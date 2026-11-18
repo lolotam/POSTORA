@@ -128,6 +128,21 @@
 --   Y57 a parent that rolled up while its row was still open is restored.
 --   Y58 the generic restoration of the Threads and fan-out paths is untouched.
 --   Y59 the mime type the caller gave is kept with the upload settings.
+--   Y60 the media version fence fails closed: a session or a live media that
+--       carries no version is refused, and the versions are compared as they
+--       are, never with a missing one read as the first.
+--   Y61 a new session needs an authorized target: the admission refuses an
+--       account the post no longer selects.
+--   Y62 a session without an attempt is refused: the attempt fences fail
+--       closed, and the row cannot be carried on.
+--   Y63 a retry with a new version of the same file is admitted: the session is
+--       rebound to the version the file carries now, and the worker has to name
+--       the version it read.
+--   Y64 the continuation budget is read before anything is written: a budget of
+--       zero or less is refused and classifies nothing.
+--   Y65 the recovery helpers are service role only, in the catalog itself.
+--   Y66 a cancellation after the final durable intent keeps the uncertainty:
+--       the session goes to reconcile, not to a definitive failure.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -3935,10 +3950,12 @@ BEGIN
          status = 'processing'
    WHERE id = v_post_a;
 
-  -- The admission rebinds the session to the file the post names.
+  -- The admission rebinds the session to the file the post names. The worker
+  -- names the version it read: the rebind pins the session to a version it
+  -- did not have, so the worker has to prove it read that one.
   PERFORM public.admit_youtube_upload(
     v_post_a, v_acct_a, v_u_a, v_media_new, 4096, 4096, '{}'::jsonb,
-    v_new_attempt, ARRAY[v_acct_a], NULL, NULL, NULL, NULL);
+    v_new_attempt, ARRAY[v_acct_a], NULL, NULL, 1, NULL);
 
   ASSERT (SELECT media_file_id FROM public.youtube_upload_sessions WHERE id = v_session) = v_media_new,
     'Y44 the session is bound to the file the post names';
@@ -3977,6 +3994,12 @@ DECLARE
   v_lease      uuid := 'ed000000-0000-4000-8000-000000000005';
   v_new_attempt timestamptz := now() + interval '1 minute';
   v_result     jsonb;
+  v_acct_b     uuid;
+  v_post_b     uuid;
+  v_media_b    uuid;
+  v_media_new_b uuid;
+  v_session_b  uuid;
+  v_lease_b    uuid := 'ed000000-0000-4000-8000-000000000006';
 BEGIN
   SELECT f.account_id, f.post_id, f.media_id
     INTO v_acct_a, v_post_a, v_media_a
@@ -4023,6 +4046,54 @@ BEGIN
   ASSERT NOT EXISTS (SELECT 1 FROM public.platform_posts
                        WHERE post_id = v_post_a AND status = 'pending'),
     'Y45 a session that needs a human leaves no pending row';
+
+  -- A SESSION A WORKER STILL OWNS IS NOT REBOUND
+  --
+  -- The worker is about to settle the session, and a rebind under it would
+  -- settle the new attempt with the old outcome. The session keeps its file
+  -- and its state, and the admission refuses it for the fence: the post has
+  -- moved on, and the session that is still owned belongs to the worker that
+  -- owns it.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_b, v_post_b, v_media_b
+    FROM pg_temp.new_youtube_fixture('y45b') f;
+  v_media_new_b := gen_random_uuid();
+  INSERT INTO public.media_files
+    (id, user_id, file_path, file_type, file_size, mime_type, storage_bucket)
+  VALUES (v_media_new_b, v_u_a, 'uploads/y45b-new.mp4', 'video', 4096, 'video/mp4', 'media');
+
+  v_session_b := (public.admit_youtube_upload(
+    v_post_b, v_acct_b, v_u_a, v_media_b, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session_b, v_lease_b, 180000);
+  -- The attempt failed for good and nothing ever reached the provider. The
+  -- lease is KEPT: the owner still has to settle the public row.
+  PERFORM public.release_youtube_upload_session(v_session_b, v_lease_b, 'failed',
+    'the provider refused the upload');
+  ASSERT (SELECT lease_token FROM public.youtube_upload_sessions WHERE id = v_session_b) = v_lease_b,
+    'Y45 the worker that owns the session keeps its lease';
+
+  UPDATE public.posts
+     SET media_file_ids = ARRAY[v_media_new_b],
+         processing_started_at = v_new_attempt,
+         status = 'processing'
+   WHERE id = v_post_b;
+
+  BEGIN
+    PERFORM public.admit_youtube_upload(
+      v_post_b, v_acct_b, v_u_a, v_media_new_b, 4096, 4096, '{}'::jsonb,
+      v_new_attempt, ARRAY[v_acct_b], NULL, NULL, 1, NULL);
+    RAISE EXCEPTION 'Y45 the session was rebound under a worker that still owns it';
+  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
+    NULL;
+  END;
+
+  ASSERT (SELECT media_file_id FROM public.youtube_upload_sessions WHERE id = v_session_b) = v_media_b,
+    'Y45 a session a worker still owns keeps its file';
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session_b) = 'failed',
+    'Y45 a session a worker still owns keeps its state';
+  ASSERT (SELECT lease_token FROM public.youtube_upload_sessions WHERE id = v_session_b) = v_lease_b,
+    'Y45 the owner keeps the lease of a session that was not rebound';
 
   RAISE NOTICE 'PASS Y45: a session that may hold a video is not rebound';
 END
@@ -5050,6 +5121,371 @@ BEGIN
   RAISE NOTICE 'PASS Y59: the mime type the caller gave is kept';
 END
 $y59_mime_kept$;
+
+-- ---------------------------------------------------------------------------
+-- Y60: THE MEDIA VERSION FENCE FAILS CLOSED.
+--
+-- A fence exists to refuse what it cannot prove. A session that carries no
+-- version is a fence that cannot be compared, and a fence that cannot be
+-- compared must not let a write through. The runtime reads the same rule
+-- before it writes (loadMatchingMedia), so the two agree.
+--
+-- The reason is the one the runtime maps to "the media is not available", so
+-- the customer sees the same sentence whichever side refused.
+-- ---------------------------------------------------------------------------
+DO $y60_media_version_fence$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ec000000-0000-4000-8000-000000000060';
+  v_result  jsonb;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y60') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  -- The session carries no version at all.
+  UPDATE public.youtube_upload_sessions SET media_object_version = NULL WHERE id = v_session;
+
+  v_result := public.youtube_upload_effect_authority(v_session, v_lease);
+  ASSERT (v_result ->> 'authorized')::boolean = false,
+    'Y60 a session without a version is not authorized';
+  ASSERT (v_result ->> 'reason') = 'media_missing',
+    'Y60 the reason says the media cannot be proven';
+
+  RAISE NOTICE 'PASS Y60: the media version fence fails closed';
+END
+$y60_media_version_fence$;
+
+-- ---------------------------------------------------------------------------
+-- Y61: A NEW SESSION NEEDS AN AUTHORIZED TARGET.
+--
+-- The restarts ask the question and the effect authority asks it again
+-- before every write. A session that was opened without asking it would be a
+-- session the other paths cannot vouch for.
+-- ---------------------------------------------------------------------------
+DO $y61_new_session_scope$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y61') f;
+
+  -- The post does not publish to YouTube any more.
+  UPDATE public.posts SET platforms = ARRAY['instagram'] WHERE id = v_post_a;
+
+  BEGIN
+    PERFORM public.admit_youtube_upload(v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb);
+    RAISE EXCEPTION 'Y61 a session was opened for a post that does not publish to YouTube';
+  EXCEPTION WHEN SQLSTATE 'YUS15' THEN
+    NULL;
+  END;
+
+  ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_upload_sessions WHERE post_id = v_post_a),
+    'Y61 a refused admission opens no session';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.platform_posts WHERE post_id = v_post_a),
+    'Y61 a refused admission opens no public row';
+
+  RAISE NOTICE 'PASS Y61: a new session needs an authorized target';
+END
+$y61_new_session_scope$;
+
+-- ---------------------------------------------------------------------------
+-- Y62: A SESSION WITHOUT AN ATTEMPT IS REFUSED EVERYWHERE.
+--
+-- The attempt is the fence that says whose upload this is. A session that
+-- carries none is a fence that cannot be compared, so the write, the claim
+-- and the settlement all refuse it.
+-- ---------------------------------------------------------------------------
+DO $y62_no_attempt$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ec000000-0000-4000-8000-000000000062';
+  v_result  jsonb;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y62') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  -- The session carries no attempt at all.
+  UPDATE public.youtube_upload_sessions SET attempt_started_at = NULL WHERE id = v_session;
+
+  v_result := public.youtube_upload_effect_authority(v_session, v_lease);
+  ASSERT (v_result ->> 'authorized')::boolean = false
+     AND (v_result ->> 'reason') = 'stale_attempt',
+    'Y62 a session without an attempt may not be written to';
+
+  BEGIN
+    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+    RAISE EXCEPTION 'Y62 a session without an attempt was claimed';
+  EXCEPTION WHEN SQLSTATE 'YUS11' THEN
+    NULL;
+  END;
+
+  BEGIN
+    PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'failed', NULL,
+      'the provider refused the upload');
+    RAISE EXCEPTION 'Y62 a session without an attempt was settled';
+  EXCEPTION WHEN SQLSTATE 'YUS11' THEN
+    NULL;
+  END;
+
+  RAISE NOTICE 'PASS Y62: a session without an attempt is refused everywhere';
+END
+$y62_no_attempt$;
+
+-- ---------------------------------------------------------------------------
+-- Y63: A RETRY WITH A NEW VERSION OF THE SAME FILE IS ADMITTED.
+--
+-- The customer replaced the file under the same name: the file the post
+-- names did not change, the content version did. The session of the previous
+-- attempt still points at the version that is gone, and the admission used to
+-- refuse the retry for ever.
+--
+-- The session is rebound to the version the file carries NOW, and the worker
+-- has to name that version: the rebind pins the session to a version it did
+-- not have, so the worker has to prove it read that one.
+-- ---------------------------------------------------------------------------
+DO $y63_new_version$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ec000000-0000-4000-8000-000000000063';
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y63') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  -- The attempt failed for good and nothing ever reached the provider.
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'failed',
+    'the provider refused the upload');
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'failed', NULL,
+    'the provider refused the upload');
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'failed',
+    'Y63 the session is terminal';
+
+  -- The customer replaces the file UNDER THE SAME NAME: the version changes.
+  UPDATE public.media_files SET current_object_version = 2 WHERE id = v_media_a;
+
+  -- And the customer retries the post: a new attempt, the same file.
+  UPDATE public.posts
+     SET processing_started_at = now() + interval '1 minute',
+         status = 'processing'
+   WHERE id = v_post_a;
+
+  -- The retry names the version the worker read.
+  PERFORM public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb,
+    NULL, NULL, NULL, NULL, 2, NULL);
+
+  ASSERT (SELECT media_file_id FROM public.youtube_upload_sessions WHERE id = v_session) = v_media_a,
+    'Y63 the file itself did not change';
+  ASSERT (SELECT media_object_version FROM public.youtube_upload_sessions WHERE id = v_session) = 2,
+    'Y63 the session is bound to the new version of the same file';
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'open',
+    'Y63 the rebound session is open again';
+  ASSERT (SELECT bytes_sent FROM public.youtube_upload_sessions WHERE id = v_session) = 0,
+    'Y63 the rebound session has sent nothing';
+
+  -- The file is replaced AGAIN, so the session points at a version that is
+  -- gone and the rebind has to pin the new one.
+  UPDATE public.media_files SET current_object_version = 3 WHERE id = v_media_a;
+  UPDATE public.youtube_upload_sessions SET state = 'failed' WHERE id = v_session;
+
+  -- A worker that names no version is refused: the rebind may not pin a
+  -- version that nobody proved it read.
+  BEGIN
+    PERFORM public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb,
+      NULL, NULL, NULL, NULL, NULL, NULL);
+    RAISE EXCEPTION 'Y63 a rebind without a named version was accepted';
+  EXCEPTION WHEN SQLSTATE 'YUS03' THEN
+    NULL;
+  END;
+
+  -- The worker that names the version it read is admitted.
+  PERFORM public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb,
+    NULL, NULL, NULL, NULL, 3, NULL);
+  ASSERT (SELECT media_object_version FROM public.youtube_upload_sessions WHERE id = v_session) = 3,
+    'Y63 the session follows the version the worker proved it read';
+
+  RAISE NOTICE 'PASS Y63: a retry with a new version of the same file is admitted';
+END
+$y63_new_version$;
+
+-- ---------------------------------------------------------------------------
+-- Y64: THE CONTINUATION BUDGET IS READ BEFORE ANYTHING IS WRITTEN.
+--
+-- A budget of zero or less would classify every open session as exhausted
+-- and would let no session be claimed, and a budget of NULL would compare
+-- with nothing at all. Both would leave the uploads of the whole table in a
+-- state nobody asked for.
+-- ---------------------------------------------------------------------------
+DO $y64_budget$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ec000000-0000-4000-8000-000000000064';
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y64') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  -- The provider session is gone and a byte reached the provider: this
+  -- session is the one a budget of zero would classify as exhausted.
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+    'https://upload.example.invalid/session/y64', true, now() - interval '1 minute', NULL);
+
+  BEGIN
+    PERFORM public.claim_youtube_upload_sessions(5, 180000, NULL);
+    RAISE EXCEPTION 'Y64 a budget of NULL was accepted';
+  EXCEPTION WHEN SQLSTATE 'YUS13' THEN
+    NULL;
+  END;
+
+  BEGIN
+    PERFORM public.claim_youtube_upload_sessions(5, 180000, 0);
+    RAISE EXCEPTION 'Y64 a budget of zero was accepted';
+  EXCEPTION WHEN SQLSTATE 'YUS13' THEN
+    NULL;
+  END;
+
+  BEGIN
+    PERFORM public.claim_youtube_upload_sessions(5, 180000, -1);
+    RAISE EXCEPTION 'Y64 a budget of less than zero was accepted';
+  EXCEPTION WHEN SQLSTATE 'YUS13' THEN
+    NULL;
+  END;
+
+  -- Nothing was written while the budget was refused: the session that a
+  -- budget of zero would have classified is still open.
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'open',
+    'Y64 a refused budget classifies nothing';
+
+  RAISE NOTICE 'PASS Y64: the continuation budget is read before anything is written';
+END
+$y64_budget$;
+
+-- ---------------------------------------------------------------------------
+-- Y65: THE RECOVERY HELPERS ARE SERVICE ROLE ONLY.
+--
+-- Each helper revokes the browser roles where it is declared. The catalog is
+-- what the database will actually answer, so the catalog is what is checked.
+-- ---------------------------------------------------------------------------
+DO $y65_grants$
+BEGIN
+  ASSERT NOT has_function_privilege('anon',
+           'public.recover_youtube_upload_terminal_results(integer)', 'EXECUTE'),
+    'Y65 anon may not run the terminal recovery';
+  ASSERT NOT has_function_privilege('authenticated',
+           'public.reconcile_youtube_upload_fanouts(integer)', 'EXECUTE'),
+    'Y65 authenticated may not run the fanout recovery';
+  ASSERT has_function_privilege('service_role',
+           'public.recover_youtube_upload_terminal_results(integer)', 'EXECUTE'),
+    'Y65 the service role may run the terminal recovery';
+  ASSERT has_function_privilege('service_role',
+           'public.reconcile_youtube_upload_fanouts(integer)', 'EXECUTE'),
+    'Y65 the service role may run the fanout recovery';
+
+  RAISE NOTICE 'PASS Y65: the recovery helpers are service role only';
+END
+$y65_grants$;
+
+-- ---------------------------------------------------------------------------
+-- Y66: A CANCELLATION AFTER THE FINAL DURABLE INTENT KEEPS THE UNCERTAINTY.
+--
+-- The runtime writes the intent BEFORE the chunk that creates the video: the
+-- record has to say that a video may exist before the write, because the
+-- write may be the last thing that happens.
+--
+-- A cancellation after that keeps the uncertainty. The provider may hold a
+-- video, and a cancellation cannot undo a fact; so the row is closed as
+-- uncertain and the session is left for a human.
+--
+-- The window between the authority check and the write cannot be closed
+-- here: the provider does not take part in this transaction, and no
+-- atomicity with it is possible. What this proves is that once the intent
+-- is durable, the cancellation preserves it.
+-- ---------------------------------------------------------------------------
+DO $y66_cancelled_uncertain$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ec000000-0000-4000-8000-000000000066';
+  v_row_id  uuid;
+  v_answer  jsonb;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y66') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  -- THE FINAL DURABLE INTENT
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+    'https://upload.example.invalid/session/y66', true, NULL, NULL);
+  ASSERT (SELECT video_may_exist FROM public.youtube_upload_sessions WHERE id = v_session) = true,
+    'Y66 the intent is durable before the write';
+
+  -- The owner cancels the post.
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post_a;
+  v_answer := public.youtube_upload_terminalize_cancelled(v_session);
+
+  ASSERT (v_answer ->> 'terminalized') = 'true',
+    'Y66 the row of the cancelled post is closed';
+  ASSERT (v_answer ->> 'reason') = 'youtube_upload_reconcile_required',
+    'Y66 the cancellation keeps the uncertainty';
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'reconcile',
+    'Y66 the session is left for a human';
+  ASSERT (SELECT response_data ->> 'publish_outcome' FROM public.platform_posts WHERE id = v_row_id) = 'uncertain',
+    'Y66 the row says the outcome is uncertain';
+  ASSERT (SELECT response_data ->> 'youtube_upload_reason' FROM public.platform_posts WHERE id = v_row_id)
+         = 'youtube_upload_reconcile_required',
+    'Y66 the row carries the stable public reason';
+
+  RAISE NOTICE 'PASS Y66: a cancellation after the final durable intent keeps the uncertainty';
+END
+$y66_cancelled_uncertain$;
 
 ROLLBACK;
 

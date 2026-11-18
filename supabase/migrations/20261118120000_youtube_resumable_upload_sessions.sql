@@ -661,7 +661,10 @@ BEGIN
     RETURN jsonb_build_object('recovered', false, 'reason', 'post_not_found');
   END IF;
   v_attempt := v_session.attempt_started_at;
-  IF v_attempt IS NOT NULL AND v_post.processing_started_at IS DISTINCT FROM v_attempt THEN
+  -- A session that carries NO attempt cannot be compared with the post, so the
+  -- closure leaves it alone: the fence that would say whether the attempt is
+  -- still the running one is the one that is missing.
+  IF v_attempt IS NULL OR v_post.processing_started_at IS DISTINCT FROM v_attempt THEN
     RETURN jsonb_build_object('recovered', false, 'reason', 'stale_attempt');
   END IF;
   IF v_post.status <> 'processing' THEN
@@ -922,8 +925,11 @@ BEGIN
   END IF;
 
   -- A later attempt owns the post: it has its own fanout and its own rows.
-  IF v_session.attempt_started_at IS NOT NULL
-     AND v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
+  -- A session that carries NO attempt cannot be compared with the post, so it
+  -- is left alone as well: the fence that would say whether it is stale is
+  -- the one that is missing.
+  IF v_session.attempt_started_at IS NULL
+     OR v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
     RETURN jsonb_build_object('terminalized', false, 'reason', 'stale_attempt');
   END IF;
 
@@ -944,9 +950,18 @@ BEGIN
     RETURN jsonb_build_object('terminalized', false, 'reason', 'row_not_pending');
   END IF;
 
-  -- A video may exist when a byte ever reached the provider, or when the last
-  -- write may have landed.
-  v_may_exist := v_session.video_may_exist OR v_session.bytes_sent > 0;
+  -- A video may exist when a byte ever reached the provider, when the last
+  -- write may have landed, or when the session already carries the mark of a
+  -- human.
+  --
+  -- The mark is the durable intent: the runtime writes it BEFORE the chunk
+  -- that creates the video, so once it is there the provider MAY hold a
+  -- video. A cancellation after that keeps the uncertainty: it closes the
+  -- row as uncertain and leaves the session for a human, because a video
+  -- that may exist is a fact a cancellation cannot undo.
+  v_may_exist := v_session.video_may_exist
+                 OR v_session.bytes_sent > 0
+                 OR v_session.state = 'reconcile';
   IF v_may_exist THEN
     v_reason := 'youtube_upload_reconcile_required';
     v_message := 'the post was cancelled, and the provider may already hold a video from this upload, so it has to be checked by hand';
@@ -1219,8 +1234,14 @@ BEGIN
   IF NOT FOUND THEN
     RETURN jsonb_build_object('authorized', false, 'reason', 'post_not_found');
   END IF;
-  IF v_session.attempt_started_at IS NOT NULL
-     AND v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
+  -- THE ATTEMPT FENCE FAILS CLOSED
+  --
+  -- A session that carries no attempt is a fence that cannot be compared. The
+  -- admission never opens one, so a session without an attempt is a record
+  -- that cannot be trusted to belong to the attempt that is running, and no
+  -- write may be made on its word.
+  IF v_session.attempt_started_at IS NULL
+     OR v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
     RETURN jsonb_build_object('authorized', false, 'reason', 'stale_attempt');
   END IF;
   IF v_post.status <> 'processing' THEN
@@ -1247,23 +1268,34 @@ BEGIN
   -- sendable. The sendability rule is the shared one, so a file that is
   -- pending a security scan or was rejected by it is refused here exactly as
   -- every other send path refuses it.
-  IF v_session.media_file_id IS NOT NULL THEN
-    SELECT current_object_version, scan_state
-      INTO v_media_version, v_scan_state
-      FROM public.media_files WHERE id = v_session.media_file_id;
-    IF NOT FOUND THEN
-      RETURN jsonb_build_object('authorized', false, 'reason', 'media_missing');
-    END IF;
-    IF v_session.media_object_version IS NOT NULL
-       AND coalesce(v_media_version, 1) IS DISTINCT FROM v_session.media_object_version THEN
-      RETURN jsonb_build_object('authorized', false, 'reason', 'media_changed');
-    END IF;
-    IF v_scan_state = 'pending' THEN
-      RETURN jsonb_build_object('authorized', false, 'reason', 'media_pending');
-    END IF;
-    IF v_scan_state = 'rejected' THEN
-      RETURN jsonb_build_object('authorized', false, 'reason', 'media_rejected');
-    END IF;
+  --
+  -- THE VERSION FENCE FAILS CLOSED
+  -- ------------------------------
+  -- A fence exists to refuse what it cannot prove. A session that carries no
+  -- version, or a file that carries no version, is a fence that cannot be
+  -- compared, and a fence that cannot be compared must not let a write
+  -- through. The runtime reads the same rule before it writes
+  -- (loadMatchingMedia), so the two agree.
+  IF v_session.media_file_id IS NULL THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'media_missing');
+  END IF;
+  SELECT current_object_version, scan_state
+    INTO v_media_version, v_scan_state
+    FROM public.media_files WHERE id = v_session.media_file_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'media_missing');
+  END IF;
+  IF v_session.media_object_version IS NULL OR v_media_version IS NULL THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'media_missing');
+  END IF;
+  IF v_session.media_object_version IS DISTINCT FROM v_media_version THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'media_changed');
+  END IF;
+  IF v_scan_state = 'pending' THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'media_pending');
+  END IF;
+  IF v_scan_state = 'rejected' THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'media_rejected');
   END IF;
 
   RETURN jsonb_build_object('authorized', true, 'reason', null);
@@ -1573,8 +1605,15 @@ BEGIN
   --
   -- The admission refuses that, here, before the session exists and before
   -- anything is written to the provider.
+  --
+  -- A file that carries no version at all is refused the same way: the fence
+  -- cannot compare what it cannot see, and the session would pin a version
+  -- it cannot prove.
+  IF v_media_version IS NULL THEN
+    RAISE EXCEPTION 'YUS03: the media file carries no content version' USING ERRCODE = 'YUS03';
+  END IF;
   IF p_expected_media_version IS NOT NULL
-     AND coalesce(v_media_version, 1) IS DISTINCT FROM p_expected_media_version THEN
+     AND v_media_version IS DISTINCT FROM p_expected_media_version THEN
     RAISE EXCEPTION 'YUS03: the media file was replaced while the worker was reading it' USING ERRCODE = 'YUS03';
   END IF;
 
@@ -1584,7 +1623,14 @@ BEGIN
   -- current attempt is used, which is the attempt the upload is really on:
   -- a post that was edited or retried is published again, and that is a new
   -- processing_started_at.
+  --
+  -- A post with no attempt at all is refused: a session without an attempt
+  -- cannot be fenced against the attempt that is running, and every fence
+  -- that reads it would have nothing to compare.
   v_attempt := coalesce(p_attempt_started_at, v_post.processing_started_at);
+  IF v_attempt IS NULL THEN
+    RAISE EXCEPTION 'YUS11: the post carries no attempt to bind the upload to' USING ERRCODE = 'YUS11';
+  END IF;
 
   -- The fence is the LIVE post, not a copy the session kept.
   v_fence := public.youtube_upload_live_fence(p_post_id, p_media_file_id, p_total_bytes, p_social_account_id);
@@ -1596,6 +1642,18 @@ BEGIN
    WHERE post_id = p_post_id AND social_account_id = p_social_account_id FOR UPDATE;
 
   IF NOT FOUND THEN
+    -- THE ACCOUNT MUST BE A TARGET OF THE POST
+    --
+    -- The session is only opened for an account the post still publishes to,
+    -- on a post that still publishes to YouTube. The restarts below ask the
+    -- same question, and the effect authority asks it again before every
+    -- write; a session that was opened without asking it would be a session
+    -- the other paths cannot vouch for.
+    IF NOT public.youtube_upload_target_authorized(
+         p_post_id, p_social_account_id, p_target_account_ids) THEN
+      RAISE EXCEPTION 'YUS15: the account is not a target of this post' USING ERRCODE = 'YUS15';
+    END IF;
+
     INSERT INTO public.youtube_upload_sessions(
       user_id, post_id, social_account_id, media_file_id, media_object_version,
       media_size, total_bytes, upload_body, upload_settings, content_fence, session_expires_at,
@@ -1683,8 +1741,7 @@ BEGIN
        AND v_lease_is_free
        AND v_session.total_bytes IS NOT DISTINCT FROM p_total_bytes
        AND v_session.media_file_id IS NOT DISTINCT FROM p_media_file_id
-       AND (v_session.media_object_version IS NULL
-            OR coalesce(v_media_version, 1) IS NOT DISTINCT FROM v_session.media_object_version)
+       AND v_session.media_object_version IS NOT DISTINCT FROM v_media_version
        AND public.youtube_upload_target_authorized(
              p_post_id, p_social_account_id,
              coalesce(p_target_account_ids, v_session.target_account_ids)) THEN
@@ -1703,7 +1760,7 @@ BEGIN
              upload_settings = v_settings,
              media_size = p_media_size,
              total_bytes = p_total_bytes,
-             media_object_version = coalesce(v_media_version, v_session.media_object_version),
+             media_object_version = v_media_version,
              resolved_platform = 'youtube',
              target_account_ids = coalesce(p_target_account_ids, v_session.target_account_ids),
              updated_at = clock_timestamp()
@@ -1720,12 +1777,17 @@ BEGIN
     -- describes a write that never happened, so the admission would refuse
     -- the new attempt for ever.
     --
-    -- So the session is REBOUND to the file the post names. That is only
-    -- safe when the previous attempt PROVES that nothing ever reached the
-    -- provider: the attempt is terminal, no byte was sent, and no video may
-    -- exist. A session that is still OPEN holds a provider session with the
-    -- old content, and a session that may already hold a video may publish a
-    -- second one, so both keep their guards.
+    -- The SAME file may also have a NEW content version: the customer
+    -- replaced the file under the same name, and the post names that file
+    -- still. The session points at the version that is gone, so it is
+    -- rebound to the version the file carries NOW.
+    --
+    -- So the session is REBOUND to the file the post names, at its live
+    -- version. That is only safe when the previous attempt PROVES that
+    -- nothing ever reached the provider: the attempt is terminal, no byte was
+    -- sent, and no video may exist. A session that is still OPEN holds a
+    -- provider session with the old content, and a session that may already
+    -- hold a video may publish a second one, so both keep their guards.
     --
     -- It also needs:
     --
@@ -1733,17 +1795,29 @@ BEGIN
     --     settle it, and a rebind under it would settle the new attempt with
     --     the old outcome;
     --   * the new file is the post's own file (checked above) at the exact
-    --     version the caller read (checked above);
+    --     version the caller read (checked below);
     --   * the account is still a target of the post;
     --   * the attempt that asks is the one that is running (checked above).
     IF v_session.state IN ('failed', 'expired')
        AND NOT v_session.video_may_exist
        AND v_session.bytes_sent = 0
        AND v_lease_is_free
-       AND v_session.media_file_id IS DISTINCT FROM p_media_file_id
+       AND (v_session.media_file_id IS DISTINCT FROM p_media_file_id
+            OR v_session.media_object_version IS DISTINCT FROM v_media_version)
        AND public.youtube_upload_target_authorized(
              p_post_id, p_social_account_id,
              coalesce(p_target_account_ids, v_session.target_account_ids)) THEN
+      -- THE READ AUTHORITY
+      --
+      -- The rebind pins the session to a version it did not have, so the
+      -- worker has to prove it read THAT version. A worker that names no
+      -- version cannot be shown to have read the file the post names now, so
+      -- it is refused rather than trusted.
+      IF p_expected_media_version IS NULL
+         OR p_expected_media_version IS DISTINCT FROM v_media_version THEN
+        RAISE EXCEPTION 'YUS03: the media file was replaced while the worker was reading it' USING ERRCODE = 'YUS03';
+      END IF;
+
       UPDATE public.youtube_upload_sessions
          SET state = 'open', session_uri = NULL, confirmed_bytes = 0, bytes_sent = 0,
              session_expires_at = p_session_expires_at, error = NULL,
@@ -1758,7 +1832,7 @@ BEGIN
              media_file_id = p_media_file_id,
              media_size = p_media_size,
              total_bytes = p_total_bytes,
-             media_object_version = coalesce(v_media_version, 1),
+             media_object_version = v_media_version,
              resolved_platform = 'youtube',
              target_account_ids = coalesce(p_target_account_ids, v_session.target_account_ids),
              updated_at = clock_timestamp()
@@ -2073,17 +2147,20 @@ BEGIN
   -- attempt with a new processing_started_at. The bytes of the older attempt
   -- are not what the customer asked for now, and the post may already have
   -- been settled by the attempt that replaced it.
-  IF v_session.attempt_started_at IS NOT NULL THEN
-    SELECT * INTO v_post FROM public.posts WHERE id = v_session.post_id;
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'YUS01: the post is gone' USING ERRCODE = 'YUS01';
-    END IF;
-    IF v_post.status <> 'processing' THEN
-      RAISE EXCEPTION 'YUS12: the post is no longer being processed' USING ERRCODE = 'YUS12';
-    END IF;
-    IF v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
-      RAISE EXCEPTION 'YUS11: the upload belongs to an older attempt of the post' USING ERRCODE = 'YUS11';
-    END IF;
+  --
+  -- A session that carries NO attempt is refused as well: the fence cannot be
+  -- compared, and a fence that cannot be compared must not hand the session
+  -- to a worker.
+  SELECT * INTO v_post FROM public.posts WHERE id = v_session.post_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'YUS01: the post is gone' USING ERRCODE = 'YUS01';
+  END IF;
+  IF v_post.status <> 'processing' THEN
+    RAISE EXCEPTION 'YUS12: the post is no longer being processed' USING ERRCODE = 'YUS12';
+  END IF;
+  IF v_session.attempt_started_at IS NULL
+     OR v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
+    RAISE EXCEPTION 'YUS11: the upload belongs to an older attempt of the post' USING ERRCODE = 'YUS11';
   END IF;
 
   UPDATE public.youtube_upload_sessions
@@ -2473,9 +2550,11 @@ BEGIN
     RAISE EXCEPTION 'YUS09: the lease is stale, so this worker does not own the session' USING ERRCODE = 'YUS09';
   END IF;
 
-  -- The session must still belong to the attempt that is running.
-  IF v_session.attempt_started_at IS NOT NULL
-     AND v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
+  -- The session must still belong to the attempt that is running. A session
+  -- that carries NO attempt cannot be compared with the post, so it is
+  -- refused as well: a settlement must know whose attempt it settles.
+  IF v_session.attempt_started_at IS NULL
+     OR v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
     RAISE EXCEPTION 'YUS11: the upload belongs to an older attempt of the post' USING ERRCODE = 'YUS11';
   END IF;
   IF v_post.status <> 'processing' THEN
@@ -2638,10 +2717,13 @@ BEGIN
     RAISE EXCEPTION 'YUS14: the session has no public row to settle' USING ERRCODE = 'YUS14';
   END IF;
 
-  IF v_session.attempt_started_at IS NOT NULL
-     AND v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
+  IF v_session.attempt_started_at IS NULL
+     OR v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
     RAISE EXCEPTION 'YUS11: the upload belongs to an older attempt of the post' USING ERRCODE = 'YUS11';
   END IF;
+
+  -- The receipt is projected onto the row of the attempt that stored it. A
+  -- session without an attempt cannot be compared, so nothing is projected.
 
   -- The result row is locked last, after the parent and the session.
   SELECT * INTO v_row FROM public.platform_posts WHERE id = v_session.platform_post_id FOR UPDATE;
@@ -2965,6 +3047,14 @@ BEGIN
     RETURN jsonb_build_object('classified', false, 'reason', 'post_not_processing');
   END IF;
 
+  -- A session that carries NO attempt is left exactly as it is. The attempt
+  -- is the authority of the settlement below, and a session without one
+  -- cannot be compared with the post: classifying it would settle a row that
+  -- belongs to nobody.
+  IF v_session.attempt_started_at IS NULL THEN
+    RETURN jsonb_build_object('classified', false, 'reason', 'stale_attempt');
+  END IF;
+
   -- A video may exist when a byte ever reached the provider, or when the last
   -- write may have landed.
   v_may_exist := v_session.video_may_exist OR v_session.bytes_sent > 0;
@@ -3001,8 +3091,8 @@ BEGIN
   -- A session of an attempt that is no longer the running one keeps its own
   -- outcome: its row is not settled here.
   IF v_session.platform_post_id IS NOT NULL
-     AND (v_session.attempt_started_at IS NULL
-          OR v_post.processing_started_at IS NOT DISTINCT FROM v_session.attempt_started_at) THEN
+     AND v_session.attempt_started_at IS NOT NULL
+     AND v_post.processing_started_at IS NOT DISTINCT FROM v_session.attempt_started_at THEN
     SELECT * INTO v_row FROM public.platform_posts WHERE id = v_session.platform_post_id FOR UPDATE;
     IF FOUND AND v_row.status = 'pending' THEN
       v_settled := public.partner_settle_platform_post(
@@ -3251,6 +3341,17 @@ BEGIN
   IF p_lease_ms IS NULL OR p_lease_ms <= 0 OR p_lease_ms > 3600000 THEN
     RAISE EXCEPTION 'YUS09: the lease length is not usable' USING ERRCODE = 'YUS09';
   END IF;
+
+  -- THE CONTINUATION BUDGET IS READ BEFORE ANYTHING IS WRITTEN
+  --
+  -- A budget of zero or less would classify every open session as exhausted
+  -- and would let no session be claimed, and a budget of NULL would compare
+  -- with nothing at all: both would leave the uploads of the whole table in a
+  -- state nobody asked for. So the budget is checked before the first
+  -- mutation, while nothing has been written yet.
+  IF p_max_continuations IS NULL OR p_max_continuations <= 0 THEN
+    RAISE EXCEPTION 'YUS13: the continuation budget is not usable' USING ERRCODE = 'YUS13';
+  END IF;
   v_lease := make_interval(secs => (p_lease_ms::double precision / 1000.0));
 
   -- The provider session is gone and a byte reached the provider: the
@@ -3320,6 +3421,7 @@ BEGIN
       JOIN public.posts p ON p.id = s.post_id
      WHERE s.state = 'open'
        AND p.status = 'processing'
+       AND s.attempt_started_at IS NOT NULL
        AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= clock_timestamp())
        AND (
          -- The provider session is gone and a byte reached the provider.

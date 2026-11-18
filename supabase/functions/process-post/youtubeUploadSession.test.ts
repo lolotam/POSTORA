@@ -507,6 +507,65 @@ Deno.test("a retried upload that never sent a byte is started again", async () =
   assertEquals(retried.record?.attemptStartedAt, "2026-11-19T00:00:00.000Z");
 });
 
+Deno.test("a retry with a new version of the same file is rebound to that version", async () => {
+  const store = openStore();
+  const opened = await store.admit({ ...admitInput, mediaFileId: "media-1", mediaObjectVersion: 1 });
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.settle({
+    sessionId,
+    leaseToken: "lease-a",
+    status: "failed",
+    errorMessage: "the provider refused the upload",
+  });
+  assertEquals(store.sessions.get(sessionId)?.state, "failed");
+
+  // The customer replaced the file under the same name, so the file the post
+  // names did not change but the content version did. The session still points
+  // at the version that is gone, so it is rebound to the version the file
+  // carries now.
+  const retried = await store.admit({
+    ...admitInput,
+    mediaFileId: "media-1",
+    mediaObjectVersion: 2,
+    expectedContent: { caption: "A video", publish_requested_at: "2026-11-19T00:00:00.000Z" },
+    attemptStartedAt: "2026-11-19T00:00:00.000Z",
+  });
+  assertEquals(retried.refused, null);
+  assertEquals(retried.record?.state, "open");
+  // The session follows the version the worker proved it read, and it starts
+  // from the beginning: nothing of the old version ever reached the provider.
+  assertEquals(retried.record?.mediaObjectVersion, 2);
+  assertEquals(retried.record?.confirmedBytes, 0);
+});
+
+Deno.test("a rebind that names no version is refused", async () => {
+  const store = openStore();
+  const opened = await store.admit({ ...admitInput, mediaFileId: "media-1", mediaObjectVersion: 1 });
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.settle({
+    sessionId,
+    leaseToken: "lease-a",
+    status: "failed",
+    errorMessage: "the provider refused the upload",
+  });
+
+  // The customer replaced the file under the same name, and the worker names
+  // no version. The rebind may not pin a version that nobody proved it read.
+  const retried = await store.admit({
+    ...admitInput,
+    mediaFileId: "media-1",
+    mediaObjectVersion: null,
+    expectedContent: { caption: "A video", publish_requested_at: "2026-11-19T00:00:00.000Z" },
+    attemptStartedAt: "2026-11-19T00:00:00.000Z",
+  });
+  assertEquals(retried.refused, "media_not_owned");
+  // The refusal pins nothing: the session is left exactly as it was.
+  assertEquals(store.sessions.get(sessionId)?.mediaObjectVersion, 1);
+  assertEquals(store.sessions.get(sessionId)?.state, "failed");
+});
+
 Deno.test("a session that a worker still owns is not started again", async () => {
   const store = openStore();
   const opened = await store.admit(admitInput);

@@ -507,6 +507,30 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
   }
 
   /**
+   * Rebinds a terminal session to the media the post names NOW.
+   *
+   * The customer may have replaced the video between the attempts: the post
+   * names the new file, or the new version of the same file, and the session
+   * of the previous attempt still points at the old one. The admission would
+   * refuse the new attempt for ever.
+   *
+   * The worker has to name the version it read, because the rebind pins the
+   * session to a version it did not have. A worker that names no version
+   * cannot be shown to have read the file the post names now, so the caller
+   * refuses it before it gets here.
+   *
+   * The caller has already checked the rest: a terminal session that proves
+   * that nothing reached the provider, and no live lease.
+   */
+  function rebind(session: MemorySession, input: AdmitUploadSession): void {
+    reopen(session, input);
+    session.mediaFileId = input.mediaFileId;
+    session.mediaObjectVersion = input.mediaObjectVersion;
+    session.mediaSize = input.mediaSize;
+    session.totalBytes = input.totalBytes;
+  }
+
+  /**
    * Starts a terminal session again, unless a worker still owns it.
    *
    * The reset is the one the database does: the provider session is dropped,
@@ -601,7 +625,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
         }
 
-        // THE SAFE RESTART
+        // THE SAFE RESTART AND THE REBIND
         //
         // A retry changes the post's publish_requested_at, so the content of the
         // previous attempt no longer matches the live post, and the comparison
@@ -609,8 +633,12 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
         //
         // A terminal session that proves that nothing ever reached the provider
         // is started again: nothing reached the provider, so a second attempt
-        // cannot create a second video. The media file has to be the SAME file
-        // at the SAME content version.
+        // cannot create a second video.
+        //
+        // The media file has to be the SAME file at the SAME content version
+        // for a restart. When the customer replaced the file under the same
+        // name, the version changed, and the session is REBOUND to the version
+        // the file carries now -- the same thing the database does.
         //
         // A session that may already hold a video is not started again, and an
         // open session keeps the comparison below: it holds a provider session
@@ -619,11 +647,25 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           (session.state === "failed" || session.state === "expired") &&
           !session.videoMayExist &&
           session.bytesSent === 0 &&
-          session.mediaFileId === input.mediaFileId &&
-          session.totalBytes === input.totalBytes &&
-          (session.mediaObjectVersion === null || session.mediaObjectVersion === input.mediaObjectVersion)
+          !holdsLiveLease(session)
         ) {
-          reopen(session, input);
+          const sameFile = session.mediaFileId === input.mediaFileId;
+          const sameVersion = session.mediaObjectVersion === input.mediaObjectVersion;
+          if (sameFile && sameVersion) {
+            // The safe restart: the SAME file at the SAME version and the same
+            // size. Nothing about the media changed, so the attempt starts
+            // again on the session that is already there.
+            if (session.totalBytes === input.totalBytes) reopen(session, input);
+          } else {
+            // The rebind: the post names another file, or the same file at a
+            // version the session does not hold. The rebind pins the session
+            // to a version it did not have, so the worker has to name the
+            // version it read.
+            if (input.mediaObjectVersion === null) {
+              return Promise.resolve({ record: null, refused: "media_not_owned", platformPostId: null });
+            }
+            rebind(session, input);
+          }
         }
 
         const sameContent =
