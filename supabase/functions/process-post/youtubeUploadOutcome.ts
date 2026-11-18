@@ -16,7 +16,7 @@
  * that exists twice is a rule that will disagree.
  */
 
-import type { ResumableUploadOutcome } from "./youtubeResumableUpload.ts";
+import type { ResumableUploadOutcome, YoutubeUploadRefusal } from "./youtubeResumableUpload.ts";
 import {
   YOUTUBE_UPLOAD_REASON,
   youtubeUploadPublicMessage,
@@ -115,6 +115,33 @@ export function youtubeUploadFailureResponseData(
     youtube_upload_reason: reason,
     ...(isUncertainUploadOutcome(outcome) ? { publish_outcome: "uncertain" } : {}),
   };
+}
+
+/**
+ * The error an admission refusal hands to the outer loop.
+ *
+ * A refusal is normally a PROOF: nothing was sent, so the customer may retry.
+ * Two of them are not: the ones that say the provider may already hold a
+ * video. Those carry the uncertain marker, so the retry gate in the database
+ * and the retry selector on the page never offer a retry that could put a
+ * second video on the customer's channel.
+ *
+ * The marker travels on the ERROR because the refusal happened before the
+ * session and the public row existed: there is no owned row to carry it, so
+ * the outer loop writes the row and this is what tells it what to write.
+ */
+export function uploadRefusalFailure(
+  refusal: YoutubeUploadRefusal,
+  message: string,
+): Error & { responseData?: Record<string, unknown> } {
+  const failure = new Error(message) as Error & { responseData?: Record<string, unknown> };
+  if (refusal === "reconcile_required" || refusal === "channel_may_have_published") {
+    failure.responseData = {
+      youtube_upload_reason: YOUTUBE_UPLOAD_REASON.reconcile,
+      publish_outcome: "uncertain",
+    };
+  }
+  return failure;
 }
 
 /**

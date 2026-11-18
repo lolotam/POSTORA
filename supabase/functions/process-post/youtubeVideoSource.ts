@@ -266,8 +266,11 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
  * The host of the first URL is checked before the first request, and the host
  * of every hop is checked before that hop is made. A redirect to a host that
  * was not approved is refused rather than followed.
+ *
+ * It is exported because the rule is the rule for every file the worker
+ * reads: the video and the thumbnail are read through the same door.
  */
-async function fetchApprovedMedia(
+export async function fetchApprovedMedia(
   url: string,
   init: RequestInit,
   approvedHosts: Set<string> | undefined,

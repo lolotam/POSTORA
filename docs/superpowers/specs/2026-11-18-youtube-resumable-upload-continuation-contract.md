@@ -17,6 +17,16 @@ in which order the locks are taken, which outcome is a proof and which is not,
 what a repair is allowed to take, and what the live authority is checked
 against.
 
+Sections 42 to 47 are the fourth round: the recovered receipt, the owned
+failure, the bounded follow-ups, the reconnect, the credential and the
+marker.
+
+Sections 48 to 57 are the fifth round, from the cross-file review. The
+lifecycle changes in three places and nowhere else: a permanent refusal now
+settles its row, the disconnect keeps the evidence, and the admission can
+rebind a session to the file a retry names. The rest is about what may be
+fetched, what may be sent, and what fails closed.
+
 ---
 
 ## 1. The lease is a number of milliseconds, not an interval
@@ -1179,6 +1189,15 @@ got a thumbnail and a comment.
   nothing about whether the first one arrived.
 * The follow-ups belong to the run that **created** the video. A run that
   inherited the receipt never repeats them.
+* **The cost of that rule, on purpose.** A worker that dies after the receipt
+  is checkpointed but before the thumbnail or the first comment is written
+  loses both, and History shows the post as published. That is the lesser
+  loss. A second comment on the customer's own channel is public and cannot
+  be unread, and a second thumbnail is a second write against a video that
+  already carries one. A missing thumbnail and a missing first comment are
+  visible and fixable — the customer can set the thumbnail on the video —
+  while a duplicate cannot be taken back. The rule is therefore kept, and the
+  cost is stated here rather than left to be discovered.
 
 **Proved by:** the follow-ups' tests, and the continuation's tests.
 
@@ -1222,6 +1241,266 @@ marker, so an outcome that was not a proof was offered as a retry.
   refusal does not take the whole post away from the retry button.
 
 **Proved by:** the outcome contract's tests, and SQL suites Y22 and Y25.
+
+---
+
+## 48. The thumbnail is fetched only from an approved origin
+
+**Was:** the follow-up that reads the thumbnail asked for the URL it was given.
+The URL came from the customer, so the worker could be asked to read anything
+on the internet, and the read had no size bound and no deadline of its own.
+
+**Is:** the thumbnail is read with `fetchApprovedMedia`, the same function the
+video source uses: only an approved HTTPS media origin, every redirect hop
+validated before it is followed, a bounded body (10 MB) and the worker's
+deadline.
+
+**Why:** the thumbnail is the customer's file. Reading it back from an origin
+Postora does not own is an SSRF the customer can aim at the deployment, and an
+unbounded read is a way to spend the worker's whole lifetime on one byte of
+answer. The cost is that a thumbnail hosted somewhere else is no longer
+fetched: the copy that is fetched is the copy that Postora stores, which is
+what the channel shows anyway.
+
+**Proved by:** `youtubeVideoSource.test.ts` (the approved hosts, the per-hop
+validation and the bounded read) and `youtubeUploadFollowUps.test.ts`.
+
+---
+
+## 49. One token refresh policy
+
+**Was:** the publishing path refreshed a YouTube token inline, and the
+continuation loaded the account without refreshing it. Two places, two
+policies, and a continuation that could run an hour after the publishing path
+had refreshed the token.
+
+**Is:** `youtubeTokenRefresh.ts` holds the policy — a token that expires
+within thirty minutes is refreshed, the refresh has fifteen seconds of its
+own, the logs are redacted and the refresh token never reaches a log line.
+Both the publishing path and the continuation's account load call it.
+
+**Why:** the refresh is a rule about one credential, so it is written once. The
+continuation is the path that runs long after the publishing path, so it is
+the path that needs the rule most.
+
+**The receipt-only work stays provider-independent.** A continuation that
+finds a stored receipt never loads the account, so it never refreshes a token
+and never touches the provider. That is deliberate: the work that only
+projects a receipt must work when the provider is unreachable.
+
+**Proved by:** `youtubeTokenRefresh.test.ts` and the continuation's tests (a
+receipt-only continuation loads no account).
+
+---
+
+## 50. The type of the video travels with the upload
+
+**Was:** the resumed upload declared its chunks as `video/mp4`, whatever the
+file was. A video that was not an MP4 was refused by the provider halfway
+through, after the bytes had been sent.
+
+**Is:** the type comes from the media row the session is fenced on, and the
+continuation's `runUpload` port carries it. The file's own `mime_type` is the
+answer, and the media version fence is what makes that answer the right one.
+
+**Why:** the provider refuses a chunk whose declared type does not match the
+upload it belongs to, and it refuses it late. The declared type is part of the
+provider request, so it is part of the session, like the query settings.
+
+**Proved by:** `youtubeUploadContinuation.test.ts` (the type reaches the
+upload) and `youtubeVideoSource.test.ts`.
+
+---
+
+## 51. The scope verdict decides what may be removed
+
+**Was:** the continuation drove the fanout closure and then removed the
+pending evidence, whether the closure had worked or not. A closure that
+could not be proven left the row pending for ever, and a closure that threw
+left it pending too — so a post whose fanout could not be closed waited for
+ever.
+
+**Is:** the recovery's answer is read as a **scope verdict**, in the worker:
+
+* `recovered` → the scope is **closed**: the evidence may be removed.
+* `attempt_may_still_be_running` → the scope is **attempt_running**: the
+  worker of the attempt is going to complete it, so the evidence may be
+  removed.
+* anything else → the scope is **incomplete**: the evidence STAYS. The
+  pending row is the sweeper's protection, and it is what keeps the sweeper
+  from reading the absence of a sibling row as "this destination never
+  started".
+
+**Why:** removing the pending evidence of a scope that was not closed is what
+turns an unfinished publication into a silent one. The verdict is derived in
+the worker from the recovery's stable reason codes, so the store's database
+contract does not change.
+
+**Proved by:** `youtubeUploadContinuation.test.ts` (the three verdicts, and the
+row that stays pending).
+
+---
+
+## 52. A permanent refusal settles the row, and keeps the uncertainty
+
+**Was:** a refusal that will not change on retry left the public row
+**pending**. The post then waited for a destination that was never going to
+publish, and the row was the only thing that said so.
+
+**Is:** a permanent refusal settles the row as a failure, and the settlement
+carries the uncertainty marker when the session may already hold a video.
+The marker follows the **durable rule**, not the reason of the refusal: the
+session knows whether a video may exist (`video_may_exist`), and that flag
+only ever grows. A refusal on such a session is not a proof, so it carries
+the marker, and neither the retry gate nor the retry button offers a blind
+retry.
+
+**Why:** a row that stays pending for ever is a publication the customer never
+sees finish, and a row that is settled as a proven failure on a session that
+may hold a video is a blind retry waiting to happen.
+
+**Proved by:** `youtubeUploadContinuation.test.ts` (a refused media settles
+the row, and the uncertain marker travels with it).
+
+---
+
+## 53. The fences fail closed
+
+**Was:** a comparison that could not be made was treated as a comparison that
+matched. A request without an attempt, a session without an attempt, a
+session without a media version, a media without a current version, and a
+media of another size all passed a fence that had nothing to compare.
+
+**Is:** each of them fails closed.
+
+* The route **requires** `attemptStartedAt` (`youtube_attempt_missing`), and
+  the continuation refuses a request without one (`stale_attempt`).
+* The session's own attempt fence fails closed when the session carries no
+  attempt.
+* The media fence fails closed when the session or the media carries no
+  version, and when the media's size is not the size the session was opened
+  for (`media_unavailable`).
+
+**Why:** a fence exists to refuse what it cannot prove. A fence that lets an
+uncomparable pair through is a fence that is only there in the cases that
+already work.
+
+**Proved by:** `youtubeUploadContinuation.test.ts` (each fence, and the size
+mismatch).
+
+---
+
+## 54. The disconnect keeps the evidence
+
+**Was:** the disconnect is a hard delete of the account row, and the session
+referenced it with `ON DELETE CASCADE`. The evidence of an upload that may
+already have published — the receipt, the byte checkpoints and the
+uncertainty marker — went with it. The disconnect was a way to publish a
+second video on one channel.
+
+**Is:** the link to the account is `ON DELETE SET NULL` and the column is
+nullable. The session survives with its evidence, and a `BEFORE DELETE`
+trigger on `social_accounts` settles the public row (with the marker when a
+video may exist), redacts the provider session URI (a credential of an account
+that is gone) and makes the session terminal.
+
+**The disconnect is never blocked**, and the tenant keeps the post, the media
+and the session. The public row still goes with the account, because its
+result belongs to the account: that is the product's behaviour for every
+platform, and changing it for YouTube alone would be a different product.
+
+**Why:** the evidence has to outlive the account, or preserving it is
+cosmetic. The pattern is the one the repository already uses for the same
+problem (`20261002090000_scheduled_keep_inflight_on_account_delete.sql`).
+
+**Proved by:** SQL suite Y42.
+
+---
+
+## 55. A retry with a replacement file is admitted
+
+**Was:** the retry that carries a replacement video names the new file in the
+post, and the session of the previous attempt still pointed at the old one.
+The admission compared the old fence with the live post and refused, so a
+retry the customer had been given could never be admitted.
+
+**Is:** the admission **rebinds** the session to the file the post names. The
+rebind is a separate branch from the same-file restart, and both require:
+
+* the attempt to be **terminal** (`failed` or `expired`),
+* **no byte sent** and **no video may exist**,
+* **no live lease**: a worker that still owns the session is about to settle
+  it, and a rebind under that worker would settle the new attempt with the
+  old outcome,
+* the new file to be the **post's own file** at the exact version the caller
+  read,
+* the account to still be a **target** of the post,
+* the attempt that asks to be the one that is **running**.
+
+The open, reconcile and uploaded sessions keep their guards: an open session
+holds a provider session with the old content, and a session that may hold a
+video may publish a second one.
+
+**Why:** the fence of the previous attempt describes a write that never
+happened, so it may not refuse a retry for ever. The proof that nothing ever
+reached the provider is what makes the rebind safe.
+
+**Proved by:** SQL suites Y44 (the rebind and the claim) and Y45 (a session
+that may hold a video is not rebound).
+
+---
+
+## 56. The same channel is not published again after a reconnect
+
+**Was:** the disconnect removed the session, so a reconnect and a retry opened
+a fresh upload. A reconnect is a **new account row** — the OAuth upsert cannot
+reuse a deleted id — so the session lookup, which is by post and account, did
+not find the old session.
+
+**Is:** the session survives the disconnect and records the **channel** it
+belonged to. The admission refuses (`YUS16`,
+`channel_may_have_published`) when the post already has a session of a
+disconnected account, that session may hold a video, and the channel is the
+one the upload is about to be carried on to.
+
+**The channel is what tells the two apart.** Another channel of the same
+customer is a different publication and stays allowed; the same channel is
+refused, because a second video on one channel is worse than a post that
+needs a human. The refusal carries the uncertain marker, so the row the
+outer loop writes is never offered as a retry.
+
+**Why:** preserving the evidence is only half of the repair. The evidence has
+to be read by something, or preserving it changes nothing.
+
+**Proved by:** SQL suite Y46 and `youtubeUploadOutcome.test.ts` (a refusal
+that may have published carries the marker).
+
+---
+
+## 57. The live state is asked about again before the first byte
+
+**Was:** the live authority was asked about once, before anything was sent. The
+media is opened lazily, inside the upload, and opening it reaches the media
+host — so it takes seconds. Between the check and the first byte the customer
+may cancel or edit the post, remove the target account, or replace the media,
+and the upload would write the old content anyway.
+
+**Is:** the live state is asked about **again** once the media is open, and the
+check travels with the source: it runs before the first chunk is read, and
+therefore before the first byte is written. A lost authority makes that read
+fail, which ends the attempt **without a write**, so nothing reaches the
+provider. The session stays resumable, and the attempt stops here instead of
+waiting for another worker to find the same thing.
+
+A media that is still being scanned is not a failure: the attempt waits, the
+same sentence the resumable outcome uses.
+
+**Why:** the first check says the world was right when it was read. The second
+one says it is right now. The write is the thing that cannot be taken back,
+so the check belongs immediately before it.
+
+**Proved by:** `youtubeUploadContinuation.test.ts` (the second check, and the
+wait for a media that is still being scanned).
 
 ---
 

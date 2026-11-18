@@ -90,6 +90,14 @@ export interface ContinuationMedia {
   id: string;
   userId: string;
   currentObjectVersion: number | null;
+  /**
+   * The size of the file as it is now.
+   *
+   * It has to be the size the upload started with: the upload resumes at an
+   * offset that was established for one object, and a file of another size is
+   * not that object.
+   */
+  fileSize: number | null;
   filePath: string;
   /**
    * The storage bucket the file lives in.
@@ -149,6 +157,14 @@ export interface YoutubeContinuationPorts {
     source: UploadByteSource;
     totalBytes: number;
     deadlineMs: number;
+    /**
+     * The type of the video, as the media library knows it.
+     *
+     * The chunks are declared with it, so a resumed upload has to declare the
+     * type the first one declared. A MOV or a WebM that is resumed as an MP4
+     * is refused by the provider, and the upload is left unresolved.
+     */
+    mimeType: string | null;
   }): Promise<ResumableUploadOutcome>;
   /**
    * Records the terminal outcome.
@@ -226,9 +242,17 @@ export interface YoutubeContinuationPorts {
   now(): number;
 }
 
+/**
+ * How the scope of the attempt stands.
+ *
+ * The scope is the set of destinations the attempt owns. It becomes complete
+ * when every one of them has a result row, and that is what lets the pending
+ * evidence be removed.
+ */
+export type YoutubeFanoutScopeState = "closed" | "attempt_running" | "incomplete";
+
 /** What the continuation ended as. */
-export interface ContinuationResult {
-  /** The public outcome. */
+export interface ContinuationResult {  /** The public outcome. */
   status: "completed" | "pending" | "failed" | "refused";
   /** The stable reason code. */
   reason: YoutubeUploadReason;
@@ -285,6 +309,11 @@ export function refusalToReason(refusal: YoutubeUploadRefusal): YoutubeUploadRea
       return YOUTUBE_UPLOAD_REASON.media_unavailable;
     case "session_expired":
       return YOUTUBE_UPLOAD_REASON.expired;
+    case "session_not_found":
+      // There is no session to continue. The caller is told the session is not
+      // there, not that the outcome is unknown: nothing will ever be sent, so
+      // the next pass has nothing to look at.
+      return YOUTUBE_UPLOAD_REASON.not_found;
     case "lease_stale":
       return YOUTUBE_UPLOAD_REASON.lease_conflict;
     case "stale_attempt":
@@ -335,7 +364,14 @@ export async function continueYoutubeUpload(
   // The attempt must be the one the dispatch named. The dispatch carries the
   // attempt the session was claimed for, and a post that moved on to a newer
   // attempt is a post whose content may have changed.
-  if (request.attemptStartedAt && !sameAttemptTimestamp(post.processingStartedAt, request.attemptStartedAt)) {
+  //
+  // A dispatch WITHOUT an attempt has no fence to compare, and a fence that
+  // cannot be compared does not hold: the continuation is refused. The route
+  // refuses such a dispatch before it gets here, so this is the second line.
+  if (!request.attemptStartedAt) {
+    return refused(YOUTUBE_UPLOAD_REASON.stale_attempt);
+  }
+  if (!sameAttemptTimestamp(post.processingStartedAt, request.attemptStartedAt)) {
     return refused(YOUTUBE_UPLOAD_REASON.stale_attempt);
   }
 
@@ -353,8 +389,10 @@ export async function continueYoutubeUpload(
   if (session.postId !== post.id) return refused(YOUTUBE_UPLOAD_REASON.not_found);
 
   // The attempt fence, checked on the session itself. A session that belongs
-  // to an older attempt is never carried on.
-  if (session.attemptStartedAt && !sameAttemptTimestamp(post.processingStartedAt, session.attemptStartedAt)) {
+  // to an older attempt is never carried on, and a session that carries no
+  // attempt at all cannot be compared with the post's, so it is refused too:
+  // the fence has to hold, and it cannot hold what it cannot compare.
+  if (!session.attemptStartedAt || !sameAttemptTimestamp(post.processingStartedAt, session.attemptStartedAt)) {
     return refused(YOUTUBE_UPLOAD_REASON.stale_attempt);
   }
 
@@ -376,12 +414,24 @@ export async function continueYoutubeUpload(
     // scope has to be settled while that row is still pending: the closure
     // then knows every destination of the attempt, and the sweeper never sees
     // a gap it could mistake for a proof.
-    await recoverFanoutQuietly(ports, session.id);
+    const recovery = await recoverFanout(ports, session.id, request.leaseToken);
+    if (recovery.scopeState === "incomplete") {
+      return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
+    }
     const projected = await ports.projectReceipt({ sessionId: session.id });
     if (!projected.settled) {
       return refused(refusalToReason(projected.refused ?? "session_not_found"));
     }
     return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: session.videoId };
+  }
+
+  if (!session.socialAccountId) {
+    // The account was disconnected.
+    //
+    // The session keeps its evidence, because a video may exist, but there is
+    // no account to carry the upload on to and no credential to send. The
+    // session is terminal already, so nothing is written here.
+    return refused(YOUTUBE_UPLOAD_REASON.account_disconnected);
   }
 
   const account = await ports.loadAccount(session.socialAccountId);
@@ -398,7 +448,17 @@ export async function continueYoutubeUpload(
     // URI could have a video nobody has a receipt for, so it is left for a
     // human instead of being started again.
     if (session.bytesSent > 0 || session.videoMayExist) {
-      return refused(YOUTUBE_UPLOAD_REASON.reconcile);
+      // The session cannot be carried on, and the provider may already hold a
+      // video. The attempt ends here, and the outcome is recorded: the row
+      // was admitted before the provider was contacted, so it exists, and a
+      // row that stays pending for ever is a publication the customer never
+      // sees finish.
+      return await refusePermanently({
+        ports,
+        session,
+        leaseToken: request.leaseToken,
+        reason: YOUTUBE_UPLOAD_REASON.reconcile,
+      });
     }
   }
 
@@ -434,7 +494,12 @@ export async function continueYoutubeUpload(
         nextCheckAt: new Date(ports.now() + YOUTUBE_CONTINUATION_MIN_DELAY_MS).toISOString(),
       };
     }
-    return refused(media.reason ?? YOUTUBE_UPLOAD_REASON.media_unavailable);
+    return await refusePermanently({
+      ports,
+      session,
+      leaseToken: request.leaseToken,
+      reason: media.reason ?? YOUTUBE_UPLOAD_REASON.media_unavailable,
+    });
   }
 
   const { leaseToken } = request;
@@ -471,25 +536,152 @@ export async function continueYoutubeUpload(
   // The checks above still run before anything is sent, so a file that is gone,
   // replaced or still being scanned is refused before the provider is asked.
   const mediaFile = media.media;
+
+  // The live state is asked about AGAIN once the media is open.
+  //
+  // Opening the media reaches the media host, so it is an awaited operation
+  // that can take seconds. Between the check above and the first byte, the
+  // customer may cancel or edit the post, remove the target account, or
+  // replace the media. The first check says the world was right when it was
+  // read; this one says it is right NOW.
+  //
+  // The source is opened lazily, inside the upload, so the check travels with
+  // it: it runs before the first chunk is read, and therefore before the
+  // first byte is written. A lost authority makes that read fail, which ends
+  // the attempt WITHOUT a write, so nothing reaches the provider. The session
+  // stays resumable, and the worker that looks at it again finds the refusal
+  // at the check it makes before it writes anything.
+  let authorityLost: YoutubeUploadReason | null = null;
   const source = deferredUploadByteSource(
-    async () => await ports.createSource({ media: mediaFile }),
+    async () => {
+      const opened = await ports.createSource({ media: mediaFile });
+      const live = await ports.effectAuthority({ sessionId: session.id, leaseToken });
+      if (!live.authorized) {
+        authorityLost = effectAuthorityReason(live.reason);
+        throw new Error("the live state no longer allows the upload");
+      }
+      return opened;
+    },
     session.totalBytes,
   );
-  const outcome = await ports.runUpload({
-    record: session,
-    leaseToken,
-    accessToken,
-    source,
-    totalBytes: session.totalBytes,
-    deadlineMs: ports.now() + YOUTUBE_CONTINUATION_LEASE_MS,
-  });
+
+  // What an attempt does when the authority was lost while the media was
+  // being opened. The upload ended without a write, so nothing reached the
+  // provider, and the attempt stops here instead of waiting for another
+  // worker to find the same thing.
+  const stopOnLostAuthority = async (): Promise<ContinuationResult | null> =>
+    await stopOnLostAuthorityAttempt({ ports, session, leaseToken, lost: authorityLost });
+
+  let outcome: ResumableUploadOutcome;
+  try {
+    outcome = await ports.runUpload({
+      record: session,
+      leaseToken,
+      accessToken,
+      source,
+      totalBytes: session.totalBytes,
+      deadlineMs: ports.now() + YOUTUBE_CONTINUATION_LEASE_MS,
+      // The type of the video, as the media library knows it. The chunks of a
+      // resumed upload are declared with it, so the continuation declares the
+      // type the first upload declared.
+      mimeType: mediaFile.mimeType,
+    });
+  } catch (error) {
+    // The upload threw. The read of the first chunk fails when the authority
+    // was lost, so this is where that ends up.
+    const stopped = await stopOnLostAuthority();
+    if (stopped) return stopped;
+    throw error;
+  }
+
+  const stopped = await stopOnLostAuthority();
+  if (stopped) return stopped;
 
   return await interpretOutcome({ ports, request, session, outcome, post, accessToken });
+}
+
+/**
+ * What an attempt does when the live state was lost while the media opened.
+ *
+ * The upload ended without a write, so nothing reached the provider. The
+ * attempt stops here instead of waiting for another worker to find the same
+ * thing. A media that is still being scanned is not a failure: it waits.
+ */
+async function stopOnLostAuthorityAttempt(args: {
+  ports: YoutubeContinuationPorts;
+  session: YoutubeUploadSessionRecord;
+  leaseToken: string;
+  /** The reason the authority was lost, or null when it was not. */
+  lost: YoutubeUploadReason | null;
+}): Promise<ContinuationResult | null> {
+  const { ports, session, leaseToken, lost } = args;
+  if (lost === null) return null;
+  if (lost === YOUTUBE_UPLOAD_REASON.resumable) {
+    return {
+      status: "pending",
+      reason: YOUTUBE_UPLOAD_REASON.resumable,
+      nextCheckAt: new Date(ports.now() + YOUTUBE_CONTINUATION_MIN_DELAY_MS).toISOString(),
+    };
+  }
+  return await refusePermanently({ ports, session, leaseToken, reason: lost });
 }
 
 /** The continuation stops here, and says why. */
 function refused(reason: YoutubeUploadReason): ContinuationResult {
   return { status: "refused", reason };
+}
+
+/**
+ * Records a refusal that ends the attempt.
+ *
+ * The public row was admitted before the provider was contacted, so it exists
+ * and it belongs to this attempt. A PERMANENT refusal has to close it: a row
+ * that stays pending for ever is a publication the customer never sees
+ * finish, and the post keeps a worker that reclaims it again and again.
+ *
+ * The uncertain evidence is kept. A refusal that says the provider may already
+ * hold a video carries the marker, so the retry gate and the retry button both
+ * refuse to offer a blind retry, and the session becomes one a human decides.
+ *
+ * A refusal that is NOT permanent leaves the row alone: another worker owns
+ * the session, the post moved on to a newer attempt, or the account may be
+ * reconnected. The worker that owns the row decides what happens to it.
+ */
+async function refusePermanently(args: {
+  ports: YoutubeContinuationPorts;
+  session: YoutubeUploadSessionRecord;
+  leaseToken: string;
+  reason: YoutubeUploadReason;
+}): Promise<ContinuationResult> {
+  const { ports, session, leaseToken, reason } = args;
+  // The marker follows the DURABLE rule, not the reason of this refusal.
+  //
+  // The session knows whether a video may exist: the flag is set when the
+  // last chunk may have been written, and it only ever grows. A refusal that
+  // happens on such a session is not a proof, so it carries the marker: the
+  // retry gate and the retry button both refuse to offer a blind retry,
+  // because a second attempt could publish a second video.
+  //
+  // The reason adds its own case: a session that lost its provider session
+  // after writing bytes may hold a video the flag never learned about.
+  const uncertain = reason === YOUTUBE_UPLOAD_REASON.reconcile || session.videoMayExist;
+  const settled = await ports.settleUpload({
+    sessionId: session.id,
+    leaseToken,
+    status: "failed",
+    videoId: null,
+    errorMessage: reason,
+    responseData: {
+      youtube_upload_reason: reason,
+      ...(uncertain ? { publish_outcome: "uncertain" } : {}),
+    },
+  });
+  if (!settled.settled) {
+    // The lease is gone, so the outcome is not recorded here. The worker that
+    // owns the session now decides what happens to the row.
+    return { status: "refused", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
+  }
+  return { status: "failed", reason };
 }
 
 /**
@@ -535,9 +727,21 @@ async function loadMatchingMedia(
   if (!media || media.userId !== post.userId) {
     return { media: null, reason: YOUTUBE_UPLOAD_REASON.media_unavailable };
   }
-  if (session.mediaObjectVersion !== null && media.currentObjectVersion !== session.mediaObjectVersion) {
+  if (session.mediaObjectVersion === null || media.currentObjectVersion === null ||
+      media.currentObjectVersion !== session.mediaObjectVersion) {
     // The file was replaced. The bytes of the upload belong to the old
     // version, and the old version is not what the post names any more.
+    //
+    // A session that carries no version at all is refused the same way: the
+    // fence has to hold, and it cannot hold what it cannot compare.
+    return { media: null, reason: YOUTUBE_UPLOAD_REASON.media_unavailable };
+  }
+  if (media.fileSize !== null && media.fileSize !== session.totalBytes) {
+    // The file is not the size the upload started with.
+    //
+    // The upload resumes at an offset that was established for one object. A
+    // file of another size is not that object, and sending the rest of it
+    // would publish bytes that do not belong to the video.
     return { media: null, reason: YOUTUBE_UPLOAD_REASON.media_unavailable };
   }
   const sendable = mediaSendability({ scanState: media.scanState });
@@ -627,7 +831,13 @@ async function interpretOutcome(args: {
     // scope has to be settled while that row is still pending: the closure
     // then knows every destination of the attempt, and the sweeper never sees
     // a gap it could mistake for a proof.
-    await recoverFanoutQuietly(ports, session.id);
+    const recovery = await recoverFanout(ports, session.id, leaseToken);
+    if (recovery.scopeState === "incomplete") {
+      // The scope is not complete and nobody will complete it, so the pending
+      // row stays: it is the only thing that keeps the sweeper from reading a
+      // missing destination as one that never started.
+      return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
+    }
 
     const settled = await ports.settleUpload({
       sessionId: session.id,
@@ -691,7 +901,10 @@ async function interpretOutcome(args: {
   // above: the pending YouTube row is what keeps the generic sweeper from
   // reading the absence of a sibling row as a proof that the sibling never
   // started.
-  await recoverFanoutQuietly(ports, session.id);
+  const recovery = await recoverFanout(ports, session.id, leaseToken);
+  if (recovery.scopeState === "incomplete") {
+    return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
+  }
 
   const settled = await ports.settleUpload({
     sessionId: session.id,
@@ -726,27 +939,77 @@ async function interpretOutcome(args: {
  * is what keeps the generic sweeper from reading the absence of a sibling row
  * as a proof that the sibling never started.
  *
- * A failure here is never fatal: the video is already published, or the
- * failure is already recorded, and the post is settled either way. The
- * candidate stays in whatever state the closure left it, and the next
- * reconciliation sees it.
+ * The lease travels with it: the closure runs while this worker still owns the
+ * session, and the token is what proves it. A closure without the token is
+ * refused by the database, and the row would become terminal with the fanout
+ * still open.
  */
-async function recoverFanoutQuietly(
+async function recoverFanout(
   ports: YoutubeContinuationPorts,
   sessionId: string,
-): Promise<void> {
+  leaseToken: string,
+): Promise<{ scopeState: YoutubeFanoutScopeState; reason: string | null }> {
   try {
-    const recovered = await ports.recoverFanout({ sessionId });
-    if (!recovered.recovered) {
+    const recovered = await ports.recoverFanout({ sessionId, leaseToken });
+    const scopeState = scopeStateOf(recovered);
+    if (scopeState === "incomplete") {
       console.warn(
         `[youtube] the fanout of session ${sessionId} was not closed:`,
         recovered.reason ?? "unknown reason",
       );
     }
+    return { scopeState, reason: recovered.reason };
   } catch (error) {
+    // A closure that could not be run at all leaves the scope unknown, and an
+    // unknown scope is an incomplete one: the pending evidence stays.
     console.warn(
       `[youtube] the fanout of session ${sessionId} could not be closed:`,
       error instanceof Error ? error.message : String(error),
     );
+    return { scopeState: "incomplete", reason: null };
   }
+}
+
+/**
+ * How the scope of the attempt stands, read from the recovery's verdict.
+ *
+ * The recovery answers with a stable reason, and the reason says what the
+ * scope is:
+ *
+ *   * it closed the scope -- every destination of the attempt has a result row,
+ *     so the scope is complete and the pending evidence may be removed;
+ *   * the attempt may still be running -- the scope is open on purpose, and
+ *     the worker of the attempt is going to complete it;
+ *   * anything else -- the scope could not be proven complete and nobody will
+ *     complete it, so the pending row stays: it is the only thing that keeps
+ *     the sweeper from reading a missing destination as one that never
+ *     started.
+ */
+export function scopeStateOf(recovery: {
+  /** Whether the closure closed the scope. */
+  recovered: boolean;
+  /** Why it did not, when it did not. */
+  reason: string | null;
+}): YoutubeFanoutScopeState {
+  if (recovery.recovered) return "closed";
+  if (recovery.reason === "attempt_may_still_be_running") return "attempt_running";
+  return "incomplete";
+}
+
+/**
+ * The answer when the scope of the attempt is not complete.
+ *
+ * The pending row is the protection: it is what keeps the sweeper from
+ * reading a missing destination as one that never started. So the row stays
+ * pending, the attempt stays open, and the next reconciliation looks again.
+ */
+function scopeIncomplete(
+  ports: YoutubeContinuationPorts,
+  reason: YoutubeUploadReason,
+): ContinuationResult {
+  return {
+    status: "pending",
+    reason,
+    nextCheckAt: new Date(ports.now() + YOUTUBE_CONTINUATION_MIN_DELAY_MS).toISOString(),
+  };
 }

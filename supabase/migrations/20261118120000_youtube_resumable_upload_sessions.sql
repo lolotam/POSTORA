@@ -135,7 +135,13 @@ CREATE TABLE public.youtube_upload_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   post_id uuid NOT NULL REFERENCES public.posts(id) ON DELETE CASCADE,
-  social_account_id uuid NOT NULL REFERENCES public.social_accounts(id) ON DELETE CASCADE,
+  -- The account this upload belongs to.
+  --
+  -- It is NULLABLE, and the link is SET NULL when the account is deleted: the
+  -- evidence of an upload that may already have published has to survive the
+  -- disconnect. The retry gate reads this row, so a session that keeps its
+  -- uncertainty marker keeps a later retry from publishing a second video.
+  social_account_id uuid REFERENCES public.social_accounts(id) ON DELETE SET NULL,
   platform_post_id uuid REFERENCES public.platform_posts(id) ON DELETE SET NULL,
   media_file_id uuid REFERENCES public.media_files(id) ON DELETE SET NULL,
   -- The media's content version, so a replaced file cannot be uploaded as
@@ -177,6 +183,18 @@ CREATE TABLE public.youtube_upload_sessions (
   -- clear it. While it is true nothing is written again: a second video on
   -- the customer's channel is worse than a post that needs a human.
   video_may_exist boolean NOT NULL DEFAULT false,
+  -- The channel of the account this upload belonged to, when that account was
+  -- disconnected while the upload was in flight.
+  --
+  -- The account row is gone, so its id says nothing any more. The CHANNEL is
+  -- the stable identity: a reconnect is a new account row (the OAuth upsert
+  -- cannot reuse a deleted id), but it is the same channel. So this is what
+  -- lets a later admission tell "the same channel, which may already hold a
+  -- video" from "another channel of the same customer", which is a different
+  -- publication and stays allowed.
+  --
+  -- It is NULL for every session whose account is still there.
+  disconnected_channel_id text,
   -- The provider session URI. A CREDENTIAL. Never returned to a browser role.
   session_uri text,
   session_expires_at timestamptz,
@@ -230,6 +248,12 @@ COMMENT ON COLUMN public.youtube_upload_sessions.video_may_exist IS
   'clear it. While it is true no session is reopened, because a second video '
   'on the customer''s channel is worse than a post that needs a human.';
 
+COMMENT ON COLUMN public.youtube_upload_sessions.disconnected_channel_id IS
+  'The channel of the account that was disconnected while this upload was in '
+  'flight. The account row is gone, so the channel is what a later admission '
+  'compares: a reconnect of the same channel may already hold a video, while '
+  'another channel of the same customer is a different publication.';
+
 COMMENT ON COLUMN public.youtube_upload_sessions.content_fence IS
   'The LIVE content of the upload: the post as it is now, with the '
   'attempt-only runtime metadata removed, plus the media file''s live '
@@ -250,6 +274,34 @@ CREATE INDEX youtube_upload_sessions_user_idx
 
 ALTER TABLE public.youtube_upload_sessions ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.youtube_upload_sessions FROM anon, authenticated;
+
+-- The link to the account is SET NULL when the account is deleted, so the
+-- evidence of an upload that may already have published survives the
+-- disconnect. The trigger below redacts the provider session URI and makes
+-- the session terminal.
+--
+-- The statement is written so that a table created by an EARLIER version of
+-- this file is brought to the same shape: the column becomes nullable and
+-- the cascade becomes a SET NULL.
+DO $$
+BEGIN
+  ALTER TABLE public.youtube_upload_sessions
+    ALTER COLUMN social_account_id DROP NOT NULL;
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'public.youtube_upload_sessions'::regclass
+       AND conname = 'youtube_upload_sessions_social_account_id_fkey'
+       AND confdeltype <> 'n'
+  ) THEN
+    ALTER TABLE public.youtube_upload_sessions
+      DROP CONSTRAINT youtube_upload_sessions_social_account_id_fkey;
+    ALTER TABLE public.youtube_upload_sessions
+      ADD CONSTRAINT youtube_upload_sessions_social_account_id_fkey
+      FOREIGN KEY (social_account_id)
+      REFERENCES public.social_accounts(id) ON DELETE SET NULL;
+  END IF;
+END
+$$;
 
 -- ---------------------------------------------------------------------------
 -- The content fence.
@@ -1407,10 +1459,48 @@ BEGIN
     RAISE EXCEPTION 'YUS02: the account is not the owner''s, or is not usable' USING ERRCODE = 'YUS02';
   END IF;
 
+  -- THE SAME CHANNEL MAY ALREADY HOLD A VIDEO
+  --
+  -- A customer who disconnects a channel while its upload is in flight keeps
+  -- the session (the link to the account is SET NULL), because the provider
+  -- may already have turned that upload into a video. The evidence has to
+  -- survive the disconnect, or the disconnect would be a way to publish a
+  -- second video on one channel.
+  --
+  -- A reconnect is a NEW account row: the OAuth upsert cannot reuse a
+  -- deleted id, so the session lookup below (which is by post and account)
+  -- does not find the old session, and a retry would open a fresh upload.
+  --
+  -- The CHANNEL is what tells the two apart. Another channel of the same
+  -- customer is a different publication and stays allowed; the same channel
+  -- is refused, because a second video on one channel is worse than a post
+  -- that needs a human.
+  IF EXISTS (
+    SELECT 1 FROM public.youtube_upload_sessions s
+     WHERE s.post_id = p_post_id
+       AND s.social_account_id IS NULL
+       AND s.video_may_exist
+       AND s.disconnected_channel_id IS NOT NULL
+       AND s.disconnected_channel_id = v_account.platform_user_id
+  ) THEN
+    RAISE EXCEPTION 'YUS16: this channel may already have published this post, so it is not published again' USING ERRCODE = 'YUS16';
+  END IF;
+
   IF p_media_file_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM public.media_files WHERE id = p_media_file_id AND user_id = p_user_id
   ) THEN
     RAISE EXCEPTION 'YUS03: the media file is not the owner''s' USING ERRCODE = 'YUS03';
+  END IF;
+
+  -- The media file has to be one of the post's own files.
+  --
+  -- Owning a file is not the same as being allowed to publish it: the file has
+  -- to be one the post names. A file of the same customer that the post does
+  -- not carry is not the content of this post, and an upload that reads it
+  -- publishes something the customer did not put on this post.
+  IF p_media_file_id IS NOT NULL
+     AND (v_post.media_file_ids IS NULL OR NOT (p_media_file_id = ANY(v_post.media_file_ids))) THEN
+    RAISE EXCEPTION 'YUS03: the media file is not one of the post''s files' USING ERRCODE = 'YUS03';
   END IF;
 
   IF p_media_size IS NULL OR p_media_size <= 0
@@ -1522,9 +1612,16 @@ BEGIN
     -- human. A session that is still OPEN is not restarted either: it holds
     -- a provider session that carries the OLD attempt's content, so it keeps
     -- the fence comparison below.
+    --
+    -- No live lease: a worker that still owns the session is about to settle
+    -- it, and a restart under that worker would settle the new attempt with
+    -- the old outcome.
     IF v_session.state IN ('failed', 'expired')
        AND NOT v_session.video_may_exist
        AND v_session.bytes_sent = 0
+       AND (v_session.lease_token IS NULL
+            OR v_session.lease_expires_at IS NULL
+            OR v_session.lease_expires_at <= now())
        AND v_session.total_bytes IS NOT DISTINCT FROM p_total_bytes
        AND v_session.media_file_id IS NOT DISTINCT FROM p_media_file_id
        AND (v_session.media_object_version IS NULL
@@ -1553,6 +1650,81 @@ BEGIN
              updated_at = clock_timestamp()
        WHERE id = v_session.id
       RETURNING * INTO v_session;
+    END IF;
+
+    -- THE REBIND
+    --
+    -- A retry may carry a DIFFERENT file: the customer replaced the video
+    -- between the attempts, and the retry with the replacement media was
+    -- accepted, so the post names the new file NOW. The session of the
+    -- previous attempt still points at the old one, and the old fence
+    -- describes a write that never happened, so the admission would refuse
+    -- the new attempt for ever.
+    --
+    -- So the session is REBOUND to the file the post names. That is only
+    -- safe when the previous attempt PROVES that nothing ever reached the
+    -- provider: the attempt is terminal, no byte was sent, and no video may
+    -- exist. A session that is still OPEN holds a provider session with the
+    -- old content, and a session that may already hold a video may publish a
+    -- second one, so both keep their guards.
+    --
+    -- It also needs:
+    --
+    --   * no live lease: a worker that still owns the session is about to
+    --     settle it, and a rebind under it would settle the new attempt with
+    --     the old outcome;
+    --   * the new file is the post's own file (checked above) at the exact
+    --     version the caller read (checked above);
+    --   * the account is still a target of the post;
+    --   * the attempt that asks is the one that is running (checked above).
+    IF v_session.state IN ('failed', 'expired')
+       AND NOT v_session.video_may_exist
+       AND v_session.bytes_sent = 0
+       AND (v_session.lease_token IS NULL
+            OR v_session.lease_expires_at IS NULL
+            OR v_session.lease_expires_at <= now())
+       AND v_session.media_file_id IS DISTINCT FROM p_media_file_id
+       AND public.youtube_upload_target_authorized(
+             p_post_id, p_social_account_id,
+             coalesce(p_target_account_ids, v_session.target_account_ids)) THEN
+      UPDATE public.youtube_upload_sessions
+         SET state = 'open', session_uri = NULL, confirmed_bytes = 0, bytes_sent = 0,
+             session_expires_at = p_session_expires_at, error = NULL,
+             lease_token = NULL, lease_expires_at = NULL,
+             next_check_at = NULL, last_outcome = NULL, continuation_count = 0,
+             attempt_started_at = v_attempt,
+             content_fence = v_fence,
+             upload_body = p_upload_body,
+             upload_settings = v_settings,
+             -- The file of the new attempt, at its live version. The old file
+             -- is gone: the post does not name it any more.
+             media_file_id = p_media_file_id,
+             media_size = p_media_size,
+             total_bytes = p_total_bytes,
+             media_object_version = coalesce(v_media_version, 1),
+             resolved_platform = 'youtube',
+             target_account_ids = coalesce(p_target_account_ids, v_session.target_account_ids),
+             updated_at = clock_timestamp()
+       WHERE id = v_session.id
+      RETURNING * INTO v_session;
+    END IF;
+
+    -- A SESSION THAT NEEDS A HUMAN STAYS THAT WAY
+    --
+    -- It is checked BEFORE the fence on purpose. The fence protects a WRITE:
+    -- it refuses to carry an upload on to a post that changed under it. A
+    -- session that needs a human is not written to any more, so there is no
+    -- write to protect here.
+    --
+    -- And a session that may already hold a video has to say so, whatever
+    -- else changed: the caller has to learn that the channel may hold a
+    -- video, because that is what keeps a retry from publishing a second one.
+    -- A fence refusal would say "the post was edited" and lose that.
+    IF v_session.state = 'reconcile' THEN
+      RETURN jsonb_build_object(
+        'session', public.youtube_upload_session_payload(v_session),
+        'platform_post_id', v_session.platform_post_id
+      );
     END IF;
 
     IF v_session.content_fence IS DISTINCT FROM v_fence THEN
@@ -1593,12 +1765,6 @@ BEGIN
              updated_at = clock_timestamp()
        WHERE id = v_session.id
       RETURNING * INTO v_session;
-    ELSIF v_session.state = 'reconcile' THEN
-      -- A session that needs a human stays that way.
-      RETURN jsonb_build_object(
-        'session', public.youtube_upload_session_payload(v_session),
-        'platform_post_id', v_session.platform_post_id
-      );
     ELSIF v_session.state = 'failed' THEN
       -- A permanent failure may be tried again, but ONLY when the record
       -- proves that no video can exist. A failure that may already hold a
@@ -3618,6 +3784,136 @@ COMMENT ON FUNCTION public.claim_post_completion_work(integer, interval) IS
   'worker.';
 
 -- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- THE ACCOUNT IS DISCONNECTED
+--
+-- The sessions of an account keep their evidence when the account is deleted:
+-- the link to the account is SET NULL, and the session row stays with its
+-- receipt, its byte checkpoints and its uncertainty marker.
+--
+-- That evidence is what a later retry reads. A customer who disconnects and
+-- reconnects the same channel must not get a second video from the retry
+-- button, so the marker has to outlive the account.
+--
+-- The provider session URI is a CREDENTIAL of an account that is gone, so it is
+-- redacted: the upload cannot be carried on any more, because there is no
+-- account to carry it on to.
+--
+-- The disconnect itself is never blocked, and the tenant keeps everything
+-- else: the post, the media and the settled public rows are all kept.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.terminalize_youtube_upload_sessions_of_account(
+  p_social_account_id uuid
+)
+RETURNS integer
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_session public.youtube_upload_sessions%ROWTYPE;
+  v_count integer := 0;
+  v_uncertain boolean;
+  v_channel_id text;
+BEGIN
+  IF p_social_account_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  -- The channel of the account that is going away.
+  --
+  -- The row is still there: this runs BEFORE the delete. The channel is the
+  -- identity that outlives the row, because a reconnect cannot reuse a
+  -- deleted id but it does land on the same channel.
+  SELECT sa.platform_user_id INTO v_channel_id
+    FROM public.social_accounts sa WHERE sa.id = p_social_account_id;
+
+  FOR v_session IN
+    SELECT s.* FROM public.youtube_upload_sessions s
+     WHERE s.social_account_id = p_social_account_id
+       AND s.state IN ('open', 'uploaded', 'expired', 'reconcile', 'failed')
+  LOOP
+    v_uncertain := v_session.video_may_exist OR v_session.bytes_sent > 0;
+
+    -- The public row is settled BEFORE the account goes, so the parent does
+    -- not wait for a destination that is about to disappear. The row itself
+    -- goes with the account: its result belongs to the account.
+    IF v_session.platform_post_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM public.platform_posts pp
+       WHERE pp.id = v_session.platform_post_id AND pp.status = 'pending'
+    ) THEN
+      PERFORM public.partner_settle_platform_post(
+        v_session.platform_post_id,
+        v_session.post_id,
+        v_session.social_account_id,
+        'youtube',
+        'failed',
+        NULL,
+        NULL,
+        'the account was disconnected before the upload finished',
+        CASE WHEN v_uncertain
+             THEN jsonb_build_object(
+               'youtube_upload_reason', 'youtube_upload_account_disconnected',
+               'publish_outcome', 'uncertain',
+               'publish_outcome_reason',
+                 'the account was disconnected while the upload was in flight, so YouTube may already hold a video'
+             )
+             ELSE jsonb_build_object(
+               'youtube_upload_reason', 'youtube_upload_account_disconnected'
+             )
+        END
+      );
+    END IF;
+
+    -- The session becomes terminal and keeps its evidence. The URI is a
+    -- credential of an account that no longer exists, so it goes.
+    UPDATE public.youtube_upload_sessions
+       SET state = CASE WHEN v_uncertain THEN 'reconcile' ELSE 'failed' END,
+           session_uri = NULL,
+           lease_token = NULL,
+           lease_expires_at = NULL,
+           disconnected_channel_id = v_channel_id,
+           error = left('the account was disconnected before the upload finished', 300),
+           updated_at = clock_timestamp()
+     WHERE id = v_session.id;
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+COMMENT ON FUNCTION public.terminalize_youtube_upload_sessions_of_account(uuid) IS
+  'Settles the public rows of the YouTube uploads that were in flight for an '
+  'account that is being disconnected. The receipt and the uncertainty marker '
+  'are written before the sessions go, so a video that may exist is never '
+  'offered as a retry.';
+
+CREATE OR REPLACE FUNCTION public.youtube_upload_terminalize_account_sessions()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  PERFORM public.terminalize_youtube_upload_sessions_of_account(OLD.id);
+  RETURN OLD;
+END;
+$$;
+
+COMMENT ON FUNCTION public.youtube_upload_terminalize_account_sessions() IS
+  'Settles the public rows of the YouTube uploads that were in flight before '
+  'an account is deleted. The evidence of an upload that may have published '
+  'survives the disconnect, and the disconnect itself is never blocked.';
+
+DROP TRIGGER IF EXISTS youtube_upload_terminalize_account_sessions ON public.social_accounts;
+CREATE TRIGGER youtube_upload_terminalize_account_sessions
+  BEFORE DELETE ON public.social_accounts
+  FOR EACH ROW
+  EXECUTE FUNCTION public.youtube_upload_terminalize_account_sessions();
+
+-- ---------------------------------------------------------------------------
 -- The grants.
 --
 -- This stack carries ALTER DEFAULT PRIVILEGES ... GRANT ALL ON FUNCTIONS TO
@@ -3658,3 +3954,9 @@ GRANT EXECUTE ON FUNCTION public.claim_post_completion_work(integer, interval) T
 
 REVOKE ALL ON FUNCTION public.sweep_stale_processing_posts(interval) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.sweep_stale_processing_posts(interval) TO service_role;
+
+REVOKE ALL ON FUNCTION public.terminalize_youtube_upload_sessions_of_account(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.terminalize_youtube_upload_sessions_of_account(uuid) TO service_role;
+
+REVOKE ALL ON FUNCTION public.youtube_upload_terminalize_account_sessions() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.youtube_upload_terminalize_account_sessions() TO service_role;

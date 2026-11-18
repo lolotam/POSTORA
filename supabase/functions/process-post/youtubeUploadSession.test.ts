@@ -304,6 +304,7 @@ Deno.test("a refusal is read from the sqlstate", () => {
   assertEquals(readRefusal({ code: "YUS11" }), "stale_attempt");
   assertEquals(readRefusal({ code: "YUS14" }), "no_public_row");
   assertEquals(readRefusal({ code: "YUS15" }), "target_not_authorized");
+  assertEquals(readRefusal({ code: "YUS16" }), "channel_may_have_published");
   assertEquals(readRefusal({ code: "P0001" }), null);
   assertEquals(readRefusal(null), null);
 });

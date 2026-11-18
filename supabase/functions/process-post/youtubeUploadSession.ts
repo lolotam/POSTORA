@@ -80,6 +80,7 @@ const REFUSAL_BY_SQLSTATE: Record<string, YoutubeUploadRefusal> = {
   YUS13: "too_many_continuations",
   YUS14: "no_public_row",
   YUS15: "target_not_authorized",
+  YUS16: "channel_may_have_published",
 };
 
 /**
@@ -101,7 +102,9 @@ function toRecord(payload: Record<string, unknown> | null): YoutubeUploadSession
   return {
     id: String(payload.id ?? ""),
     postId: String(payload.post_id ?? ""),
-    socialAccountId: String(payload.social_account_id ?? ""),
+    socialAccountId: payload.social_account_id === null || payload.social_account_id === undefined
+      ? null
+      : String(payload.social_account_id),
     state: state as YoutubeUploadSessionRecord["state"],
     sessionUri: typeof payload.session_uri === "string" ? payload.session_uri : null,
     confirmedBytes: Number(payload.confirmed_bytes ?? 0),
@@ -167,7 +170,9 @@ function toClaim(payload: Record<string, unknown>): YoutubeUploadContinuationCla
   return {
     sessionId,
     postId: String(payload.post_id ?? ""),
-    socialAccountId: String(payload.social_account_id ?? ""),
+    socialAccountId: payload.social_account_id === null || payload.social_account_id === undefined
+      ? null
+      : String(payload.social_account_id),
     userId: String(payload.user_id ?? ""),
     leaseToken: String(payload.lease_token ?? ""),
     attemptStartedAt: typeof payload.attempt_started_at === "string" ? payload.attempt_started_at : null,

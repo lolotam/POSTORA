@@ -161,7 +161,11 @@ import {
   runResumableVideoUpload,
   type ResumableUploadOutcome,
 } from "./youtubeResumableUpload.ts";
-import { createVideoByteSource } from "./youtubeVideoSource.ts";
+import {
+  createVideoByteSource,
+  fetchApprovedMedia,
+  readBoundedBytes,
+} from "./youtubeVideoSource.ts";
 import { publicSupabaseUrl } from "../_shared/publicSupabaseUrl.ts";
 import { createOwnedVideoSource } from "./youtubeUploadSource.ts";
 import {
@@ -183,6 +187,7 @@ import {
 } from "./youtubeUploadContinuation.ts";
 import {
   uploadOwnedFailure,
+  uploadRefusalFailure,
   youtubeUploadFailureResponseData,
   youtubeUploadOutcomeMessage,
   youtubeUploadOutcomeReason,
@@ -192,6 +197,7 @@ import {
   runYoutubeFollowUps,
   type YoutubeFollowUpDeps,
 } from "./youtubeUploadFollowUps.ts";
+import { refreshYoutubeAccessToken } from "./youtubeTokenRefresh.ts";
 import {
   dropRecordedStory,
   readUnrecordedStory,
@@ -2209,6 +2215,16 @@ Deno.serve(async (req) => {
       if (!resumeYoutubeUploadSessionId || !resumeYoutubeUploadLeaseToken) {
         return await refuseDispatchMode("youtube_identity_incomplete", "The upload continuation needs both the session and the claim token.", 400);
       }
+      // The attempt is part of the identity of a continuation.
+      //
+      // The continuation is fenced to one attempt of the post, and the fence is
+      // the attempt itself. A dispatch without one cannot be compared with the
+      // post, so it is refused here rather than accepted and carried on: the
+      // attempt-level routing fence has to hold, and it cannot hold what it
+      // cannot compare.
+      if (!attemptStartedAt) {
+        return await refuseDispatchMode("youtube_attempt_missing", "The upload continuation needs the attempt it belongs to.", 400);
+      }
       if (carriesNotificationIdentity && (candidateId || notificationClaimId)) {
         return await refuseDispatchMode("youtube_combined_mode", "The upload continuation cannot be combined with another mode.", 400);
       }
@@ -2224,7 +2240,7 @@ Deno.serve(async (req) => {
         post_id,
         resumeYoutubeUploadSessionId,
         resumeYoutubeUploadLeaseToken,
-        attemptStartedAt ?? null,
+        attemptStartedAt,
       );
     }
 
@@ -2857,87 +2873,64 @@ Deno.serve(async (req) => {
     for (const account of (accounts || [])) {
       if (account.platform !== 'youtube' || account.auth_provider === 'composio') continue;
 
-      const expiresAt = account.token_expires_at ? new Date(account.token_expires_at).getTime() : 0;
-      const now = Date.now();
-      const thirtyMinMs = 30 * 60 * 1000;
+      // The refresh is ONE rule, shared with the continuation: a token that
+      // expires within half an hour is refreshed before the provider is
+      // contacted.
+      const token = await refreshYoutubeAccessToken({
+        supabase,
+        account: {
+          id: account.id,
+          accessToken: account.access_token ?? null,
+          refreshToken: account.refresh_token ?? null,
+          tokenExpiresAt: account.token_expires_at ?? null,
+        },
+      });
 
-      if (expiresAt - now > thirtyMinMs) continue; // Token still fresh
+      if (token.refreshed) {
+        // Update in-memory so postToYouTube() uses the fresh token
+        (account as any).access_token = token.accessToken;
+        (account as any).token_expires_at = token.expiresAt;
 
-      console.log(`[JIT] YouTube token expiring/expired for account ${account.id}, refreshing... (source: ${postSource}, post: ${post_id})`);
+        console.log(`[JIT] YouTube token refreshed for account ${account.id}, expires: ${token.expiresAt} (source: ${postSource}, post: ${post_id})`);
 
-      if (!account.refresh_token) {
-        console.warn(`[JIT] No refresh_token for YouTube account ${account.id}, skipping refresh (source: ${postSource}, post: ${post_id})`);
+        // Write to system_logs for observability
+        await supabase.from('system_logs').insert({
+          level: 'info',
+          category: 'token',
+          source: 'process-post-jit',
+          message: `YouTube token refreshed via JIT (source: ${postSource})`,
+          user_id: post.user_id,
+          metadata: {
+            event: 'jit_refresh_success',
+            platform: 'youtube',
+            account_id: account.id,
+            post_id: post_id,
+            post_source: postSource,
+            new_expires_at: token.expiresAt,
+          },
+        });
         continue;
       }
 
-      try {
-        const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            grant_type: 'refresh_token',
-            client_id: Deno.env.get('GOOGLE_CLIENT_ID') || '',
-            client_secret: Deno.env.get('GOOGLE_CLIENT_SECRET') || '',
-            refresh_token: account.refresh_token,
-          }),
-        });
+      if (!token.reason) continue;
 
-        if (tokenRes.ok) {
-          const tokenData = await tokenRes.json();
-          const newExpiresAt = new Date(Date.now() + (tokenData.expires_in * 1000)).toISOString();
+      console.warn(`[JIT] The YouTube token of account ${account.id} was not refreshed (${token.reason}) (source: ${postSource}, post: ${post_id})`);
 
-          // Update DB
-          await supabase.from('social_accounts').update({
-            access_token: tokenData.access_token,
-            token_expires_at: newExpiresAt,
-            updated_at: new Date().toISOString(),
-          }).eq('id', account.id);
-
-          // Update in-memory so postToYouTube() uses the fresh token
-          (account as any).access_token = tokenData.access_token;
-          (account as any).token_expires_at = newExpiresAt;
-
-          console.log(`[JIT] YouTube token refreshed for account ${account.id}, expires: ${newExpiresAt} (source: ${postSource}, post: ${post_id})`);
-
-          // Write to system_logs for observability
-          await supabase.from('system_logs').insert({
-            level: 'info',
-            category: 'token',
-            source: 'process-post-jit',
-            message: `YouTube token refreshed via JIT (source: ${postSource})`,
-            user_id: post.user_id,
-            metadata: {
-              event: 'jit_refresh_success',
-              platform: 'youtube',
-              account_id: account.id,
-              post_id: post_id,
-              post_source: postSource,
-              new_expires_at: newExpiresAt,
-            },
-          });
-        } else {
-          const errText = await tokenRes.text();
-          console.error(`[JIT] YouTube token refresh failed for account ${account.id}: ${errText} (source: ${postSource}, post: ${post_id})`);
-
-          await supabase.from('system_logs').insert({
-            level: 'error',
-            category: 'token',
-            source: 'process-post-jit',
-            message: `YouTube JIT token refresh failed (source: ${postSource})`,
-            user_id: post.user_id,
-            metadata: {
-              event: 'jit_refresh_failed',
-              platform: 'youtube',
-              account_id: account.id,
-              post_id: post_id,
-              post_source: postSource,
-              error: errText,
-            },
-          });
-        }
-      } catch (refreshErr) {
-        console.error(`[JIT] YouTube token refresh error for account ${account.id} (source: ${postSource}, post: ${post_id}):`, refreshErr);
-      }
+      await supabase.from('system_logs').insert({
+        level: 'error',
+        category: 'token',
+        source: 'process-post-jit',
+        message: `YouTube JIT token refresh failed (source: ${postSource})`,
+        user_id: post.user_id,
+        metadata: {
+          event: 'jit_refresh_failed',
+          platform: 'youtube',
+          account_id: account.id,
+          post_id: post_id,
+          post_source: postSource,
+          error: token.reason,
+        },
+      });
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -3455,6 +3448,11 @@ Deno.serve(async (req) => {
         // do not insert a duplicate failed row.
         const selfWrote = (error as { selfWroteRows?: boolean })?.selfWroteRows === true;
         if (!selfWrote) {
+          // An error that carries its own response data says what the row has
+          // to hold: the uncertain marker of an upload that may already have
+          // published. It wins over the deferred image data, which belongs to
+          // another platform's rule and never travels with a YouTube failure.
+          const ownedResponseData = (error as { responseData?: Record<string, unknown> })?.responseData ?? null;
           const settled = await settlePlatformPost(supabase, {
             platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? null,
             postId: post_id,
@@ -3462,9 +3460,11 @@ Deno.serve(async (req) => {
             platform: account.platform,
             status: "failed",
             errorMessage: error instanceof Error ? error.message : "Unknown error",
-            ...(imageExecution?.deferral.media_type === "IMAGE"
-              ? { responseData: { ...imageResponseData, deferred: imageExecution.deferral } }
-              : {}),
+            ...(ownedResponseData
+              ? { responseData: ownedResponseData }
+              : imageExecution?.deferral.media_type === "IMAGE"
+                ? { responseData: { ...imageResponseData, deferred: imageExecution.deferral } }
+                : {}),
           });
           if (settled.id) {
             exactPlatformPostIds.push(settled.id);
@@ -9560,6 +9560,11 @@ function youtubeUploadRefusalMessage(refusal: YoutubeUploadRefusal): string {
       return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.expired);
     case "too_many_continuations":
       return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile);
+    case "channel_may_have_published":
+      // The channel may already hold a video of this post, so the refusal
+      // reads like the reconcile it is: a human has to look before anything is
+      // sent again.
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile);
     default:
       return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.unknown);
   }
@@ -9657,6 +9662,15 @@ async function settleYoutubeUpload(
 }
 
 /**
+ * How large a thumbnail may be.
+ *
+ * A thumbnail is an image for a video, and the provider refuses anything that
+ * is not one. The bound is here so a host that answers with a stream of any
+ * size cannot fill the worker's memory.
+ */
+const THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
  * The boundary of the YouTube follow-ups.
  *
  * The thumbnail is read from the URL the customer gave, and the read is
@@ -9664,16 +9678,33 @@ async function settleYoutubeUpload(
  * and then stops sending must not hold the worker, because the worker is the
  * only thing that may settle the outcome.
  *
+ * The read also goes through the media host policy: only HTTPS, only a host
+ * Postora reviewed, and every redirect hop checked again before it is made. A
+ * thumbnail that does not come from a reviewed host is not read at all: the
+ * worker must never be talked into fetching an internal address.
+ *
  * The budget is asked for EVERY follow-up, not once for both of them, so the
  * second one is skipped rather than started when the worker has already run
  * out of time.
  */
-function youtubeFollowUpDeps(): YoutubeFollowUpDeps {
+function youtubeFollowUpDeps(mediaHosts: Set<string>): YoutubeFollowUpDeps {
   return {
     fetchImpl: fetch,
     async downloadThumbnail(url, timeoutMs) {
-      const { blob, mimeType } = await downloadMediaAsBlob(url, timeoutMs);
-      return { blob, mimeType };
+      const response = await fetchApprovedMedia(
+        url,
+        { method: "GET", signal: AbortSignal.timeout(timeoutMs) },
+        mediaHosts,
+        fetch,
+      );
+      if (!response.ok) {
+        throw new Error(`The thumbnail host answered with ${response.status}.`);
+      }
+      const bytes = await readBoundedBytes(response, THUMBNAIL_MAX_BYTES);
+      const mimeType = (response.headers.get("content-type") ?? "image/jpeg")
+        .split(";")[0]
+        .trim();
+      return { blob: new Blob([bytes], { type: mimeType }), mimeType };
     },
     budgetMs: () => followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now()),
   };
@@ -9721,17 +9752,34 @@ function buildYoutubeContinuationPorts(
     async loadAccount(accountId) {
       const { data } = await supabase
         .from("social_accounts")
-        .select("id, user_id, platform, is_active, access_token, account_metadata, needs_reauth")
+        .select("id, user_id, platform, is_active, access_token, refresh_token, token_expires_at, account_metadata, needs_reauth")
         .eq("id", accountId)
         .maybeSingle();
       if (!data) return null;
       const metadata = (data.account_metadata ?? {}) as Record<string, unknown>;
+
+      // The token is refreshed the way the publishing path refreshes it.
+      //
+      // A continuation starts long after the publish did, and a token that
+      // expired in between turns a resumable upload into a refusal that says
+      // nothing about the video. The receipt-only recovery does NOT come here:
+      // it settles a stored receipt and never talks to the provider.
+      const token = await refreshYoutubeAccessToken({
+        supabase,
+        account: {
+          id: String(data.id),
+          accessToken: typeof data.access_token === "string" ? data.access_token : null,
+          refreshToken: typeof data.refresh_token === "string" ? data.refresh_token : null,
+          tokenExpiresAt: typeof data.token_expires_at === "string" ? data.token_expires_at : null,
+        },
+      });
+
       return {
         id: String(data.id),
         userId: String(data.user_id),
         platform: String(data.platform),
         isActive: data.is_active !== false,
-        accessToken: typeof data.access_token === "string" ? data.access_token : null,
+        accessToken: token.accessToken,
         needsReauth: data.needs_reauth === true || metadata.needs_reauth === true,
       };
     },
@@ -9739,7 +9787,7 @@ function buildYoutubeContinuationPorts(
     async loadMedia(mediaFileId) {
       const { data } = await supabase
         .from("media_files")
-        .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type, scan_state")
+        .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type, scan_state, file_size")
         .eq("id", mediaFileId)
         .maybeSingle();
       if (!data) return null;
@@ -9749,6 +9797,12 @@ function buildYoutubeContinuationPorts(
         currentObjectVersion: data.current_object_version === null || data.current_object_version === undefined
           ? null
           : Number(data.current_object_version),
+        // The size of the file as it is now. A resumed upload has to send the
+        // file the offset was established for, so the size is compared with
+        // the total the session persisted.
+        fileSize: data.file_size === null || data.file_size === undefined
+          ? null
+          : Number(data.file_size),
         filePath: String(data.file_path),
         // The bucket is part of the file's identity: a signed URL is only
         // made for the bucket the object is actually in.
@@ -9784,7 +9838,7 @@ function buildYoutubeContinuationPorts(
       });
     },
 
-    async runUpload({ record, leaseToken: token, accessToken, source, totalBytes }) {
+    async runUpload({ record, leaseToken: token, accessToken, source, totalBytes, mimeType }) {
       return await runResumableVideoUpload({
         fetchImpl: fetch,
         store,
@@ -9793,7 +9847,11 @@ function buildYoutubeContinuationPorts(
         accessToken,
         source,
         totalBytes,
-        mimeType: "video/mp4",
+        // The type of the video, as the media library knows it. The chunks
+        // are declared with it, so a resumed upload declares the type the
+        // first upload declared: a MOV or a WebM that is resumed as an MP4
+        // is refused by the provider.
+        mimeType: mimeType ?? "video/mp4",
         deadlineMs,
         now: () => Date.now(),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -9853,7 +9911,7 @@ function buildYoutubeContinuationPorts(
           thumbnailUrl: args.post.thumbnailUrl,
           firstComment: args.post.firstComment,
         },
-        youtubeFollowUpDeps(),
+        youtubeFollowUpDeps(mediaHosts),
       );
     },
 
@@ -9903,12 +9961,24 @@ function youtubeContinuationResponse(result: ContinuationResult): Response {
       next_check_at: result.nextCheckAt ?? null,
     });
   }
+  // The reason code travels with the error.
+  //
+  // The reconciler and the other callers match on the CODE, not on the
+  // message: a lease conflict, a reconciliation requirement and a failed
+  // upload are three different things, and a caller that only has the
+  // sentence has to guess which one it is.
   if (result.status === "refused") {
     // Nothing was sent to the provider, so a refusal is safe to repeat: the
     // next reconciler pass looks again.
-    return createErrorResponse(youtubeUploadPublicMessage(result.reason), 503);
+    return createJsonResponse(
+      { error: youtubeUploadPublicMessage(result.reason), reason: result.reason },
+      503,
+    );
   }
-  return createErrorResponse(youtubeUploadPublicMessage(result.reason), 500);
+  return createJsonResponse(
+    { error: youtubeUploadPublicMessage(result.reason), reason: result.reason },
+    500,
+  );
 }
 
 /**
@@ -10091,7 +10161,10 @@ async function postToYouTube(
 
   if (opened.refused || !opened.record) {
     const refusal = opened.refused ?? "post_not_found";
-    throw new Error(youtubeUploadRefusalMessage(refusal));
+    // The refusal carries the uncertain marker when the channel may already
+    // hold a video of this post, so the row the outer loop writes is never
+    // offered as a retry that could publish a second one.
+    throw uploadRefusalFailure(refusal, youtubeUploadRefusalMessage(refusal));
   }
 
   // The public row the upload settles when it finishes.
@@ -10204,7 +10277,7 @@ async function postToYouTube(
           thumbnailUrl: thumbnailUrl ?? null,
           firstComment: firstComment ?? null,
         },
-        youtubeFollowUpDeps(),
+        youtubeFollowUpDeps(mediaHosts),
       );
     } else {
       console.warn(

@@ -20,6 +20,7 @@ import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.
 import {
   isUncertainUploadOutcome,
   uploadOwnedFailure,
+  uploadRefusalFailure,
   youtubeUploadFailureResponseData,
   youtubeUploadOutcomeMessage,
   youtubeUploadOutcomeReason,
@@ -139,4 +140,26 @@ Deno.test("an owned failure carries the video id when there is one", () => {
     videoId: "abcdefghijk",
   });
   assertEquals(failure.videoId, "abcdefghijk");
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// What a refusal is told
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("a refusal that may have published a video carries the marker", () => {
+  // Two refusals say the same thing in different words: the channel may
+  // already hold a video of this post, and the session needs a human. Both
+  // have to stop the row from being offered as a retry.
+  const channel = uploadRefusalFailure("channel_may_have_published", "The channel may already hold a video.");
+  assertEquals(channel.responseData?.publish_outcome, "uncertain");
+  assertEquals(channel.responseData?.youtube_upload_reason, YOUTUBE_UPLOAD_REASON.reconcile);
+
+  const session = uploadRefusalFailure("reconcile_required", "YouTube may have a video from this upload.");
+  assertEquals(session.responseData?.publish_outcome, "uncertain");
+});
+
+Deno.test("a refusal that is a proof carries no marker, so it stays retryable", () => {
+  // Nothing reached the channel, so the customer may try again.
+  const failure = uploadRefusalFailure("media_not_owned", "The video file is not yours.");
+  assertEquals("responseData" in failure, false);
 });

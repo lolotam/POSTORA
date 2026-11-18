@@ -47,6 +47,14 @@ export const YOUTUBE_UPLOAD_REASON = {
   cancelled: "youtube_upload_cancelled",
   /** The connected account can no longer be used to publish. */
   account_unusable: "youtube_upload_account_unusable",
+  /**
+   * The account was disconnected while the upload was in flight.
+   *
+   * The upload ended because the account went away, not because the provider
+   * refused it. A video may exist: the account is gone, so nothing can be
+   * checked, and the row carries the marker that says so.
+   */
+  account_disconnected: "youtube_upload_account_disconnected",
   /** The media file is missing, replaced, or not owned by this owner. */
   media_unavailable: "youtube_upload_media_unavailable",
   /**
@@ -100,6 +108,9 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
   [YOUTUBE_UPLOAD_REASON.cancelled]: "The YouTube upload was cancelled.",
   [YOUTUBE_UPLOAD_REASON.account_unusable]:
     "The connected YouTube account can no longer publish. Reconnect it and retry.",
+  [YOUTUBE_UPLOAD_REASON.account_disconnected]:
+    "The YouTube account was disconnected before the upload finished. " +
+    "YouTube may still have a video from it, so check your channel before retrying.",
   [YOUTUBE_UPLOAD_REASON.media_unavailable]:
     "The video for this post is no longer available in the media library.",
   [YOUTUBE_UPLOAD_REASON.media_read_failed]:

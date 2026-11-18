@@ -184,8 +184,14 @@ export interface YoutubeUploadSessionRecord {
   id: string;
   /** The post this upload belongs to. */
   postId: string;
-  /** The YouTube account this upload goes to. */
-  socialAccountId: string;
+  /**
+   * The YouTube account this upload goes to.
+   *
+   * It is NULL when the account was disconnected: the session keeps its
+   * evidence, because a video may exist, but there is no account to publish
+   * to any more.
+   */
+  socialAccountId: string | null;
   state: "open" | "uploaded" | "expired" | "reconcile" | "failed";
   /** The session URI. A credential: never log it, never show it to a client. */
   sessionUri: string | null;
@@ -314,7 +320,9 @@ export type YoutubeUploadRefusal =
   /** The session has no public row to settle. */
   | "no_public_row"
   /** The account is not a target of this post any more. */
-  | "target_not_authorized";
+  | "target_not_authorized"
+  /** The channel may already have published this post, so it is not published again. */
+  | "channel_may_have_published";
 
 /** The durable store the upload keeps its state in. */
 export interface YoutubeUploadSessionStore {
@@ -524,7 +532,14 @@ export interface ClaimUploadSession {
 export interface YoutubeUploadContinuationClaim {
   sessionId: string;
   postId: string;
-  socialAccountId: string;
+  /**
+   * The account the upload belongs to.
+   *
+   * It is NULL when the account was disconnected while the upload was in
+   * flight: the session keeps its evidence, but there is no account to carry
+   * the upload on to, and the worker refuses rather than sending without one.
+   */
+  socialAccountId: string | null;
   userId: string;
   /** The claim token. The worker proves ownership with it. */
   leaseToken: string;

@@ -168,9 +168,14 @@ async function run(
 ): Promise<{ outcome: ResumableUploadOutcome; store: ReturnType<typeof createInMemoryYoutubeUploadSessionStore> }> {
   // The session is put in the store the way the caller puts it there:
   // admitted, claimed, and given its provider uri when it already has one.
+  //
+  // The admission always names an account: it is what the upload is carried
+  // on to. A session whose account was disconnected is never admitted again,
+  // so the helper names the account the session was opened with.
+  const accountId = session.socialAccountId ?? "account-1";
   const opened = await store.admit({
     postId: session.postId,
-    socialAccountId: session.socialAccountId,
+    socialAccountId: accountId,
     mediaFileId: session.mediaFileId,
     mediaObjectVersion: session.mediaObjectVersion,
     mediaSize: session.totalBytes,
@@ -179,7 +184,7 @@ async function run(
     expectedContent: { caption: "A video" },
     userId: "user-1",
     attemptStartedAt: session.attemptStartedAt,
-    targetAccountIds: [session.socialAccountId],
+    targetAccountIds: [accountId],
   });
   assert(opened.record !== null);
   await store.claim({ sessionId: opened.record.id, leaseToken: "lease-1", leaseMs: 300_000 });
