@@ -154,10 +154,11 @@ answer").
 **Was:** the outcome carried free text (`"The provider did not answer the
 write: ..."`).
 
-**Is:** every outcome carries one of the codes in `YOUTUBE_UPLOAD_REASON`. The
-message that goes with a code is fixed, and a code that needs a human never
-reads like a retry is safe. The provider text is kept on the server side,
-redacted, and never reaches the customer.
+**Is:** the continuation result uses a code from `YOUTUBE_UPLOAD_REASON`.
+Successful continuation uses `youtube_upload_completed`. The internal upload
+runner hands a successful video receipt to the caller, which builds that
+public continuation result. Each code has a stable message. Provider text
+stays on the server in redacted diagnostics.
 
 **Proved by:** `youtubeUploadPolicy.test.ts`.
 
@@ -656,11 +657,11 @@ becomes part of the scope.
   sibling is terminalised the way section 28 describes. The successful sibling
   keeps its result, and **nothing is re-run**.
 
-The authority is the session, not the lease: the closure runs after the
-settlement, and the settlement releases the lease. A session that reached a
-terminal state was settled by the worker that owned it, and the scope is read
-from the database, so a caller that arrives late or twice can only cause the
-closure the database already implies.
+The continuation closes the fanout before settling the YouTube result or
+projecting an existing receipt. If a worker holds a live lease, it passes the
+token to recovery. The pending result stays in place while the scope is
+incomplete. After the lease expires, the reconciler can recover an eligible
+terminal session using the persisted attempt scope.
 
 **Proved by:** SQL suites Y24, Y25 and Y31.
 
