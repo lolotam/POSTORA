@@ -1,6 +1,7 @@
 -- ============================================================================
 -- supabase/tests/youtube_upload_sessions.sql
--- Migration 20261118120000_youtube_resumable_upload_sessions.sql.
+-- Migrations 20261118120000_youtube_resumable_upload_sessions.sql and
+-- 20261118173000_youtube_pending_handoff_guard.sql.
 --
 -- One transaction, synthetic fixtures, labelled assertions, expected refusals
 -- in nested BEGIN/EXCEPTION blocks, ROLLBACK. Fixture values are synthetic
@@ -120,6 +121,13 @@
 --   Y52 a slot that no upload wanted is left to the notification.
 --   Y53 the receipt survives a disconnect, and the parent keeps its result.
 --   Y54 the mark of a human survives a disconnect.
+--   Y55 the lost answer of a settlement that landed does not bring a completed
+--       parent back to processing: the guarded restoration refuses it, and the
+--       old restoration is what would have done it.
+--   Y56 a handoff that is genuinely pending keeps the parent processing.
+--   Y57 a parent that rolled up while its row was still open is restored.
+--   Y58 the generic restoration of the Threads and fan-out paths is untouched.
+--   Y59 the mime type the caller gave is kept with the upload settings.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -4686,6 +4694,362 @@ BEGIN
   RAISE NOTICE 'PASS Y54: the mark of a human survives the disconnect';
 END
 $y54_reconcile_disconnect$;
+
+-- ---------------------------------------------------------------------------
+-- Y55: THE RECEIPT IS COMMITTED AND THE ANSWER IS LOST.
+--
+-- The settlement of a YouTube upload closes the public row and rolls the
+-- parent up, in one transaction. The worker that made the settlement may
+-- never learn that it landed: the answer can be lost between the database and
+-- the client.
+--
+-- The worker then hands the row to the upload recovery as a PENDING
+-- destination, and the outer loop asks the database to put the parent back
+-- into processing.
+--
+-- The old restoration cannot tell that apart from a handoff that is genuinely
+-- pending. It reads the attempt, the content and the rollup provenance, and
+-- all three still match: the settlement did not change the attempt, and the
+-- rollup it wrote IS the provenance. So it restores a parent that has already
+-- rolled up, and the post stays in processing with no open destination under
+-- it. Nothing will ever settle it again, because the row it was waiting for
+-- is already closed.
+--
+-- The guarded restoration asks for the row the handoff names, and restores
+-- the parent only while that row is STILL pending.
+-- ---------------------------------------------------------------------------
+DO $y55_lost_ack$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ed000000-0000-4000-8000-000000000055';
+  v_row     uuid;
+  v_attempt timestamptz;
+  v_fence   jsonb;
+  v_result  jsonb;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y55') f;
+
+  -- THE GRANT SURFACE
+  --
+  -- A browser role may not restore a parent, and neither may it read the rows
+  -- the restoration reads.
+  ASSERT NOT has_function_privilege('anon',
+           'public.restore_youtube_pending_post(uuid, timestamptz, jsonb, uuid)', 'EXECUTE'),
+    'Y55 anon may not restore a YouTube parent';
+  ASSERT NOT has_function_privilege('authenticated',
+           'public.restore_youtube_pending_post(uuid, timestamptz, jsonb, uuid)', 'EXECUTE'),
+    'Y55 authenticated may not restore a YouTube parent';
+  ASSERT has_function_privilege('service_role',
+           'public.restore_youtube_pending_post(uuid, timestamptz, jsonb, uuid)', 'EXECUTE'),
+    'Y55 the service role may restore a YouTube parent';
+
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  -- The fence and the attempt are read while the upload is running, the way
+  -- the worker read them.
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_fence FROM public.posts x WHERE x.id = v_post_a;
+
+  -- THE RECEIPT IS COMMITTED
+  --
+  -- The video reached the channel and the settlement landed: the row is
+  -- closed and the parent rolls up to 'completed'.
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y55');
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'success', 'yt-video-y55', NULL,
+    jsonb_build_object('youtube_video_id', 'yt-video-y55'));
+
+  v_row := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row) = 'success',
+    'Y55 the settlement closed the public row';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'completed',
+    'Y55 the settlement rolled the parent up';
+
+  -- THE ANSWER IS LOST
+  --
+  -- The worker never learned that the settlement landed, so the handoff names
+  -- the row as pending and the outer loop asks for the restore.
+  v_result := public.restore_youtube_pending_post(v_post_a, v_attempt, v_fence, v_row);
+
+  ASSERT (v_result ->> 'restored')::boolean = false,
+    'Y55 the duplicate handoff did not restore the parent';
+  ASSERT (v_result ->> 'reason') = 'destination_not_pending',
+    'Y55 the duplicate handoff is named as one';
+  ASSERT (v_result ->> 'destination_status') = 'success',
+    'Y55 the answer carries the status of the row that is no longer pending';
+  ASSERT (v_result ->> 'current_status') = 'completed',
+    'Y55 the answer carries the status of the parent';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'completed',
+    'Y55 the parent keeps the result it earned';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row) = 'success',
+    'Y55 the closed row is not reopened';
+
+  -- The row is required: a restoration that cannot see the destination it is
+  -- restoring for is the old restoration.
+  v_result := public.restore_youtube_pending_post(v_post_a, v_attempt, v_fence, NULL);
+  ASSERT (v_result ->> 'restored')::boolean = false
+     AND (v_result ->> 'reason') = 'invalid_arguments'
+     AND (v_result ->> 'current_status') = 'completed',
+    'Y55 the restoration needs the row it is restoring for';
+
+  -- WHY THE GUARD IS NEEDED
+  --
+  -- The old restoration cannot answer that question: the attempt matches, the
+  -- content matches and the rollup it reads IS the provenance of the
+  -- settlement that landed. So it restores a parent that has already rolled
+  -- up, and the post waits for a destination that is already closed.
+  v_result := public.restore_legacy_pending_post(v_post_a, v_attempt, v_fence, true);
+  ASSERT (v_result ->> 'restored')::boolean = true,
+    'Y55 the old restoration brings the completed parent back to processing';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'processing',
+    'Y55 and the post then waits for a destination that is already closed';
+
+  RAISE NOTICE 'PASS Y55: the lost answer does not bring a completed parent back to processing';
+END
+$y55_lost_ack$;
+
+-- ---------------------------------------------------------------------------
+-- Y56: A HANDOFF THAT IS GENUINELY PENDING IS RESTORED.
+--
+-- The settlement was refused, so the row is still open and the parent is
+-- still processing. The handoff is genuine: the destination that owns the row
+-- has not finished, and the parent waits for it.
+--
+-- The guarded restoration answers the same as the old one here: the parent
+-- stays processing, and the row stays open.
+-- ---------------------------------------------------------------------------
+DO $y56_genuinely_pending$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ed000000-0000-4000-8000-000000000056';
+  v_row     uuid;
+  v_attempt timestamptz;
+  v_fence   jsonb;
+  v_result  jsonb;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y56') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_fence FROM public.posts x WHERE x.id = v_post_a;
+
+  -- The settlement is refused: the worker lost the lease, so the outcome was
+  -- not written and the row is still open.
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'failed', 'the lease was lost');
+  v_row := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row) = 'pending',
+    'Y56 the row is still open';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'processing',
+    'Y56 the parent is still processing';
+
+  v_result := public.restore_youtube_pending_post(v_post_a, v_attempt, v_fence, v_row);
+
+  ASSERT (v_result ->> 'restored')::boolean = true,
+    'Y56 the genuine handoff is restored';
+  ASSERT (v_result ->> 'already_processing')::boolean = true,
+    'Y56 the answer says the parent was already processing';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'processing',
+    'Y56 the parent waits for the destination that owns the row';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row) = 'pending',
+    'Y56 the row stays open';
+
+  RAISE NOTICE 'PASS Y56: a handoff that is genuinely pending keeps the parent processing';
+END
+$y56_genuinely_pending$;
+
+-- ---------------------------------------------------------------------------
+-- Y57: THE PARENT ROLLED UP WHILE THE ROW WAS STILL OPEN.
+--
+-- This is the case the restore exists for: a sibling rolled the parent up
+-- while the destination of this handoff was still open, so the parent has to
+-- go back to processing or the open destination is waited for by nobody.
+--
+-- The guard does not stand in the way of it: the row IS still pending, so the
+-- restore goes ahead.
+-- ---------------------------------------------------------------------------
+DO $y57_rolled_up_parent$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ed000000-0000-4000-8000-000000000057';
+  v_row     uuid;
+  v_attempt timestamptz;
+  v_fence   jsonb;
+  v_result  jsonb;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y57') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_fence FROM public.posts x WHERE x.id = v_post_a;
+
+  v_row := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row) = 'pending',
+    'Y57 the row is still open';
+
+  -- A sibling rolled the parent up, and the rollup belongs to this attempt.
+  UPDATE public.posts
+     SET status = 'completed',
+         posted_at = now(),
+         metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'settlement_rollup_at', now(),
+           'settlement_rollup_status', 'completed',
+           'settlement_rollup_processing_started_at', v_attempt)
+   WHERE id = v_post_a;
+
+  v_result := public.restore_youtube_pending_post(v_post_a, v_attempt, v_fence, v_row);
+
+  ASSERT (v_result ->> 'restored')::boolean = true,
+    'Y57 the rolled up parent is restored while the row is open';
+  ASSERT (v_result ->> 'prior_status') = 'completed',
+    'Y57 the answer carries the status the parent had';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'processing',
+    'Y57 the parent waits again for the open destination';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row) = 'pending',
+    'Y57 the open row is not touched';
+
+  RAISE NOTICE 'PASS Y57: a rolled up parent is restored while its row is still open';
+END
+$y57_rolled_up_parent$;
+
+-- ---------------------------------------------------------------------------
+-- Y58: THE OLD GENERIC RESTORATION IS UNTOUCHED.
+--
+-- The Threads and the fan-out paths keep the old restoration, because their
+-- handoff does not name a row: they restore a parent that a SIBLING rolled up
+-- while their own destination was still open, and that question cannot be
+-- asked with a row in hand.
+--
+-- So the old restoration still restores, and the guarded one is the one the
+-- YouTube path uses.
+-- ---------------------------------------------------------------------------
+DO $y58_generic_untouched$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ed000000-0000-4000-8000-000000000058';
+  v_row     uuid;
+  v_attempt timestamptz;
+  v_fence   jsonb;
+  v_result  jsonb;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y58') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_fence FROM public.posts x WHERE x.id = v_post_a;
+
+  v_row := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+
+  -- The parent rolled up, and the rollup belongs to this attempt.
+  UPDATE public.posts
+     SET status = 'completed',
+         posted_at = now(),
+         metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'settlement_rollup_at', now(),
+           'settlement_rollup_status', 'completed',
+           'settlement_rollup_processing_started_at', v_attempt)
+   WHERE id = v_post_a;
+
+  -- The old restoration still restores: it is the one the generic path uses.
+  v_result := public.restore_legacy_pending_post(v_post_a, v_attempt, v_fence, true);
+  ASSERT (v_result ->> 'restored')::boolean = true,
+    'Y58 the generic restoration still restores';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'processing',
+    'Y58 the generic path is unchanged';
+
+  RAISE NOTICE 'PASS Y58: the generic restoration is untouched';
+END
+$y58_generic_untouched$;
+
+-- ---------------------------------------------------------------------------
+-- Y59: THE MIME TYPE THE CALLER GAVE IS KEPT.
+--
+-- The upload settings are the query settings of the provider request, and the
+-- mime type is one of them: the request has to say what it is sending. The
+-- settings travel with the session as one JSON document, so a worker that
+-- opens the provider session later makes the SAME request.
+--
+-- The settings are stored as they were given. Nothing picks the known keys
+-- out of them, so a setting the database does not know about is not lost on
+-- the way in.
+-- ---------------------------------------------------------------------------
+DO $y59_mime_kept$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_settings jsonb := jsonb_build_object(
+    'part', 'snippet,status', 'notifySubscribers', true, 'mimeType', 'video/mp4');
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y59') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb,
+      NULL, NULL, NULL, NULL, NULL, v_settings)
+    -> 'session' ->> 'id')::uuid;
+
+  ASSERT (SELECT upload_settings FROM public.youtube_upload_sessions WHERE id = v_session) = v_settings,
+    'Y59 the settings the caller gave are kept as they are';
+  ASSERT (SELECT upload_settings ->> 'mimeType' FROM public.youtube_upload_sessions WHERE id = v_session) = 'video/mp4',
+    'Y59 the mime type survives the admission';
+
+  RAISE NOTICE 'PASS Y59: the mime type the caller gave is kept';
+END
+$y59_mime_kept$;
 
 ROLLBACK;
 
