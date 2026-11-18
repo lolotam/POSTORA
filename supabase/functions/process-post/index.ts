@@ -9746,7 +9746,7 @@ function buildYoutubeContinuationPorts(
         id: String(data.id),
         userId: String(data.user_id),
         status: String(data.status),
-        processingStartedAt: data.processing_started_at ? new Date(data.processing_started_at).toISOString() : null,
+        processingStartedAt: typeof data.processing_started_at === "string" ? data.processing_started_at : null,
         selectedAccountIds: selected,
         mediaFileIds: Array.isArray(data.media_file_ids)
           ? data.media_file_ids.filter((value): value is string => typeof value === "string")

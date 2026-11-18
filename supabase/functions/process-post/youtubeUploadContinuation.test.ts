@@ -199,6 +199,24 @@ const request = {
   attemptStartedAt: ATTEMPT,
 };
 
+Deno.test("equivalent timestamp encodings carry the same upload attempt", async () => {
+  const postAttempt = "2026-11-18T02:00:00.1234+00:00";
+  const dispatchAttempt = "2026-11-18T05:00:00.123400+03:00";
+  const w = world({ post: { processingStartedAt: postAttempt }, session: { attemptStartedAt: "2026-11-18T02:00:00.123400Z" } });
+  await continueYoutubeUpload(w.ports, { ...request, attemptStartedAt: dispatchAttempt });
+  assertEquals(w.uploads, 1);
+});
+
+Deno.test("attempts a microsecond apart cannot continue each other's uploads", async () => {
+  const w = world({
+    post: { processingStartedAt: "2026-11-18T02:00:00.123400+00:00" },
+    session: { attemptStartedAt: "2026-11-18T02:00:00.123401Z" },
+  });
+  const result = await continueYoutubeUpload(w.ports, { ...request, attemptStartedAt: "2026-11-18T02:00:00.123400Z" });
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.stale_attempt);
+  assertEquals(w.uploads, 0);
+});
+
 Deno.test("a receipt that is already stored settles the row without touching the provider", async () => {
   const w = world({ session: { state: "uploaded", videoId: VIDEO_ID } });
   const result = await continueYoutubeUpload(w.ports, request);

@@ -233,6 +233,17 @@ export function refusalToReason(refusal: YoutubeUploadRefusal): YoutubeUploadRea
   }
 }
 
+function sameAttemptTimestamp(actual: string | null, expected: string): boolean {
+  if (!actual) return false;
+  const actualMillis = Date.parse(actual);
+  if (!Number.isFinite(actualMillis) || actualMillis !== Date.parse(expected)) return false;
+
+  // Postgres timestamps can distinguish attempts within one JavaScript millisecond.
+  const subMillisecond = (value: string) =>
+    (value.match(/\.(\d+)(?:Z|[+-]\d{2}(?::?\d{2})?)$/i)?.[1] ?? "").slice(3).replace(/0+$/, "");
+  return subMillisecond(actual) === subMillisecond(expected);
+}
+
 /**
  * Carries one YouTube upload on.
  *
@@ -255,7 +266,7 @@ export async function continueYoutubeUpload(
   // The attempt must be the one the dispatch named. The dispatch carries the
   // attempt the session was claimed for, and a post that moved on to a newer
   // attempt is a post whose content may have changed.
-  if (request.attemptStartedAt && post.processingStartedAt !== request.attemptStartedAt) {
+  if (request.attemptStartedAt && !sameAttemptTimestamp(post.processingStartedAt, request.attemptStartedAt)) {
     return refused(YOUTUBE_UPLOAD_REASON.stale_attempt);
   }
 
@@ -274,7 +285,7 @@ export async function continueYoutubeUpload(
 
   // The attempt fence, checked on the session itself. A session that belongs
   // to an older attempt is never carried on.
-  if (session.attemptStartedAt && post.processingStartedAt !== session.attemptStartedAt) {
+  if (session.attemptStartedAt && !sameAttemptTimestamp(post.processingStartedAt, session.attemptStartedAt)) {
     return refused(YOUTUBE_UPLOAD_REASON.stale_attempt);
   }
 
