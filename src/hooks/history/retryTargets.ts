@@ -6,30 +6,20 @@ export interface RetryResultRow {
   response_data?: Record<string, unknown> | null;
 }
 
-/**
- * The publish outcomes that are not a proven failure.
- *
- * `uncertain` means the provider may already hold the publication: the result
- * row was lost, not the publication. `cancelled` means the attempt was
- * cancelled before the destination was reached. Neither may be retried
- * automatically, because a retry can publish a second time.
- *
- * The marker is written by the row itself, so it holds for every platform and
- * not only for YouTube. The database refuses the same rows in the one place
- * every retry path goes through; the page must not offer them either.
- */
-const NON_RETRYABLE_OUTCOMES = new Set(["uncertain", "cancelled"]);
-
-/**
- * Whether this result may not be published again.
- *
- * An `uncertain` outcome may already have been published, so a retry could
- * publish a second copy. A `cancelled` outcome belongs to an attempt the owner
- * stopped, so it is not republished either.
- */
-export function hasNonRetryableOutcome(row: RetryResultRow): boolean {
+/** A cancelled or possibly published destination must not be sent again. */
+export function nonRetryableOutcome(row: RetryResultRow): "uncertain" | "cancelled" | undefined {
   const outcome = row.response_data?.publish_outcome;
-  return typeof outcome === "string" && NON_RETRYABLE_OUTCOMES.has(outcome);
+  if (outcome === "uncertain" || outcome === "cancelled") return outcome;
+  const deferred = row.response_data?.deferred;
+  if (row.platform === "threads" && deferred && typeof deferred === "object" &&
+    "media_type" in deferred && deferred.media_type === "IMAGE" &&
+    "publish_outcome" in deferred && deferred.publish_outcome === "uncertain") {
+    return "uncertain";
+  }
+}
+
+export function hasNonRetryableOutcome(row: RetryResultRow): boolean {
+  return nonRetryableOutcome(row) !== undefined;
 }
 
 /**
@@ -44,7 +34,10 @@ export function hasNonRetryableOutcome(row: RetryResultRow): boolean {
  * publish to again.
  */
 export function failedRetryTargets(rows: RetryResultRow[] | undefined): { platforms: string[]; accountIds: string[] } {
-  const targetable = (rows ?? []).filter((row) => row.status === "failed" && row.social_account_id && !hasNonRetryableOutcome(row));
+  const protectedAccountIds = new Set(rows?.filter(hasNonRetryableOutcome).map((row) => row.social_account_id));
+  const targetable = (rows ?? []).filter((row) =>
+    row.status === "failed" && row.social_account_id && !protectedAccountIds.has(row.social_account_id)
+  );
   return {
     platforms: [...new Set(targetable.map((row) => row.platform))],
     accountIds: [...new Set(targetable.map((row) => row.social_account_id as string))],

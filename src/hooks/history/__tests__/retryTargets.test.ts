@@ -40,6 +40,15 @@ describe("failedRetryTargets", () => {
   });
 });
 
+it("blocks an account with an uncertain Threads image despite an older failed result", () => {
+  expect(failedRetryTargets([
+    { platform: "threads", status: "failed", social_account_id: "threads-1" },
+    { platform: "threads", status: "failed", social_account_id: "threads-1",
+      response_data: { deferred: { media_type: "IMAGE", publish_outcome: "uncertain" } } },
+    { platform: "instagram", status: "failed", social_account_id: "instagram-1" },
+  ])).toEqual({ platforms: ["instagram"], accountIds: ["instagram-1"] });
+});
+
 describe("hasNonRetryableOutcome", () => {
   it.each([
     { name: "an unknown outcome", response_data: { publish_outcome: "uncertain" } },

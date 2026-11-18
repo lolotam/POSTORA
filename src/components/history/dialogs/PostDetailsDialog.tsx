@@ -15,7 +15,7 @@ import { openExternalPostUrl } from "@/lib/openExternalPostUrl";
 import { ExternalLink, Maximize2, Download, DownloadCloud, RefreshCw, Loader2, AlertTriangle, RotateCcw, Type, Image as ImageIcon, Copy, Lightbulb, ChevronDown, ChevronUp, HardDrive, ShieldAlert, Clock, FileWarning, Wifi, Ban, Trash2 } from "lucide-react";
 import type { PlatformPost } from "@/hooks/usePosts";
 import { buildPostUrl } from "@/components/history/historyUtils";
-import { hasNonRetryableOutcome } from "@/hooks/history/retryTargets";
+import { failedRetryTargets } from "@/hooks/history/retryTargets";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -325,6 +325,7 @@ export function PostDetailsDialog({
               <div className="space-y-2">
                 {(() => {
                   const results = post.platformResults || [];
+                  const eligibleAccounts = new Set(failedRetryTargets(results).accountIds);
                   
                   // Find platforms that have zero results at all
                   const platformsWithResults = new Set<string>(results.map((r) => r.platform));
@@ -432,7 +433,7 @@ export function PostDetailsDialog({
                                 /* A result whose outcome is unknown may already have been
                                    published, so a retry could publish a second copy. It is
                                    not offered here, and the database refuses it too. */
-                                !hasNonRetryableOutcome(result) &&
+                                eligibleAccounts.has(result.social_account_id ?? "") &&
                                 (!(result.response_data as Record<string, unknown> | null)?.story_job_id ||
                                   (result.response_data as Record<string, unknown>)?.story_retryable === true) && onRetrySinglePlatform && (
                                 <Button

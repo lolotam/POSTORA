@@ -9,7 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   PostWithResults, invalidatePostQueries,
 } from "./historyUtils";
-import { failedRetryTargets, hasNonRetryableOutcome } from "./retryTargets";
+import { failedRetryTargets, nonRetryableOutcome } from "./retryTargets";
 import type { Platform } from "@/lib/types";
 
 export function usePostRetry() {
@@ -19,12 +19,7 @@ export function usePostRetry() {
     const acceptance = await enqueuePostPublish({ postId, mode: "retry", accountIds });
     if (acceptance.accepted === false) {
       if (acceptance.reason === "no_targets") {
-        // The database refused every target: the only failed result of this
-        // post is one whose outcome is not a proven failure, so a retry could
-        // publish a second time.
-        throw new Error(
-          "Nothing on this post can be retried safely. A result whose outcome is unknown may already have been published, so check that account by hand."
-        );
+        throw new Error("No destinations are currently eligible to retry. Refresh History to see the latest results.");
       }
       throw new Error(t("common:publishing.unconfirmed", "Could not confirm the publish request. Check History for its status."));
     }
@@ -51,9 +46,6 @@ export function usePostRetry() {
   const [retryMediaUploading, setRetryMediaUploading] = useState(false);
   const retryMediaInputRef = useRef<HTMLInputElement>(null);
 
-  const hasTikTokFailure = (post: PostWithResults) =>
-    post.platformResults?.some((r) => r.status === "failed" && r.platform === "tiktok");
-
   const isTikTokMediaError = (post: PostWithResults) =>
     post.platformResults?.some(
       (r) => r.status === "failed" && r.platform === "tiktok" && r.error_message &&
@@ -63,10 +55,7 @@ export function usePostRetry() {
     );
 
   const openRetryDialog = (post: PostWithResults) => {
-    // A result whose outcome is unknown is not offered: its account is not
-    // safe to publish to again.
-    const failedAccountIds = post.platformResults?.filter((r) => r.status === "failed" && r.social_account_id && !hasNonRetryableOutcome(r)).map((r) => r.social_account_id as string) || [];
-    setRetrySelectedAccountIds(failedAccountIds);
+    setRetrySelectedAccountIds(failedRetryTargets(post.platformResults).accountIds);
     setRetryDialogPost(post);
   };
 
@@ -105,29 +94,33 @@ export function usePostRetry() {
   };
 
   const handleRetryFailed = async (post: PostWithResults) => {
-    const failedPlatforms = post.platformResults?.filter((r) => r.status === "failed").map((r) => r.platform) || [];
-    if (failedPlatforms.length === 0) { toast({ title: "No failed platforms", description: "This post has no failed platforms to retry." }); return; }
-    if (hasTikTokFailure(post)) { openRetryDialog(post); return; }
+    const failedRows = post.platformResults?.filter((r) => r.status === "failed") ?? [];
+    if (failedRows.length === 0) { toast({ title: "No failed platforms", description: "This post has no failed platforms to retry." }); return; }
 
-    if (failedRetryTargets(post.platformResults).accountIds.length === 0) {
-      // A result whose outcome is unknown is not retried: its account is not
-      // safe to publish to again, so the customer has to look at it by hand.
-      const uncertain = (post.platformResults ?? []).some((r) => r.status === "failed" && hasNonRetryableOutcome(r));
+    const retryTargets = failedRetryTargets(post.platformResults);
+    if (retryTargets.accountIds.length === 0) {
+      const protectedOutcomes = post.platformResults?.map(nonRetryableOutcome) ?? [];
+      const uncertain = protectedOutcomes.includes("uncertain");
+      const cancelled = protectedOutcomes.includes("cancelled");
       toast({
-        title: uncertain ? "This result cannot be retried" : "Cannot retry automatically",
+        title: uncertain || cancelled ? "This result cannot be retried" : "Cannot retry automatically",
         description: uncertain
           ? "Its outcome is not known: the destination may already have been published, so a retry could publish a second copy. Check that account by hand."
-          : "The failed results name no account, so they cannot be retried without posting to every account again.",
+          : cancelled
+            ? "Publishing was cancelled for this destination."
+            : "The failed results name no account, so they cannot be retried without posting to every account again.",
         variant: "destructive",
       });
       return;
     }
 
+    if (retryTargets.platforms.includes("tiktok")) { openRetryDialog(post); return; }
+
     setRetryingPostId(post.id);
     try {
       // The server selects current failed accounts atomically, including failures since the last read.
       await submitRetry(post.id);
-      notifyRetrySubmitted(failedPlatforms as Platform[]);
+      notifyRetrySubmitted(retryTargets.platforms as Platform[]);
       invalidatePostQueries(queryClient);
     } catch (error) {
       console.error("Retry error:", error);

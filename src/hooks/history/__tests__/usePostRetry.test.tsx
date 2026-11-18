@@ -62,10 +62,11 @@ describe("post retry submission", () => {
 
   it("does not offer a result whose outcome is unknown, because a retry could publish twice", async () => {
     const uncertain = { id: "post-2", platformResults: [
-      { id: "failed-2", platform: "instagram", status: "failed", social_account_id: "account-9", response_data: { publish_outcome: "uncertain" } },
+      { id: "failed-2", platform: "tiktok", status: "failed", social_account_id: "account-9", response_data: { publish_outcome: "uncertain" } },
     ] };
     const { result } = renderRetry();
     await act(async () => { await result.current.handleRetryFailed(uncertain); });
+    expect(result.current.retryDialogPost).toBeNull();
     expect(invoke).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "This result cannot be retried", variant: "destructive" }));
     expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Retry submitted" }));
@@ -77,7 +78,7 @@ describe("post retry submission", () => {
     await act(async () => { await result.current.handleRetryFailed(post); });
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({
       title: "Retry failed",
-      description: expect.stringContaining("may already have been published"),
+      description: expect.stringContaining("Refresh History"),
     }));
   });
 
