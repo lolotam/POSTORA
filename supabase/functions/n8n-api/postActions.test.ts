@@ -2770,6 +2770,35 @@ Deno.test("n8n retry keeps uncertain Threads evidence while a proven other-platf
     reason: "Threads publish outcome is uncertain; reconcile it manually before any retry." }]);
 });
 
+for (const publishOutcome of ["uncertain", "cancelled"]) {
+  Deno.test(`n8n retry preserves ${publishOutcome} results and skips their accounts`, async () => {
+    const db = new FakeSupabase();
+    claimQueued(db);
+    const blocked = {
+      ...platformResult("facebook-blocked", "facebook", ACCOUNT_TWO, "failed"),
+      response_data: { publish_outcome: publishOutcome },
+    };
+    const duplicateFailure = platformResult("facebook-old-failure", "facebook", ACCOUNT_TWO, "failed");
+    const retryable = platformResult("instagram-failed", "instagram", ACCOUNT, "failed");
+    db.queue("platform_posts", { data: [duplicateFailure, retryable, blocked], error: null });
+    db.queue("platform_posts", {
+      data: [blocked, duplicateFailure, retryable, platformResult("instagram-new", "instagram", ACCOUNT, "success")],
+      error: null,
+    });
+    db.queue("platform_posts", { data: null, error: null });
+    db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+    const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+    assertEquals(result.status, 200);
+    assertEquals(calls.length, 1);
+    assertEquals(JSON.parse(String(calls[0].body)).account_ids, [ACCOUNT]);
+    const [removal] = callsFor(db, "platform_posts", "delete");
+    assertEquals(hasInFilter(removal, "id", ["instagram-failed"]), true);
+    assertEquals((result.body.skipped as Array<{ account_id: string }>).map((row) => row.account_id), [ACCOUNT_TWO, ACCOUNT_TWO]);
+  });
+}
+
 Deno.test("a retry publishes only the failed accounts and clears the rows it replaced", async () => {
   const db = new FakeSupabase();
   claimQueued(db);
