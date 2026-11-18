@@ -479,7 +479,17 @@ Deno.test("a retried upload that never sent a byte is started again", async () =
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
   // The provider refused the upload and the worker gave up. No byte ever
   // reached the provider, so a second attempt cannot create a second video.
-  await store.release({ sessionId, leaseToken: "lease-a", state: "failed" });
+  //
+  // The worker settles the outcome before it lets go: the settlement is
+  // fenced to the owner of the lease, and it is what releases the lease. A
+  // session that a worker still owns is never started again.
+  const settled = await store.settle({
+    sessionId,
+    leaseToken: "lease-a",
+    status: "failed",
+    errorMessage: "the provider refused the upload",
+  });
+  assertEquals(settled.settled, true);
   assertEquals(store.sessions.get(sessionId)?.state, "failed");
 
   // The customer retries the post. The retry changes publish_requested_at, so
@@ -495,6 +505,156 @@ Deno.test("a retried upload that never sent a byte is started again", async () =
   assertEquals(retried.record?.sessionUri, null);
   assertEquals(retried.record?.confirmedBytes, 0);
   assertEquals(retried.record?.attemptStartedAt, "2026-11-19T00:00:00.000Z");
+});
+
+Deno.test("a session that a worker still owns is not started again", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  // The worker gave up and released the session, but it still owns the lease:
+  // it is about to settle the public row with it.
+  await store.release({ sessionId, leaseToken: "lease-a", state: "failed" });
+
+  // The customer retries the post. The session is NOT started again: a
+  // restart under the worker that owns it would settle the new attempt with
+  // the old outcome, and the lease stays with its owner.
+  const retried = await store.admit({
+    ...admitInput,
+    expectedContent: { caption: "A video", publish_requested_at: "2026-11-19T00:00:00.000Z" },
+    attemptStartedAt: "2026-11-19T00:00:00.000Z",
+  });
+  assertEquals(retried.refused, "content_changed");
+  assertEquals(store.sessions.get(sessionId)?.state, "failed");
+  assertEquals(store.sessions.get(sessionId)?.leaseToken, "lease-a");
+
+  // The lease is the only thing that keeps the session closed. Once it is
+  // gone, the retry is admitted again.
+  const expired = await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 0 });
+  assertEquals(expired.refused, null);
+});
+
+Deno.test("a session that another worker owns keeps its attempt", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.release({ sessionId, leaseToken: "lease-a", state: "failed" });
+
+  // A second worker asks for the same post while the first one still owns the
+  // session. Nothing refuses it: the content is the same, so the session is
+  // simply left alone.
+  const asked = await store.admit({
+    ...admitInput,
+    attemptStartedAt: "2026-11-19T00:00:00.000Z",
+  });
+  assertEquals(asked.refused, null);
+  assertEquals(asked.record?.state, "failed");
+
+  // The session keeps the attempt of the worker that owns it. An attempt that
+  // took it over would be settled with the outcome of the old one, and the
+  // owner is about to settle it.
+  assertEquals(asked.record?.attemptStartedAt, "2026-11-18T00:00:00.000Z");
+
+  // And the claim refuses it: the lease is the only thing that keeps the
+  // session closed, and it belongs to the other worker.
+  const claimed = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
+  assertEquals(claimed.refused, "lease_held");
+});
+
+Deno.test("a session whose provider session expired under a live lease keeps its attempt", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+
+  // The provider session is gone, and the worker that owns the session is
+  // about to settle it.
+  store.sessions.get(sessionId)!.sessionExpiresAt = Date.now() - 1;
+
+  const asked = await store.admit({
+    ...admitInput,
+    attemptStartedAt: "2026-11-19T00:00:00.000Z",
+  });
+  assertEquals(asked.refused, null);
+  assertEquals(asked.record?.state, "open");
+
+  // The session is left alone, so it keeps the attempt of the worker that
+  // owns it. A session that was started again would belong to the new one.
+  assertEquals(asked.record?.attemptStartedAt, "2026-11-18T00:00:00.000Z");
+
+  const claimed = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
+  assertEquals(claimed.refused, "lease_held");
+});
+
+Deno.test("a session that ran out of continuations is started again with a fresh count", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  const exhausted = store.sessions.get(sessionId)!;
+  exhausted.continuationCount = 24;
+  exhausted.nextCheckAt = Date.now() + 60_000;
+  exhausted.lastOutcome = "youtube_upload_unsent";
+  await store.release({ sessionId, leaseToken: "lease-a", state: "failed" });
+  await store.settle({ sessionId, leaseToken: "lease-a", status: "failed", errorMessage: "the provider refused it" });
+
+  const retried = await store.admit(admitInput);
+  assertEquals(retried.refused, null);
+  assertEquals(retried.record?.state, "open");
+  assertEquals(retried.record?.continuationCount, 0);
+  assertEquals(retried.record?.nextCheckAt, null);
+  assertEquals(retried.record?.lastOutcome, null);
+
+  // A fresh count is a claimable session: the count of the old attempt would
+  // refuse every later claim for ever.
+  const claimed = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
+  assertEquals(claimed.refused, null);
+});
+
+Deno.test("a failure that sent a byte is left for a human, not failed", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  // A byte reached the provider, so a video may exist there. The same
+  // session is an uncertain one when its worker died and when it settled
+  // the failure itself.
+  await store.checkpoint({
+    sessionId,
+    leaseToken: "lease-a",
+    confirmedBytes: 100,
+    bytesSent: 100,
+    videoMayExist: false,
+  });
+
+  const settled = await store.settle({
+    sessionId,
+    leaseToken: "lease-a",
+    status: "failed",
+    errorMessage: "the upload did not finish",
+  });
+  assertEquals(settled.settled, true);
+  assertEquals(store.sessions.get(sessionId)?.state, "reconcile");
+});
+
+Deno.test("a receipt answers the attempt that stored it", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.complete({ sessionId, leaseToken: "lease-a", videoId: "yt-video-1" });
+
+  // The same attempt is answered with the receipt.
+  const same = await store.admit(admitInput);
+  assertEquals(same.refused, null);
+  assertEquals(same.record?.state, "uploaded");
+
+  // Another attempt is not: the receipt proves that the provider holds a
+  // video for the attempt that stored it, and says nothing about a later one.
+  const other = await store.admit({ ...admitInput, attemptStartedAt: "2026-11-19T00:00:00.000Z" });
+  assertEquals(other.refused, "already_published");
+  assertEquals(other.record, null);
 });
 
 Deno.test("an upload that may hold a video is never started again", async () => {

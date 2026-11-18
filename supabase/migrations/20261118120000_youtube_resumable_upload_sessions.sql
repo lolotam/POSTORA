@@ -1400,6 +1400,7 @@ DECLARE
   v_media_version integer;
   v_settings jsonb;
   v_attempt timestamptz;
+  v_lease_is_free boolean;
   v_public_row public.platform_posts%ROWTYPE;
   v_public_row_id uuid;
 BEGIN
@@ -1477,11 +1478,23 @@ BEGIN
   -- customer is a different publication and stays allowed; the same channel
   -- is refused, because a second video on one channel is worse than a post
   -- that needs a human.
+  --
+  -- The evidence is the same evidence the disconnect keeps: a session that may
+  -- already hold a video -- a byte that reached the provider, the provider's
+  -- own uncertainty, or the mark of a session that was left for a human -- and
+  -- a session that holds a RECEIPT, because that video is not a "maybe" but a
+  -- fact. A session that proves that nothing ever reached the provider stays
+  -- eligible: there is nothing on the channel to publish twice.
   IF EXISTS (
     SELECT 1 FROM public.youtube_upload_sessions s
      WHERE s.post_id = p_post_id
        AND s.social_account_id IS NULL
-       AND s.video_may_exist
+       AND (
+         s.video_may_exist
+         OR s.bytes_sent > 0
+         OR s.state = 'reconcile'
+         OR s.video_id IS NOT NULL
+       )
        AND s.disconnected_channel_id IS NOT NULL
        AND s.disconnected_channel_id = v_account.platform_user_id
   ) THEN
@@ -1500,8 +1513,16 @@ BEGIN
   -- to be one the post names. A file of the same customer that the post does
   -- not carry is not the content of this post, and an upload that reads it
   -- publishes something the customer did not put on this post.
-  IF p_media_file_id IS NOT NULL
-     AND (v_post.media_file_ids IS NULL OR NOT (p_media_file_id = ANY(v_post.media_file_ids))) THEN
+  --
+  -- The membership is tested with EXISTS and not with ANY, because ANY answers
+  -- NULL when the array holds a NULL element and the requested file is not
+  -- listed: the NOT around it would be NULL as well, the IF would not fire,
+  -- and an unlisted file would be admitted. A file is in the post when an
+  -- element equals it, and a NULL element equals nothing.
+  IF p_media_file_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM unnest(v_post.media_file_ids) AS listed(id)
+     WHERE listed.id = p_media_file_id
+  ) THEN
     RAISE EXCEPTION 'YUS03: the media file is not one of the post''s files' USING ERRCODE = 'YUS03';
   END IF;
 
@@ -1617,6 +1638,20 @@ BEGIN
       RAISE EXCEPTION 'YUS17: this post was already published to this channel, so a new post is needed to publish again' USING ERRCODE = 'YUS17';
     END IF;
 
+    -- THE LEASE
+    --
+    -- A session that a worker still owns is not started again: that worker is
+    -- about to settle it, and a restart under it would settle the new attempt
+    -- with the old outcome. The session is left exactly as it is, and the
+    -- claim refuses it until the lease is gone.
+    --
+    -- The rule is read ONCE, because the row is locked for this whole
+    -- admission: nothing else may take the lease or release it while this
+    -- runs, and the row this function writes clears the lease itself.
+    v_lease_is_free := v_session.lease_token IS NULL
+                       OR v_session.lease_expires_at IS NULL
+                       OR v_session.lease_expires_at <= clock_timestamp();
+
     -- THE SAFE RESTART
     --
     -- A retry legitimately changes the post's publish_requested_at, so the
@@ -1645,9 +1680,7 @@ BEGIN
     IF v_session.state IN ('failed', 'expired')
        AND NOT v_session.video_may_exist
        AND v_session.bytes_sent = 0
-       AND (v_session.lease_token IS NULL
-            OR v_session.lease_expires_at IS NULL
-            OR v_session.lease_expires_at <= clock_timestamp())
+       AND v_lease_is_free
        AND v_session.total_bytes IS NOT DISTINCT FROM p_total_bytes
        AND v_session.media_file_id IS NOT DISTINCT FROM p_media_file_id
        AND (v_session.media_object_version IS NULL
@@ -1706,9 +1739,7 @@ BEGIN
     IF v_session.state IN ('failed', 'expired')
        AND NOT v_session.video_may_exist
        AND v_session.bytes_sent = 0
-       AND (v_session.lease_token IS NULL
-            OR v_session.lease_expires_at IS NULL
-            OR v_session.lease_expires_at <= clock_timestamp())
+       AND v_lease_is_free
        AND v_session.media_file_id IS DISTINCT FROM p_media_file_id
        AND public.youtube_upload_target_authorized(
              p_post_id, p_social_account_id,
@@ -1780,17 +1811,23 @@ BEGIN
           'platform_post_id', v_session.platform_post_id
         );
       END IF;
-      UPDATE public.youtube_upload_sessions
-         SET state = 'open', session_uri = NULL, confirmed_bytes = 0, bytes_sent = 0,
-             session_expires_at = p_session_expires_at, error = NULL,
-             lease_token = NULL, lease_expires_at = NULL,
-             next_check_at = NULL, last_outcome = NULL, continuation_count = 0,
-             attempt_started_at = v_attempt,
-             resolved_platform = 'youtube',
-             target_account_ids = coalesce(p_target_account_ids, v_session.target_account_ids),
-             updated_at = clock_timestamp()
-       WHERE id = v_session.id
-      RETURNING * INTO v_session;
+      -- The session is NOT reopened while a worker still owns it: that worker
+      -- is about to settle it, and a restart under it would settle the new
+      -- attempt with the old outcome. The session is left as it is, and the
+      -- claim refuses it until the lease is gone.
+      IF v_lease_is_free THEN
+        UPDATE public.youtube_upload_sessions
+           SET state = 'open', session_uri = NULL, confirmed_bytes = 0, bytes_sent = 0,
+               session_expires_at = p_session_expires_at, error = NULL,
+               lease_token = NULL, lease_expires_at = NULL,
+               next_check_at = NULL, last_outcome = NULL, continuation_count = 0,
+               attempt_started_at = v_attempt,
+               resolved_platform = 'youtube',
+               target_account_ids = coalesce(p_target_account_ids, v_session.target_account_ids),
+               updated_at = clock_timestamp()
+         WHERE id = v_session.id
+        RETURNING * INTO v_session;
+      END IF;
     ELSIF v_session.state = 'failed' THEN
       -- A permanent failure may be tried again, but ONLY when the record
       -- proves that no video can exist. A failure that may already hold a
@@ -1813,18 +1850,23 @@ BEGIN
           'platform_post_id', v_session.platform_post_id
         );
       END IF;
-      -- A permanent failure may be tried again.
-      UPDATE public.youtube_upload_sessions
-         SET state = 'open', session_uri = NULL, confirmed_bytes = 0, bytes_sent = 0,
-             session_expires_at = p_session_expires_at, error = NULL,
-             lease_token = NULL, lease_expires_at = NULL,
-             next_check_at = NULL, last_outcome = NULL, continuation_count = 0,
-             attempt_started_at = v_attempt,
-             resolved_platform = 'youtube',
-             target_account_ids = coalesce(p_target_account_ids, v_session.target_account_ids),
-             updated_at = clock_timestamp()
-       WHERE id = v_session.id
-      RETURNING * INTO v_session;
+      -- A permanent failure may be tried again, but ONLY when no worker owns
+      -- the session: a worker that still holds the lease is about to settle
+      -- it, and a restart under it would settle the new attempt with the old
+      -- outcome.
+      IF v_lease_is_free THEN
+        UPDATE public.youtube_upload_sessions
+           SET state = 'open', session_uri = NULL, confirmed_bytes = 0, bytes_sent = 0,
+               session_expires_at = p_session_expires_at, error = NULL,
+               lease_token = NULL, lease_expires_at = NULL,
+               next_check_at = NULL, last_outcome = NULL, continuation_count = 0,
+               attempt_started_at = v_attempt,
+               resolved_platform = 'youtube',
+               target_account_ids = coalesce(p_target_account_ids, v_session.target_account_ids),
+               updated_at = clock_timestamp()
+         WHERE id = v_session.id
+        RETURNING * INTO v_session;
+      END IF;
     ELSE
       -- The live session now belongs to the attempt that is running, and to the
       -- platform_posts row this attempt settles. The provider session URI is
@@ -2454,7 +2496,21 @@ BEGIN
   -- The caller says so as well: a result that carries the uncertain marker is
   -- uncertain, whatever the flags say. The marker is what the retry gate and
   -- the page read, so a settlement that dropped it would offer a blind retry.
-  v_video_may_exist := v_session.video_may_exist OR (p_status = 'success');
+  --
+  -- A BYTE THAT REACHED THE PROVIDER IS THE SAME EVIDENCE HERE AND IN THE
+  -- TERMINAL RECOVERY
+  -- ------------------------------------------------------
+  -- The classification of a session whose worker died asks the same question
+  -- with the same rule: a session that sent a byte may already have left a
+  -- video on the channel. When the two paths answered it differently, the
+  -- same session was a definitive failure when a worker settled it and an
+  -- uncertain one when the worker died -- and the uncertainty was the safe
+  -- answer. So the settlement uses the classification's rule: a byte that
+  -- reached the provider makes the outcome uncertain, and only a session that
+  -- proves that nothing ever reached the provider stays a retryable failure.
+  v_video_may_exist := v_session.video_may_exist
+    OR v_session.bytes_sent > 0
+    OR (p_status = 'success');
   v_uncertain := v_video_may_exist
     OR v_session.state = 'reconcile'
     OR coalesce(p_response_data ->> 'publish_outcome', '') = 'uncertain';
@@ -3243,11 +3299,27 @@ BEGIN
   -- classification locks the parent before the session, so the parent is
   -- locked here as well and the two orders never meet. A parent another
   -- transaction holds is SKIPPED rather than waited for.
+  --
+  -- A SESSION WHOSE POST IS NOT BEING PROCESSED DOES NOT TAKE A SLOT
+  -- ---------------------------------------------------------------
+  -- The classification refuses such a session: the cancellation repair owns
+  -- it, that repair finds it by its open state, and a classification that
+  -- changed the state would take the repair's place and leave its pending row
+  -- open for ever. So its state is left alone -- and it is left out of this
+  -- scan as well, because a slot spent on a session that cannot be settled is
+  -- a slot the current exhausted upload does not get.
+  --
+  -- That matters because these sessions are never removed: the cancellation
+  -- repair skips the ones whose attempt no longer matches the post, and the
+  -- due claim skips the capped ones. They sort by their id, so enough of them
+  -- would sit in front of every current exhausted upload and starve it for
+  -- ever.
   FOR v_candidate IN
     SELECT s.id
       FROM public.youtube_upload_sessions s
       JOIN public.posts p ON p.id = s.post_id
      WHERE s.state = 'open'
+       AND p.status = 'processing'
        AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= clock_timestamp())
        AND (
          -- The provider session is gone and a byte reached the provider.
@@ -3683,6 +3755,10 @@ BEGIN
   -- shares what is left. The total is still p_limit, and a limit of one keeps
   -- the plain order: there is only one slot, and it goes to the step that
   -- comes first.
+  --
+  -- The slot that is kept for the upload work is only kept when an upload
+  -- wants it: the upload work is claimed before the notification capacity is
+  -- computed, so a slot that no upload took is left to the notification.
   v_reserved := least(2, greatest(0, p_limit - 1));
 
   -- Step 1: Claim due deferred publishes / image rows using existing claim_deferred_publishes
@@ -3701,7 +3777,39 @@ BEGIN
     RETURN NEXT;
   END LOOP;
 
-  -- Step 2: If capacity remains within p_limit, claim ready legacy notification candidates
+  -- Step 2: The upload reservation.
+  --
+  -- One slot of the shared limit is kept for an upload that is due for another
+  -- look, so that a backlog of notifications cannot starve an upload whose
+  -- post is waiting. The reservation is only worth a slot when there IS such
+  -- an upload: the upload work is claimed HERE, before the notification
+  -- capacity is computed, and the notification takes what is left. A slot that
+  -- no upload wanted is left to the notification, instead of being kept for an
+  -- upload that does not exist.
+  --
+  -- The reservation only exists when the limit leaves more than one slot: a
+  -- limit of one keeps the plain order, and the notification takes it.
+  v_remaining := p_limit - v_claimed_count;
+  IF v_reserved > 0 AND v_remaining > 0 THEN
+    FOR v_rec IN
+      SELECT ys.session_id, ys.post_id, ys.attempt_started_at, ys.lease_token
+        FROM public.claim_youtube_upload_sessions(1, 180000, 24) ys
+    LOOP
+      kind := 'youtube_upload_continuation';
+      platform_post_id := NULL;
+      post_id := v_rec.post_id;
+      attempt_started_at := v_rec.attempt_started_at;
+      candidate_id := v_rec.session_id;
+      claim_id := v_rec.lease_token;
+      v_claimed_count := v_claimed_count + 1;
+      RETURN NEXT;
+    END LOOP;
+  END IF;
+
+  -- Step 3: If capacity remains within p_limit, claim ready legacy notification candidates
+  --
+  -- The capacity is what is LEFT: the reserved slot is already spent when an
+  -- upload took it, and it is still there when no upload wanted it.
   v_remaining := p_limit - v_claimed_count;
   IF v_remaining > 0 THEN
     FOR v_candidate_rec IN
@@ -3739,7 +3847,7 @@ BEGIN
                 AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
            )
          ORDER BY coalesce((p.metadata #>> '{legacy_notification_candidate,claimed_until}')::timestamptz, p.created_at), p.created_at
-         LIMIT greatest(0, v_remaining - CASE WHEN v_reserved > 0 THEN 1 ELSE 0 END)
+         LIMIT greatest(0, v_remaining)
          FOR UPDATE OF p SKIP LOCKED
       )
       UPDATE public.posts p
@@ -3768,8 +3876,11 @@ BEGIN
     END LOOP;
   END IF;
 
-  -- Step 3: If capacity remains, claim the YouTube upload sessions that are
+  -- Step 4: If capacity remains, claim the YouTube upload sessions that are
   -- due for another look.
+  --
+  -- The reserved slot is already taken when an upload wanted it; what is left
+  -- here is the share of the batch that nobody else needed.
   --
   -- A session without an attempt is never claimed: the worker could not tell
   -- whether the post it belongs to is still the one that is being worked on.
@@ -3805,7 +3916,7 @@ BEGIN
     END LOOP;
   END IF;
 
-  -- Step 4: Drive the YouTube fanout repairs.
+  -- Step 5: Drive the YouTube fanout repairs.
   --
   -- This hands out no work: the outcome is derived from the database, so it
   -- needs no worker and no provider. It is not part of the shared limit for
@@ -3854,6 +3965,7 @@ DECLARE
   v_session public.youtube_upload_sessions%ROWTYPE;
   v_count integer := 0;
   v_uncertain boolean;
+  v_receipt text;
   v_channel_id text;
 BEGIN
   IF p_social_account_id IS NULL THEN
@@ -3873,7 +3985,21 @@ BEGIN
      WHERE s.social_account_id = p_social_account_id
        AND s.state IN ('open', 'uploaded', 'expired', 'reconcile', 'failed')
   LOOP
-    v_uncertain := v_session.video_may_exist OR v_session.bytes_sent > 0;
+    v_receipt := v_session.video_id;
+
+    -- THE OUTCOME OF THIS SESSION
+    --
+    -- A video may exist when a byte ever reached the provider, when the
+    -- provider may already have turned the upload into one, or when the
+    -- session was ALREADY marked for a human.
+    --
+    -- The mark is what keeps a second video off the channel, and a disconnect
+    -- must never take it away: a session that was marked for a human before
+    -- the disconnect is still marked for a human after it, even when it never
+    -- sent a byte.
+    v_uncertain := v_session.video_may_exist
+      OR v_session.bytes_sent > 0
+      OR v_session.state = 'reconcile';
 
     -- The public row is settled BEFORE the account goes, so the parent does
     -- not wait for a destination that is about to disappear. The row itself
@@ -3882,38 +4008,86 @@ BEGIN
       SELECT 1 FROM public.platform_posts pp
        WHERE pp.id = v_session.platform_post_id AND pp.status = 'pending'
     ) THEN
-      PERFORM public.partner_settle_platform_post(
-        v_session.platform_post_id,
-        v_session.post_id,
-        v_session.social_account_id,
-        'youtube',
-        'failed',
-        NULL,
-        NULL,
-        'the account was disconnected before the upload finished',
-        CASE WHEN v_uncertain
-             THEN jsonb_build_object(
-               'youtube_upload_reason', 'youtube_upload_account_disconnected',
-               'publish_outcome', 'uncertain',
-               'publish_outcome_reason',
-                 'the account was disconnected while the upload was in flight, so YouTube may already hold a video'
-             )
-             ELSE jsonb_build_object(
-               'youtube_upload_reason', 'youtube_upload_account_disconnected'
-             )
-        END
-      );
+      IF v_receipt IS NOT NULL THEN
+        -- THE RECEIPT IS A PROOF, NOT A FAILURE
+        --
+        -- The provider accepted the video and gave its id, so the video IS on
+        -- the channel. Settling the row as a failure would report a
+        -- publication that happened as one that did not, would lose the video
+        -- id, and would roll the parent up to 'failed' for a post whose video
+        -- is published.
+        --
+        -- So the receipt is settled with the row and the parent keeps the
+        -- result it earned. The row goes with the account, as it does for
+        -- every platform; the receipt stays on the session, which is the row
+        -- that outlives it.
+        PERFORM public.partner_settle_platform_post(
+          v_session.platform_post_id,
+          v_session.post_id,
+          v_session.social_account_id,
+          'youtube',
+          'success',
+          v_receipt,
+          'https://www.youtube.com/watch?v=' || v_receipt,
+          NULL,
+          jsonb_build_object(
+            'youtube_upload_reason', 'youtube_upload_account_disconnected_after_publish'
+          )
+        );
+      ELSIF v_uncertain THEN
+        PERFORM public.partner_settle_platform_post(
+          v_session.platform_post_id,
+          v_session.post_id,
+          v_session.social_account_id,
+          'youtube',
+          'failed',
+          NULL,
+          NULL,
+          'the account was disconnected before the upload finished',
+          jsonb_build_object(
+            'youtube_upload_reason', 'youtube_upload_account_disconnected',
+            'publish_outcome', 'uncertain',
+            'publish_outcome_reason',
+              'the account was disconnected while the upload was in flight, so YouTube may already hold a video'
+          )
+        );
+      ELSE
+        PERFORM public.partner_settle_platform_post(
+          v_session.platform_post_id,
+          v_session.post_id,
+          v_session.social_account_id,
+          'youtube',
+          'failed',
+          NULL,
+          NULL,
+          'the account was disconnected before the upload finished',
+          jsonb_build_object(
+            'youtube_upload_reason', 'youtube_upload_account_disconnected'
+          )
+        );
+      END IF;
     END IF;
 
     -- The session becomes terminal and keeps its evidence. The URI is a
     -- credential of an account that no longer exists, so it goes.
+    --
+    -- The marker of an uncertain outcome stays on the session as well, because
+    -- the public row goes with the account: the session is the row that
+    -- outlives it, and it is what a later admission reads.
     UPDATE public.youtube_upload_sessions
-       SET state = CASE WHEN v_uncertain THEN 'reconcile' ELSE 'failed' END,
+       SET state = CASE WHEN v_receipt IS NOT NULL THEN 'uploaded'
+                        WHEN v_uncertain THEN 'reconcile'
+                        ELSE 'failed' END,
+           last_outcome = CASE WHEN v_uncertain THEN 'youtube_upload_reconcile_required'
+                               ELSE last_outcome END,
            session_uri = NULL,
            lease_token = NULL,
            lease_expires_at = NULL,
            disconnected_channel_id = v_channel_id,
-           error = left('the account was disconnected before the upload finished', 300),
+           error = left(CASE WHEN v_receipt IS NOT NULL
+                              THEN 'the account was disconnected after the video was published'
+                              ELSE 'the account was disconnected before the upload finished'
+                         END, 300),
            updated_at = clock_timestamp()
      WHERE id = v_session.id;
     v_count := v_count + 1;

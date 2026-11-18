@@ -151,7 +151,11 @@ function readUploadSettings(
     const settings = value as Record<string, unknown>;
     if (typeof settings.part === "string" && settings.part.length > 0 &&
         typeof settings.notifySubscribers === "boolean") {
-      return { part: settings.part, notifySubscribers: settings.notifySubscribers };
+      return {
+        part: settings.part,
+        notifySubscribers: settings.notifySubscribers,
+        ...(typeof settings.mimeType === "string" && settings.mimeType.length > 0 ? { mimeType: settings.mimeType } : {}),
+      };
     }
   }
   const storedBody = typeof body === "object" && body !== null && !Array.isArray(body)
@@ -502,6 +506,36 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
     return session.leaseExpiresAt !== null && session.leaseExpiresAt > now();
   }
 
+  /**
+   * Starts a terminal session again, unless a worker still owns it.
+   *
+   * The reset is the one the database does: the provider session is dropped,
+   * the counters go back to zero, the check schedule is cleared, and the
+   * continuation count starts again. A session that ran out of continuations
+   * would otherwise refuse every later claim for ever.
+   *
+   * A session that a worker still owns is NOT started again. That worker is
+   * about to settle it, and a restart under it would settle the new attempt
+   * with the old outcome. The session is left exactly as it is, and the claim
+   * refuses it with 'lease_held' until the lease is gone.
+   */
+  function reopen(session: MemorySession, input: AdmitUploadSession): void {
+    if (holdsLiveLease(session)) return;
+    session.state = "open";
+    session.sessionUri = null;
+    session.sessionExpiresAt = null;
+    session.confirmedBytes = 0;
+    session.bytesSent = 0;
+    session.leaseToken = null;
+    session.leaseExpiresAt = null;
+    session.nextCheckAt = null;
+    session.lastOutcome = null;
+    session.continuationCount = 0;
+    session.uploadBody = input.uploadBody;
+    session.uploadSettings = input.uploadSettings ?? youtubeUploadSettingsFromBody(input.uploadBody);
+    session.expectedContent = input.expectedContent;
+  }
+
   return {
     sessions,
     fanoutRecoveries,
@@ -551,6 +585,16 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
         }
 
         if (session.state === "uploaded") {
+          // THE RECEIPT PROVES ONE ATTEMPT
+          //
+          // The receipt is the proof that the provider holds a video FOR THE
+          // ATTEMPT THAT STORED IT. It says nothing about a later attempt: the
+          // customer may have edited the post and published it again, and the
+          // old video is not the new content. So the receipt answers the
+          // attempt that stored it, and every other attempt is refused.
+          if (session.attemptStartedAt === null || session.attemptStartedAt !== input.attemptStartedAt) {
+            return Promise.resolve({ record: null, refused: "already_published", platformPostId: null });
+          }
           return Promise.resolve({ record: payload(session), refused: null, platformPostId: session.platformPostId });
         }
         if (session.state === "reconcile") {
@@ -579,15 +623,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           session.totalBytes === input.totalBytes &&
           (session.mediaObjectVersion === null || session.mediaObjectVersion === input.mediaObjectVersion)
         ) {
-          session.state = "open";
-          session.sessionUri = null;
-          session.confirmedBytes = 0;
-          session.bytesSent = 0;
-          session.leaseToken = null;
-          session.leaseExpiresAt = null;
-          session.uploadBody = input.uploadBody;
-          session.uploadSettings = input.uploadSettings ?? youtubeUploadSettingsFromBody(input.uploadBody);
-          session.expectedContent = input.expectedContent;
+          reopen(session, input);
         }
 
         const sameContent =
@@ -606,12 +642,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
             session.state = "reconcile";
             return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
           }
-          session.state = "open";
-          session.sessionUri = null;
-          session.confirmedBytes = 0;
-          session.bytesSent = 0;
-          session.leaseToken = null;
-          session.leaseExpiresAt = null;
+          reopen(session, input);
         }
 
         if (session.state === "failed") {
@@ -621,18 +652,26 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
             session.state = "reconcile";
             return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
           }
-          session.state = "open";
-          session.sessionUri = null;
-          session.confirmedBytes = 0;
-          session.bytesSent = 0;
-          session.leaseToken = null;
-          session.leaseExpiresAt = null;
+          reopen(session, input);
         }
 
-        // The session now belongs to the attempt that is running.
-        session.attemptStartedAt = input.attemptStartedAt;
-        session.resolvedPlatform = "youtube";
-        if (input.targetAccountIds.length > 0) session.targetAccountIds = input.targetAccountIds;
+        // THE ATTEMPT OF THE SESSION
+        //
+        // The session belongs to the attempt that is running when it was
+        // started again, or when it is a live session that is still open. A
+        // session that was LEFT ALONE does not: a terminal session that
+        // another worker still owns keeps the attempt it has, because that
+        // worker is about to settle it, and a new attempt may not take it
+        // over. The database writes the attempt in exactly the same places,
+        // and the claim refuses such a session with 'lease_held' until the
+        // lease is gone.
+        const sessionWasLeftAlone = session.state !== "open" ||
+          (session.sessionExpiresAt !== null && session.sessionExpiresAt <= now());
+        if (!sessionWasLeftAlone) {
+          session.attemptStartedAt = input.attemptStartedAt;
+          session.resolvedPlatform = "youtube";
+          if (input.targetAccountIds.length > 0) session.targetAccountIds = input.targetAccountIds;
+        }
       }
 
       // The public pending row is created with the session, in one step.
@@ -729,7 +768,19 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       } else {
         // A video may exist, so the session is left for a human rather than
         // declared failed.
-        session.state = session.videoMayExist ? "reconcile" : "failed";
+        //
+        // A BYTE THAT REACHED THE PROVIDER IS THE SAME EVIDENCE HERE AND IN
+        // THE TERMINAL RECOVERY
+        // ------------------------------------------------------
+        // The classification of a session whose worker died asks the same
+        // question with the same rule: a session that sent a byte may already
+        // have left a video on the channel. When the two paths answered it
+        // differently, the same session was a definitive failure when a
+        // worker settled it and an uncertain one when the worker died -- and
+        // the uncertainty was the safe answer. So the settlement uses the
+        // classification's rule: only a session that proves that nothing ever
+        // reached the provider stays a retryable failure.
+        session.state = session.videoMayExist || session.bytesSent > 0 ? "reconcile" : "failed";
       }
       session.leaseToken = null;
       session.leaseExpiresAt = null;
