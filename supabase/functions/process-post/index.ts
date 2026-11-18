@@ -1,5 +1,5 @@
 import { checkpointThreadsImage, publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable, ThreadsCheckpointCanceled, type ThreadsImageCheckpoint } from "./threadsPublish.ts";
-import { buildYoutubeUploadRequest, initiateYoutubeUpload } from "./youtubePublisher.ts";
+import { buildYoutubeUploadRequest } from "./youtubePublisher.ts";
 import { hashRequest } from "../_shared/partnerApiIdempotency.ts";
 /**
  * ============================================================================
@@ -157,6 +157,15 @@ import {
 } from "./deferredPublish.ts";
 import { createCarouselChildren, threadsChildWait, waitForCarouselChildren } from "./carouselChildren.ts";
 import { claimFinalNotification, claimThreadsImageNotification, confirmThreadsImageNotification } from "./finalNotification.ts";
+import {
+  runResumableVideoUpload,
+  type ResumableUploadOutcome,
+} from "./youtubeResumableUpload.ts";
+import { createVideoByteSource } from "./youtubeVideoSource.ts";
+import {
+  createSupabaseYoutubeUploadSessionStore,
+  type YoutubeUploadRefusal,
+} from "./youtubeUploadSession.ts";
 import {
   dropRecordedStory,
   readUnrecordedStory,
@@ -3045,7 +3054,7 @@ Deno.serve(async (req) => {
                   return data.signedUrl;
                 },
               })
-              : await postToYouTube(account, post, mediaUrls, mediaFiles);
+              : await postToYouTube(account, post, mediaUrls, mediaFiles, supabase);
             break;
           default:
             throw new Error(`Unsupported platform: ${account.platform}`);
@@ -9343,22 +9352,120 @@ async function postToTwitter(
 // └─────────────────────────────────────────────────────────────────────────┘
 
 /**
+ * The message a YouTube upload refusal becomes.
+ *
+ * The wording matters as much as the branch: a refusal that needs a human
+ * must never read like "safe to try again", because trying again could put a
+ * second video on the customer's channel.
+ */
+function youtubeUploadRefusalMessage(refusal: YoutubeUploadRefusal): string {
+  switch (refusal) {
+    case "reconcile_required":
+      return "The YouTube upload could not be confirmed. The video may or may not have been created, so it was not uploaded again automatically. Please check your YouTube channel.";
+    case "content_changed":
+      return "The YouTube upload was interrupted and the post was changed since it started. Review the post before trying again.";
+    case "lease_held":
+      return "Another upload of this video is already running.";
+    case "account_not_usable":
+      return "The YouTube account is not connected or not usable. Please reconnect it.";
+    case "media_not_owned":
+      return "The video file for this post is no longer available.";
+    case "post_not_found":
+      return "The post for this upload is no longer available.";
+    case "invalid_size":
+      return "The video file for this post could not be read.";
+    default:
+      return "The YouTube upload could not be prepared.";
+  }
+}
+
+/**
+ * The message an upload outcome becomes.
+ *
+ * The three cases the protocol keeps apart are three different messages: one
+ * that says the upload never started and is safe to try again, one that says
+ * it can continue where it stopped, and one that says a human has to look.
+ */
+function youtubeUploadOutcomeMessage(outcome: ResumableUploadOutcome): string {
+  switch (outcome.kind) {
+    case "resumable":
+      return `The YouTube upload did not finish yet (${outcome.reason}). Trying again continues the same upload from where it stopped.`;
+    case "unsent":
+      return `The YouTube upload never reached the point where a video could be created (${outcome.reason}). Nothing was published to the channel, so trying again is safe.`;
+    case "reconcile":
+      return `The YouTube upload could not be confirmed (${outcome.reason}). The video may or may not have been created, so it was not uploaded again automatically. Please check your YouTube channel.`;
+    case "abandoned":
+      return "Another worker is finishing this YouTube upload.";
+    case "failed":
+      return outcome.retryable
+        ? `The YouTube upload failed (${outcome.message}). Nothing was created on the channel, so trying again is safe.`
+        : `The YouTube upload failed (${outcome.message}).`;
+    default:
+      return "The YouTube upload finished.";
+  }
+}
+
+/**
+ * Opens the durable upload session and takes it for this worker.
+ *
+ * The session is opened first and claimed second, and the pair is tried twice:
+ * a session whose provider session expired between the two calls is reopened
+ * by the second round, and a session that was reopened is claimed with the
+ * same lease.
+ */
+async function openYoutubeUploadSession(
+  store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
+  input: Parameters<ReturnType<typeof createSupabaseYoutubeUploadSessionStore>["begin"]>[0],
+  leaseToken: string,
+  leaseMs: number,
+): Promise<{ record: Awaited<ReturnType<typeof store.claim>>["record"]; refused: YoutubeUploadRefusal | null }> {
+  for (let round = 0; round < 2; round += 1) {
+    const opened = await store.begin(input);
+    if (opened.refused) return { record: null, refused: opened.refused };
+    if (!opened.record) return { record: null, refused: "post_not_found" };
+
+    const claimed = await store.claim({
+      sessionId: opened.record.id,
+      leaseToken,
+      leaseMs,
+    });
+    if (!claimed.refused) return claimed;
+    if (claimed.refused !== "session_expired") return claimed;
+  }
+  return { record: null, refused: "session_expired" };
+}
+
+/**
  * Post to YouTube (video uploads, Shorts)
+ *
+ * The upload is native and resumable. The video is written in bounded
+ * chunks, the provider's answer is asked for after every write that did not
+ * answer, and the whole state of the upload is kept in a private, leased
+ * session row. That is what makes a second video on the customer's channel
+ * impossible: a receipt that already exists is used instead of an upload, and
+ * a session that may have been accepted by the provider is left for a human
+ * instead of being written again.
  */
 async function postToYouTube(
   account: SocialAccount,
   post: PostData,
   mediaUrls: string[],
-  mediaFiles: MediaFile[]
+  mediaFiles: MediaFile[],
+  supabase: SupabaseClient,
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
 
   // YouTube only supports video uploads
-  const videoUrl = mediaUrls.find((url) => isVideoUrl(url));
+  const videoIndex = mediaUrls.findIndex((url) => isVideoUrl(url));
+  const videoUrl = videoIndex >= 0 ? mediaUrls[videoIndex] : null;
 
   if (!videoUrl) {
     throw new Error("YouTube requires a video file. Please upload a video to post to YouTube.");
   }
+
+  // The media urls are built in the same order as the media files, so the
+  // video's own file is the one the durable session is fenced on.
+  const videoFile = videoIndex >= 0 ? mediaFiles[videoIndex] : undefined;
 
   // Get YouTube settings from metadata
   const metadata = post.metadata;
@@ -9385,15 +9492,20 @@ async function postToYouTube(
   console.log(`YouTube upload - type: ${isShort ? "Short" : "Video"}, title: ${title}, privacy: ${privacyStatus}`);
 
   // ─────────────────────────────────────────────────────────────────────
-  // Step 1: Download the video file
+  // Step 1: The video is read a chunk at a time, so only its size and its
+  // type are asked for. The file itself is never held whole.
   // ─────────────────────────────────────────────────────────────────────
-  console.log("Downloading video from:", videoUrl);
-  const { blob: videoBlob, mimeType, size: videoSize } = await downloadMediaAsBlob(videoUrl);
+  const source = await createVideoByteSource({
+    url: videoUrl,
+    mimeType: videoFile?.mime_type ?? null,
+  });
+  const mimeType = source.mimeType;
+  const videoSize = source.size;
 
-  console.log(`YouTube: Video downloaded, size=${videoSize}, mimeType=${mimeType}`);
+  console.log(`YouTube: Video ready, size=${videoSize}, mimeType=${mimeType}`);
 
   // ─────────────────────────────────────────────────────────────────────
-  // Step 2: Initialize resumable upload
+  // Step 2: The request the provider is asked to create.
   // ─────────────────────────────────────────────────────────────────────
   // The request is built by the YouTube provider adapter so the fields that
   // the YouTube Data API actually accepts are the ones that get sent.
@@ -9404,42 +9516,73 @@ async function postToYouTube(
     tags,
   });
 
-  console.log("YouTube: Initializing resumable upload...");
-
-  const uploadUrl = await initiateYoutubeUpload({
-    accessToken,
-    videoSize,
-    mimeType,
-    request: uploadRequest,
-  });
-
-  console.log("Got resumable upload URL, uploading video...");
-
   // ─────────────────────────────────────────────────────────────────────
-  // Step 3: Upload the video content
+  // Step 3: The durable session.
+  //
+  // It holds the provider's resumable session URI, the confirmed offset and
+  // the video id. It is private to the service role, so the URI never
+  // reaches a log line, a telemetry event or a client response.
   // ─────────────────────────────────────────────────────────────────────
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": mimeType,
-      "Content-Length": String(videoSize),
+  const store = createSupabaseYoutubeUploadSessionStore(supabase);
+  const leaseToken = crypto.randomUUID();
+  const publishDeadlineMs = workerPublishDeadline(WORKER_STARTED_AT_MS);
+  const leaseMs = Math.max(60_000, publishDeadlineMs - Date.now() + 10_000);
+
+  const opened = await openYoutubeUploadSession(
+    store,
+    {
+      postId: post.id,
+      socialAccountId: account.id,
+      platformPostId: null,
+      mediaFileId: videoFile?.id ?? null,
+      mediaObjectVersion: videoFile?.current_object_version ?? null,
+      mediaSize: videoSize,
+      totalBytes: videoSize,
+      uploadBody: uploadRequest.body,
+      userId: post.user_id,
     },
-    body: videoBlob,
-  });
+    leaseToken,
+    leaseMs,
+  );
 
-  if (!uploadResponse.ok) {
-    const errorData = await uploadResponse.json().catch(() => ({}));
-    console.error("YouTube upload error:", errorData);
-    throw new Error(`YouTube upload failed: ${errorData?.error?.message || uploadResponse.statusText}`);
+  if (opened.refused || !opened.record) {
+    const refusal = opened.refused ?? "post_not_found";
+    throw new Error(youtubeUploadRefusalMessage(refusal));
   }
 
-  const uploadData = await uploadResponse.json();
-  console.log("YouTube upload complete:", uploadData.id);
-
-  const videoId = uploadData.id as string;
+  // A receipt that already exists belongs to an earlier attempt. The video
+  // is not uploaded again, and the first comment is not posted again either.
+  const inheritedReceipt = opened.record.videoId;
 
   // ─────────────────────────────────────────────────────────────────────
-  // Step 4: Set thumbnail if provided
+  // Step 4: The upload itself.
+  // ─────────────────────────────────────────────────────────────────────
+  const outcome = await runResumableVideoUpload({
+    fetchImpl: fetch,
+    store,
+    session: opened.record,
+    leaseToken,
+    accessToken,
+    source,
+    totalBytes: videoSize,
+    mimeType,
+    deadlineMs: publishDeadlineMs,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    uploadUrl: uploadRequest.url,
+    uploadBody: uploadRequest.body,
+  });
+
+  if (outcome.kind !== "completed") {
+    throw new Error(youtubeUploadOutcomeMessage(outcome));
+  }
+
+  const videoId = outcome.videoId;
+
+  console.log("YouTube upload complete:", videoId);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Step 5: Set thumbnail if provided
   // ─────────────────────────────────────────────────────────────────────
   if (thumbnailUrl) {
     try {
@@ -9469,9 +9612,13 @@ async function postToYouTube(
   }
 
   // ─────────────────────────────────────────────────────────────────────
-  // Step 5: Post first comment if provided
+  // Step 6: Post first comment if provided
+  //
+  // Only when this run uploaded the video. A comment that was already posted
+  // by an earlier attempt must not be posted twice, and the earlier attempt
+  // is the one that had the video id.
   // ─────────────────────────────────────────────────────────────────────
-  if (firstComment) {
+  if (firstComment && !inheritedReceipt) {
     try {
       console.log("Posting first comment to YouTube video...");
       const commentResponse = await fetch(
@@ -9503,6 +9650,8 @@ async function postToYouTube(
     } catch (commentError) {
       console.warn("Error posting first comment:", commentError);
     }
+  } else if (firstComment) {
+    console.log("First comment skipped: the video was uploaded by an earlier attempt");
   }
 
   return {

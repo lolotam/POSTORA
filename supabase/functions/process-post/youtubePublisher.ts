@@ -219,22 +219,13 @@ export function buildYoutubeUploadRequest(
   };
 }
 
-export interface YoutubeUploadInit {
-  accessToken: string;
-  videoSize: number;
-  mimeType: string;
-  request: YoutubeUploadRequest;
-  /** Injectable for tests; defaults to the global fetch. */
-  fetchImpl?: typeof fetch;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
 }
 
 /** Translates a failed upload handshake into the message the caller shows. */
-function uploadFailureMessage(status: number, errorData: unknown, statusText: string): string {
+export function uploadFailureMessage(status: number, errorData: unknown, statusText: string): string {
   const payload = asRecord(asRecord(errorData)?.error);
   const message = typeof payload?.message === "string" ? payload.message : undefined;
   if (status === 401) {
@@ -252,39 +243,4 @@ function uploadFailureMessage(status: number, errorData: unknown, statusText: st
     return `YouTube permission error: ${message || "Access denied"}`;
   }
   return `YouTube API error: ${message || statusText}`;
-}
-
-/**
- * Starts a resumable upload and returns the URL the video bytes go to.
- *
- * The provider's failure modes are translated here so the caller sees the
- * same messages it always has.
- */
-export async function initiateYoutubeUpload(init: YoutubeUploadInit): Promise<string> {
-  const doFetch = init.fetchImpl ?? fetch;
-
-  const initResponse = await doFetch(init.request.url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${init.accessToken}`,
-      "Content-Type": "application/json; charset=UTF-8",
-      "X-Upload-Content-Length": String(init.videoSize),
-      "X-Upload-Content-Type": init.mimeType,
-    },
-    body: JSON.stringify(init.request.body),
-  });
-
-  if (!initResponse.ok) {
-    const errorData = await initResponse.json().catch(() => ({}));
-    console.error("YouTube init error:", errorData);
-    throw new Error(
-      uploadFailureMessage(initResponse.status, errorData, initResponse.statusText),
-    );
-  }
-
-  const uploadUrl = initResponse.headers.get("Location");
-  if (!uploadUrl) {
-    throw new Error("YouTube did not return an upload URL");
-  }
-  return uploadUrl;
 }

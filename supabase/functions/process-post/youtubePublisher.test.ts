@@ -1,58 +1,14 @@
 import {
   assert,
   assertEquals,
-  assertRejects,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 import {
   buildYoutubeUploadRequest,
-  initiateYoutubeUpload,
   type YoutubeUploadRequest,
 } from "./youtubePublisher.ts";
 import { YOUTUBE_DEFAULT_CATEGORY_ID } from "../_shared/youtubePublishOptions.ts";
-
-interface RecordedCall {
-  url: string;
-  init: RequestInit;
-}
-
-/**
- * A fake YouTube provider. It records what Postora sent and answers with the
- * response the test asks for, so the request contract can be asserted without
- * touching the live API.
- */
-function fakeYouTube(options: {
-  status?: number;
-  payload?: unknown;
-  location?: string | null;
-} = {}) {
-  const calls: RecordedCall[] = [];
-  const status = options.status ?? 200;
-  const location = options.location === undefined
-    ? "https://upload.example/fake-session"
-    : options.location;
-
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(input), init: init ?? {} });
-    const headers = new Headers();
-    if (location) headers.set("Location", location);
-    return new Response(
-      status >= 400 ? JSON.stringify(options.payload ?? { error: { message: "nope" } }) : "{}",
-      { status, headers },
-    );
-  }) as unknown as typeof fetch;
-
-  return { calls, fetchImpl };
-}
-
-function bodyOf(call: RecordedCall): Record<string, unknown> {
-  return JSON.parse(String(call.init.body)) as Record<string, unknown>;
-}
-
-function headersOf(call: RecordedCall): Headers {
-  return new Headers(call.init.headers as HeadersInit);
-}
 
 function snippetOf(request: YoutubeUploadRequest): Record<string, unknown> {
   return request.body.snippet as Record<string, unknown>;
@@ -60,10 +16,6 @@ function snippetOf(request: YoutubeUploadRequest): Record<string, unknown> {
 
 function statusOf(request: YoutubeUploadRequest): Record<string, unknown> {
   return request.body.status as Record<string, unknown>;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 const baseInput = { title: "A video", description: "A description", tags: ["one"] };
@@ -192,93 +144,6 @@ Deno.test("upload request falls back to the default category", () => {
   const request = buildYoutubeUploadRequest({ metadata: {}, ...baseInput });
 
   assertEquals(snippetOf(request).categoryId, YOUTUBE_DEFAULT_CATEGORY_ID);
-});
-
-Deno.test("upload handshake sends the built request to the provider", async () => {
-  const fixtureCredential = "fixture";
-  const provider = fakeYouTube();
-  const request = buildYoutubeUploadRequest({
-    metadata: { youtube_visibility: "public", youtube_contains_synthetic_media: true },
-    ...baseInput,
-  });
-
-  const uploadUrl = await initiateYoutubeUpload({
-    accessToken: fixtureCredential,
-    videoSize: 2048,
-    mimeType: "video/mp4",
-    request,
-    fetchImpl: provider.fetchImpl,
-  });
-
-  assertEquals(uploadUrl, "https://upload.example/fake-session");
-  assertEquals(provider.calls.length, 1);
-
-  const call = provider.calls[0];
-  assertEquals(call.init.method, "POST");
-  assertStringIncludes(call.url, "uploadType=resumable");
-  assertStringIncludes(call.url, "part=snippet,status");
-  assertEquals(headersOf(call).get("Authorization"), `Bearer ${fixtureCredential}`);
-  assertEquals(headersOf(call).get("X-Upload-Content-Length"), "2048");
-  assertEquals(headersOf(call).get("X-Upload-Content-Type"), "video/mp4");
-
-  const body = bodyOf(call);
-  const status = body.status;
-  assert(typeof status === "object" && status !== null);
-  assert("privacyStatus" in status);
-  assert("containsSyntheticMedia" in status);
-  assertEquals(status.privacyStatus, "public");
-  assertEquals(status.containsSyntheticMedia, true);
-});
-
-Deno.test("upload handshake reports an expired authorization", async () => {
-  const provider = fakeYouTube({ status: 401 });
-
-  const error = await assertRejects(() =>
-    initiateYoutubeUpload({
-      accessToken: "stale",
-      videoSize: 1,
-      mimeType: "video/mp4",
-      request: buildYoutubeUploadRequest({ metadata: {}, ...baseInput }),
-      fetchImpl: provider.fetchImpl,
-    })
-  );
-
-  assertStringIncludes(errorMessage(error), "authentication expired");
-});
-
-Deno.test("upload handshake reports an exhausted quota", async () => {
-  const provider = fakeYouTube({
-    status: 403,
-    payload: { error: { errors: [{ reason: "quotaExceeded" }], message: "quota" } },
-  });
-
-  const error = await assertRejects(() =>
-    initiateYoutubeUpload({
-      accessToken: "token",
-      videoSize: 1,
-      mimeType: "video/mp4",
-      request: buildYoutubeUploadRequest({ metadata: {}, ...baseInput }),
-      fetchImpl: provider.fetchImpl,
-    })
-  );
-
-  assertStringIncludes(errorMessage(error), "quota exceeded");
-});
-
-Deno.test("upload handshake reports a missing upload location", async () => {
-  const provider = fakeYouTube({ location: null });
-
-  const error = await assertRejects(() =>
-    initiateYoutubeUpload({
-      accessToken: "token",
-      videoSize: 1,
-      mimeType: "video/mp4",
-      request: buildYoutubeUploadRequest({ metadata: {}, ...baseInput }),
-      fetchImpl: provider.fetchImpl,
-    })
-  );
-
-  assertStringIncludes(errorMessage(error), "did not return an upload URL");
 });
 
 Deno.test("upload request keeps the title and description within the provider limits", () => {
