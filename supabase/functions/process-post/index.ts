@@ -2896,6 +2896,18 @@ Deno.serve(async (req) => {
     // read-preference provider, fall back to the other provider, then legacy paths).
     const mediaUrls: string[] = [];
     const providerPreferenceOrder = await cdnReadPreferenceOrder(supabase);
+    // The hosts a delivery URL may point at, and the owner the media belongs
+    // to: a media row is a row the customer may write, so the resolver is told
+    // what may be read rather than what is stored.
+    const mediaHosts = await approvedMediaHostSet(supabase);
+    // The workspaces this post publishes into. The partner API writes its media
+    // under the workspace's own prefix, so the media of one of these
+    // workspaces may be read and the media of another one may not.
+    const allowedWorkspaceIds = new Set(
+      (accounts ?? [])
+        .map((account: { workspace_id?: string | null }) => account.workspace_id ?? null)
+        .filter((workspaceId): workspaceId is string => typeof workspaceId === "string" && workspaceId.length > 0),
+    );
 
     // Provider state per media file (single query for the whole post). Rows are
     // matched against each file's current_object_version afterwards — renames bump
@@ -2905,7 +2917,12 @@ Deno.serve(async (req) => {
     for (const file of mediaFiles) {
       let resolvedUrl: string | null = null;
       try {
-        resolvedUrl = await resolveMediaUrl(supabase, file, providerRowsByMedia, providerPreferenceOrder);
+        resolvedUrl = await resolveMediaUrl(supabase, file, providerRowsByMedia, {
+          preferenceOrder: providerPreferenceOrder,
+          ownerUserId: post.user_id,
+          allowedWorkspaceIds,
+          approvedHosts: mediaHosts,
+        });
       } catch (signingError) {
         console.error(`Failed to create a delivery URL for media ${file.id}:`, redactProviderText(signingError));
         return await failMediaPreparation("Could not create a delivery URL for post media. Retry the publish.");
@@ -9675,7 +9692,7 @@ function youtubeUploadRefusalMessage(refusal: YoutubeUploadRefusal): string {
  * reopened by the second round, and a session that was reopened is claimed
  * with the same lease.
  */
-async function openYoutubeUploadSession(
+export async function openYoutubeUploadSession(
   store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
   input: Parameters<ReturnType<typeof createSupabaseYoutubeUploadSessionStore>["admit"]>[0],
   leaseToken: string,
@@ -9697,8 +9714,11 @@ async function openYoutubeUploadSession(
       leaseToken,
       leaseMs,
     });
-    if (!claimed.refused) return { ...claimed, platformPostId: opened.platformPostId };
-    if (claimed.refused !== "session_expired") return { ...claimed, platformPostId: opened.platformPostId };
+    // The pending row id is the one the session was FIRST admitted with: a
+    // reopened session is admitted again without one, and the row the upload
+    // settles is still the row the first admission created.
+    if (!claimed.refused) return { ...claimed, platformPostId };
+    if (claimed.refused !== "session_expired") return { ...claimed, platformPostId };
   }
   return { record: null, refused: "session_expired", platformPostId };
 }
@@ -9839,7 +9859,7 @@ function buildYoutubeContinuationPorts(
     async loadMedia(mediaFileId) {
       const { data, error } = await supabase
         .from("media_files")
-        .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type, scan_state, file_size")
+        .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type, scan_state, file_size, workspace_id")
         .eq("id", mediaFileId)
         .maybeSingle();
       if (error) throw new Error("YouTube media lookup failed");
@@ -9860,6 +9880,10 @@ function buildYoutubeContinuationPorts(
         // The bucket is part of the file's identity: a signed URL is only
         // made for the bucket the object is actually in.
         storageBucket: String(data.storage_bucket ?? ""),
+        // The workspace the file belongs to. The partner API writes its media
+        // under the workspace's prefix, and that prefix is what the resolver
+        // checks before it signs the object.
+        workspaceId: typeof data.workspace_id === "string" ? data.workspace_id : null,
         mimeType: typeof data.mime_type === "string" ? data.mime_type : null,
         // The shared sendability rule reads this. A resumed upload refuses a
         // file that is still being scanned or that was rejected, exactly as
@@ -9884,6 +9908,7 @@ function buildYoutubeContinuationPorts(
           userId: media.userId,
           filePath: media.filePath,
           storageBucket: media.storageBucket,
+          workspaceId: media.workspaceId,
           mimeType: media.mimeType,
           currentObjectVersion: media.currentObjectVersion,
           fileSize: media.fileSize,
@@ -9999,12 +10024,31 @@ function buildYoutubeContinuationPorts(
 }
 
 /**
+ * The message a terminal continuation failure answers with.
+ *
+ * A failed continuation released the session for good: the row was settled and
+ * nothing is going to look at it again. The public sentence for an answer that
+ * could not be classified promises a check that is never coming, so a terminal
+ * failure with that reason answers with the reconcile sentence instead -- the
+ * same one the settled public row carries.
+ *
+ * The REASON is not changed. It stays the code the caller matches on, and it
+ * stays the code that says the outcome is uncertain.
+ */
+function youtubeTerminalFailureMessage(reason: ContinuationResult["reason"]): string {
+  if (reason === YOUTUBE_UPLOAD_REASON.unknown) {
+    return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile);
+  }
+  return youtubeUploadPublicMessage(reason);
+}
+
+/**
  * The answer the worker gives the reconciler.
  *
  * It carries a reason code and the public message, never provider text and
  * never the session URI.
  */
-function youtubeContinuationResponse(result: ContinuationResult): Response {
+export function youtubeContinuationResponse(result: ContinuationResult): Response {
   if (result.status === "completed") {
     return createJsonResponse({
       success: true,
@@ -10036,7 +10080,7 @@ function youtubeContinuationResponse(result: ContinuationResult): Response {
     );
   }
   return createJsonResponse(
-    { error: youtubeUploadPublicMessage(result.reason), reason: result.reason },
+    { error: youtubeTerminalFailureMessage(result.reason), reason: result.reason },
     500,
   );
 }

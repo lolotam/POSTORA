@@ -11,7 +11,7 @@
  *
  *   * a hard-coded bucket: the same path in another bucket is another
  *     object, and a file in the `media` bucket must not be signed in the
- *     `postora` bucket;
+ *     `supabase` bucket;
  *   * a provider row of a STALE content version: a rename bumps the version
  *     and the old row stays "ready" with a dead URL;
  *   * a provider row of a version that is not the file's: the delivery URL
@@ -25,8 +25,10 @@ import { YOUTUBE_UPLOAD_REASON } from "./youtubeUploadPolicy.ts";
 
 const MEDIA_ID = "media-1";
 const OWNER = "user-1";
+/** The path of the file inside its bucket: the owner's own prefix. */
+const FILE_PATH = `${OWNER}/video.mp4`;
 const HOST = "https://media.fixture.invalid";
-const SIGNED_PATH = "/storage/v1/object/sign/media/owner/video.mp4?token=secret-token";
+const SIGNED_PATH = `/storage/v1/object/sign/media/${OWNER}/video.mp4?token=secret-token`;
 
 /** What the fake database was asked for. */
 interface Fixture {
@@ -59,7 +61,7 @@ interface FixtureOptions {
 function fixture(options: FixtureOptions = {}): { client: unknown; seen: Fixture } {
   const seen: Fixture = { signedBuckets: [], signedPaths: [], fetched: [] };
   const bucket = options.bucket ?? "media";
-  const filePath = options.filePath ?? "owner/video.mp4";
+  const filePath = options.filePath ?? FILE_PATH;
   const signedUrl = options.signedUrl ?? `${HOST}${SIGNED_PATH}`;
   const rows = options.providerRows ?? [];
 
@@ -134,15 +136,15 @@ function mediaFetch(seen: Fixture, status = 206) {
 // The approved media hosts are HOSTS, not origins.
 const hosts = new Set(["media.fixture.invalid"]);
 
-for (const bucket of ["media", "postora"]) {
+for (const bucket of ["media", "supabase"]) {
   Deno.test(`a file in the ${bucket} bucket is signed in the ${bucket} bucket`, async () => {
-    const { client, seen } = fixture({ bucket, filePath: "owner/video.mp4" });
+    const { client, seen } = fixture({ bucket, filePath: FILE_PATH });
     const source = await createOwnedVideoSource({
       supabase: client as never,
       file: {
         id: MEDIA_ID,
         userId: OWNER,
-        filePath: "owner/video.mp4",
+        filePath: FILE_PATH,
         storageBucket: bucket,
         mimeType: "video/mp4",
         currentObjectVersion: 1,
@@ -154,7 +156,7 @@ for (const bucket of ["media", "postora"]) {
     assertEquals(source.size, 4);
     // The bucket is the file's own. It is not hard-coded.
     assertEquals(seen.signedBuckets, [bucket]);
-    assertEquals(seen.signedPaths, ["owner/video.mp4"]);
+    assertEquals(seen.signedPaths, [FILE_PATH]);
   });
 }
 
@@ -171,7 +173,7 @@ Deno.test("a provider row of the current version is used instead of the bucket",
     file: {
       id: MEDIA_ID,
       userId: OWNER,
-      filePath: "owner/video.mp4",
+      filePath: FILE_PATH,
       storageBucket: "media",
       mimeType: "video/mp4",
       currentObjectVersion: 3,
@@ -206,7 +208,7 @@ for (const row of [
       file: {
         id: MEDIA_ID,
         userId: OWNER,
-        filePath: "owner/video.mp4",
+        filePath: FILE_PATH,
         storageBucket: "media",
         mimeType: "video/mp4",
         currentObjectVersion: 2,
@@ -233,7 +235,7 @@ Deno.test("the read preference decides which provider is used", async () => {
     file: {
       id: MEDIA_ID,
       userId: OWNER,
-      filePath: "owner/video.mp4",
+      filePath: FILE_PATH,
       storageBucket: "media",
       mimeType: "video/mp4",
       currentObjectVersion: 1,
@@ -249,7 +251,7 @@ Deno.test("the read preference decides which provider is used", async () => {
     file: {
       id: MEDIA_ID,
       userId: OWNER,
-      filePath: "owner/video.mp4",
+      filePath: FILE_PATH,
       storageBucket: "media",
       mimeType: "video/mp4",
       currentObjectVersion: 1,
@@ -269,7 +271,7 @@ Deno.test("a host outside the approved policy is refused before any request", as
       file: {
         id: MEDIA_ID,
         userId: OWNER,
-        filePath: "owner/video.mp4",
+        filePath: FILE_PATH,
         storageBucket: "media",
         mimeType: "video/mp4",
         currentObjectVersion: 1,
@@ -296,7 +298,7 @@ Deno.test("a source that cannot be read names a stable reason and no URL", async
       file: {
         id: MEDIA_ID,
         userId: OWNER,
-        filePath: "owner/video.mp4",
+        filePath: FILE_PATH,
         storageBucket: "media",
         mimeType: "video/mp4",
         currentObjectVersion: 1,

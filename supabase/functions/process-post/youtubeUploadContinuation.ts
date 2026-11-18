@@ -108,6 +108,13 @@ export interface ContinuationMedia {
    * is actually in.
    */
   storageBucket: string;
+  /**
+   * The workspace the media belongs to.
+   *
+   * The partner API writes its media under the workspace's prefix, so this is
+   * the prefix of a partner object and nothing else.
+   */
+  workspaceId: string | null;
   mimeType: string | null;
   /**
    * The security scan state of the file.

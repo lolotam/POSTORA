@@ -137,6 +137,7 @@ function world(options: WorldOptions = {}): World {
     fileSize: 100,
     filePath: "postora/user/video.mp4",
     storageBucket: "postora",
+    workspaceId: null,
     mimeType: "video/mp4",
     scanState: "available",
     ...options.media,

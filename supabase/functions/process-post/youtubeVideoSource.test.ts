@@ -17,7 +17,7 @@
  */
 
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { createVideoByteSource, readBoundedBytes, VideoSourceError } from "./youtubeVideoSource.ts";
+import { createVideoByteSource, fetchApprovedMedia, readBoundedBytes, VideoSourceError } from "./youtubeVideoSource.ts";
 import { approvedMediaHosts, isApprovedMediaUrl, YOUTUBE_UPLOAD_REASON } from "./youtubeUploadPolicy.ts";
 
 const HOST = "https://media.example.test";
@@ -377,6 +377,70 @@ Deno.test("a body that is longer than the range is refused", async () => {
   await assertRejects(() => readBoundedBytes(response, 10));
 });
 
+Deno.test("a body that announces more than the limit is cancelled instead of left open", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const response = new Response(body, { headers: { "Content-Length": "64" } });
+  const error = await assertRejects(() => readBoundedBytes(response, 10), VideoSourceError);
+  assertEquals(error.detail, "The media host announced 64 bytes instead of 10.");
+  assertEquals(cancelled, true);
+});
+
+Deno.test("a body that streams more than the limit is cancelled instead of left open", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(fileBytes(8));
+      controller.enqueue(fileBytes(8));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const response = new Response(body);
+  const error = await assertRejects(() => readBoundedBytes(response, 10), VideoSourceError);
+  assertEquals(error.detail, "The media host sent more than 10 bytes.");
+  assertEquals(cancelled, true);
+});
+
+Deno.test("a range answer that sends more than the range is cancelled", async () => {
+  let cancelled = false;
+  const fetchImpl: typeof fetch = (_input, init) => {
+    const range = new Headers(init?.headers).get("range") ?? "";
+    const match = /bytes=(\d+)-(\d+)/.exec(range);
+    const start = match ? Number(match[1]) : 0;
+    const end = match ? Number(match[2]) : 4095;
+    const wanted = end - start + 1;
+    // The probe is answered with a plain body, so the cancel below can only
+    // come from the range read itself.
+    const body = range === "bytes=0-0"
+      ? new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(fileBytes(1));
+        },
+      })
+      : new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(fileBytes(wanted + 8));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+    return Promise.resolve(
+      new Response(body, { status: 206, headers: { "Content-Range": `bytes ${start}-${end}/4096` } }),
+    );
+  };
+  const source = await createVideoByteSource({ url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED });
+  const error = await assertRejects(() => source.read(0, 99), VideoSourceError);
+  assertEquals(error.detail, "The media host sent more than 100 bytes.");
+  assertEquals(cancelled, true);
+});
+
 Deno.test("a host outside the approved list never receives a request", async () => {
   const host = fakeHost();
   await assertRejects(() =>
@@ -399,6 +463,43 @@ Deno.test("a redirect to a host outside the approved list is refused", async () 
     })
   );
   assertEquals(host.requests.length, 1);
+});
+
+Deno.test("a followed redirect cancels the body of the hop it left behind", async () => {
+  let cancelled = false;
+  let hops = 0;
+  const fetchImpl: typeof fetch = () => {
+    hops += 1;
+    if (hops === 1) {
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 302, headers: { Location: `${HOST}/second.mp4` } }));
+    }
+    return Promise.resolve(new Response(new Uint8Array(4), { status: 200 }));
+  };
+  const response = await fetchApprovedMedia(`${HOST}/first.mp4`, { method: "GET" }, APPROVED, fetchImpl);
+  assertEquals(response.status, 200);
+  assertEquals(cancelled, true);
+});
+
+Deno.test("a refused redirect cancels the body of the hop it refused", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const fetchImpl: typeof fetch = () =>
+    Promise.resolve(new Response(body, { status: 302, headers: { Location: "https://elsewhere.example/video.mp4" } }));
+  const error = await assertRejects(
+    () => fetchApprovedMedia(`${HOST}/video.mp4`, { method: "GET" }, APPROVED, fetchImpl),
+    VideoSourceError,
+  );
+  assertEquals(error.reason, YOUTUBE_UPLOAD_REASON.media_origin_not_approved);
+  assertEquals(cancelled, true);
 });
 
 Deno.test("only https is approved", () => {

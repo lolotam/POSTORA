@@ -181,19 +181,24 @@ export async function refreshYoutubeAccessToken(args: {
   }
 
   const expiresAt = expiry.toISOString();
-  let update = supabase.from("social_accounts")
-    .update({ access_token: accessToken, token_expires_at: expiresAt })
-    .eq("id", account.id)
-    .eq("refresh_token", account.refreshToken);
-  update = account.accessToken === null
-    ? update.is("access_token", null)
-    : update.eq("access_token", account.accessToken);
-  update = account.tokenExpiresAt === null
-    ? update.is("token_expires_at", null)
-    : update.eq("token_expires_at", account.tokenExpiresAt);
-
-  const { data: stored, error } = await update.select("id").maybeSingle();
-  if (error || !stored) {
+  // THE CREDENTIALS TRAVEL IN THE BODY
+  //
+  // A PostgREST filter is a QUERY STRING, and a query string is written to
+  // the access log of every hop between this worker and the database. The
+  // compare-and-set therefore happens in the database, where the refresh
+  // token and the access token travel in the body of a POST and never in a
+  // URL. The rule it proves is the one the filters proved: the token is
+  // stored only if the row still carries the credential the refresh was
+  // asked with.
+  const { data: stored, error } = await supabase.rpc("store_youtube_refreshed_token", {
+    p_account_id: account.id,
+    p_expected_refresh_token: account.refreshToken,
+    p_expected_access_token: account.accessToken,
+    p_expected_token_expires_at: account.tokenExpiresAt,
+    p_new_access_token: accessToken,
+    p_new_token_expires_at: expiresAt,
+  });
+  if (error || stored !== true) {
     if (error) console.warn("[youtube] token check-and-update failed:", redactProviderText(error));
     const { data: current } = await supabase.from("social_accounts")
       .select("access_token, token_expires_at").eq("id", account.id).maybeSingle();

@@ -6,11 +6,46 @@ import { buildPostoraFileName } from "@/lib/postoraFileName";
 import { isMediaQuotaMessage, mediaQuotaHumanMessage } from "@/components/media/uploadErrors";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
+import { idsConfirmedDeleted } from "@/lib/mediaDelete";
 import {
   PostWithResults, invalidatePostQueries,
 } from "./historyUtils";
 import { failedRetryTargets, nonRetryableOutcome } from "./retryTargets";
 import type { Platform } from "@/lib/types";
+
+/** A retry the server refused for a known reason, so the caller can react to the reason. */
+export class InvalidMediaRetryError extends Error {
+  readonly reason = "invalid_media";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidMediaRetryError";
+  }
+}
+
+export function isInvalidMediaRetryError(error: unknown): error is InvalidMediaRetryError {
+  return error instanceof InvalidMediaRetryError;
+}
+
+/**
+ * Removes uploaded objects from storage and reports whether the removal was
+ * confirmed. A caller that does not get a confirmation must keep the library
+ * rows that still point at a live object instead of claiming a clean rollback.
+ */
+const removeUploadedObjects = async (paths: string[]): Promise<boolean> => {
+  if (paths.length === 0) return true;
+  try {
+    const { error } = await supabase.storage.from("media").remove(paths);
+    if (error) {
+      console.warn(`Could not remove the uploaded media objects; they stay in storage: ${error.message}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn(`Could not remove the uploaded media objects; they stay in storage: ${error instanceof Error ? error.message : error}`);
+    return false;
+  }
+};
 
 export function usePostRetry() {
   const { toast } = useToast();
@@ -19,7 +54,7 @@ export function usePostRetry() {
     const acceptance = await enqueuePostPublish({ postId, mode: "retry", accountIds, replacementMediaIds });
     if (acceptance.accepted === false) {
       if (acceptance.reason === "invalid_media") {
-        throw new Error("The replacement media is unavailable. Choose files from your media library and try again.");
+        throw new InvalidMediaRetryError("The replacement media is unavailable. Choose files from your media library and try again.");
       }
       if (acceptance.reason === "no_targets") {
         throw new Error("No destinations are currently eligible to retry. Refresh History to see the latest results.");
@@ -163,8 +198,9 @@ export function usePostRetry() {
         user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
       }).select().single();
       if (mediaError) {
+        // The object is already in storage: leaving it there would orphan it.
+        await removeUploadedObjects([uploadData.path]);
         if (isMediaQuotaMessage(mediaError.message)) {
-          await supabase.storage.from("media").remove([uploadData.path]);
           throw new Error(mediaQuotaHumanMessage(mediaError.message));
         }
         throw mediaError;
@@ -175,11 +211,27 @@ export function usePostRetry() {
     const stored = settled
       .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
     if (failed) {
-      // One file failing (e.g. the daily limit) aborts the retry: drop the siblings that
-      // did land so they are not left as unreferenced library rows and storage objects.
+      // One file failing (e.g. the daily limit) aborts the retry: the siblings that
+      // did land must lose their storage objects first, and a library row may only
+      // be deleted once the object it names is gone.
       if (stored.length > 0) {
-        await supabase.from("media_files").delete().in("id", stored.map((mediaFile) => mediaFile.id));
-        await supabase.storage.from("media").remove(stored.map((mediaFile) => mediaFile.file_path));
+        const objectsRemoved = await removeUploadedObjects(stored.map((mediaFile) => mediaFile.file_path));
+        const outcome = idsConfirmedDeleted({
+          storageIds: stored.map((mediaFile) => mediaFile.id),
+          storageFailed: !objectsRemoved,
+          providerIds: [],
+          invokeFailed: false,
+          deletedMediaFileIds: [],
+        });
+        if (outcome.removeIds.length > 0) {
+          const { error: deleteError } = await supabase.from("media_files").delete().in("id", outcome.removeIds);
+          if (deleteError) {
+            console.warn(`Could not delete the media library rows of the rolled back upload: ${deleteError.message}`);
+          }
+        }
+        if (outcome.failedIds.length > 0) {
+          console.warn(`Media library rows kept because their storage objects could not be removed: ${outcome.failedIds.join(", ")}`);
+        }
       }
       throw failed.reason;
     }
@@ -204,6 +256,11 @@ export function usePostRetry() {
       setRetryMediaFiles([]);
     } catch (error) {
       console.error("Retry with media error:", error);
+      if (isInvalidMediaRetryError(error)) {
+        // The server refused these media ids: keeping them would make the next
+        // attempt reuse media it has already rejected.
+        uploadedRetryMedia.current = null;
+      }
       toast({ title: "Retry failed", description: error instanceof Error ? error.message : "Failed to retry post", variant: "destructive" });
     } finally { setRetryMediaUploading(false); }
   };

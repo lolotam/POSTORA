@@ -194,6 +194,20 @@ export function readProbeResponse(response: Response, declaredSize?: number | nu
 }
 
 /**
+ * Discards a body that is not going to be read.
+ *
+ * A body that is left open keeps downloading: the host sends the rest of the
+ * file to a reader that already refused it. Cancelling is what stops that.
+ *
+ * The cancel lives in one place so every path that discards a body does it
+ * the same way, and so the functions that discard one do not each carry a
+ * branch for the body that may not be there.
+ */
+function discardBody(response: Response | undefined): void {
+  void response?.body?.cancel().catch(() => {});
+}
+
+/**
  * Reads a body through a bounded reader.
  *
  * `maxBytes` is the number of bytes that are wanted. A body that announces a
@@ -208,6 +222,9 @@ export async function readBoundedBytes(
 ): Promise<ArrayBuffer> {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
+    // The body is discarded instead of left open: a host that announced more
+    // than it may send would keep downloading until the request timed out.
+    discardBody(response);
     throw new VideoSourceError(
       YOUTUBE_UPLOAD_REASON.media_read_failed,
       MEDIA_READ_FAILED,
@@ -244,6 +261,11 @@ export async function readBoundedBytes(
       chunks.push(value);
     }
   } finally {
+    // The reader is cancelled BEFORE the lock is released. Releasing the lock
+    // alone leaves the download running, and a host that sends more than it
+    // announced would keep going until the request timed out. On the success
+    // path the stream is already closed, so the cancel is a no-op.
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 
@@ -298,6 +320,9 @@ export async function fetchApprovedMedia(
 
     const location = response.headers.get("location");
     if (!location) {
+      // The hop is dropped and its answer is the one the caller gets, so the
+      // body is discarded here rather than left open behind the response.
+      discardBody(response);
       return response;
     }
 
@@ -305,6 +330,7 @@ export async function fetchApprovedMedia(
     try {
       next = new URL(location, target).toString();
     } catch {
+      discardBody(response);
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
@@ -313,11 +339,16 @@ export async function fetchApprovedMedia(
     }
 
     if (approvedHosts && !isApprovedMediaUrl(next, approvedHosts)) {
+      discardBody(response);
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_origin_not_approved,
         MEDIA_ORIGIN_NOT_APPROVED,
       );
     }
+    // The hop is followed, and the body of the hop that answered it is never
+    // read: cancelling it is what stops the previous answer from downloading
+    // while the next one is made.
+    discardBody(response);
     target = next;
   }
 
@@ -347,10 +378,11 @@ class RangeByteSource implements VideoByteSource {
   ) {}
 
   async read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer> {
+    let response: Response | undefined;
     try {
       const wanted = end - start + 1;
       const budget = Math.max(1, Math.min(timeoutMs ?? this.timeoutMs, this.timeoutMs));
-      const response = await fetchApprovedMedia(
+      response = await fetchApprovedMedia(
         this.url,
         {
           method: "GET",
@@ -361,7 +393,7 @@ class RangeByteSource implements VideoByteSource {
         this.fetchImpl,
       );
       if (response.status !== 206) {
-        void response.body?.cancel().catch(() => {});
+        discardBody(response);
         throw new VideoSourceError(
           YOUTUBE_UPLOAD_REASON.media_read_failed,
           MEDIA_READ_FAILED,
@@ -371,7 +403,7 @@ class RangeByteSource implements VideoByteSource {
       const contentRange = response.headers.get("content-range");
       const returned = parseContentRange(contentRange);
       if (!returned || returned.start !== start || returned.end !== end || returned.total !== this.size) {
-        void response.body?.cancel().catch(() => {});
+        discardBody(response);
         throw new VideoSourceError(
           YOUTUBE_UPLOAD_REASON.media_read_failed,
           MEDIA_READ_FAILED,
@@ -380,6 +412,9 @@ class RangeByteSource implements VideoByteSource {
       }
       return await readBoundedBytes(response, wanted);
     } catch (error) {
+      // A read that was refused must not leave the host downloading: the body
+      // is cancelled on the way out, whatever the refusal was.
+      discardBody(response);
       throw mediaReadError(error);
     }
   }
@@ -450,7 +485,7 @@ class StreamingByteSource implements VideoByteSource {
     );
     controller.signal.throwIfAborted();
     if (response.status !== 200 || response.headers.has("content-range") || !response.body) {
-      void response.body?.cancel().catch(() => {});
+      discardBody(response);
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
@@ -686,7 +721,7 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
     }
     probe = readProbeResponse(response, options.declaredSize);
   } finally {
-    void response.body?.cancel().catch(() => {});
+    discardBody(response);
   }
 
   const size = probe.size;

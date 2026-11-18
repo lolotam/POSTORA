@@ -16,6 +16,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0
 import {
   cdnReadPreferenceOrder,
   loadMediaProviderRows,
+  MediaDeliveryRefusedError,
   resolveMediaUrl,
   type MediaFile,
 } from "./mediaDelivery.ts";
@@ -34,6 +35,8 @@ export interface OwnedVideoFile {
   userId: string;
   filePath: string;
   storageBucket: string;
+  /** The workspace the media belongs to. The partner API writes under it. */
+  workspaceId?: string | null;
   mimeType: string | null;
   fileSize?: number | null;
   currentObjectVersion: number | null;
@@ -60,20 +63,33 @@ export class VideoSourceUnavailableError extends Error {
 function ownedVideoRow(file: OwnedVideoFile): MediaFile {
   return {
     id: file.id,
+    user_id: file.userId,
     file_path: file.filePath,
     file_type: "video",
     storage_bucket: file.storageBucket,
+    workspace_id: file.workspaceId ?? null,
     mime_type: file.mimeType,
     current_object_version: file.currentObjectVersion,
   };
 }
 
 /** The URL the owned video is read from, through the normal resolver. */
-async function ownedVideoUrl(supabase: SupabaseClient, file: OwnedVideoFile): Promise<string | null> {
+async function ownedVideoUrl(
+  supabase: SupabaseClient,
+  file: OwnedVideoFile,
+  mediaHosts: Set<string>,
+): Promise<string | null> {
   const row = ownedVideoRow(file);
   const providerRowsByMedia = await loadMediaProviderRows(supabase, [row]);
   const preferenceOrder = await cdnReadPreferenceOrder(supabase);
-  return await resolveMediaUrl(supabase, row, providerRowsByMedia, preferenceOrder);
+  return await resolveMediaUrl(supabase, row, providerRowsByMedia, {
+    preferenceOrder,
+    ownerUserId: file.userId,
+    // The admission already proved that the media belongs to the owner of the
+    // post, so the workspace of a partner file is the one the post may read.
+    allowedWorkspaceIds: new Set(file.workspaceId ? [file.workspaceId] : []),
+    approvedHosts: mediaHosts,
+  });
 }
 
 /**
@@ -93,13 +109,21 @@ export async function createOwnedVideoSource(args: {
 
   let url: string | null;
   try {
-    const deliveryUrl = await ownedVideoUrl(supabase, file);
+    const deliveryUrl = await ownedVideoUrl(supabase, file, mediaHosts);
     url = deliveryUrl ? youtubeStorageReadUrl(deliveryUrl) : null;
   } catch (error) {
     console.error(
       `[youtube] the delivery URL for media ${file.id} could not be signed:`,
       redactProviderText(error),
     );
+    // A file on a host this upload may not read from is not a file that is
+    // gone, so it gets the reason that says so.
+    if (error instanceof MediaDeliveryRefusedError && error.reason === "origin_not_approved") {
+      throw new VideoSourceUnavailableError(
+        YOUTUBE_UPLOAD_REASON.media_origin_not_approved,
+        "The video is stored on a host this upload may not read from.",
+      );
+    }
     throw new VideoSourceUnavailableError(
       YOUTUBE_UPLOAD_REASON.media_unavailable,
       "The video for this post is no longer available in the media library.",
