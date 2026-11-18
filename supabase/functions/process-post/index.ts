@@ -3004,6 +3004,8 @@ Deno.serve(async (req) => {
     let hasFailed = false;
     // An account whose Meta container is left for reconcile-deferred-publishes.
     let hasDeferred = false;
+    // The open YouTube row a pending handoff names; the restore asks the database whether it is still open.
+    let youtubePendingRowId: string | null = null;
     const managedImageFence = claim.processingStartedAt
       ? { processingStartedAt: claim.processingStartedAt, content: threadsImageContentFence(post) }
       : null;
@@ -3259,6 +3261,7 @@ Deno.serve(async (req) => {
           platformResults.push(pendingDestinationResult(account.platform));
           hasDeferred = true;
           if (result.pendingPlatformPostId) exactPlatformPostIds.push(result.pendingPlatformPostId);
+          if (account.platform === "youtube" && result.pendingPlatformPostId) youtubePendingRowId ??= result.pendingPlatformPostId;
           console.log(`[${account.platform}] upload left for the continuation`);
           continue;
         }
@@ -3690,12 +3693,21 @@ Deno.serve(async (req) => {
       finalStatus = parentStatusForDestinations(platformResults);
       notify = false;
       if (claim.processingStartedAt) {
-        const { data: restoreResult, error: restoreError } = await supabase.rpc("restore_legacy_pending_post", {
-          p_post_id: post_id,
-          p_expected_processing_started_at: claim.processingStartedAt,
-          p_expected_content: threadsImageContentFence(post),
-          p_has_success: hasSuccess,
-        });
+        // A lost settlement answer lands here as pending while the destination is already
+        // closed; the YouTube guard reads that under the parent lock instead of trusting the caller.
+        const { data: restoreResult, error: restoreError } = youtubePendingRowId
+          ? await supabase.rpc("restore_youtube_pending_post", {
+            p_post_id: post_id,
+            p_expected_processing_started_at: claim.processingStartedAt,
+            p_expected_content: threadsImageContentFence(post),
+            p_expected_platform_post_id: youtubePendingRowId,
+          })
+          : await supabase.rpc("restore_legacy_pending_post", {
+            p_post_id: post_id,
+            p_expected_processing_started_at: claim.processingStartedAt,
+            p_expected_content: threadsImageContentFence(post),
+            p_has_success: hasSuccess,
+          });
         const res = restoreResult as {
           restored?: boolean;
           status?: string;
