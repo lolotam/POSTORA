@@ -1784,10 +1784,15 @@ function isFinalPublishRefusal(status: number): boolean {
 // decides WHICH results are published again and hands exactly those accounts
 // over. The service role is used because the publishing service is an
 // internal call, and it is the same call the create route makes.
+//
+// The claim travels with the dispatch. The route decided what to publish from
+// a snapshot of the results, and a destination may have become unsafe since;
+// the publishing service checks the claim against the durable state of the
+// post under its lock, so it publishes only what is still safe.
 async function dispatchRetry(
   deps: PostActionDeps,
   route: string,
-  request: { postId: string; targets: RetryTarget[] },
+  request: { postId: string; targets: RetryTarget[]; claimId: string },
 ): Promise<RetryDispatch> {
   const platforms = [
     ...new Set(request.targets.map((target) => target.platform)),
@@ -1816,6 +1821,11 @@ async function dispatchRetry(
           post_id: request.postId,
           platforms,
           account_ids: accountIds,
+          // The lease this route holds on the post. The publishing service
+          // checks it against the row, so a retry that lost its lease, or one
+          // whose destinations became unsafe after the read above, publishes
+          // nothing.
+          action_claim_id: request.claimId,
           // expected_scheduled_at is deliberately not sent: it makes the
           // publishing service compare the row's scheduled_at with the one
           // the caller saw, and a finished post has no scheduled instant to
@@ -2133,7 +2143,7 @@ export async function retryFailedPost(
     platform: target.platform,
   }));
 
-  const dispatch = await dispatchRetry(deps, route, { postId, targets });
+  const dispatch = await dispatchRetry(deps, route, { postId, targets, claimId });
   if (dispatch.kind === "pending") {
     // The publish may still be running: its answer did not come back in time,
     // or it came back as a fault that says nothing about whether the publish

@@ -310,6 +310,164 @@ BEGIN
       'accepted request queues the same post with replacement media';
   END;
 
+  -- A1-A14: the processing claim of an agent action. The agent route reads its
+  -- results, then the worker publishes; the gate between them decides, under
+  -- the lock of the post, whether the destinations are still safe to publish
+  -- to.
+  DECLARE
+    p_claim uuid := gen_random_uuid();
+    p_race uuid := gen_random_uuid();
+    p_race_claim uuid := gen_random_uuid();
+    p_pending uuid := gen_random_uuid();
+    p_published uuid := gen_random_uuid();
+    p_session uuid := gen_random_uuid();
+    p_lease uuid := gen_random_uuid();
+    p_expired uuid := gen_random_uuid();
+    p_foreign_target uuid := gen_random_uuid();
+    p_running uuid := gen_random_uuid();
+    p_media uuid := gen_random_uuid();
+    acct_yt uuid := gen_random_uuid();
+    v_claim_result jsonb;
+  BEGIN
+    INSERT INTO public.media_files (id, user_id, file_path, file_type, file_size, mime_type, storage_bucket)
+    VALUES (p_media, u_a, 'fixture/agent-action.jpg', 'image', 10, 'image/jpeg', 'media');
+
+    -- A1: the live lease of the owner claims the post for processing.
+    INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+    VALUES (p_lease, u_a, ARRAY['facebook'], 'failed', 'manual', p_claim, now());
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+    VALUES (p_lease, acct_fb, 'facebook', 'failed');
+    v_claim_result := public.claim_post_action_processing(p_lease, u_a, p_claim, ARRAY[acct_fb]);
+    ASSERT v_claim_result ->> 'status' = 'claimed', 'A1 the live lease claims the post for processing';
+    ASSERT v_claim_result -> 'account_ids' = to_jsonb(ARRAY[acct_fb]), 'A1b the claim names the targets';
+    ASSERT (SELECT status = 'processing' AND processing_started_at IS NOT NULL
+              FROM public.posts WHERE id = p_lease),
+      'A1c the post moves to processing';
+
+    -- A2: a claim that is not the one on the row may not publish.
+    v_claim_result := public.claim_post_action_processing(p_lease, u_a, gen_random_uuid(), ARRAY[acct_fb]);
+    ASSERT v_claim_result ->> 'reason' = 'claim_not_live', 'A2 another claim may not publish';
+
+    -- A3: a lease that ran out may not publish, and the post keeps its status.
+    INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+    VALUES (p_expired, u_a, ARRAY['facebook'], 'failed', 'manual', p_claim, now() - interval '20 minutes');
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+    VALUES (p_expired, acct_fb, 'facebook', 'failed');
+    v_claim_result := public.claim_post_action_processing(p_expired, u_a, p_claim, ARRAY[acct_fb]);
+    ASSERT v_claim_result ->> 'reason' = 'claim_not_live', 'A3 an expired lease may not publish';
+    ASSERT (SELECT status = 'failed' FROM public.posts WHERE id = p_expired),
+      'A3b the refused post keeps its status';
+
+    -- A4: another user's post is not found, and its row is untouched.
+    v_claim_result := public.claim_post_action_processing(p_lease, u_b, p_claim, ARRAY[acct_fb]);
+    ASSERT v_claim_result ->> 'reason' = 'not_found', 'A4 another user''s post reads as not found';
+
+    -- A5: a post that is being published is not claimed for a second publish.
+    INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+    VALUES (p_running, u_a, ARRAY['facebook'], 'processing', 'manual', p_claim, now());
+    v_claim_result := public.claim_post_action_processing(p_running, u_a, p_claim, ARRAY[acct_fb]);
+    ASSERT v_claim_result ->> 'reason' = 'not_terminal', 'A5 a processing post is not claimed again';
+
+    -- A6: a target that is not the caller's own account is not a target.
+    INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+    VALUES (p_foreign_target, u_a, ARRAY['facebook'], 'failed', 'manual', p_claim, now());
+    v_claim_result := public.claim_post_action_processing(p_foreign_target, u_a, p_claim, ARRAY[acct_b]);
+    ASSERT v_claim_result ->> 'reason' = 'no_targets', 'A6 another user''s account is not a target';
+
+    -- A7: THE RACE. The caller read its results and chose this destination;
+    -- then a durable writer marked the destination as one that may already
+    -- hold the publication, before the worker claimed the post. The gate sees
+    -- the marker, because it reads the durable rows under the lock of the
+    -- post, and it refuses before any provider is touched.
+    INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+    VALUES (p_race, u_a, ARRAY['facebook'], 'failed', 'manual', p_race_claim, now());
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+    VALUES (p_race, acct_fb, 'facebook', 'failed');
+    -- The application-side read happened here: the row is a plain failure, so
+    -- the route picked this account. The marker is written AFTER that read.
+    UPDATE public.platform_posts
+       SET response_data = '{"publish_outcome":"uncertain"}'::jsonb
+     WHERE post_id = p_race AND social_account_id = acct_fb;
+    v_claim_result := public.claim_post_action_processing(p_race, u_a, p_race_claim, ARRAY[acct_fb]);
+    ASSERT v_claim_result ->> 'reason' = 'targets_not_admissible',
+      'A7 a destination marked after the read refuses the publish';
+    ASSERT v_claim_result -> 'blocked' -> 0 ->> 'account_id' = acct_fb::text
+       AND v_claim_result -> 'blocked' -> 0 ->> 'reason' = 'publish_outcome_protected',
+      'A7b the refusal names the destination and the reason';
+    ASSERT (SELECT status = 'failed' AND processing_started_at IS NULL FROM public.posts WHERE id = p_race),
+      'A7c the refused post is left exactly as it was';
+    ASSERT EXISTS (SELECT 1 FROM public.platform_posts
+                    WHERE post_id = p_race AND social_account_id = acct_fb
+                      AND response_data ->> 'publish_outcome' = 'uncertain'),
+      'A7d the evidence of the uncertain outcome is kept';
+
+    -- A8: a publish that is still going out is not published again.
+    INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+    VALUES (p_pending, u_a, ARRAY['facebook'], 'failed', 'manual', p_claim, now());
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+    VALUES (p_pending, acct_fb, 'facebook', 'pending');
+    v_claim_result := public.claim_post_action_processing(p_pending, u_a, p_claim, ARRAY[acct_fb]);
+    ASSERT v_claim_result ->> 'reason' = 'targets_not_admissible',
+      'A8 a publish that is still going out refuses the retry';
+    ASSERT v_claim_result -> 'blocked' -> 0 ->> 'reason' = 'publish_in_flight',
+      'A8b the refusal names the in-flight publish';
+
+    -- A9: a destination that already published is not published again.
+    INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+    VALUES (p_published, u_a, ARRAY['facebook'], 'failed', 'manual', p_claim, now());
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+    VALUES (p_published, acct_fb, 'facebook', 'failed'),
+           (p_published, acct_fb, 'facebook', 'success');
+    v_claim_result := public.claim_post_action_processing(p_published, u_a, p_claim, ARRAY[acct_fb]);
+    ASSERT v_claim_result ->> 'reason' = 'targets_not_admissible',
+      'A9 a destination that already published refuses the retry';
+    ASSERT v_claim_result -> 'blocked' -> 0 ->> 'reason' = 'already_published',
+      'A9b the refusal names the publication that already happened';
+
+    -- A10: a YouTube upload that may have created a video is not published
+    -- again, for the same reason.
+    INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, is_active)
+    VALUES (acct_yt, u_a, 'youtube', 'agent-action-fixture-channel', 'fixture-token', true);
+    INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+    VALUES (p_session, u_a, ARRAY['youtube'], 'failed', 'manual', p_claim, now());
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+    VALUES (p_session, acct_yt, 'youtube', 'failed');
+    INSERT INTO public.youtube_upload_sessions
+      (user_id, post_id, social_account_id, media_file_id, media_size, total_bytes,
+       upload_body, upload_settings, content_fence, state, video_may_exist)
+    VALUES (u_a, p_session, acct_yt, p_media, 10, 10,
+            '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'reconcile', true);
+    v_claim_result := public.claim_post_action_processing(p_session, u_a, p_claim, ARRAY[acct_yt]);
+    ASSERT v_claim_result ->> 'reason' = 'targets_not_admissible',
+      'A10 a YouTube upload that may hold a video refuses the retry';
+    ASSERT v_claim_result -> 'blocked' -> 0 ->> 'reason' = 'youtube_upload_in_flight',
+      'A10b the refusal names the upload in flight';
+
+    -- A11: the shared reason is the same one the retry contract asks.
+    ASSERT public.post_retry_block_reason(p_race, acct_fb) = 'publish_outcome_protected',
+      'A11 the shared helper names the protected destination';
+    ASSERT public.post_retry_block_reason(p_pending, acct_fb) = 'publish_in_flight',
+      'A11b the shared helper names the in-flight publish';
+    ASSERT public.post_retry_block_reason(p_lease, acct_fb) IS NULL,
+      'A11c a destination with nothing against it has no reason';
+
+    -- A12-A14: the gate is the service role's alone, and it is definer with
+    -- its search path pinned.
+    ASSERT NOT has_function_privilege('authenticated', 'public.claim_post_action_processing(uuid,uuid,uuid,uuid[])', 'EXECUTE')
+      AND NOT has_function_privilege('anon', 'public.claim_post_action_processing(uuid,uuid,uuid,uuid[])', 'EXECUTE')
+      AND has_function_privilege('service_role', 'public.claim_post_action_processing(uuid,uuid,uuid,uuid[])', 'EXECUTE'),
+      'A12 the gate accepts a service role caller only';
+    ASSERT NOT has_function_privilege('authenticated', 'public.post_retry_block_reason(uuid,uuid)', 'EXECUTE')
+      AND NOT has_function_privilege('anon', 'public.post_retry_block_reason(uuid,uuid)', 'EXECUTE')
+      AND has_function_privilege('service_role', 'public.post_retry_block_reason(uuid,uuid)', 'EXECUTE'),
+      'A13 the shared reason is a service role helper';
+    ASSERT (SELECT bool_and(prosecdef AND 'search_path=public' = ANY (proconfig))
+              FROM pg_proc
+             WHERE oid IN ('public.claim_post_action_processing(uuid,uuid,uuid,uuid[])'::regprocedure,
+                           'public.post_retry_block_reason(uuid,uuid)'::regprocedure)),
+      'A14 both functions are SECURITY DEFINER with search_path pinned';
+  END;
+
 END $$;
 
 -- G1-G8: privileges, definer settings and the due-row index.

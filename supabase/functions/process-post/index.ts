@@ -115,7 +115,12 @@ import {
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds, orderPostMediaFiles } from "../_shared/post-media.ts";
-import { claimPostForProcessing } from "../_shared/postProcessingClaim.ts";
+import {
+  actionProcessingRefusalMessage,
+  claimPostForActionProcessing,
+  claimPostForProcessing,
+  type PostProcessingClaim,
+} from "../_shared/postProcessingClaim.ts";
 import { activeRetryRequest } from "../_shared/publishRequest.ts";
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { prepareIndependentStory } from "./independentStory.ts";
@@ -245,6 +250,11 @@ const ProcessPostSchema = z.object({
   // post unscheduled after selection is declined rather than published.
   expected_scheduled_at: z.string().max(64).nullable().optional(),
   expected_publish_requested_at: z.string().max(64).optional(),
+  // Sent by the agent route (n8n / MCP): the lease it holds on the post. The
+  // processing claim honours it (see _shared/postProcessingClaim.ts), so a
+  // retry that lost its lease, or one whose destinations became unsafe after
+  // the route read its results, is declined before any provider is touched.
+  action_claim_id: z.string().uuid().optional(),
   // Sent by reconcile-deferred-publishes (service role only): finish the pending row
   // a Meta container was deferred on, instead of publishing the post afresh.
   resume_platform_post_id: z.string().uuid().optional(),
@@ -2082,6 +2092,7 @@ Deno.serve(async (req) => {
       post_id,
       expected_scheduled_at: expectedScheduledAt,
       expected_publish_requested_at: expectedPublishRequestedAt,
+      action_claim_id: actionClaimId,
       resume_platform_post_id: resumePlatformPostId,
       notification_only: notificationOnly,
       attempt_started_at: attemptStartedAt,
@@ -2522,7 +2533,49 @@ Deno.serve(async (req) => {
     // touched. Callers with no expectation keep the unconditional transition.
     // A resumed run continues the original run's claim; claiming again would also
     // restart the stale-post clock.
-    const claim = resume ? { claimed: true, error: null, processingStartedAt: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt, expectedPublishRequestedAt);
+    //
+    // The agent route publishes under a lease instead. Its decision to publish
+    // was made from a snapshot of the results, and a destination may have
+    // become unsafe since. The lease claim asks the database, under the lock
+    // of the post, whether the destinations are still safe: a refusal happens
+    // here, before any provider is touched and before any row is written.
+    let claim: PostProcessingClaim;
+    if (resume) {
+      claim = { claimed: true, error: null, processingStartedAt: null };
+    } else if (actionClaimId) {
+      const actionClaim = await claimPostForActionProcessing(supabase, {
+        postId: post_id,
+        userId: post.user_id,
+        actionClaimId,
+        accountIds: overrideAccountIds ?? [],
+      });
+      if (actionClaim.error) {
+        const logError = await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Agent processing claim was unavailable; no provider call was made",
+          metadata: { event: "action_processing_claim_unavailable", post_id },
+        });
+        if (logError) console.error("Agent processing claim log failed:", logError);
+        return createErrorResponse(`Could not claim post for processing: ${actionClaim.error}`, 500);
+      }
+      if (!actionClaim.claimed) {
+        const logError = await writeLogRow(supabase, {
+          level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Agent publish declined: the action lease or a destination refused it; no provider call was made",
+          metadata: {
+            event: "action_processing_claim_refused",
+            post_id,
+            reason: actionClaim.reason,
+            blocked: actionClaim.blocked,
+          },
+        });
+        if (logError) console.error("Agent publish refusal log failed:", logError);
+        return createErrorResponse(actionProcessingRefusalMessage(actionClaim), 409);
+      }
+      claim = { claimed: true, error: null, processingStartedAt: actionClaim.processingStartedAt };
+    } else {
+      claim = await claimPostForProcessing(supabase, post_id, expectedScheduledAt, expectedPublishRequestedAt);
+    }
     if (claim.error) {
       const logError = await writeLogRow(supabase, {
         level: "error", category: "post", source: "process-post", user_id: post.user_id,

@@ -2878,6 +2878,10 @@ Deno.test("a retry publishes only the failed accounts and clears the rows it rep
   // Only the failed account is published again, and only on its platform.
   assertEquals(sent.platforms, ["instagram"]);
   assertEquals(sent.account_ids, [ACCOUNT]);
+  // The lease travels with the dispatch. The publishing service checks it
+  // against the row under the lock of the post, so a destination that became
+  // unsafe after the read above is not published again.
+  assertEquals(sent.action_claim_id, CLAIM);
   // The post finished, it is not scheduled: the publishing service must not
   // be asked to match a scheduled instant it does not have.
   assertEquals("expected_scheduled_at" in sent, false);
@@ -2917,6 +2921,38 @@ Deno.test("a retry publishes only the failed accounts and clears the rows it rep
   assertEquals(results.length, 1);
   assertEquals(results[0].id, "row-new");
   assertEquals(results[0].status, "success");
+});
+
+Deno.test("a publish the publishing service declines publishes nothing and gives the claim back", async () => {
+  // The publishing service checks the lease and the destinations before it
+  // touches a provider. A destination that became unsafe after this route read
+  // its results is refused there, and the refusal is a refusal for good: the
+  // next call is told the same thing.
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { fetcher } = fakeFetcher([{
+    status: 409,
+    body: { error: "The post was not published: the outcome of the last attempt there is unknown or was cancelled." },
+  }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+
+  assertEquals(result.status, 502);
+  // Nothing was published, so no row is removed and the claim is given back.
+  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The reason the publishing service gave travels with the refusal.
+  const failure = result.body.error as { code: string; details?: { reason?: string } };
+  assertEquals(failure.code, "RETRY_FAILED");
+  assertEquals((failure.details?.reason ?? "").includes("not published"), true);
 });
 
 Deno.test("a publish that does not answer in time is answered 202 and keeps the claim", async () => {
