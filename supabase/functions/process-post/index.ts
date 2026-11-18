@@ -2889,7 +2889,11 @@ Deno.serve(async (req) => {
           refreshToken: account.refresh_token ?? null,
           tokenExpiresAt: account.token_expires_at ?? null,
         },
+      }).catch((error) => {
+        console.warn("[JIT] YouTube token refresh failed:", redactProviderText(error));
+        return null;
       });
+      if (!token) continue;
 
       // The refresh can lose its conditional update to a concurrent reconnect.
       // Use the current stored credential if the helper read it back.
@@ -9616,10 +9620,12 @@ async function openYoutubeUploadSession(
   refused: YoutubeUploadRefusal | null;
   platformPostId: string | null;
 }> {
+  let platformPostId: string | null = null;
   for (let round = 0; round < 2; round += 1) {
     const opened = await store.admit(input);
-    if (opened.refused) return { record: null, refused: opened.refused, platformPostId: null };
-    if (!opened.record) return { record: null, refused: "post_not_found", platformPostId: null };
+    platformPostId = opened.platformPostId ?? platformPostId;
+    if (opened.refused) return { record: null, refused: opened.refused, platformPostId };
+    if (!opened.record) return { record: null, refused: "post_not_found", platformPostId };
 
     const claimed = await store.claim({
       sessionId: opened.record.id,
@@ -9629,7 +9635,7 @@ async function openYoutubeUploadSession(
     if (!claimed.refused) return { ...claimed, platformPostId: opened.platformPostId };
     if (claimed.refused !== "session_expired") return { ...claimed, platformPostId: opened.platformPostId };
   }
-  return { record: null, refused: "session_expired", platformPostId: null };
+  return { record: null, refused: "session_expired", platformPostId };
 }
 
 // The settlement of an upload, and what it hands to the outer loop, live in
@@ -9663,9 +9669,10 @@ const THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024;
  * second one is skipped rather than started when the worker has already run
  * out of time.
  */
-function youtubeFollowUpDeps(mediaHosts: Set<string>): YoutubeFollowUpDeps {
+function youtubeFollowUpDeps(mediaHosts: Set<string>, canWrite: () => Promise<boolean>): YoutubeFollowUpDeps {
   return {
     fetchImpl: fetch,
+    canWrite,
     async downloadThumbnail(url, timeoutMs) {
       const response = await fetchApprovedMedia(
         url,
@@ -9676,7 +9683,7 @@ function youtubeFollowUpDeps(mediaHosts: Set<string>): YoutubeFollowUpDeps {
       if (!response.ok) {
         throw new Error(`The thumbnail host answered with ${response.status}.`);
       }
-      const bytes = await readBoundedBytes(response, THUMBNAIL_MAX_BYTES);
+      const bytes = await readBoundedBytes(response, THUMBNAIL_MAX_BYTES, { requireExact: false });
       const mimeType = (response.headers.get("content-type") ?? "image/jpeg")
         .split(";")[0]
         .trim();
@@ -9765,11 +9772,12 @@ function buildYoutubeContinuationPorts(
     },
 
     async loadMedia(mediaFileId) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("media_files")
         .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type, scan_state, file_size")
         .eq("id", mediaFileId)
         .maybeSingle();
+      if (error) throw new Error("YouTube media lookup failed");
       if (!data) return null;
       return {
         id: String(data.id),
@@ -9896,7 +9904,9 @@ function buildYoutubeContinuationPorts(
           thumbnailUrl: args.post.thumbnailUrl,
           firstComment: args.post.firstComment,
         },
-        youtubeFollowUpDeps(mediaHosts),
+        youtubeFollowUpDeps(mediaHosts, async () => (await store.effectAuthority({
+          sessionId: args.sessionId, leaseToken: args.leaseToken,
+        })).authorized),
       );
     },
 
@@ -10131,6 +10141,7 @@ async function postToYouTube(
       uploadSettings: {
         part: uploadRequest.part,
         notifySubscribers: uploadRequest.notifySubscribers,
+        mimeType,
       },
       userId: post.user_id,
       attemptStartedAt,
@@ -10145,6 +10156,9 @@ async function postToYouTube(
   );
 
   if (opened.refused || !opened.record) {
+    if (opened.platformPostId) {
+      return { pendingContinuation: true, pendingPlatformPostId: opened.platformPostId };
+    }
     const refusal = opened.refused ?? "post_not_found";
     // The refusal carries the uncertain marker when the channel may already
     // hold a video of this post, so the row the outer loop writes is never
@@ -10264,25 +10278,17 @@ async function postToYouTube(
     //
     // The receipt does not depend on that answer. The video exists, so it is
     // settled either way.
-    const followUpAuthority = await store.effectAuthority({
-      sessionId: uploadSessionId,
-      leaseToken,
-    });
-    if (followUpAuthority.authorized) {
-      await runYoutubeFollowUps(
-        {
-          videoId,
-          accessToken,
-          thumbnailUrl: thumbnailUrl ?? null,
-          firstComment: firstComment ?? null,
-        },
-        youtubeFollowUpDeps(mediaHosts),
-      );
-    } else {
-      console.warn(
-        `YouTube follow-ups skipped: ${followUpAuthority.reason ?? "not authorized"}`,
-      );
-    }
+    await runYoutubeFollowUps(
+      {
+        videoId,
+        accessToken,
+        thumbnailUrl: thumbnailUrl ?? null,
+        firstComment: firstComment ?? null,
+      },
+      youtubeFollowUpDeps(mediaHosts, async () => (await store.effectAuthority({
+        sessionId: uploadSessionId, leaseToken,
+      })).authorized),
+    );
   } else {
     if (thumbnailUrl) console.log("YouTube thumbnail skipped: the video was uploaded by an earlier attempt");
     if (firstComment) console.log("First comment skipped: the video was uploaded by an earlier attempt");

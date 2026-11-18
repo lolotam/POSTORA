@@ -303,6 +303,13 @@ Deno.test("a read past the size of the video is refused", async () => {
   await assertRejects(() => source.read(4000, 5000));
 });
 
+Deno.test("a bounded thumbnail may omit its length and end before the maximum", async () => {
+  const body = fileBytes(1024);
+  const response = new Response(blockBody(body, [7, 13]));
+  const bytes = await readBoundedBytes(response, 2048, { requireExact: false });
+  assertEquals(new Uint8Array(bytes), body);
+});
+
 Deno.test("a body that is longer than the range is refused", async () => {
   const response = new Response(new Uint8Array(50), {
     status: 206,

@@ -201,7 +201,11 @@ export function readProbeResponse(response: Response, declaredSize?: number | nu
  * than it announced is refused while it is read. Either way the worker never
  * allocates more than it asked for.
  */
-export async function readBoundedBytes(response: Response, maxBytes: number): Promise<ArrayBuffer> {
+export async function readBoundedBytes(
+  response: Response,
+  maxBytes: number,
+  { requireExact = true }: { requireExact?: boolean } = {},
+): Promise<ArrayBuffer> {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new VideoSourceError(
@@ -212,7 +216,7 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
   }
   if (!response.body) {
     const buffer = await response.arrayBuffer();
-    if (buffer.byteLength !== maxBytes) {
+    if (buffer.byteLength > maxBytes || (requireExact && buffer.byteLength !== maxBytes)) {
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
@@ -243,7 +247,7 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
     reader.releaseLock();
   }
 
-  if (total !== maxBytes) {
+  if (requireExact && total !== maxBytes) {
     throw new VideoSourceError(
       YOUTUBE_UPLOAD_REASON.media_read_failed,
       MEDIA_READ_FAILED,

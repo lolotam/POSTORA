@@ -719,7 +719,7 @@ export function YouTubeSettings({
           onChange={(e) => onSettingsChange({ thumbnailUrl: e.target.value })}
         />
         <p className="text-xs text-muted-foreground">
-          {t("youtube.thumbnailUrlHelp", "For direct YouTube publishing, use an HTTPS link from an approved media host, or upload the image above.")}
+          {t("youtube.thumbnailUrlHelp", "For direct YouTube publishing, use an HTTPS image URL from an approved media host.")}
         </p>
       </div>
 

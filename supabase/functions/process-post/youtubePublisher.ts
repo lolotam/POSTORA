@@ -228,6 +228,7 @@ export function buildYoutubeUploadRequest(
  * so these settings travel with the session.
  */
 export type YoutubeUploadRequestSettings = {
+  mimeType?: string;
   /** The parts the request writes, as the provider names them. */
   part: string;
   /** Whether the channel's subscribers are told about the video. */

@@ -49,6 +49,13 @@ it("blocks an account with an uncertain Threads image despite an older failed re
   ])).toEqual({ platforms: ["instagram"], accountIds: ["instagram-1"] });
 });
 
+it.each(["pending", "success"])("blocks an older YouTube failure when the account also has a %s result", (status) => {
+  expect(failedRetryTargets([
+    { platform: "youtube", status: "failed", social_account_id: "youtube-1" },
+    { platform: "youtube", status, social_account_id: "youtube-1" },
+  ]).accountIds).toEqual([]);
+});
+
 describe("hasNonRetryableOutcome", () => {
   it.each([
     { name: "an unknown outcome", response_data: { publish_outcome: "uncertain" } },

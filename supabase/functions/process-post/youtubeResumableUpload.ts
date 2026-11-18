@@ -1628,11 +1628,13 @@ async function openProviderSession(
   allowedHosts: readonly string[],
 ): Promise<{ kind: "sessionUri"; sessionUri: string } | { kind: "outcome"; outcome: ResumableUploadOutcome }> {
   const remainingMs = deps.deadlineMs - deps.now();
-  if (remainingMs <= 0) {
-    const delay = continuationDelayMs(deps.session.continuationCount + 1);
+  const deferInitialization = async (retryAfterMs?: number) => {
+    const delay = continuationDelayMs(deps.session.continuationCount + 1, retryAfterMs);
     const context = buildContext(deps, deps.session.id, "", totalBytes, mimeType, deps.deadlineMs, deps.now, deps.sleep);
-    const outcome = await scheduleAnotherLook(context, 0, 0, false, deps.now() + delay);
-    return { kind: "outcome", outcome };
+    return await scheduleAnotherLook(context, 0, 0, false, deps.now() + delay);
+  };
+  if (remainingMs <= 0) {
+    return { kind: "outcome", outcome: await deferInitialization() };
   }
   let sessionUri: string;
   try {
@@ -1652,6 +1654,9 @@ async function openProviderSession(
     // customer has to reconnect, and a retry with the same credential would
     // fail the same way.
     if (error instanceof YoutubeProviderRefusal) {
+      if (error.status === 408 || error.status === 429 || error.status >= 500) {
+        return { kind: "outcome", outcome: await deferInitialization(error.retryAfterMs) };
+      }
       return {
         kind: "outcome",
         outcome: {
@@ -1880,12 +1885,14 @@ function mimeTypeForProbe(): string {
 export class YoutubeProviderRefusal extends Error {
   readonly status: number;
   readonly reason: YoutubeUploadReason;
+  readonly retryAfterMs?: number;
 
-  constructor(status: number, message: string, reason: YoutubeUploadReason) {
+  constructor(status: number, message: string, reason: YoutubeUploadReason, retryAfterMs?: number) {
     super(message);
     this.name = "YoutubeProviderRefusal";
     this.status = status;
     this.reason = reason;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -1958,6 +1965,7 @@ export async function createYoutubeResumableSession(args: {
       response.status === 403 && youtubeUploadErrorReason(errorData) === "quotaExceeded"
         ? YOUTUBE_UPLOAD_REASON.quota_exceeded
         : providerRefusalReason(response.status),
+      parseRetryAfterMs(response.headers.get("retry-after"), Date.now()),
     );
   }
 

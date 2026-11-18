@@ -34,7 +34,10 @@ export function hasNonRetryableOutcome(row: RetryResultRow): boolean {
  * publish to again.
  */
 export function failedRetryTargets(rows: RetryResultRow[] | undefined): { platforms: string[]; accountIds: string[] } {
-  const protectedAccountIds = new Set(rows?.filter(hasNonRetryableOutcome).map((row) => row.social_account_id));
+  const protectedAccountIds = new Set(rows?.filter((row) =>
+    hasNonRetryableOutcome(row) || row.status === "pending" ||
+    (row.status === "success" && row.platform !== "instagram")
+  ).map((row) => row.social_account_id));
   const targetable = (rows ?? []).filter((row) =>
     row.status === "failed" && row.social_account_id && !protectedAccountIds.has(row.social_account_id)
   );

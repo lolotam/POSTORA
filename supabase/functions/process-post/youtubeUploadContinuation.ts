@@ -206,6 +206,8 @@ export interface YoutubeContinuationPorts {
    * public row has to be settled either way.
    */
   followUps(args: {
+    sessionId: string;
+    leaseToken: string;
     post: ContinuationPost;
     videoId: string;
     accessToken: string;
@@ -573,6 +575,11 @@ export async function continueYoutubeUpload(
   const source = deferredUploadByteSource(
     async () => {
       const opened = await ports.createSource({ media: mediaFile });
+      if (opened.size !== session.totalBytes) {
+        authorityLost = YOUTUBE_UPLOAD_REASON.media_unavailable;
+        opened.close?.();
+        throw new Error("The opened media does not match the uploaded byte count.");
+      }
       const live = await ports.effectAuthority({ sessionId: session.id, leaseToken });
       if (!live.authorized) {
         authorityLost = effectAuthorityReason(live.reason);
@@ -611,7 +618,7 @@ export async function continueYoutubeUpload(
       // The type of the video, as the media library knows it. The chunks of a
       // resumed upload are declared with it, so the continuation declares the
       // type the first upload declared.
-      mimeType: mediaFile.mimeType,
+      mimeType: session.uploadSettings.mimeType ?? mediaFile.mimeType,
     });
   } catch (error) {
     // The upload threw. The read of the first chunk fails when the authority
@@ -713,7 +720,9 @@ async function refusePermanently(args: {
   //
   // The reason adds its own case: a session that lost its provider session
   // after writing bytes may hold a video the flag never learned about.
-  const uncertain = reason === YOUTUBE_UPLOAD_REASON.reconcile || session.videoMayExist;
+  const recovery = await recoverFanout(ports, session.id, leaseToken);
+  if (recovery.scopeState === "incomplete") return scopeIncomplete(ports, reason);
+  const uncertain = reason === YOUTUBE_UPLOAD_REASON.reconcile || session.videoMayExist || session.bytesSent > 0;
   const settled = await ports.settleUpload({
     sessionId: session.id,
     leaseToken,
@@ -772,7 +781,13 @@ async function loadMatchingMedia(
   if (!session.mediaFileId || !post.mediaFileIds.includes(session.mediaFileId)) {
     return { media: null, reason: YOUTUBE_UPLOAD_REASON.media_unavailable };
   }
-  const media = await ports.loadMedia(session.mediaFileId);
+  let media: ContinuationMedia | null;
+  try {
+    media = await ports.loadMedia(session.mediaFileId);
+  } catch {
+    console.warn("[youtube] media lookup could not be confirmed");
+    return { media: null, reason: YOUTUBE_UPLOAD_REASON.resumable };
+  }
   if (!media || media.userId !== post.userId) {
     return { media: null, reason: YOUTUBE_UPLOAD_REASON.media_unavailable };
   }
@@ -856,21 +871,13 @@ async function interpretOutcome(args: {
     //
     // The receipt does not depend on that answer. The video exists, so it is
     // settled either way.
-    const followUpAuthority = await ports.effectAuthority({ sessionId: session.id, leaseToken });
-    if (followUpAuthority.authorized) {
-      try {
-        await ports.followUps({ post, videoId: outcome.videoId, accessToken });
-      } catch (error) {
-        console.warn(
-          `[youtube] the follow-ups for video ${outcome.videoId} did not finish:`,
-          error instanceof Error ? error.message : String(error),
-        );
+    try {
+      const followUpAuthority = await ports.effectAuthority({ sessionId: session.id, leaseToken });
+      if (followUpAuthority.authorized) {
+        await ports.followUps({ post, videoId: outcome.videoId, accessToken, sessionId: session.id, leaseToken });
       }
-    } else {
-      console.warn(
-        `[youtube] the follow-ups for video ${outcome.videoId} were skipped:`,
-        followUpAuthority.reason ?? "not authorized",
-      );
+    } catch {
+      console.warn("[youtube] optional follow-ups could not be confirmed");
     }
 
     // The fanout closure comes BEFORE the settlement.

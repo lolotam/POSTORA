@@ -44,6 +44,7 @@ function world(
   let budgetCalls = 0;
 
   const deps: YoutubeFollowUpDeps = {
+    canWrite: () => Promise.resolve(true),
     fetchImpl: options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       calls.push({
@@ -210,6 +211,16 @@ Deno.test("a thumbnail download that consumes the deadline sends no provider wri
     { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
     w.deps,
   );
+  assertEquals(w.downloads.length, 1);
+  assertEquals(w.calls.length, 0);
+});
+
+Deno.test("authority lost during a thumbnail download prevents both provider writes", async () => {
+  const w = world({});
+  w.deps.canWrite = () => Promise.resolve(w.downloads.length === 0);
+  await runYoutubeFollowUps({
+    videoId: VIDEO_ID, accessToken: "fixture", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello",
+  }, w.deps);
   assertEquals(w.downloads.length, 1);
   assertEquals(w.calls.length, 0);
 });

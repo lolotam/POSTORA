@@ -77,7 +77,7 @@ export async function refreshYoutubeAccessToken(args: {
   const fetchImpl = args.fetchImpl ?? fetch;
   const nowMs = args.nowMs ?? Date.now();
 
-  if (!youtubeTokenNeedsRefresh(account.tokenExpiresAt, nowMs)) {
+  if (account.accessToken && !youtubeTokenNeedsRefresh(account.tokenExpiresAt, nowMs)) {
     return {
       accessToken: account.accessToken,
       refreshed: false,

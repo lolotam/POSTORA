@@ -110,7 +110,8 @@ Deno.test("retry submits the replacement IDs to the owner-scoped admission befor
 for (const reason of ["not_found", "not_retryable", "no_targets", "invalid_media"] as const) {
   Deno.test(`retry refusal ${reason} maps to its HTTP status and logs once`, async () => {
     const f = fixture({ requestPostRetry: () => Promise.resolve({ status: "refused", reason }) });
-    assertEquals(await run(f.deps, { callerId: OWNER, body: { post_id: POST, mode: "retry" } }), {
+    const body = { post_id: POST, mode: "retry", ...(reason === "invalid_media" ? { replacement_media_ids: [ACCOUNT] } : {}) };
+    assertEquals(await run(f.deps, { callerId: OWNER, body }), {
       status: reason === "not_found" ? 404 : 409, body: { error: reason },
     });
     assertEquals(f.kicks, []);

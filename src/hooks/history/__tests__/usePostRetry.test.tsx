@@ -45,7 +45,7 @@ describe("post retry submission", () => {
       if (kind === "bulk") await result.current.handleBulkRetry([post]);
     });
     expect(from).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", { body: kind === "single"
+    expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", { body: kind !== "bulk"
       ? { post_id: post.id, mode: "retry", account_ids: ["account-1"] }
       : { post_id: post.id, mode: "retry" } });
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: kind === "bulk" ? "Retry requests submitted" : "Retry submitted" }));
@@ -94,6 +94,19 @@ describe("post retry submission", () => {
     expect(result.current.retryDialogPost).toBeNull();
   });
 
+  it("limits a retry without confirmation to the accounts shown as failed", async () => {
+    const { result } = renderRetry();
+    const snapshot = { ...post, platformResults: [
+      ...post.platformResults,
+      { id: "pending-tt", platform: "tiktok", status: "pending", social_account_id: "account-2" },
+    ] };
+    await act(async () => { await result.current.handleRetryFailed(snapshot); });
+    expect(result.current.retryDialogPost).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", {
+      body: { post_id: post.id, mode: "retry", account_ids: ["account-1"] },
+    });
+  });
+
   it("submits replacement media through the enqueue boundary without writing the post directly", async () => {
     from.mockImplementation((table) => {
       if (table === "media_files") return { insert: () => ({ select: () => ({ single: async () => ({ data: { id: "media-1" }, error: null }) }) }) };
@@ -105,7 +118,11 @@ describe("post retry submission", () => {
       result.current.openRetryMediaDialog(post);
       result.current.setRetryMediaFiles([new File(["image"], "photo.jpg", { type: "image/jpeg" })]);
     });
+    invoke.mockResolvedValueOnce({ data: null, error: new FunctionsHttpError(Response.json({ error: "no_targets" }, { status: 409 })) });
     await act(async () => { await result.current.handleRetryWithNewMedia(); });
+    expect(result.current.retryMediaDialogPost?.id).toBe(post.id);
+    await act(async () => { await result.current.handleRetryWithNewMedia(); });
+    expect(upload).toHaveBeenCalledTimes(1);
     expect(from).not.toHaveBeenCalledWith("posts");
     expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", { body: { post_id: post.id, mode: "retry", replacement_media_ids: ["media-1"] } });
     expect(from).not.toHaveBeenCalledWith("platform_posts");

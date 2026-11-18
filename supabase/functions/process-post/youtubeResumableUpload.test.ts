@@ -843,3 +843,13 @@ Deno.test("a run with no time left writes no bytes at all", async () => {
   // written: the write loop finds no time and stops.
   assertEquals(provider.requests.filter((request) => request.bodyLength > 0).length, 0);
 });
+
+Deno.test("a transient initialization refusal leaves the empty upload scheduled", async () => {
+  const provider = fakeProvider([{ status: 503, headers: { "Retry-After": "120" } }]);
+  const before = Date.now();
+  const { outcome, store } = await run(provider, record());
+  assert(outcome.kind === "resumable");
+  assert(outcome.nextCheckAtMs && outcome.nextCheckAtMs >= before + 120_000);
+  assertEquals(provider.requests.map((call) => call.method), ["POST"]);
+  assertEquals([...store.sessions.values()][0].sessionUri, null);
+});

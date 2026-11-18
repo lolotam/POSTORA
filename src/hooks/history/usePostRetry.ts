@@ -48,6 +48,7 @@ export function usePostRetry() {
   const [retryMediaFiles, setRetryMediaFiles] = useState<File[]>([]);
   const [retryMediaUploading, setRetryMediaUploading] = useState(false);
   const retryMediaInputRef = useRef<HTMLInputElement>(null);
+  const uploadedRetryMedia = useRef<{ postId: string; files: File[]; ids: string[] } | null>(null);
 
   const isTikTokMediaError = (post: PostWithResults) =>
     post.platformResults?.some(
@@ -63,6 +64,7 @@ export function usePostRetry() {
   };
 
   const openRetryMediaDialog = (post: PostWithResults) => {
+    uploadedRetryMedia.current = null;
     setRetryMediaDialogPost(post);
     setRetryMediaFiles([]);
   };
@@ -121,8 +123,7 @@ export function usePostRetry() {
 
     setRetryingPostId(post.id);
     try {
-      // The server selects current failed accounts atomically, including failures since the last read.
-      await submitRetry(post.id);
+      await submitRetry(post.id, retryTargets.accountIds);
       notifyRetrySubmitted(retryTargets.platforms as Platform[]);
       invalidatePostQueries(queryClient);
     } catch (error) {
@@ -146,46 +147,57 @@ export function usePostRetry() {
     } finally { setRetryLoading(false); }
   };
 
+  const uploadRetryMedia = async (files: File[]) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Not authenticated");
+
+    const settled = await Promise.allSettled(files.map(async (retryMediaFile) => {
+      const fileExt = retryMediaFile.name.split(".").pop() || "bin";
+      const fileName = `${user.id}/${await buildPostoraFileName(user.id, fileExt)}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(fileName, retryMediaFile, { cacheControl: "3600", upsert: false });
+      if (uploadError) throw uploadError;
+
+      const isGif = retryMediaFile.type === "image/gif" || retryMediaFile.name.toLowerCase().endsWith(".gif");
+      const fileType = retryMediaFile.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
+      const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
+        user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
+      }).select().single();
+      if (mediaError) {
+        if (isMediaQuotaMessage(mediaError.message)) {
+          await supabase.storage.from("media").remove([uploadData.path]);
+          throw new Error(mediaQuotaHumanMessage(mediaError.message));
+        }
+        throw mediaError;
+      }
+      return newMediaFile;
+    }));
+    const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    const stored = settled
+      .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+    if (failed) {
+      // One file failing (e.g. the daily limit) aborts the retry: drop the siblings that
+      // did land so they are not left as unreferenced library rows and storage objects.
+      if (stored.length > 0) {
+        await supabase.from("media_files").delete().in("id", stored.map((mediaFile) => mediaFile.id));
+        await supabase.storage.from("media").remove(stored.map((mediaFile) => mediaFile.file_path));
+      }
+      throw failed.reason;
+    }
+    return stored.map((mediaFile) => mediaFile.id);
+  };
+
   const handleRetryWithNewMedia = async () => {
     if (!retryMediaDialogPost || retryMediaFiles.length === 0) return;
     setRetryMediaUploading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const settled = await Promise.allSettled(retryMediaFiles.map(async (retryMediaFile) => {
-        const fileExt = retryMediaFile.name.split(".").pop() || "bin";
-        const fileName = `${user.id}/${await buildPostoraFileName(user.id, fileExt)}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(fileName, retryMediaFile, { cacheControl: "3600", upsert: false });
-        if (uploadError) throw uploadError;
-
-        const isGif = retryMediaFile.type === "image/gif" || retryMediaFile.name.toLowerCase().endsWith(".gif");
-        const fileType = retryMediaFile.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
-        const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
-          user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
-        }).select().single();
-        if (mediaError) {
-          if (isMediaQuotaMessage(mediaError.message)) {
-            await supabase.storage.from("media").remove([uploadData.path]);
-            throw new Error(mediaQuotaHumanMessage(mediaError.message));
-          }
-          throw mediaError;
-        }
-        return newMediaFile;
-      }));
-      const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-      const stored = settled
-        .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-      if (failed) {
-        // One file failing (e.g. the daily limit) aborts the retry: drop the siblings that
-        // did land so they are not left as unreferenced library rows and storage objects.
-        if (stored.length > 0) {
-          await supabase.from("media_files").delete().in("id", stored.map((mediaFile) => mediaFile.id));
-          await supabase.storage.from("media").remove(stored.map((mediaFile) => mediaFile.file_path));
-        }
-        throw failed.reason;
-      }
-      await submitRetry(retryMediaDialogPost.id, undefined, stored.map((mediaFile) => mediaFile.id));
+      const saved = uploadedRetryMedia.current;
+      const postId = retryMediaDialogPost.id;
+      const ids = saved?.postId === postId && saved.files === retryMediaFiles
+        ? saved.ids
+        : await uploadRetryMedia(retryMediaFiles);
+      uploadedRetryMedia.current = { postId, files: retryMediaFiles, ids };
+      await submitRetry(postId, undefined, ids);
+      uploadedRetryMedia.current = null;
       notifyRetrySubmitted();
       invalidatePostQueries(queryClient);
       setRetryMediaDialogPost(null);

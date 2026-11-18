@@ -45,6 +45,7 @@ export interface YoutubeFollowUpFile {
 export interface YoutubeFollowUpDeps {
   /** The provider calls. */
   fetchImpl: typeof fetch;
+  canWrite(): Promise<boolean>;
   /**
    * The thumbnail bytes.
    *
@@ -93,6 +94,7 @@ async function setYoutubeThumbnail(
   }
   try {
     const { blob, mimeType } = await deps.downloadThumbnail(thumbnailUrl, budgetMs);
+    if (!await deps.canWrite()) return;
     const uploadBudgetMs = deps.budgetMs();
     if (uploadBudgetMs <= 0) return;
     const response = await deps.fetchImpl(`${THUMBNAIL_ENDPOINT}?videoId=${videoId}`, {
@@ -120,12 +122,10 @@ async function postYoutubeFirstComment(
   firstComment: string,
   deps: YoutubeFollowUpDeps,
 ): Promise<void> {
-  const budgetMs = deps.budgetMs();
-  if (budgetMs <= 0) {
-    console.warn("First comment skipped: the worker has no time left for it");
-    return;
-  }
   try {
+    if (!await deps.canWrite()) return;
+    const budgetMs = deps.budgetMs();
+    if (budgetMs <= 0) return;
     console.log("Posting first comment to YouTube video...");
     const response = await deps.fetchImpl(COMMENT_ENDPOINT, {
       method: "POST",
