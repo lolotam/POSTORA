@@ -205,7 +205,10 @@ function isOwnedPath(path: string, prefix: string | null | undefined): boolean {
   // tenant's object once the storage layer resolves it. Dot segments, empty
   // segments, backslashes and encoded separators are never part of an object
   // key Postora writes.
-  if (/[\\\u0000-\u001f]|%2e|%2f|%5c/i.test(path)) return false;
+  if (/[\\]|%2e|%2f|%5c/i.test(path)) return false;
+  for (let index = 0; index < path.length; index++) {
+    if (path.charCodeAt(index) < 0x20) return false;
+  }
   return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
