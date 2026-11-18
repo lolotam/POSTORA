@@ -197,7 +197,8 @@ describe("post retry submission", () => {
     await act(async () => { await result.current.handleRetryWithNewMedia(); });
     expect(upload).toHaveBeenCalledTimes(1);
     expect(from).not.toHaveBeenCalledWith("posts");
-    expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", { body: { post_id: post.id, mode: "retry", replacement_media_ids: ["media-1"] } });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenNthCalledWith(2, "enqueue-post-publish", { body: { post_id: post.id, mode: "retry", replacement_media_ids: ["media-1"] } });
     expect(from).not.toHaveBeenCalledWith("platform_posts");
     expect(result.current.retryMediaDialogPost).toBeNull();
   });
