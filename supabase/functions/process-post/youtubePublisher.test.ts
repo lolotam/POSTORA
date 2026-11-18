@@ -1,6 +1,7 @@
 import {
   assert,
   assertEquals,
+  assertRejects,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
@@ -10,6 +11,7 @@ import {
   youtubeUploadSettingsFromBody,
   type YoutubeUploadRequest,
 } from "./youtubePublisher.ts";
+import { createYoutubeResumableSession } from "./youtubeResumableUpload.ts";
 import { YOUTUBE_DEFAULT_CATEGORY_ID } from "../_shared/youtubePublishOptions.ts";
 
 function snippetOf(request: YoutubeUploadRequest): Record<string, unknown> {
@@ -222,4 +224,26 @@ Deno.test("the fallback settings notify the way the provider does by default", (
 Deno.test("the fallback settings of an empty body still name a writable part", () => {
   const settings = youtubeUploadSettingsFromBody({});
   assertEquals(settings.part, "snippet,status");
+});
+
+Deno.test("native upload initialization refuses redirects at the fetch boundary", async () => {
+  const request = buildYoutubeUploadRequest({ metadata: {}, ...baseInput });
+  const redirectModes: Array<RequestRedirect | undefined> = [];
+  const transport: typeof fetch = (_url, init) => {
+    redirectModes.push(init?.redirect);
+    return Promise.resolve(new Response(null, {
+      status: 307,
+      headers: { Location: "https://redirect.invalid/upload" },
+    }));
+  };
+
+  await assertRejects(() => createYoutubeResumableSession({
+    fetchImpl: transport,
+    accessToken: "fixture-oauth",
+    url: request.url,
+    body: request.body,
+    totalBytes: 1024,
+    mimeType: "video/mp4",
+  }), Error, "redirect");
+  assertEquals(redirectModes, ["manual"]);
 });
