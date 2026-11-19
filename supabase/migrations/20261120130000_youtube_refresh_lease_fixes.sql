@@ -54,6 +54,7 @@ AS $function$
 DECLARE
   v_account          RECORD;
   v_token            UUID;
+  v_now              TIMESTAMPTZ;
   v_acquired_token   UUID;
   v_acquired_expires TIMESTAMPTZ;
   v_held_expires     TIMESTAMPTZ;
@@ -107,19 +108,24 @@ BEGIN
 
   v_token := gen_random_uuid();
 
-  -- Atomic insert-or-takeover from fresh clocks. On the conflict path (a
-  -- concurrent first-time acquirer won the row between our locked read and
-  -- this insert, or an expired lease is taken over) EvalPlanQual re-evaluates
-  -- the expiry guard against the committed row and both stamps below are
-  -- captured HERE, after the wait.
+  -- ONE post-lock clock sample stamps the whole lease: acquired_at and
+  -- expires_at derive from v_now, so the window is exactly the requested ttl
+  -- (the L9 race3/race4 assertions read this directly).
+  v_now := clock_timestamp();
+
+  -- Atomic insert-or-takeover. With the account-row lock above, concurrent
+  -- acquirers of the SAME account are fully serialized before this insert;
+  -- the ON CONFLICT clause stays as a belt for a row committed between our
+  -- locked read and this insert, and re-stamps from fresh clocks there
+  -- (EvalPlanQual re-evaluates the expiry guard against the committed row).
   INSERT INTO public.youtube_token_refresh_leases (
     social_account_id, lease_token, acquired_at, expires_at
   )
   VALUES (
     p_account_id,
     v_token,
-    clock_timestamp(),
-    clock_timestamp() + make_interval(secs => p_ttl_seconds)
+    v_now,
+    v_now + make_interval(secs => p_ttl_seconds)
   )
   ON CONFLICT (social_account_id) DO UPDATE
      SET lease_token = EXCLUDED.lease_token,

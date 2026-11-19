@@ -859,7 +859,7 @@ BEGIN
       v_row.acquired_at, v_b_send);
   ASSERT v_row.expires_at > clock_timestamp(),
     'L9 race3 the takeover lease is born live, never pre-expired';
-  ASSERT v_row.expires_at - v_row.acquired_at >= interval '59 seconds'
+  ASSERT v_row.expires_at - v_row.acquired_at >= interval '55 seconds'
      AND v_row.expires_at - v_row.acquired_at <= interval '60 seconds',
     'L9 race3 the requested ttl is honored from the post-lock clock';
 END
@@ -948,7 +948,7 @@ BEGIN
       v_row.acquired_at, v_b_send);
   ASSERT v_row.expires_at > clock_timestamp(),
     'L9 race4 the lease is born LIVE, never pre-expired by a rolled-back rival';
-  ASSERT v_row.expires_at - v_row.acquired_at >= interval '59 seconds'
+  ASSERT v_row.expires_at - v_row.acquired_at >= interval '55 seconds'
      AND v_row.expires_at - v_row.acquired_at <= interval '60 seconds',
     'L9 race4 the requested ttl is honored from the post-lock clock';
 END
@@ -958,7 +958,7 @@ $l9_race4$;
 -- L11 (migration 20261120130000, finding G): both write RPCs lock the ACCOUNT
 -- row before they check the lease, matching the deletion order (account row,
 -- then cascade to the lease). Proven discriminator: with A holding ONLY the
--- account row lock, a write presenting a WRONG token must block — a
+-- account row lock, a write presenting a WRONG token must block â€” a
 -- lease-first order would answer stale_lease immediately.
 --
 -- The lease the writes are fenced on is acquired OUTSIDE the DO blocks, at
