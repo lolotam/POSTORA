@@ -203,14 +203,17 @@ Deno.serve(async (req) => {
         // post row is not written, and the next tick selects it again.
         const youtubeProbes: ScheduledYouTubeRefreshProbe[] = [];
 
-        // Check for expiring tokens before processing
+        // Check for expiring tokens before processing. is_active matches the
+        // publish path's own filter: an inactive account never refreshes here
+        // and never defers the post on a refresh refusal.
         if (post.platforms && Array.isArray(post.platforms) && post.platforms.length > 0) {
           // Use selected_account_ids from metadata to only refresh relevant accounts
           const selectedAccountIds = post.metadata?.selected_account_ids;
           let accountQuery = supabaseAdmin
             .from('social_accounts')
             .select('*')
-            .eq('user_id', post.user_id);
+            .eq('user_id', post.user_id)
+            .eq('is_active', true);
 
           if (selectedAccountIds && Array.isArray(selectedAccountIds) && selectedAccountIds.length > 0) {
             accountQuery = accountQuery.in('id', selectedAccountIds);
@@ -240,8 +243,10 @@ Deno.serve(async (req) => {
                   accountId: account.id,
                   platform: account.platform,
                   authProvider: account.auth_provider ?? null,
+                  isActive: account.is_active !== false,
                   refreshRefusalReason: ytOutcome.ok ? null : ytOutcome.reason,
                   refreshRefusalRetryable: ytOutcome.ok ? false : ytOutcome.retryable,
+                  storedAccessToken: account.access_token ?? null,
                   storedTokenExpiresAt: account.token_expires_at ?? null,
                 });
                 if (ytOutcome.ok) {

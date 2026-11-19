@@ -14,8 +14,10 @@ const probe = (
   accountId: "yt-1",
   platform: "youtube",
   authProvider: "native",
+  isActive: true,
   refreshRefusalReason: null,
   refreshRefusalRetryable: false,
+  storedAccessToken: "stored-tok",
   storedTokenExpiresAt: EXPIRED_AT,
   ...overrides,
 });
@@ -106,6 +108,21 @@ Deno.test("a composio YouTube account never defers", () => {
     [
       probe({
         authProvider: "composio",
+        refreshRefusalReason: "refresh_in_progress",
+        refreshRefusalRetryable: true,
+        storedTokenExpiresAt: EXPIRED_AT,
+      }),
+    ],
+    { nowMs: NOW },
+  );
+  assertEquals(decision.defer, false);
+});
+
+Deno.test("an inactive account with a retryable refusal never defers the post", () => {
+  const decision = youtubePostDeferral(
+    [
+      probe({
+        isActive: false,
         refreshRefusalReason: "refresh_in_progress",
         refreshRefusalRetryable: true,
         storedTokenExpiresAt: EXPIRED_AT,

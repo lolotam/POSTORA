@@ -28,12 +28,16 @@ export interface ScheduledYouTubeRefreshProbe {
   platform: string;
   /** auth_provider of the row; null counts as native. */
   authProvider?: string | null;
+  /** is_active of the row; an inactive row never defers a post. */
+  isActive: boolean;
   /**
    * The refusal reason of a failed refresh, null when the refresh succeeded.
    */
   refreshRefusalReason: string | null;
   /** The retryable flag of the failed refresh; false when it succeeded. */
   refreshRefusalRetryable: boolean;
+  /** The access token the row still held when the refresh was attempted. */
+  storedAccessToken: string | null;
   /**
    * The expiry of the token the row still held when the refresh was attempted:
    * the credential a publish started now would carry.
@@ -66,6 +70,10 @@ export function youtubePostDeferral(
   for (const probe of probes) {
     if (probe.platform !== "youtube") continue;
     if (probe.authProvider === "composio") continue;
+    // The scheduler only refreshes active accounts; a probe that still
+    // carries an inactive row never defers a post (the publish path refuses
+    // inactive accounts on its own).
+    if (probe.isActive === false) continue;
     if (!probe.refreshRefusalRetryable) continue;
     // A publish would fail: the token is expired or inside the refresh window.
     // The other worker is already refreshing, so the post waits one tick.
