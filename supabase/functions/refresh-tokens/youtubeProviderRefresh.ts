@@ -43,6 +43,7 @@ export async function refreshNativeYouTubeAccount(
   account: NativeYouTubeAccountSnapshot,
   deps: {
     // deno-lint-ignore no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same service-role client seam as createSupabaseYouTubeRefreshStore
     admin: any;
     force?: boolean;
     maxFailures?: number;

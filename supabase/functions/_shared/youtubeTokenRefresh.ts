@@ -314,6 +314,7 @@ export async function exchangeGoogleRefreshToken(
  * Explicit `any` is confined to this infrastructure seam (ARCHITECTURE.md §31).
  */
 // deno-lint-ignore no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- callers hold clients from different supabase-js versions and a typed client overflows TypeScript's instantiation depth (TS2589)
 export function createSupabaseYouTubeRefreshStore(supabase: any): YouTubeRefreshStore {
   return {
     async acquireLease(accountId, ttlSeconds) {
