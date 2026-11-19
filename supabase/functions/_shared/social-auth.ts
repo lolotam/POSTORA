@@ -123,62 +123,6 @@ export async function refreshTikTokToken(account: SocialAccount): Promise<{ acce
     }
 }
 
-export class YouTubeInvalidGrantError extends Error {
-    constructor() {
-        super('youtube_invalid_grant');
-        this.name = 'YouTubeInvalidGrantError';
-    }
-}
-
-/**
- * @deprecated Production callers must use `refreshYouTubeAccountToken` in
- * `./youtubeTokenRefresh.ts`, which serialises refreshes behind the DB lease.
- * Kept only for backward compatibility with legacy test stubs.
- */
-export async function refreshYouTubeToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number; refresh_token?: string; scope?: string } | null> {
-    if (!account.refresh_token) {
-        console.error('No refresh token available for YouTube account');
-        return null;
-    }
-
-    try {
-        const response = await fetch('https://oauth2.googleapis.com/token', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-                client_id: Deno.env.get('GOOGLE_CLIENT_ID') || '',
-                client_secret: Deno.env.get('GOOGLE_CLIENT_SECRET') || '',
-                grant_type: 'refresh_token',
-                refresh_token: account.refresh_token,
-            }),
-            signal: AbortSignal.timeout(15_000),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok || data.error || !data.access_token) {
-            const code = typeof data.error === 'string' ? data.error : `http_${response.status}`;
-            console.error(`YouTube token refresh failed: ${code}`);
-            if (data.error === 'invalid_grant') throw new YouTubeInvalidGrantError();
-            return null;
-        }
-
-        return {
-            access_token: data.access_token,
-            expires_in: data.expires_in || 3600,
-            refresh_token: typeof data.refresh_token === 'string' && data.refresh_token.length > 0 ? data.refresh_token : undefined,
-            scope: typeof data.scope === 'string' ? data.scope : undefined
-        };
-    } catch (error) {
-        if (error instanceof YouTubeInvalidGrantError) throw error;
-        const name = error instanceof Error ? error.name : 'UnknownError';
-        console.error(`Error refreshing YouTube token: ${name}`);
-        return null;
-    }
-}
-
 export async function refreshPinterestToken(account: SocialAccount): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
     if (!account.refresh_token) {
         console.error('No refresh token available for Pinterest account');

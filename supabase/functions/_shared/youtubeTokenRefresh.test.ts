@@ -701,6 +701,49 @@ Deno.test("an unflagged row with a fresh token still reuses under force", async 
   assertEquals(state.stores.length, 0);
 });
 
+Deno.test("adminRecovery without force on a flagged fresh row still exchanges", async () => {
+  // The fresh fast-path shortcut must not swallow a flagged snapshot either:
+  // a caller asking for recovery of a flagged account gets the exchange (and
+  // the persisted flag clear), never a silent "fresh" that leaves the flag.
+  const { state, store } = makeFakeStore({
+    account: {
+      id: ACCOUNT_ID,
+      access_token: synth("fresh", "flagged"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: FRESH_AT,
+      needs_reauth: true,
+    },
+  });
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("fresh", "flagged"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: FRESH_AT,
+      needs_reauth: true,
+    },
+    adminRecovery: true,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: synth("recovered", "tok"),
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: null,
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "refreshed");
+    assertEquals(outcome.accessToken, synth("recovered", "tok"));
+  }
+  assertEquals(state.stores.length, 1);
+  assertEquals(state.account?.needs_reauth, false);
+});
+
 Deno.test("provider refusal log maps OAuth codes to fixed labels and never echoes raw provider error text", async () => {
   await withGoogleEnv(async () => {
     const lines: string[] = [];

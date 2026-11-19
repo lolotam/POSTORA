@@ -602,8 +602,11 @@ export async function refreshYouTubeAccountToken(
   const nowMs = options.nowMs ?? (() => Date.now());
   const log = options.log ?? defaultLog;
 
-  // Fast-path checks on caller-provided snapshot. Admin recovery skips the
-  // refusal: its whole purpose is to re-test a flagged account at Google.
+  // Fast-path checks on caller-provided snapshot. A flagged snapshot never
+  // takes the fresh shortcut: under adminRecovery the caller asked for the
+  // exchange, and the shortcut would otherwise silently leave the flag set.
+  // Admin recovery skips the refusal: its whole purpose is to re-test a
+  // flagged account at Google.
   if (!adminRecovery && snapshot?.needs_reauth === true) {
     return {
       ok: false,
@@ -618,6 +621,7 @@ export async function refreshYouTubeAccountToken(
   if (
     !force &&
     snapshot?.access_token &&
+    snapshot.needs_reauth !== true &&
     !youtubeTokenNeedsRefresh(snapshot.token_expires_at, nowMs(), refreshWindowMs)
   ) {
     return {
