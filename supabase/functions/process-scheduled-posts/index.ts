@@ -226,7 +226,7 @@ Deno.serve(async (req) => {
           const { data: accounts } = await accountQuery;
 
           if (accounts) {
-            for (const account of accounts as (SocialAccount & { auth_provider?: string | null; needs_reauth?: boolean | null })[]) {
+            for (const account of accounts as (SocialAccount & { auth_provider?: string | null; needs_reauth?: boolean | null; is_active?: boolean | null })[]) {
               if (account.platform === 'youtube') {
                 if (account.auth_provider === 'composio') continue;
                 const ytOutcome = await refreshYouTubeAccountToken({
