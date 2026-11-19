@@ -178,7 +178,7 @@ describe("useDisconnectAccountFromProfile", () => {
         expect(mockToast).not.toHaveBeenCalled();
     });
 
-    it("shows an error toast and keeps the YouTube account in UI state when upstream revoke fails", async () => {
+    it("rejects with the upstream message and keeps the YouTube account in UI state when revoke fails", async () => {
         const ytAccount = {
             id: "acc-yt",
             user_id: "test-user-id",
@@ -233,10 +233,8 @@ describe("useDisconnectAccountFromProfile", () => {
         expect(deleteEq).not.toHaveBeenCalled();
         expect(queryClient.getQueryData(["all_social_accounts", "test-user-id"])).toEqual([ytAccount]);
         expect(queryClient.getQueryData(["social_accounts", "prof-1"])).toEqual([ytAccount]);
-        expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
-            variant: "destructive",
-            description: "Failed to disconnect YouTube account. Please try again.",
-        }));
+        // The page shows the localized error toast from its own catch; the hook stays silent.
+        expect(mockToast).not.toHaveBeenCalled();
     });
 
     it("does not invoke youtube-oauth when disconnecting a Composio-managed YouTube account", async () => {

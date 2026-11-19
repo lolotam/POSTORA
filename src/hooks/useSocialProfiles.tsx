@@ -1,7 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
-import { toast } from "@/hooks/use-toast";
 import { Platform } from "@/lib/types";
 
 export interface SocialProfile {
@@ -245,16 +244,6 @@ export function useDisconnectAccountFromProfile() {
       await queryClient.refetchQueries({ queryKey: ["social_accounts_by_profile"] });
       await queryClient.refetchQueries({ queryKey: ["social_profiles"] });
       await queryClient.refetchQueries({ queryKey: ["all_social_accounts"] });
-    },
-    onError: (error: unknown) => {
-      const description = error instanceof Error && error.message
-        ? error.message
-        : "Failed to disconnect account.";
-      toast({
-        title: "Disconnect failed",
-        description,
-        variant: "destructive",
-      });
     },
   });
 }
