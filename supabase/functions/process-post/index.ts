@@ -2960,6 +2960,7 @@ Deno.serve(async (req) => {
           accessToken: account.access_token ?? null,
           refreshToken: account.refresh_token ?? null,
           tokenExpiresAt: account.token_expires_at ?? null,
+          needsReauth: account.needs_reauth === true,
         },
       }).catch((error) => {
         console.warn("[JIT] YouTube token refresh failed:", redactProviderText(error));
@@ -9899,20 +9900,22 @@ function buildYoutubeContinuationPorts(
           accessToken: typeof data.access_token === "string" ? data.access_token : null,
           refreshToken: typeof data.refresh_token === "string" ? data.refresh_token : null,
           tokenExpiresAt: typeof data.token_expires_at === "string" ? data.token_expires_at : null,
+          needsReauth: data.needs_reauth === true || metadata.needs_reauth === true,
         },
       });
 
       const usableToken = youtubeCredentialRefusalReason(token.accessToken, token.expiresAt)
         ? null
         : token.accessToken;
+      const needsReauth = data.needs_reauth === true || metadata.needs_reauth === true || token.needsReauth;
       return {
         id: String(data.id),
         userId: String(data.user_id),
         platform: String(data.platform),
         isActive: data.is_active !== false,
         accessToken: usableToken,
-        tokenRefreshPending: usableToken === null && token.reason !== null,
-        needsReauth: data.needs_reauth === true || metadata.needs_reauth === true,
+        tokenRefreshPending: usableToken === null && token.reason !== null && !needsReauth,
+        needsReauth,
       };
     },
 

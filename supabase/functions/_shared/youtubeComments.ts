@@ -16,19 +16,17 @@ import {
   withConnectorCall,
 } from "./connectorTelemetry.ts";
 import {
-  refreshYouTubeToken,
-  YouTubeInvalidGrantError,
-} from "./social-auth.ts";
-import {
   classifyComposioError,
   classifyGoogleError,
   type YouTubeErrorClass,
 } from "./youtubeApiErrors.ts";
 import { YOUTUBE_COMMENT_SCOPE } from "./youtubeCommentCapability.ts";
+import { dropGrantedScope } from "./youtubeGrantedScopes.ts";
 import {
-  dropGrantedScope,
-  recordGrantedScopes,
-} from "./youtubeGrantedScopes.ts";
+  createSupabaseYouTubeRefreshStore,
+  refreshYouTubeAccountToken,
+  type YouTubeRefreshStore,
+} from "./youtubeTokenRefresh.ts";
 
 const DATA_API = "https://www.googleapis.com/youtube/v3";
 const REFRESH_WINDOW_MS = 30 * 60 * 1000;
@@ -51,6 +49,7 @@ export interface YouTubeCommentAccount {
   connection_id?: string | null;
   workspace_id?: string | null;
   account_metadata?: Record<string, unknown> | null;
+  needs_reauth?: boolean | null;
 }
 
 export interface YouTubeCommentsDeps {
@@ -58,6 +57,7 @@ export interface YouTubeCommentsDeps {
   fetcher?: typeof fetch;
   composio?: ComposioClient | null;
   now?: () => number;
+  refreshStore?: YouTubeRefreshStore;
 }
 
 export type YouTubeResult<T> =
@@ -121,66 +121,51 @@ async function nativeToken(
   deps: YouTubeCommentsDeps,
   options: { force?: boolean } = {},
 ): Promise<YouTubeResult<NativeToken>> {
-  const now = deps.now?.() ?? Date.now();
-  const expiresAt = account.token_expires_at
-    ? new Date(account.token_expires_at).getTime()
-    : 0;
-  if (
-    !options.force && account.access_token &&
-    expiresAt - now > REFRESH_WINDOW_MS
-  ) {
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: account.id,
+    snapshot: {
+      access_token: account.access_token,
+      refresh_token: account.refresh_token ?? null,
+      token_expires_at: account.token_expires_at ?? null,
+      needs_reauth: account.needs_reauth ?? false,
+    },
+    force: options.force ?? false,
+    recordTransientFailure: false,
+    refreshWindowMs: REFRESH_WINDOW_MS,
+    store: deps.refreshStore ?? createSupabaseYouTubeRefreshStore(deps.admin),
+    nowMs: deps.now,
+  });
+
+  if (outcome.ok) {
+    if (outcome.status !== "fresh") {
+      account.access_token = outcome.accessToken;
+      account.token_expires_at = outcome.expiresAt;
+    }
     return {
       ok: true,
-      value: { token: account.access_token, refreshed: false },
+      value: {
+        token: outcome.accessToken,
+        refreshed: outcome.status !== "fresh",
+      },
     };
   }
 
-  // No refresh token is a permanent state, not a transient one: refreshYouTubeToken would
-  // return null here, which reads as "temporarily unavailable" and would keep the poller
-  // counting failures instead of telling the user to reconnect.
-  if (!account.refresh_token) {
+  if (outcome.reason === "no_refresh_token") {
     return fail(
       "unauthorized",
       "The YouTube connection has no refresh token. Reconnect the channel in Profiles.",
     );
   }
-
-  let refreshed;
-  try {
-    refreshed = await refreshYouTubeToken(account as any);
-  } catch (error) {
-    if (!(error instanceof YouTubeInvalidGrantError)) throw error;
-    await deps.admin.from("social_accounts").update({
-      needs_reauth: true,
-      last_refresh_error: "YouTube refresh failed: invalid_grant",
-      updated_at: new Date().toISOString(),
-    }).eq("id", account.id);
+  if (outcome.status === "needs_reauth") {
     return fail(
       "unauthorized",
       "The YouTube connection expired. Reconnect the channel in Profiles.",
     );
   }
-  if (!refreshed) {
-    return fail(
-      "upstream",
-      "YouTube token refresh is temporarily unavailable. Try again.",
-    );
-  }
-
-  await deps.admin.from("social_accounts").update({
-    access_token: refreshed.access_token,
-    token_expires_at: new Date(now + refreshed.expires_in * 1000).toISOString(),
-    needs_reauth: false,
-    failure_count: 0,
-    last_refresh_error: null,
-    updated_at: new Date().toISOString(),
-  }).eq("id", account.id);
-  await recordGrantedScopes(deps.admin, account.id, refreshed.scope);
-  account.access_token = refreshed.access_token;
-  return {
-    ok: true,
-    value: { token: refreshed.access_token, refreshed: true },
-  };
+  return fail(
+    "upstream",
+    "YouTube token refresh is temporarily unavailable. Try again.",
+  );
 }
 
 async function sendNative(

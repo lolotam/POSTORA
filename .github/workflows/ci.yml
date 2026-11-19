@@ -457,6 +457,22 @@ jobs:
       - name: Typecheck process-scheduled-posts
         run: deno check --node-modules-dir=none supabase/functions/process-scheduled-posts/index.ts
 
+      - name: Typecheck and test YouTube refresh lease
+        run: |
+          set -euo pipefail
+          map=".github/deno/process-post-import-map.json"
+          deno check --node-modules-dir=none --import-map="${map}" \
+            supabase/functions/_shared/youtubeTokenRefresh.ts \
+            supabase/functions/_shared/youtubeTokenRefresh.test.ts \
+            supabase/functions/_shared/youtubeComments.ts \
+            supabase/functions/_shared/youtubeComments.test.ts \
+            supabase/functions/refresh-tokens/youtubeProviderRefresh.ts \
+            supabase/functions/refresh-tokens/youtubeProviderRefresh.test.ts
+          deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}" \
+            supabase/functions/_shared/youtubeTokenRefresh.test.ts \
+            supabase/functions/_shared/youtubeComments.test.ts \
+            supabase/functions/refresh-tokens/youtubeProviderRefresh.test.ts
+
       - name: Typecheck and test AI provider health and catalogue sync
         run: |
           set -euo pipefail

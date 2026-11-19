@@ -4,9 +4,112 @@ import {
   resolveWorkspaceForCall,
   withConnectorCall,
 } from "../_shared/connectorTelemetry.ts";
+import {
+  createSupabaseYouTubeRefreshStore,
+  refreshYouTubeAccountToken,
+  type GoogleRefreshExchangeResult,
+  type YouTubeRefreshStore,
+} from "../_shared/youtubeTokenRefresh.ts";
 
 export const COMPOSIO_YOUTUBE_REAUTH_MESSAGE =
   "Token limit exceeded. Please reconnect your account.";
+
+const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+export interface NativeYouTubeAccountSnapshot {
+  id: string;
+  user_id: string;
+  access_token?: string | null;
+  refresh_token?: string | null;
+  token_expires_at?: string | null;
+  needs_reauth?: boolean | null;
+  alerts_snoozed?: boolean | null;
+  last_alert_sent_at?: string | null;
+}
+
+export interface NativeYouTubeRefreshResult {
+  status:
+    | "refreshed"
+    | "already_refreshed"
+    | "cooldown"
+    | "needs_reauth"
+    | "failed";
+  accessToken?: string;
+  error?: string;
+  shouldAlert: boolean;
+}
+
+export async function refreshNativeYouTubeAccount(
+  account: NativeYouTubeAccountSnapshot,
+  deps: {
+    // deno-lint-ignore no-explicit-any
+    admin: any;
+    force?: boolean;
+    maxFailures?: number;
+    store?: YouTubeRefreshStore;
+    exchange?: (refreshToken: string) => Promise<GoogleRefreshExchangeResult>;
+    fetchImpl?: typeof fetch;
+    nowMs?: () => number;
+  },
+): Promise<NativeYouTubeRefreshResult> {
+  const nowMs = deps.nowMs ?? (() => Date.now());
+  const now = nowMs();
+  const lastAlertMs = account.last_alert_sent_at
+    ? Date.parse(account.last_alert_sent_at)
+    : Number.NaN;
+  const canAlert = !account.alerts_snoozed &&
+    (!Number.isFinite(lastAlertMs) || now - lastAlertMs > ALERT_COOLDOWN_MS);
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: account.id,
+    snapshot: {
+      access_token: account.access_token ?? null,
+      refresh_token: account.refresh_token ?? null,
+      token_expires_at: account.token_expires_at ?? null,
+      needs_reauth: account.needs_reauth ?? false,
+    },
+    force: deps.force ?? false,
+    recordTransientFailure: true,
+    maxFailures: deps.maxFailures ?? 3,
+    lastAlertSentAt: canAlert ? new Date(now).toISOString() : null,
+    store: deps.store ?? createSupabaseYouTubeRefreshStore(deps.admin),
+    exchange: deps.exchange,
+    fetchImpl: deps.fetchImpl,
+    nowMs,
+  });
+
+  if (outcome.ok) {
+    return {
+      status: outcome.status === "refreshed" ? "refreshed" : "already_refreshed",
+      accessToken: outcome.accessToken,
+      shouldAlert: false,
+    };
+  }
+
+  if (outcome.status === "needs_reauth") {
+    return {
+      status: "needs_reauth",
+      error: COMPOSIO_YOUTUBE_REAUTH_MESSAGE,
+      shouldAlert: canAlert && outcome.transitioned !== false,
+    };
+  }
+
+  if (outcome.status === "retryable_refusal") {
+    return {
+      status: "cooldown",
+      error: "Refresh already in progress",
+      shouldAlert: false,
+    };
+  }
+
+  return {
+    status: "failed",
+    error: outcome.reason === "no_refresh_token"
+      ? "No refresh token available"
+      : "Could not refresh token",
+    shouldAlert: canAlert,
+  };
+}
 
 export interface ProviderAwareYouTubeAccount {
   id: string;

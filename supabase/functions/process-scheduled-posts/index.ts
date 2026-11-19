@@ -13,9 +13,12 @@ import {
   refreshFacebookToken,
   refreshInstagramBusinessToken,
   refreshTikTokToken,
-  refreshYouTubeToken,
   refreshPinterestToken
 } from '../_shared/social-auth.ts';
+import {
+  createSupabaseYouTubeRefreshStore,
+  refreshYouTubeAccountToken,
+} from '../_shared/youtubeTokenRefresh.ts';
 import { metaRefreshStrategy } from '../_shared/refreshEligibility.ts';
 import { redactSensitive } from '../_shared/logging.ts';
 
@@ -213,7 +216,44 @@ Deno.serve(async (req) => {
           const { data: accounts } = await accountQuery;
 
           if (accounts) {
-            for (const account of accounts as SocialAccount[]) {
+            for (const account of accounts as (SocialAccount & { auth_provider?: string | null; needs_reauth?: boolean | null })[]) {
+              if (account.platform === 'youtube') {
+                if (account.auth_provider === 'composio') continue;
+                const ytOutcome = await refreshYouTubeAccountToken({
+                  accountId: account.id,
+                  snapshot: {
+                    access_token: account.access_token ?? null,
+                    refresh_token: account.refresh_token ?? null,
+                    token_expires_at: account.token_expires_at ?? null,
+                    needs_reauth: account.needs_reauth === true,
+                  },
+                  store: createSupabaseYouTubeRefreshStore(supabaseAdmin),
+                });
+                if (ytOutcome.ok) {
+                  if (ytOutcome.status !== 'fresh') {
+                    console.log(`[JIT-SCHEDULED] YouTube token ${ytOutcome.status} for account ${account.id} (post: ${post.id})`);
+                  }
+                } else {
+                  console.warn(`[JIT-SCHEDULED] YouTube token not refreshed for account ${account.id} (reason: ${ytOutcome.reason}, post: ${post.id})`);
+                  await supabaseAdmin.from('system_logs').insert({
+                    level: 'warn',
+                    category: 'token',
+                    source: 'process-scheduled-posts',
+                    message: `Token refresh failed for youtube (${ytOutcome.reason})`,
+                    user_id: post.user_id,
+                    metadata: {
+                      post_id: post.id,
+                      platform: account.platform,
+                      account_id: account.id,
+                      reason: ytOutcome.reason,
+                      retryable: ytOutcome.retryable,
+                      needs_reauth: ytOutcome.needsReauth,
+                    },
+                  });
+                }
+                continue;
+              }
+
               if (isTokenExpiring(account.token_expires_at, account.platform)) {
                 console.log(`[JIT-SCHEDULED] Token expiring for ${account.platform} (User: ${account.user_id}, post: ${post.id}), refreshing...`);
                 let refreshResult = null;
@@ -242,9 +282,6 @@ Deno.serve(async (req) => {
                     }
                     case 'tiktok':
                       refreshResult = await refreshTikTokToken(account);
-                      break;
-                    case 'youtube':
-                      refreshResult = await refreshYouTubeToken(account);
                       break;
                     case 'pinterest':
                       refreshResult = await refreshPinterestToken(account);

@@ -61,6 +61,7 @@ import { composioClientFromEnv } from '../_shared/composioClient.ts';
 import {
   COMPOSIO_YOUTUBE_REAUTH_MESSAGE,
   probeYouTubeProvider,
+  refreshNativeYouTubeAccount,
 } from './youtubeProviderRefresh.ts';
 
 import {
@@ -68,7 +69,6 @@ import {
   refreshFacebookToken,
   refreshInstagramBusinessToken,
   refreshTikTokToken,
-  refreshYouTubeToken,
   refreshPinterestToken,
   refreshLinkedInToken,
   refreshTwitterToken,
@@ -627,36 +627,23 @@ async function refreshSingleAccount(
           return { id: account.id, platform: account.platform, status: 'failed', error: errorMessage };
         }
 
-      case 'youtube':
-        try {
-          refreshResult = await refreshYouTubeToken(account);
-          if (refreshResult) {
-            const expiresAt = new Date();
-            expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
-            const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
-            if (updated) {
-              const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
-              return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
-            } else {
-              return { id: account.id, platform: account.platform, status: 'already_refreshed' };
-            }
-          } else {
-            await handleRefreshFailure(supabaseAdmin, account, 'Could not refresh token');
-            return { id: account.id, platform: account.platform, status: 'failed', error: 'Could not refresh token' };
-          }
-        } catch (youtubeError) {
-          let errorMessage = youtubeError instanceof Error ? youtubeError.message : 'Could not refresh token';
-          
-          // CUSTOM FIX: Handle invalid_grant specifically for YouTube (100 token limit)
-          if (errorMessage.includes('invalid_grant')) {
-            errorMessage = "Token limit exceeded. Please reconnect your account.";
-            console.log(`[youtube-force-refresh] Detected invalid_grant for ${account.id}, marking as limit exceeded`);
-          }
-
-          console.error(`[youtube-force-refresh] Error for ${account.id}:`, errorMessage);
-          await handleRefreshFailure(supabaseAdmin, account, errorMessage);
-          return { id: account.id, platform: account.platform, status: 'failed', error: errorMessage };
+      case 'youtube': {
+        const ytResult = await refreshNativeYouTubeAccount(account, {
+          admin: supabaseAdmin,
+          force: _force,
+          maxFailures: MAX_FAILURES_BEFORE_REAUTH,
+        });
+        if (ytResult.status === 'refreshed' && ytResult.accessToken) {
+          const avatarRefreshed = await refreshAndCacheAvatar(account, ytResult.accessToken, supabaseAdmin);
+          return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
         }
+        return {
+          id: account.id,
+          platform: account.platform,
+          status: ytResult.status,
+          ...(ytResult.error ? { error: ytResult.error } : {}),
+        };
+      }
 
       case 'pinterest':
         refreshResult = await refreshPinterestToken(account);
@@ -1534,36 +1521,26 @@ Deno.serve(async (req) => {
             }
             break;
 
-          case 'youtube':
-            try {
-              refreshResult = await refreshYouTubeToken(account);
-              if (refreshResult) {
-                const expiresAt = new Date();
-                expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
-                const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
-                if (updated) {
-                  const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
-                  results.push({ id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed });
-                } else {
-                  results.push({ id: account.id, platform: account.platform, status: 'already_refreshed' });
-                }
-              }
-            } catch (youtubeError) {
-              // YouTube now throws with actual error message (e.g., 'invalid_grant')
-              let errorMessage = youtubeError instanceof Error ? youtubeError.message : 'Could not refresh token';
-              
-              // CUSTOM FIX: Handle invalid_grant specifically for YouTube (100 token limit)
-              if (errorMessage.includes('invalid_grant')) {
-                errorMessage = "Token limit exceeded. Please reconnect your account.";
-                console.log(`[youtube-refresh] Detected invalid_grant for ${account.id}, marking as limit exceeded`);
-              }
-
-              console.error(`[youtube-refresh] Error for ${account.id}:`, errorMessage);
-              const { needsReauth, shouldAlert } = await handleRefreshFailure(supabaseAdmin, account, errorMessage);
-              results.push({ id: account.id, platform: account.platform, status: needsReauth ? 'needs_reauth' : 'failed', error: errorMessage });
-              if (shouldAlert) accountsToAlert.push(account);
+          case 'youtube': {
+            const ytResult = await refreshNativeYouTubeAccount(account, {
+              admin: supabaseAdmin,
+              force: adminTriggered,
+              maxFailures: MAX_FAILURES_BEFORE_REAUTH,
+            });
+            if (ytResult.status === 'refreshed' && ytResult.accessToken) {
+              const avatarRefreshed = await refreshAndCacheAvatar(account, ytResult.accessToken, supabaseAdmin);
+              results.push({ id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed });
+            } else {
+              results.push({
+                id: account.id,
+                platform: account.platform,
+                status: ytResult.status,
+                ...(ytResult.error ? { error: ytResult.error } : {}),
+              });
+              if (ytResult.shouldAlert) accountsToAlert.push(account);
             }
             break;
+          }
 
           case 'pinterest':
             refreshResult = await refreshPinterestToken(account);

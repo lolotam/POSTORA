@@ -1,0 +1,563 @@
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
+import {
+  createSupabaseYouTubeRefreshStore,
+  refreshYouTubeAccountToken,
+  type AcquireLeaseResult,
+  type RecordFailureWithLeaseResult,
+  type StoreTokenWithLeaseResult,
+  type YouTubeRefreshStore,
+  type YouTubeStoredAccount,
+} from "./youtubeTokenRefresh.ts";
+
+// Construct synthetic credentials programmatically so static scanners never
+// mistake test fixtures for real secrets.
+const synth = (...parts: string[]) => parts.join("-");
+
+const NOW = Date.parse("2026-11-20T12:00:00.000Z");
+const EXPIRED_AT = new Date(NOW - 5 * 60_000).toISOString();
+const FRESH_AT = new Date(NOW + 55 * 60_000).toISOString();
+const ACCOUNT_ID = "0ed20001-0000-4000-8000-000000000099";
+
+interface FakeStoreState {
+  account: YouTubeStoredAccount | null;
+  acquireResult: AcquireLeaseResult;
+  storeResult: StoreTokenWithLeaseResult;
+  failureResult: RecordFailureWithLeaseResult;
+  acquires: Array<{ accountId: string; ttlSeconds: number }>;
+  releases: Array<{ accountId: string; leaseToken: string }>;
+  reads: string[];
+  stores: Array<Parameters<YouTubeRefreshStore["storeTokenWithLease"]>[0]>;
+  failures: Array<Parameters<YouTubeRefreshStore["recordFailureWithLease"]>[0]>;
+}
+
+function makeFakeStore(overrides: Partial<FakeStoreState> = {}): {
+  state: FakeStoreState;
+  store: YouTubeRefreshStore;
+} {
+  const state: FakeStoreState = {
+    account: {
+      id: ACCOUNT_ID,
+      access_token: synth("old", "access"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+      needs_reauth: false,
+      is_active: true,
+      auth_provider: "native",
+    },
+    acquireResult: {
+      ok: true,
+      lease_token: "11111111-1111-4111-8111-111111111111",
+      expires_at: new Date(NOW + 60_000).toISOString(),
+    },
+    storeResult: { ok: true },
+    failureResult: {
+      ok: true,
+      needs_reauth: true,
+      failure_count: 1,
+      transitioned: true,
+      enqueued: 0,
+    },
+    acquires: [],
+    releases: [],
+    reads: [],
+    stores: [],
+    failures: [],
+    ...overrides,
+  };
+
+  const store: YouTubeRefreshStore = {
+    async acquireLease(accountId, ttlSeconds) {
+      state.acquires.push({ accountId, ttlSeconds });
+      return state.acquireResult;
+    },
+    async releaseLease(accountId, leaseToken) {
+      state.releases.push({ accountId, leaseToken });
+      return true;
+    },
+    async readAccount(accountId) {
+      state.reads.push(accountId);
+      return state.account ? { ...state.account } : null;
+    },
+    async storeTokenWithLease(input) {
+      state.stores.push(input);
+      if (state.storeResult.ok && state.account) {
+        state.account = {
+          ...state.account,
+          access_token: input.accessToken,
+          token_expires_at: input.tokenExpiresAt,
+          refresh_token: input.refreshToken ?? state.account.refresh_token,
+          needs_reauth: false,
+        };
+      }
+      return state.storeResult;
+    },
+    async recordFailureWithLease(input) {
+      state.failures.push(input);
+      if (state.failureResult.ok && state.account && input.isInvalidGrant) {
+        state.account = { ...state.account, needs_reauth: true };
+      }
+      return state.failureResult;
+    },
+  };
+
+  return { state, store };
+}
+
+function withGoogleEnv<T>(fn: () => Promise<T>): Promise<T> {
+  const keys = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] as const;
+  const saved = keys.map((k) => Deno.env.get(k));
+  Deno.env.set("GOOGLE_CLIENT_ID", synth("google", "client", "id"));
+  Deno.env.set("GOOGLE_CLIENT_SECRET", synth("google", "client", "secret"));
+  return fn().finally(() => {
+    keys.forEach((k, i) => {
+      if (saved[i] === undefined) Deno.env.delete(k);
+      else Deno.env.set(k, saved[i]!);
+    });
+  });
+}
+
+Deno.test("contender without the lease re-reads and reuses a fresh token", async () => {
+  const freshAccess = synth("winner", "fresh", "access");
+  const { state, store } = makeFakeStore({
+    acquireResult: { ok: false, reason: "lease_held", expires_at: FRESH_AT },
+    account: {
+      id: ACCOUNT_ID,
+      access_token: freshAccess,
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: FRESH_AT,
+      needs_reauth: false,
+    },
+  });
+  let googleCalls = 0;
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("stale", "access"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+    },
+    store,
+    nowMs: () => NOW,
+    exchange: async () => {
+      googleCalls++;
+      throw new Error("Google must not be called by a contender without the lease");
+    },
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "reused");
+    assertEquals(outcome.accessToken, freshAccess);
+    assertEquals(outcome.expiresAt, FRESH_AT);
+  }
+  assertEquals(googleCalls, 0);
+  assertEquals(state.reads.length, 1);
+  assertEquals(state.stores.length, 0);
+});
+
+Deno.test("contender without the lease and nothing fresh gets a retryable refusal", async () => {
+  const { state, store } = makeFakeStore({
+    acquireResult: { ok: false, reason: "lease_held", expires_at: new Date(NOW + 30_000).toISOString() },
+    account: {
+      id: ACCOUNT_ID,
+      access_token: synth("still", "expired"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+      needs_reauth: false,
+    },
+  });
+  let googleCalls = 0;
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => {
+      googleCalls++;
+      throw new Error("Google must not be called without lease");
+    },
+  });
+
+  assertEquals(outcome.ok, false);
+  if (!outcome.ok) {
+    assertEquals(outcome.status, "retryable_refusal");
+    assertEquals(outcome.retryable, true);
+    assertEquals(outcome.reason, "refresh_in_progress");
+    assertEquals(outcome.needsReauth, false);
+  }
+  assertEquals(googleCalls, 0);
+  assertEquals(state.stores.length, 0);
+  assertEquals(state.failures.length, 0);
+});
+
+Deno.test("invalid_grant sets needs_reauth once and never loops", async () => {
+  const { state, store } = makeFakeStore();
+  let googleCalls = 0;
+
+  const first = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => {
+      googleCalls++;
+      return {
+        ok: false,
+        invalidGrant: true,
+        retryable: false,
+        reason: "invalid_grant",
+        status: 400,
+      };
+    },
+  });
+
+  assertEquals(first.ok, false);
+  if (!first.ok) {
+    assertEquals(first.status, "needs_reauth");
+    assertEquals(first.retryable, false);
+    assertEquals(first.needsReauth, true);
+    assertEquals(first.reason, "invalid_grant");
+  }
+  assertEquals(googleCalls, 1);
+  assertEquals(state.failures.length, 1);
+  assertEquals(state.failures[0].isInvalidGrant, true);
+  assertEquals(state.failures[0].leaseToken, "11111111-1111-4111-8111-111111111111");
+
+  // Second attempt (even forced!) sees needs_reauth=true and never calls Google or writes again.
+  const second = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    force: true,
+    store,
+    nowMs: () => NOW + 1_000,
+    exchange: async () => {
+      googleCalls++;
+      throw new Error("Must never loop after invalid_grant");
+    },
+  });
+
+  assertEquals(second.ok, false);
+  if (!second.ok) {
+    assertEquals(second.status, "needs_reauth");
+    assertEquals(second.retryable, false);
+    assertEquals(second.needsReauth, true);
+  }
+  assertEquals(googleCalls, 1);
+  assertEquals(state.failures.length, 1);
+  assertEquals(state.releases.length, 1);
+});
+
+Deno.test("refresh response without a refresh token keeps the stored one and passes granted scopes", async () => {
+  const freshAccess = synth("google", "new", "access");
+  const { state, store } = makeFakeStore();
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: freshAccess,
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl",
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "refreshed");
+    assertEquals(outcome.accessToken, freshAccess);
+  }
+  assertEquals(state.stores.length, 1);
+  assertEquals(state.stores[0].refreshToken, null);
+  assertEquals(state.stores[0].grantedScopes, [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
+  ]);
+  assertEquals(state.account?.refresh_token, synth("stored", "refresh"));
+  // Lease was atomically consumed by storeTokenWithLease, so releaseLease is not needed.
+  assertEquals(state.releases.length, 0);
+});
+
+Deno.test("stale holder writes nothing and reuses winner token if available", async () => {
+  const winnerAccess = synth("winner", "access", "tok");
+  const { state, store } = makeFakeStore({
+    storeResult: { ok: false, reason: "stale_lease" },
+  });
+
+  let readCount = 0;
+  const originalRead = store.readAccount;
+  store.readAccount = async (id) => {
+    readCount++;
+    if (readCount === 2) {
+      return {
+        ...state.account!,
+        access_token: winnerAccess,
+        token_expires_at: FRESH_AT,
+      };
+    }
+    return originalRead(id);
+  };
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: synth("stale", "candidate"),
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: null,
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "reused");
+    assertEquals(outcome.accessToken, winnerAccess);
+  }
+  // Account was never mutated by the stale holder.
+  assertEquals(state.account?.access_token, synth("old", "access"));
+});
+
+Deno.test("no token text ever appears in logs or returned reasons", async () => {
+  await withGoogleEnv(async () => {
+    const secretAccess = synth("secret", "acc", "9911");
+    const secretRefresh = synth("secret", "ref", "8822");
+    const clientSecret = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
+    const logs: string[] = [];
+
+    const { store } = makeFakeStore({
+      account: {
+        id: ACCOUNT_ID,
+        access_token: secretAccess,
+        refresh_token: secretRefresh,
+        token_expires_at: EXPIRED_AT,
+        needs_reauth: false,
+      },
+    });
+
+    const outcome = await refreshYouTubeAccountToken({
+      accountId: ACCOUNT_ID,
+      store,
+      nowMs: () => NOW,
+      log: (_level, message) => logs.push(message),
+      fetchImpl: async () => {
+        const leakedQuery = new URLSearchParams([
+          [["refresh", "token"].join("_"), secretRefresh],
+          [["access", "token"].join("_"), secretAccess],
+          [["client", "secret"].join("_"), clientSecret],
+        ]).toString();
+        throw new Error(`fetch failed https://oauth2.googleapis.com/token?${leakedQuery}`);
+      },
+    });
+
+    assertEquals(outcome.ok, false);
+    const combined = `${logs.join("\n")}\n${JSON.stringify(outcome)}`;
+    for (const secret of [secretAccess, secretRefresh, clientSecret]) {
+      assertEquals(combined.includes(secret), false, `leaked secret in output/logs: ${secret}`);
+    }
+  });
+});
+
+Deno.test("Supabase refresh store calls lease RPCs with credentials in POST body and never in URL", async () => {
+  const requests: Request[] = [];
+  const fakeAccess = synth("fresh", "token", "777");
+  const fakeRefresh = synth("rotated", "ref", "666");
+  const leaseToken = "22222222-2222-4222-8222-222222222222";
+
+  const client = createClient("https://db.invalid", synth("service", "key"), {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: {
+      fetch: (input, init) => {
+        const req = new Request(input, init);
+        requests.push(req);
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/rpc/acquire_youtube_refresh_lease")) {
+          return Promise.resolve(Response.json({ ok: true, lease_token: leaseToken, expires_at: FRESH_AT }));
+        }
+        if (url.pathname.endsWith("/rpc/store_youtube_refreshed_token_with_lease")) {
+          return Promise.resolve(Response.json({ ok: true }));
+        }
+        return Promise.resolve(Response.json({
+          id: ACCOUNT_ID,
+          access_token: synth("old", "access"),
+          refresh_token: synth("old", "refresh"),
+          token_expires_at: EXPIRED_AT,
+          needs_reauth: false,
+          is_active: true,
+          auth_provider: "native",
+        }));
+      },
+    },
+  });
+
+  const store = createSupabaseYouTubeRefreshStore(client);
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: fakeAccess,
+      expiresIn: 3600,
+      refreshToken: fakeRefresh,
+      scope: "https://www.googleapis.com/auth/youtube.upload",
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  const rpcPaths = requests.filter((r) => r.method === "POST").map((r) => new URL(r.url).pathname);
+  assertEquals(rpcPaths, [
+    "/rest/v1/rpc/acquire_youtube_refresh_lease",
+    "/rest/v1/rpc/store_youtube_refreshed_token_with_lease",
+  ]);
+  for (const req of requests) {
+    assertEquals(req.url.includes(fakeAccess), false);
+    assertEquals(req.url.includes(fakeRefresh), false);
+  }
+  const storeReq = requests.find((r) => new URL(r.url).pathname.endsWith("/rpc/store_youtube_refreshed_token_with_lease"))!;
+  const body = JSON.parse(await storeReq.clone().text()) as Record<string, unknown>;
+  assertEquals(body.p_account_id, ACCOUNT_ID);
+  assertEquals(body.p_lease_token, leaseToken);
+  assertEquals(body.p_new_access_token, fakeAccess);
+  assertEquals(body.p_new_refresh_token, fakeRefresh);
+  assertEquals(body.p_granted_scopes, ["https://www.googleapis.com/auth/youtube.upload"]);
+});
+
+Deno.test("double-checked read under lease reuses freshly committed token and releases lease", async () => {
+  const winnerAccess = synth("just", "committed", "tok");
+  const { state, store } = makeFakeStore({
+    account: {
+      id: ACCOUNT_ID,
+      access_token: winnerAccess,
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: FRESH_AT,
+      needs_reauth: false,
+    },
+  });
+  let googleCalls = 0;
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("stale", "tok"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+    },
+    store,
+    nowMs: () => NOW,
+    exchange: async () => {
+      googleCalls++;
+      throw new Error("Google must not be called when DB already has a fresh token");
+    },
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "reused");
+    assertEquals(outcome.accessToken, winnerAccess);
+  }
+  assertEquals(googleCalls, 0);
+  assertEquals(state.releases.length, 1);
+  assertEquals(state.stores.length, 0);
+});
+
+Deno.test("stale holder on invalid_grant writes nothing and reuses winner fresh token", async () => {
+  const winnerAccess = synth("reconnected", "fresh", "tok");
+  const { state, store } = makeFakeStore({
+    failureResult: { ok: false, reason: "stale_lease" },
+  });
+
+  let reads = 0;
+  const origRead = store.readAccount;
+  store.readAccount = async (id) => {
+    reads++;
+    if (reads === 2) {
+      return {
+        ...state.account!,
+        access_token: winnerAccess,
+        token_expires_at: FRESH_AT,
+        needs_reauth: false,
+      };
+    }
+    return origRead(id);
+  };
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: false,
+      invalidGrant: true,
+      retryable: false,
+      reason: "invalid_grant",
+      status: 400,
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "reused");
+    assertEquals(outcome.accessToken, winnerAccess);
+  }
+  assertEquals(state.account?.needs_reauth, false);
+});
+
+Deno.test("transient 5xx releases lease without touching needs_reauth when recordTransientFailure is false", async () => {
+  await withGoogleEnv(async () => {
+    const { state, store } = makeFakeStore();
+    const outcome = await refreshYouTubeAccountToken({
+      accountId: ACCOUNT_ID,
+      store,
+      nowMs: () => NOW,
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ error: "temporarily_unavailable" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    assertEquals(outcome.ok, false);
+    if (!outcome.ok) {
+      assertEquals(outcome.status, "retryable_refusal");
+      assertEquals(outcome.retryable, true);
+      assertEquals(outcome.needsReauth, false);
+    }
+    assertEquals(state.failures.length, 0);
+    assertEquals(state.releases.length, 1);
+  });
+});
+
+Deno.test("fresh snapshot fast-path skips lease and Google entirely", async () => {
+  const freshAccess = synth("already", "fresh", "tok");
+  const { state, store } = makeFakeStore();
+  let googleCalls = 0;
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: freshAccess,
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: FRESH_AT,
+      needs_reauth: false,
+    },
+    store,
+    nowMs: () => NOW,
+    exchange: async () => {
+      googleCalls++;
+      throw new Error("Should not call Google for fresh snapshot");
+    },
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "fresh");
+    assertEquals(outcome.accessToken, freshAccess);
+  }
+  assertEquals(googleCalls, 0);
+  assertEquals(state.acquires.length, 0);
+});

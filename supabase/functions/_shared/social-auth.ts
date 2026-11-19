@@ -130,7 +130,12 @@ export class YouTubeInvalidGrantError extends Error {
     }
 }
 
-export async function refreshYouTubeToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number; scope?: string } | null> {
+/**
+ * @deprecated Production callers must use `refreshYouTubeAccountToken` in
+ * `./youtubeTokenRefresh.ts`, which serialises refreshes behind the DB lease.
+ * Kept only for backward compatibility with legacy test stubs.
+ */
+export async function refreshYouTubeToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number; refresh_token?: string; scope?: string } | null> {
     if (!account.refresh_token) {
         console.error('No refresh token available for YouTube account');
         return null;
@@ -148,13 +153,14 @@ export async function refreshYouTubeToken(account: SocialAccount): Promise<{ acc
                 grant_type: 'refresh_token',
                 refresh_token: account.refresh_token,
             }),
+            signal: AbortSignal.timeout(15_000),
         });
 
         const data = await response.json();
 
-        if (data.error) {
-            const errorMsg = data.error_description || data.error;
-            console.error('YouTube token refresh failed:', errorMsg);
+        if (!response.ok || data.error || !data.access_token) {
+            const code = typeof data.error === 'string' ? data.error : `http_${response.status}`;
+            console.error(`YouTube token refresh failed: ${code}`);
             if (data.error === 'invalid_grant') throw new YouTubeInvalidGrantError();
             return null;
         }
@@ -162,11 +168,13 @@ export async function refreshYouTubeToken(account: SocialAccount): Promise<{ acc
         return {
             access_token: data.access_token,
             expires_in: data.expires_in || 3600,
+            refresh_token: typeof data.refresh_token === 'string' && data.refresh_token.length > 0 ? data.refresh_token : undefined,
             scope: typeof data.scope === 'string' ? data.scope : undefined
         };
     } catch (error) {
         if (error instanceof YouTubeInvalidGrantError) throw error;
-        console.error('Error refreshing YouTube token:', error);
+        const name = error instanceof Error ? error.name : 'UnknownError';
+        console.error(`Error refreshing YouTube token: ${name}`);
         return null;
     }
 }
