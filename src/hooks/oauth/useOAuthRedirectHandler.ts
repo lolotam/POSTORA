@@ -9,7 +9,7 @@ import { refetchSocialQueries } from "./oauthUtils";
 
 interface CallbackHandlers {
   handleTikTokCallback: (code: string, profileId: string) => Promise<void>;
-  handleYouTubeCallback: (code: string, profileId: string) => Promise<void>;
+  handleYouTubeCallback: (code: string, profileId: string, state: string) => Promise<void>;
   handleLinkedInCallback: (code: string, profileId: string) => Promise<void>;
   handleTwitterCallback: (code: string, profileId: string) => Promise<void>;
   handleThreadsCallback: (code: string, profileId: string) => Promise<void>;
@@ -69,9 +69,10 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
     const code = searchParams.get("code");
     const platform = searchParams.get("platform");
     const profileId = searchParams.get("profile_id");
+    const state = searchParams.get("state");
 
     if (code && platform === "tiktok" && user && profileId) { handlers.handleTikTokCallback(code, profileId); setSearchParams({}); return; }
-    if (code && platform === "youtube" && user && profileId) { handlers.handleYouTubeCallback(code, profileId); setSearchParams({}); return; }
+    if (code && platform === "youtube" && user && profileId && state) { handlers.handleYouTubeCallback(code, profileId, state); setSearchParams({}); return; }
     if (code && platform === "linkedin" && user && profileId) { handlers.handleLinkedInCallback(code, profileId); setSearchParams({}); return; }
     if (code && platform === "twitter" && user && profileId) { handlers.handleTwitterCallback(code, profileId); setSearchParams({}); return; }
     if (code && platform === "threads" && user && profileId) { handlers.handleThreadsCallback(code, profileId); setSearchParams({}); return; }
