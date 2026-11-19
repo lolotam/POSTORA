@@ -5979,9 +5979,10 @@ $y71_null_scope$;
 --
 -- The prefix guard accepted any value that LOOKED like a date, and the cast
 -- raised on an invalid calendar date -- one poisoned row aborted the recovery
--- statement and starved every session behind it. All three sites read the
--- value through the validating conversion now: a malformed value is a value
--- that does not match.
+-- statement and starved every session behind it. Every site reads the value
+-- through the validating conversion now, the recovery's three and
+-- close_post_fanout's deferred-row and candidate reads alike: a malformed
+-- value is a value that does not match.
 -- ---------------------------------------------------------------------------
 DO $y72_invalid_dates$
 DECLARE
@@ -6078,9 +6079,62 @@ BEGIN
   ASSERT (v_result ->> 'reason') = 'post_not_processing',
     'Y72 an impossible rollup date proves nothing and aborts nothing';
 
-  -- The deferred attempt a result row carries is read by close_post_fanout
-  -- (applied before this migration) with an unvalidated cast; that path is a
-  -- recorded follow-up, not part of this migration.
+  -- THE DEFERRED ROW ATTEMPT. The attempt a result row carries in
+  -- response_data.deferred is read by close_post_fanout as well; the
+  -- validating conversion is a non-match there too, never an abort of the
+  -- whole closure statement.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y72c') f;
+
+  UPDATE public.posts
+     SET processing_started_at = now() - public.youtube_upload_attempt_quiet_after() - interval '1 second'
+   WHERE id = v_post_a;
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_a;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_a, v_attempt, v_content,
+    ARRAY[v_acct_a], ARRAY[]::uuid[]);
+
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'reconcile',
+    'the provider may already hold a video');
+
+  -- The admission's own pending row is removed, and the only row the
+  -- destination carries is one an older attempt left behind whose deferred
+  -- attempt is a date that is not on the calendar. The row is too old to
+  -- match by created_at, so the deferred attempt is the only read that could
+  -- claim it for this attempt.
+  SELECT platform_post_id INTO v_row_id FROM public.youtube_upload_sessions WHERE id = v_session;
+  UPDATE public.youtube_upload_sessions SET platform_post_id = NULL WHERE id = v_session;
+  DELETE FROM public.platform_posts WHERE id = v_row_id;
+
+  INSERT INTO public.platform_posts
+    (id, post_id, social_account_id, platform, status, created_at, response_data)
+  VALUES (gen_random_uuid(), v_post_a, v_acct_a, 'youtube', 'failed', '2000-01-01T00:00:00Z',
+    jsonb_build_object('deferred', jsonb_build_object('attempt_started_at', '2026-02-31T00:00:00Z')));
+
+  -- Reaching the assertions at all proves the conversion did not raise. The
+  -- poisoned row matches no attempt, so the destination has no row for this
+  -- attempt and its outcome is read as unknown; the closure settles it with a
+  -- non-retryable row and closes the fanout.
+  v_result := public.recover_youtube_upload_fanout(v_session, NULL);
+  ASSERT (v_result ->> 'recovered')::boolean IS TRUE,
+    'Y72 a deferred row with an impossible date is not an abort';
+  ASSERT (v_result -> 'unknown_account_ids') ? v_acct_a::text,
+    'Y72 a deferred row with an impossible date leaves the destination unknown';
+  ASSERT (v_result -> 'closed' ->> 'status') = 'failed',
+    'Y72 the unknown destination is terminalised and the fanout closes';
+
   RAISE NOTICE 'PASS Y72: an impossible date is a non-match, never an abort';
 END
 $y72_invalid_dates$;
