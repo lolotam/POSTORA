@@ -476,6 +476,13 @@ BEGIN
        AND x.grantee = 0),
     'L6 PUBLIC holds no table privilege';
   ASSERT NOT EXISTS (
+    SELECT 1 FROM pg_class c, aclexplode(c.relacl) x
+     WHERE c.oid = 'public.youtube_token_refresh_leases'::regclass
+       AND x.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'service_role')),
+    'L6 service_role holds no direct table privilege on youtube_token_refresh_leases';
+  ASSERT NOT has_table_privilege('service_role', 'public.youtube_token_refresh_leases', 'SELECT'),
+    'L6 service_role cannot SELECT live lease_token values directly';
+  ASSERT NOT EXISTS (
     SELECT 1 FROM pg_proc p, aclexplode(p.proacl) x
      WHERE p.oid IN (
        'public.acquire_youtube_refresh_lease(uuid, integer)'::regprocedure,
@@ -583,8 +590,9 @@ $l7b$;
 RESET ROLE;
 
 -- ---------------------------------------------------------------------------
--- L8. service_role runs the RPCs and reads the table, but cannot write the
---     table directly.
+-- L8. service_role runs all four SECURITY DEFINER RPCs, but holds NO direct
+--     table privileges (not even SELECT, so live lease_token values are never
+--     readable directly by service_role).
 -- ---------------------------------------------------------------------------
 SET LOCAL ROLE service_role;
 SELECT set_config('request.jwt.claim.role', 'service_role', true);
@@ -598,9 +606,27 @@ BEGIN
   r := public.acquire_youtube_refresh_lease(a_yt, 60);
   ASSERT (r ->> 'ok')::boolean IS TRUE, 'L8 service_role acquires lease';
   v_tok := (r ->> 'lease_token')::uuid;
-  ASSERT (SELECT count(*) FROM public.youtube_token_refresh_leases WHERE social_account_id = a_yt) = 1,
-    'L8 service_role reads the lease table';
+
+  BEGIN
+    PERFORM count(*) FROM public.youtube_token_refresh_leases WHERE social_account_id = a_yt;
+    RAISE EXCEPTION 'L8 service_role read the lease table directly' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE '42501' THEN NULL;
+  END;
+
   ASSERT public.release_youtube_refresh_lease(a_yt, v_tok), 'L8 service_role releases lease';
+
+  -- Store and failure RPCs also work as service_role (SECURITY DEFINER).
+  v_tok := (public.acquire_youtube_refresh_lease(a_yt, 60) ->> 'lease_token')::uuid;
+  r := public.store_youtube_refreshed_token_with_lease(
+    a_yt, v_tok, 'access-from-service-role', clock_timestamp() + interval '1 hour', NULL, NULL
+  );
+  ASSERT (r ->> 'ok')::boolean IS TRUE, 'L8 service_role commits refreshed token via RPC';
+
+  v_tok := (public.acquire_youtube_refresh_lease(a_yt, 60) ->> 'lease_token')::uuid;
+  r := public.record_youtube_refresh_failure_with_lease(
+    a_yt, v_tok, 'YouTube refresh failed: transient', false
+  );
+  ASSERT (r ->> 'ok')::boolean IS TRUE, 'L8 service_role records failure via RPC';
 
   BEGIN
     INSERT INTO public.youtube_token_refresh_leases (social_account_id, lease_token, expires_at)

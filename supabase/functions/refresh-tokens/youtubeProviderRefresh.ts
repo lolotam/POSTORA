@@ -97,9 +97,16 @@ export async function refreshNativeYouTubeAccount(
   }
 
   if (outcome.status === "retryable_refusal") {
+    if (outcome.reason === "refresh_in_progress") {
+      return {
+        status: "cooldown",
+        error: "Refresh already in progress",
+        shouldAlert: false,
+      };
+    }
     return {
-      status: "cooldown",
-      error: "Refresh already in progress",
+      status: "failed",
+      error: outcome.reason,
       shouldAlert: false,
     };
   }

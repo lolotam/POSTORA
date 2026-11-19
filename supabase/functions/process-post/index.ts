@@ -207,7 +207,11 @@ import {
   runYoutubeFollowUps,
   type YoutubeFollowUpDeps,
 } from "./youtubeUploadFollowUps.ts";
-import { refreshYoutubeAccessToken, youtubeJitRefusalStopsPublish } from "./youtubeTokenRefresh.ts";
+import {
+  refreshYoutubeAccessToken,
+  youtubeJitRefusalLogEntry,
+  youtubeJitRefusalStopsPublish,
+} from "./youtubeTokenRefresh.ts";
 import {
   dropRecordedStory,
   readUnrecordedStory,
@@ -3007,23 +3011,20 @@ Deno.serve(async (req) => {
         account.access_token = null;
       }
 
+      const errorLog = youtubeJitRefusalLogEntry(token, {
+        accountId: account.id,
+        postId: post_id,
+        postSource,
+        userId: post.user_id,
+      });
+      if (!errorLog) {
+        console.log(`[JIT] YouTube token refresh deferred for account ${account.id} (${token.reason}) (source: ${postSource}, post: ${post_id})`);
+        continue;
+      }
+
       console.warn(`[JIT] The YouTube token of account ${account.id} was not refreshed (${token.reason}) (source: ${postSource}, post: ${post_id})`);
 
-      await supabase.from('system_logs').insert({
-        level: 'error',
-        category: 'token',
-        source: 'process-post-jit',
-        message: `YouTube JIT token refresh failed (source: ${postSource})`,
-        user_id: post.user_id,
-        metadata: {
-          event: 'jit_refresh_failed',
-          platform: 'youtube',
-          account_id: account.id,
-          post_id: post_id,
-          post_source: postSource,
-          error: token.reason,
-        },
-      });
+      await supabase.from('system_logs').insert(errorLog);
     }
 
     // ─────────────────────────────────────────────────────────────────────

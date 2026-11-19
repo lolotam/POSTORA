@@ -334,3 +334,57 @@ Deno.test("without the admin recovery option a needs_reauth account is still ref
   assertEquals(result.status, "needs_reauth");
   assertEquals(exchanged, false);
 });
+
+Deno.test("refreshNativeYouTubeAccount reports failed with the real reason for non-contention retryable refusals", async () => {
+  const now = Date.parse("2026-11-20T12:00:00.000Z");
+  const account = {
+    id: "account-1",
+    user_id: "owner-1",
+    access_token: ["stale", "acc"].join("-"),
+    refresh_token: ["old", "ref"].join("-"),
+    token_expires_at: new Date(now - 60_000).toISOString(),
+  };
+
+  // lease_acquire_failed -> failed with real reason (not cooldown).
+  const acquireFailed = await refreshNativeYouTubeAccount(account, {
+    admin: {},
+    store: leaseStore({
+      acquireLease: async () => ({ ok: false, reason: "lease_acquire_failed" }),
+    }),
+    nowMs: () => now,
+  });
+  assertEquals(acquireFailed.status, "failed");
+  assertEquals(acquireFailed.error, "lease_acquire_failed");
+  assertEquals(acquireFailed.shouldAlert, false);
+
+  // account_read_failed -> failed with real reason (not cooldown).
+  const readFailed = await refreshNativeYouTubeAccount(account, {
+    admin: {},
+    store: leaseStore({
+      readAccount: async () => {
+        throw new Error("db read failed");
+      },
+    }),
+    nowMs: () => now,
+  });
+  assertEquals(readFailed.status, "failed");
+  assertEquals(readFailed.error, "account_read_failed");
+  assertEquals(readFailed.shouldAlert, false);
+
+  // refresh_answer_incomplete (e.g. non-positive expires_in) -> failed with real reason.
+  const incomplete = await refreshNativeYouTubeAccount(account, {
+    admin: {},
+    store: leaseStore(),
+    nowMs: () => now,
+    exchange: async () => ({
+      ok: true,
+      accessToken: ["candidate", "acc"].join("-"),
+      expiresIn: 0,
+      refreshToken: null,
+      scope: null,
+    }),
+  });
+  assertEquals(incomplete.status, "failed");
+  assertEquals(incomplete.error, "refresh_answer_incomplete");
+  assertEquals(incomplete.shouldAlert, false);
+});

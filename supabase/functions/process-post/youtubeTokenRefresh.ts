@@ -42,6 +42,8 @@ export interface YoutubeTokenResult {
   reason: string | null;
   /** True when the account requires user reconnection (e.g. invalid_grant). */
   needsReauth: boolean;
+  /** True when the refusal is transient/retryable (e.g. lease contention, 5xx). */
+  retryable: boolean;
 }
 
 /**
@@ -60,6 +62,56 @@ export function youtubeJitRefusalStopsPublish(
   token: Pick<YoutubeTokenResult, "accessToken" | "needsReauth">,
 ): boolean {
   return token.accessToken === null && token.needsReauth;
+}
+
+export interface YoutubeJitRefusalLogContext {
+  accountId: string;
+  postId: string;
+  postSource: string;
+  userId: string;
+}
+
+export interface YoutubeJitRefusalLogRow {
+  level: "error";
+  category: "token";
+  source: "process-post-jit";
+  message: string;
+  user_id: string;
+  metadata: {
+    event: "jit_refresh_failed";
+    platform: "youtube";
+    account_id: string;
+    post_id: string;
+    post_source: string;
+    error: string;
+  };
+}
+
+/**
+ * Builds the error-level system_logs row for a non-retryable YouTube JIT
+ * refresh failure, or returns null when the refusal is ordinary lease
+ * contention / retryable (or there was no refusal).
+ */
+export function youtubeJitRefusalLogEntry(
+  token: Pick<YoutubeTokenResult, "reason" | "retryable">,
+  context: YoutubeJitRefusalLogContext,
+): YoutubeJitRefusalLogRow | null {
+  if (!token.reason || token.retryable) return null;
+  return {
+    level: "error",
+    category: "token",
+    source: "process-post-jit",
+    message: `YouTube JIT token refresh failed (source: ${context.postSource})`,
+    user_id: context.userId,
+    metadata: {
+      event: "jit_refresh_failed",
+      platform: "youtube",
+      account_id: context.accountId,
+      post_id: context.postId,
+      post_source: context.postSource,
+      error: token.reason,
+    },
+  };
 }
 
 /**
@@ -94,17 +146,21 @@ export async function refreshYoutubeAccessToken(args: {
       expiresAt: outcome.expiresAt,
       reason: null,
       needsReauth: false,
+      retryable: false,
     };
   }
 
-  // A missing refresh token is not by itself a refused credential: the old
-  // behaviour handed the stored token back and let the shared credential
-  // policy decide. That behaviour is kept, because a token inside its refresh
-  // window is still one the provider accepts — the publish path and the
-  // continuation read the SAME rule from youtubeCredentialRefusalReason.
-  // Expired credentials, invalid_grant and lease refusals keep returning
-  // nothing.
-  if (outcome.reason === "no_refresh_token" && account.accessToken) {
+  // A retryable refusal (lease contention, transient provider/DB error), a
+  // missing refresh token, or unconfigured OAuth client env is not by itself
+  // a dead access token: when the stored token is still strictly in the future
+  // inside the 30-minute refresh window, hand it back so initial publishes and
+  // resumable upload continuations do not stall unnecessarily. Expired tokens,
+  // invalid_grant, and reauthentication refusals keep returning null.
+  const canUseStoredToken = !outcome.needsReauth &&
+    (outcome.status === "retryable_refusal" ||
+      outcome.reason === "no_refresh_token" ||
+      outcome.reason === "refresh_not_configured");
+  if (canUseStoredToken && account.accessToken) {
     const nowMsValue = args.nowMs ?? Date.now();
     const credentialRefusal = youtubeCredentialRefusalReason(
       account.accessToken,
@@ -118,6 +174,7 @@ export async function refreshYoutubeAccessToken(args: {
         expiresAt: account.tokenExpiresAt,
         reason: outcome.reason,
         needsReauth: false,
+        retryable: outcome.retryable,
       };
     }
   }
@@ -128,5 +185,6 @@ export async function refreshYoutubeAccessToken(args: {
     expiresAt: outcome.expiresAt,
     reason: outcome.reason,
     needsReauth: outcome.needsReauth,
+    retryable: outcome.retryable,
   };
 }

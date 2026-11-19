@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
 import {
   refreshYoutubeAccessToken,
+  youtubeJitRefusalLogEntry,
   youtubeJitRefusalStopsPublish,
 } from "./youtubeTokenRefresh.ts";
 
@@ -347,4 +348,277 @@ Deno.test("a reauthentication refusal stops the publish for the account; retryab
     youtubeJitRefusalStopsPublish({ accessToken: fake("tok"), needsReauth: false }),
     false,
   );
+});
+
+Deno.test("retryable lease contention with 20 minutes left proceeds with stored access token", async () => {
+  await withGoogleEnv(async () => {
+    const storedToken = fake("usable-in-window");
+    const storedExpiry = new Date(NOW + 20 * 60_000).toISOString();
+    const db = createClient("https://db.invalid", fake("fixture"), {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (input, init) => {
+          const url = new URL(new Request(input, init).url);
+          if (url.pathname.endsWith("/rpc/acquire_youtube_refresh_lease")) {
+            return Promise.resolve(Response.json({ ok: false, reason: "lease_held" }));
+          }
+          return Promise.resolve(Response.json({
+            id: "account-1",
+            access_token: storedToken,
+            refresh_token: ["stored", "grant"].join("-"),
+            token_expires_at: storedExpiry,
+            needs_reauth: false,
+          }));
+        },
+      },
+    });
+
+    const result = await refreshYoutubeAccessToken({
+      supabase: db,
+      account: {
+        id: "account-1",
+        accessToken: storedToken,
+        refreshToken: ["stored", "grant"].join("-"),
+        tokenExpiresAt: storedExpiry,
+      },
+      nowMs: NOW,
+      fetchImpl: () => Promise.reject(new Error("must not call Google when lease is held")),
+    });
+
+    assertEquals(result.accessToken, storedToken);
+    assertEquals(result.expiresAt, storedExpiry);
+    assertEquals(result.refreshed, false);
+    assertEquals(result.reason, "refresh_in_progress");
+    assertEquals(result.needsReauth, false);
+    assertEquals(result.retryable, true);
+  });
+});
+
+Deno.test("retryable lease contention with an expired stored token still returns null", async () => {
+  await withGoogleEnv(async () => {
+    const expiredAt = new Date(NOW - 60_000).toISOString();
+    const db = createClient("https://db.invalid", fake("fixture"), {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (input, init) => {
+          const url = new URL(new Request(input, init).url);
+          if (url.pathname.endsWith("/rpc/acquire_youtube_refresh_lease")) {
+            return Promise.resolve(Response.json({ ok: false, reason: "lease_held" }));
+          }
+          return Promise.resolve(Response.json({
+            id: "account-1",
+            access_token: fake("expired-tok"),
+            refresh_token: ["stored", "grant"].join("-"),
+            token_expires_at: expiredAt,
+            needs_reauth: false,
+          }));
+        },
+      },
+    });
+
+    const result = await refreshYoutubeAccessToken({
+      supabase: db,
+      account: {
+        id: "account-1",
+        accessToken: fake("expired-tok"),
+        refreshToken: ["stored", "grant"].join("-"),
+        tokenExpiresAt: expiredAt,
+      },
+      nowMs: NOW,
+      fetchImpl: () => Promise.reject(new Error("must not call Google when lease is held")),
+    });
+
+    assertEquals(result.accessToken, null);
+    assertEquals(result.reason, "refresh_in_progress");
+    assertEquals(result.retryable, true);
+    assertEquals(result.needsReauth, false);
+  });
+});
+
+Deno.test("Google 5xx and unconfigured env with a usable stored token proceed with stored token", async () => {
+  const storedToken = fake("usable-in-window");
+  const storedExpiry = new Date(NOW + 20 * 60_000).toISOString();
+  const makeDb = () =>
+    createClient("https://db.invalid", fake("fixture"), {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (input, init) => {
+          const url = new URL(new Request(input, init).url);
+          if (url.pathname.endsWith("/rpc/acquire_youtube_refresh_lease")) {
+            return Promise.resolve(Response.json({
+              ok: true,
+              lease_token: LEASE_ID,
+              expires_at: new Date(NOW + 60_000).toISOString(),
+            }));
+          }
+          if (url.pathname.endsWith("/rpc/release_youtube_refresh_lease")) {
+            return Promise.resolve(Response.json(true));
+          }
+          return Promise.resolve(Response.json({
+            id: "account-1",
+            access_token: storedToken,
+            refresh_token: ["stored", "grant"].join("-"),
+            token_expires_at: storedExpiry,
+            needs_reauth: false,
+          }));
+        },
+      },
+    });
+
+  await withGoogleEnv(async () => {
+    const out5xx = await refreshYoutubeAccessToken({
+      supabase: makeDb(),
+      account: {
+        id: "account-1",
+        accessToken: storedToken,
+        refreshToken: ["stored", "grant"].join("-"),
+        tokenExpiresAt: storedExpiry,
+      },
+      nowMs: NOW,
+      fetchImpl: () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: "temporarily_unavailable" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+    });
+
+    assertEquals(out5xx.accessToken, storedToken);
+    assertEquals(out5xx.expiresAt, storedExpiry);
+    assertEquals(out5xx.reason, "refresh_refused");
+    assertEquals(out5xx.retryable, true);
+    assertEquals(out5xx.needsReauth, false);
+  });
+
+  // Unconfigured GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET with a usable stored token.
+  const keys = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] as const;
+  const saved = keys.map((k) => Deno.env.get(k));
+  for (const k of keys) Deno.env.delete(k);
+  try {
+    const outUnconf = await refreshYoutubeAccessToken({
+      supabase: makeDb(),
+      account: {
+        id: "account-1",
+        accessToken: storedToken,
+        refreshToken: ["stored", "grant"].join("-"),
+        tokenExpiresAt: storedExpiry,
+      },
+      nowMs: NOW,
+      fetchImpl: () => Promise.reject(new Error("must not call Google when unconfigured")),
+    });
+
+    assertEquals(outUnconf.accessToken, storedToken);
+    assertEquals(outUnconf.expiresAt, storedExpiry);
+    assertEquals(outUnconf.reason, "refresh_not_configured");
+    assertEquals(outUnconf.needsReauth, false);
+  } finally {
+    keys.forEach((k, i) => {
+      if (saved[i] === undefined) Deno.env.delete(k);
+      else Deno.env.set(k, saved[i]!);
+    });
+  }
+});
+
+Deno.test("invalid_grant with 20 minutes left on stored token still returns null and needsReauth", async () => {
+  await withGoogleEnv(async () => {
+    const storedToken = fake("revoked-in-window");
+    const storedExpiry = new Date(NOW + 20 * 60_000).toISOString();
+    const db = createClient("https://db.invalid", fake("fixture"), {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (input, init) => {
+          const url = new URL(new Request(input, init).url);
+          if (url.pathname.endsWith("/rpc/acquire_youtube_refresh_lease")) {
+            return Promise.resolve(Response.json({
+              ok: true,
+              lease_token: LEASE_ID,
+              expires_at: new Date(NOW + 60_000).toISOString(),
+            }));
+          }
+          if (url.pathname.endsWith("/rpc/record_youtube_refresh_failure_with_lease")) {
+            return Promise.resolve(Response.json({
+              ok: true,
+              needs_reauth: true,
+              failure_count: 1,
+              transitioned: true,
+              enqueued: 0,
+            }));
+          }
+          return Promise.resolve(Response.json({
+            id: "account-1",
+            access_token: storedToken,
+            refresh_token: ["revoked", "grant"].join("-"),
+            token_expires_at: storedExpiry,
+            needs_reauth: false,
+          }));
+        },
+      },
+    });
+
+    const result = await refreshYoutubeAccessToken({
+      supabase: db,
+      account: {
+        id: "account-1",
+        accessToken: storedToken,
+        refreshToken: ["revoked", "grant"].join("-"),
+        tokenExpiresAt: storedExpiry,
+      },
+      nowMs: NOW,
+      fetchImpl: () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: "invalid_grant" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+    });
+
+    assertEquals(result.accessToken, null);
+    assertEquals(result.needsReauth, true);
+    assertEquals(result.reason, "invalid_grant");
+    assertEquals(result.retryable, false);
+  });
+});
+
+Deno.test("JIT refusal log entry skips retryable refusals and keeps error rows for non-retryable failures", () => {
+  const ctx = {
+    accountId: "account-1",
+    postId: "post-1",
+    postSource: "scheduled",
+    userId: "user-1",
+  };
+
+  // Ordinary lease contention and other retryable refusals must not emit an
+  // error-level system_logs row.
+  assertEquals(
+    youtubeJitRefusalLogEntry({ reason: "refresh_in_progress", retryable: true }, ctx),
+    null,
+  );
+  assertEquals(
+    youtubeJitRefusalLogEntry({ reason: "lease_acquire_failed", retryable: true }, ctx),
+    null,
+  );
+  assertEquals(
+    youtubeJitRefusalLogEntry({ reason: null, retryable: false }, ctx),
+    null,
+  );
+
+  // Non-retryable failures keep the error-level jit_refresh_failed log row.
+  const entry = youtubeJitRefusalLogEntry({ reason: "invalid_grant", retryable: false }, ctx);
+  assertEquals(entry, {
+    level: "error",
+    category: "token",
+    source: "process-post-jit",
+    message: "YouTube JIT token refresh failed (source: scheduled)",
+    user_id: "user-1",
+    metadata: {
+      event: "jit_refresh_failed",
+      platform: "youtube",
+      account_id: "account-1",
+      post_id: "post-1",
+      post_source: "scheduled",
+      error: "invalid_grant",
+    },
+  });
 });

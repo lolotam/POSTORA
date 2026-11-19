@@ -31,6 +31,12 @@
 --      token (the trigger deletes the lease mid-flight) and then deletes its
 --      own lease again as a no-op.
 --
+--   M4 20261120110000 granted SELECT on youtube_token_refresh_leases to
+--      service_role, which exposed live lease_token values directly and
+--      contradicted acquire_youtube_refresh_lease's "Never return the live
+--      holder's lease_token" contract. Revoke SELECT from service_role so all
+--      access goes strictly through the SECURITY DEFINER RPCs.
+--
 -- APPLY AS supabase_admin, the migration role of this stack, exactly like
 -- 20261120110000.
 -- ===========================================================================
@@ -416,9 +422,15 @@ REVOKE ALL ON FUNCTION public.delete_youtube_refresh_lease_on_credential_change(
   FROM PUBLIC, anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
--- 4. Privileges of the replaced functions are restated so this file stays
---    self-contained and load-bearing the same way 20261120110000 is.
+-- 4. Privileges of the lease table and replaced functions are restated so this
+--    file stays self-contained and load-bearing the same way 20261120110000 is.
+--    M4: revoke SELECT on youtube_token_refresh_leases from service_role so
+--    live lease_token values cannot be read directly; the four SECURITY DEFINER
+--    RPCs remain the sole interface.
 -- ---------------------------------------------------------------------------
+REVOKE ALL ON public.youtube_token_refresh_leases
+  FROM PUBLIC, anon, authenticated, service_role;
+
 REVOKE ALL ON FUNCTION public.acquire_youtube_refresh_lease(UUID, INTEGER)
   FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.release_youtube_refresh_lease(UUID, UUID)
@@ -458,6 +470,13 @@ BEGIN
   ASSERT NOT has_table_privilege('authenticated', 'public.youtube_token_refresh_leases', 'SELECT')
      AND NOT has_table_privilege('anon', 'public.youtube_token_refresh_leases', 'SELECT'),
     'browser roles must not read youtube_token_refresh_leases';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM pg_class c, aclexplode(c.relacl) x
+     WHERE c.oid = 'public.youtube_token_refresh_leases'::regclass
+       AND x.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'service_role')
+  ), 'service_role must hold no privilege on youtube_token_refresh_leases';
+  ASSERT NOT has_table_privilege('service_role', 'public.youtube_token_refresh_leases', 'SELECT'),
+    'service_role must not read live lease_token values directly';
   ASSERT NOT EXISTS (
     SELECT 1 FROM pg_proc p, aclexplode(p.proacl) x
      WHERE p.oid IN (
