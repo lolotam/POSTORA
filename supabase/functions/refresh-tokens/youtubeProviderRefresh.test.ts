@@ -260,6 +260,7 @@ Deno.test("refreshNativeYouTubeAccount marks needs_reauth once on invalid_grant"
 Deno.test("admin force refresh recovers a needs_reauth account under the lease and clears the flag", async () => {
   const now = Date.parse("2026-11-20T12:00:00.000Z");
   let stored = false;
+  let readNeedsReauth: boolean | null = null;
   const result = await refreshNativeYouTubeAccount(
     {
       id: "account-1",
@@ -274,6 +275,18 @@ Deno.test("admin force refresh recovers a needs_reauth account under the lease a
       force: true,
       adminRecovery: true,
       store: leaseStore({
+        // The database row is the flagged one: the under-lease guard must be
+        // exercised, not just the snapshot fast path.
+        readAccount: async () => {
+          readNeedsReauth = true;
+          return {
+            id: "account-1",
+            access_token: ["stale", "acc"].join("-"),
+            refresh_token: ["old", "ref"].join("-"),
+            token_expires_at: new Date(now - 60_000).toISOString(),
+            needs_reauth: true,
+          };
+        },
         storeTokenWithLease: async () => {
           stored = true;
           return { ok: true };
@@ -292,6 +305,7 @@ Deno.test("admin force refresh recovers a needs_reauth account under the lease a
   assertEquals(result.status, "refreshed");
   assertEquals(result.accessToken, ["recovered", "acc"].join("-"));
   assertEquals(stored, true);
+  assertEquals(readNeedsReauth, true);
 });
 
 Deno.test("without the admin recovery option a needs_reauth account is still refused", async () => {
