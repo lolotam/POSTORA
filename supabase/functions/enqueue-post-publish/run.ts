@@ -7,12 +7,13 @@ const BodySchema = z.discriminatedUnion("mode", [
   z.object({
     post_id: z.string().uuid(), mode: z.literal("retry"),
     account_ids: z.array(z.string().uuid()).min(1).max(50).optional(),
+    replacement_media_ids: z.array(z.string().uuid()).min(1).max(50).optional(),
   }).strict(),
 ]);
 
 export type RetryResult =
   | { status: "accepted"; requested_at: string; account_ids: string[]; platforms: string[] }
-  | { status: "refused"; reason: "not_found" | "not_retryable" | "no_targets" };
+  | { status: "refused"; reason: "not_found" | "not_retryable" | "no_targets" | "invalid_media" };
 
 export interface KickPayload {
   post_id: string;
@@ -22,7 +23,7 @@ export interface KickPayload {
 export interface EnqueueDependencies {
   requestStoryRetry?(postId: string, resultId: string, userId: string): Promise<boolean>;
   requestImmediatePublish(postId: string, userId: string): Promise<string | null>;
-  requestPostRetry(postId: string, userId: string, accountIds?: string[]): Promise<RetryResult>;
+  requestPostRetry(postId: string, userId: string, accountIds?: string[], replacementMediaIds?: string[]): Promise<RetryResult>;
   readPostStatus(postId: string, userId: string): Promise<string | null>;
   /** Resolves after registering bounded background work, not after publishing. */
   kick(payload: KickPayload): Promise<void>;
@@ -62,7 +63,7 @@ async function enqueue(deps: EnqueueDependencies, callerId: string, body: z.infe
     return { status: 202, body: { accepted: true, post_id: body.post_id, status: "processing" } };
   }
   if (body.mode === "retry") {
-    const retry = await deps.requestPostRetry(body.post_id, callerId, body.account_ids);
+    const retry = await deps.requestPostRetry(body.post_id, callerId, body.account_ids, body.replacement_media_ids);
     return retry.status === "accepted"
       ? await accept(deps, body.post_id, retry.requested_at)
       : await refuse(deps, callerId, body.post_id, retry.reason);

@@ -714,11 +714,13 @@ export function YouTubeSettings({
       <div className="space-y-2">
         <Label className="text-sm font-medium">{t("youtube.thumbnailUrl", "Thumbnail URL")}</Label>
         <Input
-          placeholder="https://example.com/images/thumbnail-1280x720.jpg"
+          placeholder="https://"
           value={settings.thumbnailUrl}
           onChange={(e) => onSettingsChange({ thumbnailUrl: e.target.value })}
         />
-        <p className="text-xs text-muted-foreground">{t("youtube.thumbnailSpecHelp", "JPG/PNG/GIF/BMP - ≤ 2MB recommended - ideal size 1280×720 (16:9).")}</p>
+        <p className="text-xs text-muted-foreground">
+          {t("youtube.thumbnailUrlHelp", "For direct YouTube publishing, use an HTTPS image URL from an approved media host.")}
+        </p>
       </div>
 
       {/* Auto-generated Thumbnail Dialog */}

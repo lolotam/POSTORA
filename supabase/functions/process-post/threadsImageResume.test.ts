@@ -567,6 +567,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       if (missingMedia) return Response.json([]);
       return Response.json((post.media_file_ids as string[]).map((id) => ({
         id,
+        user_id: OWNER,
         file_path: `https://media-fixture.invalid/${id}.${legacyVideoMode ? "mp4" : "jpg"}`,
         file_type: legacyVideoMode ? "video" : "image",
         storage_bucket: "openinary",
@@ -575,6 +576,11 @@ Deno.test("registered process-post durably completes single-image Threads contai
     }
     if (table === "media_file_providers") return Response.json([]);
     if (table === "app_settings") {
+      if (url.searchParams.get("key") === "eq.cdn_storage") {
+        // The CDN that serves the fixture media has to be a configured origin:
+        // a host the deployment did not name is never read from.
+        return Response.json({ value: { read_preference: "openinary", openinary: { serverUrl: "https://media-fixture.invalid" } } });
+      }
       if (url.searchParams.get("key")?.startsWith("like.n8n_webhook_")) {
         return Response.json(registeredEndpoints.map(webhook_url => ({ value: { webhook_url, is_active: true, events: ["*"] } })));
       }

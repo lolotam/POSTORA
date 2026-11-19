@@ -2,7 +2,7 @@
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logToDatabase } from "../_shared/logging.ts";
-import type { ClaimedRow, ReconcilePorts } from "./run.ts";
+import { isWellFormedClaimRow, resumePayload, type ClaimedRow, type ReconcilePorts } from "./run.ts";
 
 /** Under this function's own 60 s, so a slow resume cannot take the whole run down with it. */
 const RESUME_TIMEOUT_MS = 50_000;
@@ -19,29 +19,13 @@ export function createReconcilePorts(): ReconcilePorts {
       if (error) {
         throw new Error(`claim_post_completion_work failed: ${error.message}`);
       }
-      if (!Array.isArray(data) || data.some((row) =>
-        !row || typeof row.post_id !== "string" ||
-        (row.kind === "notification_only"
-          ? !row.candidate_id || !row.claim_id || !row.attempt_started_at || row.platform_post_id != null
-          : row.kind !== "deferred_publish" || typeof row.platform_post_id !== "string"))) {
+      if (!Array.isArray(data) || !data.every(isWellFormedClaimRow)) {
         throw new Error("claim_post_completion_work returned malformed work");
       }
       return data as ClaimedRow[];
     },
     async resume(row) {
-      const isNotificationOnly = row.kind === "notification_only";
-      const payload = isNotificationOnly
-        ? {
-            post_id: row.post_id,
-            notification_only: true,
-            attempt_started_at: row.attempt_started_at,
-            candidate_id: row.candidate_id,
-            notification_claim_id: row.claim_id,
-          }
-        : {
-            post_id: row.post_id,
-            resume_platform_post_id: row.platform_post_id,
-          };
+      const payload = resumePayload(row);
       const response = await fetch(`${supabaseUrl}/functions/v1/process-post`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },

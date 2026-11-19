@@ -6,18 +6,59 @@ import { buildPostoraFileName } from "@/lib/postoraFileName";
 import { isMediaQuotaMessage, mediaQuotaHumanMessage } from "@/components/media/uploadErrors";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
+import { idsConfirmedDeleted } from "@/lib/mediaDelete";
 import {
   PostWithResults, invalidatePostQueries,
 } from "./historyUtils";
-import { failedRetryTargets } from "./retryTargets";
+import { failedRetryTargets, nonRetryableOutcome } from "./retryTargets";
 import type { Platform } from "@/lib/types";
+
+/** A retry the server refused for a known reason, so the caller can react to the reason. */
+export class InvalidMediaRetryError extends Error {
+  readonly reason = "invalid_media";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidMediaRetryError";
+  }
+}
+
+export function isInvalidMediaRetryError(error: unknown): error is InvalidMediaRetryError {
+  return error instanceof InvalidMediaRetryError;
+}
+
+/**
+ * Removes uploaded objects from storage and reports whether the removal was
+ * confirmed. A caller that does not get a confirmation must keep the library
+ * rows that still point at a live object instead of claiming a clean rollback.
+ */
+const removeUploadedObjects = async (paths: string[]): Promise<boolean> => {
+  if (paths.length === 0) return true;
+  try {
+    const { error } = await supabase.storage.from("media").remove(paths);
+    if (error) {
+      console.warn(`Could not remove the uploaded media objects; they stay in storage: ${error.message}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn(`Could not remove the uploaded media objects; they stay in storage: ${error instanceof Error ? error.message : error}`);
+    return false;
+  }
+};
 
 export function usePostRetry() {
   const { toast } = useToast();
   const { t } = useTranslation("history");
-  const submitRetry = async (postId: string, accountIds?: string[]) => {
-    const acceptance = await enqueuePostPublish({ postId, mode: "retry", accountIds });
+  const submitRetry = async (postId: string, accountIds?: string[], replacementMediaIds?: string[]) => {
+    const acceptance = await enqueuePostPublish({ postId, mode: "retry", accountIds, replacementMediaIds });
     if (acceptance.accepted === false) {
+      if (acceptance.reason === "invalid_media") {
+        throw new InvalidMediaRetryError("The replacement media is unavailable. Choose files from your media library and try again.");
+      }
+      if (acceptance.reason === "no_targets") {
+        throw new Error("No destinations are currently eligible to retry. Refresh History to see the latest results.");
+      }
       throw new Error(t("common:publishing.unconfirmed", "Could not confirm the publish request. Check History for its status."));
     }
   };
@@ -42,9 +83,7 @@ export function usePostRetry() {
   const [retryMediaFiles, setRetryMediaFiles] = useState<File[]>([]);
   const [retryMediaUploading, setRetryMediaUploading] = useState(false);
   const retryMediaInputRef = useRef<HTMLInputElement>(null);
-
-  const hasTikTokFailure = (post: PostWithResults) =>
-    post.platformResults?.some((r) => r.status === "failed" && r.platform === "tiktok");
+  const uploadedRetryMedia = useRef<{ postId: string; files: File[]; ids: string[] } | null>(null);
 
   const isTikTokMediaError = (post: PostWithResults) =>
     post.platformResults?.some(
@@ -55,12 +94,12 @@ export function usePostRetry() {
     );
 
   const openRetryDialog = (post: PostWithResults) => {
-    const failedAccountIds = post.platformResults?.filter((r) => r.status === "failed" && r.social_account_id).map((r) => r.social_account_id as string) || [];
-    setRetrySelectedAccountIds(failedAccountIds);
+    setRetrySelectedAccountIds(failedRetryTargets(post.platformResults).accountIds);
     setRetryDialogPost(post);
   };
 
   const openRetryMediaDialog = (post: PostWithResults) => {
+    uploadedRetryMedia.current = null;
     setRetryMediaDialogPost(post);
     setRetryMediaFiles([]);
   };
@@ -95,20 +134,32 @@ export function usePostRetry() {
   };
 
   const handleRetryFailed = async (post: PostWithResults) => {
-    const failedPlatforms = post.platformResults?.filter((r) => r.status === "failed").map((r) => r.platform) || [];
-    if (failedPlatforms.length === 0) { toast({ title: "No failed platforms", description: "This post has no failed platforms to retry." }); return; }
-    if (hasTikTokFailure(post)) { openRetryDialog(post); return; }
+    const failedRows = post.platformResults?.filter((r) => r.status === "failed") ?? [];
+    if (failedRows.length === 0) { toast({ title: "No failed platforms", description: "This post has no failed platforms to retry." }); return; }
 
-    if (failedRetryTargets(post.platformResults).accountIds.length === 0) {
-      toast({ title: "Cannot retry automatically", description: "The failed results name no account, so they cannot be retried without posting to every account again.", variant: "destructive" });
+    const retryTargets = failedRetryTargets(post.platformResults);
+    if (retryTargets.accountIds.length === 0) {
+      const protectedOutcomes = post.platformResults?.map(nonRetryableOutcome) ?? [];
+      const uncertain = protectedOutcomes.includes("uncertain");
+      const cancelled = protectedOutcomes.includes("cancelled");
+      toast({
+        title: uncertain || cancelled ? "This result cannot be retried" : "Cannot retry automatically",
+        description: uncertain
+          ? "Its outcome is not known: the destination may already have been published, so a retry could publish a second copy. Check that account by hand."
+          : cancelled
+            ? "Publishing was cancelled for this destination."
+            : "The failed results name no account, so they cannot be retried without posting to every account again.",
+        variant: "destructive",
+      });
       return;
     }
 
+    if (retryTargets.platforms.includes("tiktok")) { openRetryDialog(post); return; }
+
     setRetryingPostId(post.id);
     try {
-      // The server selects current failed accounts atomically, including failures since the last read.
-      await submitRetry(post.id);
-      notifyRetrySubmitted(failedPlatforms as Platform[]);
+      await submitRetry(post.id, retryTargets.accountIds);
+      notifyRetrySubmitted(retryTargets.platforms as Platform[]);
       invalidatePostQueries(queryClient);
     } catch (error) {
       console.error("Retry error:", error);
@@ -131,57 +182,110 @@ export function usePostRetry() {
     } finally { setRetryLoading(false); }
   };
 
-  const handleRetryWithNewMedia = async () => {
-    if (!retryMediaDialogPost || retryMediaFiles.length === 0) return;
-    setRetryMediaUploading(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
+  const uploadRetryMedia = async (files: File[]) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Not authenticated");
 
-      const settled = await Promise.allSettled(retryMediaFiles.map(async (retryMediaFile) => {
-        const fileExt = retryMediaFile.name.split(".").pop() || "bin";
-        const fileName = `${user.id}/${await buildPostoraFileName(user.id, fileExt)}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(fileName, retryMediaFile, { cacheControl: "3600", upsert: false });
-        if (uploadError) throw uploadError;
+    const settled = await Promise.allSettled(files.map(async (retryMediaFile) => {
+      const fileExt = retryMediaFile.name.split(".").pop() || "bin";
+      const fileName = `${user.id}/${await buildPostoraFileName(user.id, fileExt)}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(fileName, retryMediaFile, { cacheControl: "3600", upsert: false });
+      if (uploadError) throw uploadError;
 
-        const isGif = retryMediaFile.type === "image/gif" || retryMediaFile.name.toLowerCase().endsWith(".gif");
-        const fileType = retryMediaFile.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
-        const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
-          user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
-        }).select().single();
-        if (mediaError) {
+      const isGif = retryMediaFile.type === "image/gif" || retryMediaFile.name.toLowerCase().endsWith(".gif");
+      const fileType = retryMediaFile.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
+      const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
+        user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
+      }).select().single();
+      if (mediaError) {
+        // The insert may have committed and its answer been lost: a gateway
+        // error after the commit is indistinguishable from a failed insert.
+        // The row is reconciled by owner and path before the cleanup, so a
+        // committed row is never left pointing at an object this path deleted.
+        const { data: committedRow, error: reconcileError } = await supabase
+          .from("media_files")
+          .select("id, file_path")
+          .eq("user_id", user.id)
+          .eq("file_path", uploadData.path)
+          .maybeSingle();
+        if (reconcileError) {
+          // The insert is ambiguous and the row cannot be read: the object
+          // stays, because deleting a committed object breaks the library row
+          // that names it.
           if (isMediaQuotaMessage(mediaError.message)) {
-            await supabase.storage.from("media").remove([uploadData.path]);
             throw new Error(mediaQuotaHumanMessage(mediaError.message));
           }
           throw mediaError;
         }
-        return newMediaFile;
-      }));
-      const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-      const stored = settled
-        .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-      if (failed) {
-        // One file failing (e.g. the daily limit) aborts the retry: drop the siblings that
-        // did land so they are not left as unreferenced library rows and storage objects.
-        if (stored.length > 0) {
-          await supabase.from("media_files").delete().in("id", stored.map((mediaFile) => mediaFile.id));
-          await supabase.storage.from("media").remove(stored.map((mediaFile) => mediaFile.file_path));
+        if (committedRow) {
+          // The insert committed: the upload stands, and the retry names the
+          // row it actually wrote.
+          return committedRow;
         }
-        throw failed.reason;
+        // The insert did not commit, and the object is already in storage:
+        // leaving it there would orphan it.
+        await removeUploadedObjects([uploadData.path]);
+        if (isMediaQuotaMessage(mediaError.message)) {
+          throw new Error(mediaQuotaHumanMessage(mediaError.message));
+        }
+        throw mediaError;
       }
-      const newMediaFiles = stored;
+      return newMediaFile;
+    }));
+    const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    const stored = settled
+      .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+    if (failed) {
+      // One file failing (e.g. the daily limit) aborts the retry: the siblings that
+      // did land must lose their storage objects first, and a library row may only
+      // be deleted once the object it names is gone.
+      if (stored.length > 0) {
+        const objectsRemoved = await removeUploadedObjects(stored.map((mediaFile) => mediaFile.file_path));
+        const outcome = idsConfirmedDeleted({
+          storageIds: stored.map((mediaFile) => mediaFile.id),
+          storageFailed: !objectsRemoved,
+          providerIds: [],
+          invokeFailed: false,
+          deletedMediaFileIds: [],
+        });
+        if (outcome.removeIds.length > 0) {
+          const { error: deleteError } = await supabase.from("media_files").delete().in("id", outcome.removeIds);
+          if (deleteError) {
+            console.warn(`Could not delete the media library rows of the rolled back upload: ${deleteError.message}`);
+          }
+        }
+        if (outcome.failedIds.length > 0) {
+          console.warn(`Media library rows kept because their storage objects could not be removed: ${outcome.failedIds.join(", ")}`);
+        }
+      }
+      throw failed.reason;
+    }
+    return stored.map((mediaFile) => mediaFile.id);
+  };
 
-      const { error: updateError } = await supabase.from("posts").update({ media_file_ids: newMediaFiles.map((mediaFile) => mediaFile.id) }).eq("id", retryMediaDialogPost.id);
-      if (updateError) throw updateError;
-
-      await submitRetry(retryMediaDialogPost.id);
+  const handleRetryWithNewMedia = async () => {
+    if (!retryMediaDialogPost || retryMediaFiles.length === 0) return;
+    setRetryMediaUploading(true);
+    try {
+      const saved = uploadedRetryMedia.current;
+      const postId = retryMediaDialogPost.id;
+      const ids = saved?.postId === postId && saved.files === retryMediaFiles
+        ? saved.ids
+        : await uploadRetryMedia(retryMediaFiles);
+      uploadedRetryMedia.current = { postId, files: retryMediaFiles, ids };
+      await submitRetry(postId, undefined, ids);
+      uploadedRetryMedia.current = null;
       notifyRetrySubmitted();
       invalidatePostQueries(queryClient);
       setRetryMediaDialogPost(null);
       setRetryMediaFiles([]);
     } catch (error) {
       console.error("Retry with media error:", error);
+      if (isInvalidMediaRetryError(error)) {
+        // The server refused these media ids: keeping them would make the next
+        // attempt reuse media it has already rejected.
+        uploadedRetryMedia.current = null;
+      }
       toast({ title: "Retry failed", description: error instanceof Error ? error.message : "Failed to retry post", variant: "destructive" });
     } finally { setRetryMediaUploading(false); }
   };

@@ -1593,6 +1593,7 @@ interface PlatformPostResult {
   error_message: string | null;
   response_data?: {
     story_job_id?: unknown;
+    publish_outcome?: unknown;
     deferred?: { media_type?: unknown; publish_outcome?: unknown } | null;
   } | null;
 }
@@ -1608,6 +1609,20 @@ interface RetrySkip {
   account_id: string | null;
   platform: string | null;
   reason: string;
+}
+
+function protectedRetryReason(row: PlatformPostResult): string | undefined {
+  if (row.response_data?.publish_outcome === "uncertain") {
+    return "Publish outcome is uncertain; reconcile it manually before any retry.";
+  }
+  if (row.response_data?.publish_outcome === "cancelled") {
+    return "Publishing for this account was cancelled.";
+  }
+  if (row.platform === "threads" && row.response_data?.deferred?.media_type === "IMAGE" &&
+      row.response_data.deferred.publish_outcome === "uncertain") {
+    return "Threads publish outcome is uncertain; reconcile it manually before any retry.";
+  }
+  return undefined;
 }
 
 // Which failed results are published again.
@@ -1626,16 +1641,17 @@ function pickRetryTargets(
 ): { targets: RetryTarget[]; skipped: RetrySkip[] } {
   // The accounts that already carry a live result for this post.
   const published = new Set<string>();
-  const uncertainAccounts = new Set<string>();
+  const protectedAccounts = new Map<string, string>();
   for (const row of rows) {
     if (!row.social_account_id) continue;
     if (row.status === "success" || row.status === "pending") {
       published.add(row.social_account_id);
     }
-    if (row.status === "failed" && row.platform === "threads" &&
-      row.response_data?.deferred?.media_type === "IMAGE" &&
-      row.response_data.deferred.publish_outcome === "uncertain") {
-      uncertainAccounts.add(row.social_account_id);
+    if (row.status === "failed") {
+      const reason = protectedRetryReason(row);
+      if (reason && (!protectedAccounts.has(row.social_account_id) || row.response_data?.publish_outcome !== "cancelled")) {
+        protectedAccounts.set(row.social_account_id, reason);
+      }
     }
   }
 
@@ -1650,9 +1666,10 @@ function pickRetryTargets(
         reason: "Use story_result_id to retry this managed Story independently." });
       continue;
     }
-    if (row.social_account_id && uncertainAccounts.has(row.social_account_id)) {
-      skipped.push({ account_id: row.social_account_id, platform: row.platform,
-        reason: "Threads publish outcome is uncertain; reconcile it manually before any retry." });
+    const protectedReason = protectedRetryReason(row) ??
+      (row.social_account_id ? protectedAccounts.get(row.social_account_id) : undefined);
+    if (protectedReason) {
+      skipped.push({ account_id: row.social_account_id, platform: row.platform, reason: protectedReason });
       continue;
     }
     const accountId = row.social_account_id;
@@ -1767,10 +1784,15 @@ function isFinalPublishRefusal(status: number): boolean {
 // decides WHICH results are published again and hands exactly those accounts
 // over. The service role is used because the publishing service is an
 // internal call, and it is the same call the create route makes.
+//
+// The claim travels with the dispatch. The route decided what to publish from
+// a snapshot of the results, and a destination may have become unsafe since;
+// the publishing service checks the claim against the durable state of the
+// post under its lock, so it publishes only what is still safe.
 async function dispatchRetry(
   deps: PostActionDeps,
   route: string,
-  request: { postId: string; targets: RetryTarget[] },
+  request: { postId: string; targets: RetryTarget[]; claimId: string },
 ): Promise<RetryDispatch> {
   const platforms = [
     ...new Set(request.targets.map((target) => target.platform)),
@@ -1799,6 +1821,11 @@ async function dispatchRetry(
           post_id: request.postId,
           platforms,
           account_ids: accountIds,
+          // The lease this route holds on the post. The publishing service
+          // checks it against the row, so a retry that lost its lease, or one
+          // whose destinations became unsafe after the read above, publishes
+          // nothing.
+          action_claim_id: request.claimId,
           // expected_scheduled_at is deliberately not sent: it makes the
           // publishing service compare the row's scheduled_at with the one
           // the caller saw, and a finished post has no scheduled instant to
@@ -1942,6 +1969,7 @@ async function clearReplacedResults(
 
   const oldIds = new Set(request.oldRows.map((row) => row.id));
   const targetAccounts = new Set(request.targets.map((target) => target.accountId));
+  const protectedResultIds = new Set(after.filter((row) => protectedRetryReason(row)).map((row) => row.id));
 
   // The rows the publish wrote: a new row for one of the retried accounts.
   const newRows = after.filter((row) =>
@@ -1961,7 +1989,7 @@ async function clearReplacedResults(
     if (!republished) continue;
     for (const row of request.oldRows) {
       if (row.social_account_id !== target.accountId) continue;
-      if (row.status !== "failed") continue;
+      if (row.status !== "failed" || protectedRetryReason(row) || protectedResultIds.has(row.id)) continue;
       if (replacedIds.includes(row.id)) continue;
       replacedIds.push(row.id);
     }
@@ -2105,6 +2133,7 @@ export async function retryFailedPost(
         409,
         "NO_FAILED_PLATFORMS",
         "This post has no failed platform result left to retry.",
+        skipped.length ? { skipped } : undefined,
       ),
     );
   }
@@ -2114,7 +2143,7 @@ export async function retryFailedPost(
     platform: target.platform,
   }));
 
-  const dispatch = await dispatchRetry(deps, route, { postId, targets });
+  const dispatch = await dispatchRetry(deps, route, { postId, targets, claimId });
   if (dispatch.kind === "pending") {
     // The publish may still be running: its answer did not come back in time,
     // or it came back as a fault that says nothing about whether the publish
@@ -2123,7 +2152,7 @@ export async function retryFailedPost(
     // let a second retry take the post and publish the same accounts again
     // while the first publish may still be running. The claim is a lease, so
     // it runs out on its own and the post is free again after it.
-    return ok({ post_id: postId, status: "results_pending", retried }, 202);
+    return ok({ post_id: postId, status: "results_pending", retried, ...(skipped.length ? { skipped } : {}) }, 202);
   }
   if (dispatch.kind === "failed") {
     // Nothing was published, so the post is free again right away.

@@ -105,6 +105,33 @@ const errorPatterns: ErrorPattern[] = [
 
   // ── Generic (all platforms) ──
   {
+    pattern: /^partner_publish_reconcile_required$/,
+    result: {
+      title: "Publication Outcome Unknown",
+      explanation: "The receipt for this destination was lost, so Postora cannot tell whether the platform already published it. Platforms record the result after they publish, so a missing receipt can belong to a publication that did happen.",
+      recommendation: "Check this account by hand before publishing again. Postora does not retry it automatically, because a retry could publish a second copy.",
+      icon: "network",
+    },
+  },
+  {
+    pattern: /^youtube_upload_reconcile_required$/,
+    result: {
+      title: "Upload Outcome Needs Verification",
+      explanation: "The video may already be on the channel: the provider may hold the upload even though Postora could not confirm the result.",
+      recommendation: "Check the channel for the video by hand. Postora does not retry it automatically, because a retry could upload a second copy.",
+      icon: "network",
+    },
+  },
+  {
+    pattern: /^youtube_upload_cancelled$/,
+    result: {
+      title: "Upload Cancelled",
+      explanation: "The post was cancelled before the upload reached the provider, so nothing was published to this account.",
+      recommendation: "Publish a new post if you want this on the account. The cancelled upload is not retried automatically.",
+      icon: "network",
+    },
+  },
+  {
     pattern: /rate.?limit/i,
     result: {
       title: "Too Many Requests",

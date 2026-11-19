@@ -8,6 +8,8 @@ export interface PlatformResult {
   status: string | null;
   social_account_id?: string | null;
   error_message?: string | null;
+  /** The provider's own record of the result, including the publish outcome marker. */
+  response_data?: Record<string, unknown> | null;
 }
 
 export interface PostWithResults {

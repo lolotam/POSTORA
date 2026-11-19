@@ -1,5 +1,12 @@
-import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { type ClaimedRow, type ReconcilePorts, type ResumeOutcome, runReconcile } from "./run.ts";
+import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  type ClaimedRow,
+  type ReconcilePorts,
+  type ResumeOutcome,
+  isWellFormedClaimRow,
+  resumePayload,
+  runReconcile,
+} from "./run.ts";
 
 function ports(options: {
   claimed?: ClaimedRow[];
@@ -126,5 +133,61 @@ Deno.test("reconciler resumes notification_only work items and aggregates outcom
   assertEquals(summary.resumed, { completed: 1 });
   assertEquals(summary.resume_errors, 0);
   assertEquals(logs.map((l) => l.level), ["info"]);
+});
+
+const UPLOAD_ROW: ClaimedRow = {
+  kind: "youtube_upload_continuation",
+  post_id: "post-upload-1",
+  attempt_started_at: "2026-11-18T00:00:00Z",
+  candidate_id: "session-1",
+  claim_id: "lease-token-1",
+};
+
+Deno.test("an upload continuation is dispatched with the token and not the session uri", () => {
+  const payload = resumePayload(UPLOAD_ROW);
+  assertEquals(payload.post_id, "post-upload-1");
+  assertEquals(payload.resume_youtube_upload_session_id, "session-1");
+  assertEquals(payload.resume_youtube_upload_lease_token, "lease-token-1");
+  assertEquals(payload.attempt_started_at, "2026-11-18T00:00:00Z");
+  // The session URI is the credential. It stays in the private session table
+  // and must never travel in the dispatch body.
+  assert(!("session_uri" in payload));
+  assert(!JSON.stringify(payload).includes("upload_id"));
+});
+
+Deno.test("a deferred publish is dispatched with its public row", () => {
+  assertEquals(resumePayload(ROW("pp-1")), {
+    post_id: "post-pp-1",
+    resume_platform_post_id: "pp-1",
+  });
+});
+
+Deno.test("a claimed upload continuation is a well formed row", () => {
+  assert(isWellFormedClaimRow(UPLOAD_ROW));
+});
+
+Deno.test("a continuation claim must have nonempty string identifiers", () => {
+  for (const malformed of [
+    { claim_id: "" }, { claim_id: 17 }, { candidate_id: [] },
+    { attempt_started_at: {} }, { post_id: " " },
+  ]) {
+    assert(!isWellFormedClaimRow({ ...UPLOAD_ROW, ...malformed }));
+  }
+});
+
+Deno.test("a claimed row that carries a public row id it should not have is refused", () => {
+  assert(!isWellFormedClaimRow({
+    kind: "youtube_upload_continuation",
+    post_id: "post-upload-1",
+    attempt_started_at: "2026-11-18T00:00:00Z",
+    candidate_id: "session-1",
+    claim_id: "lease-token-1",
+    platform_post_id: "public-row-1",
+  }));
+});
+
+Deno.test("a row of an unknown kind is refused", () => {
+  assert(!isWellFormedClaimRow({ kind: "something_else", post_id: "post-1", platform_post_id: "pp-1" }));
+  assert(!isWellFormedClaimRow(null));
 });
 
