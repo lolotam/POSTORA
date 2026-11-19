@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useOAuthRedirectHandler } from "../useOAuthRedirectHandler";
 
@@ -60,5 +60,26 @@ it("shows refreshed state and refetches account health after reconnect", () => {
   });
   expect(mocks.queryClient.refetchQueries).toHaveBeenCalledWith({
     queryKey: ["all_social_accounts"],
+  });
+});
+
+it("forwards opaque state through the app-driven YouTube callback", async () => {
+  const code = crypto.randomUUID();
+  const state = crypto.randomUUID();
+  mocks.searchParams.delete("connected");
+  mocks.searchParams.delete("reconnected");
+  mocks.searchParams.set("code", code);
+  mocks.searchParams.set("platform", "youtube");
+  mocks.searchParams.set("profile_id", "synthetic-profile");
+  mocks.searchParams.set("state", state);
+
+  renderHook(() => useOAuthRedirectHandler(handlers));
+
+  await waitFor(() => {
+    expect(handlers.handleYouTubeCallback).toHaveBeenCalledWith(
+      code,
+      "synthetic-profile",
+      state,
+    );
   });
 });

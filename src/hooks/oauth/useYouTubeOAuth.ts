@@ -38,11 +38,11 @@ export function useYouTubeOAuth(
     }
   };
 
-  const handleYouTubeCallback = async (code: string, profileId: string) => {
+  const handleYouTubeCallback = async (code: string, profileId: string, state: string) => {
     setConnectingPlatform("youtube");
     try {
       const { data, error } = await supabase.functions.invoke("youtube-oauth", {
-        body: { action: "callback", code, social_profile_id: profileId },
+        body: { action: "callback", code, state },
       });
       if (error) throw error;
       if (data?.success) {
