@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
+import { toast } from "@/hooks/use-toast";
 import { Platform } from "@/lib/types";
 
 export interface SocialProfile {
@@ -173,12 +174,37 @@ export function useEnsureDefaultProfile() {
   });
 }
 
+async function readInvokeErrorMessage(
+  data: unknown,
+  error: unknown,
+  fallback: string,
+): Promise<string> {
+  if (data && typeof data === "object" && "error" in data && typeof (data as { error?: unknown }).error === "string") {
+    return (data as { error: string }).error;
+  }
+  if (error && typeof error === "object" && "context" in error) {
+    const context = (error as { context?: unknown }).context;
+    if (context && typeof (context as Response).clone === "function") {
+      const body = await (context as Response).clone().json().catch(() => null);
+      if (body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string") {
+        return (body as { error: string }).error;
+      }
+    }
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
 export function useDisconnectAccountFromProfile() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (accountId: string) => {
-      const { data: account, error: lookupError } = await supabase.from("social_accounts").select("platform").eq("id", accountId).maybeSingle();
+      const { data: account, error: lookupError } = await supabase
+        .from("social_accounts")
+        .select("platform, auth_provider")
+        .eq("id", accountId)
+        .maybeSingle();
       if (lookupError) throw lookupError;
       if (account?.platform === "tiktok") {
         // Withdraw Postora's TikTok authorization first, so reconnecting shows TikTok's permission screen.
@@ -191,6 +217,20 @@ export function useDisconnectAccountFromProfile() {
         const { error: revokeError } = await supabase.functions.invoke("facebook-oauth", { body: { action: "disconnect", social_account_id: accountId } });
         // Best effort, like TikTok: removing the account must not depend on Meta being reachable.
         if (revokeError) console.warn("Meta grant withdrawal before account removal failed:", revokeError);
+      }
+      if (account?.platform === "youtube" && account.auth_provider !== "composio") {
+        // Fail closed for native YouTube: if Google revoke fails on the last active channel
+        // of a grant, abort so local credentials and UI state do not claim a false disconnect.
+        const { data: disconnectData, error: revokeError } = await supabase.functions.invoke("youtube-oauth", {
+          body: { action: "disconnect", account_id: accountId },
+        });
+        if (revokeError || !disconnectData?.success) {
+          throw new Error(await readInvokeErrorMessage(
+            disconnectData,
+            revokeError,
+            "Failed to disconnect YouTube account. Please try again.",
+          ));
+        }
       }
 
       const { error } = await supabase
@@ -205,6 +245,16 @@ export function useDisconnectAccountFromProfile() {
       await queryClient.refetchQueries({ queryKey: ["social_accounts_by_profile"] });
       await queryClient.refetchQueries({ queryKey: ["social_profiles"] });
       await queryClient.refetchQueries({ queryKey: ["all_social_accounts"] });
+    },
+    onError: (error: unknown) => {
+      const description = error instanceof Error && error.message
+        ? error.message
+        : "Failed to disconnect account.";
+      toast({
+        title: "Disconnect failed",
+        description,
+        variant: "destructive",
+      });
     },
   });
 }

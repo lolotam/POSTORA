@@ -189,7 +189,7 @@ export default function Profiles() {
         description: t("profiles.toast.disconnectedDesc", "Your {{platform}} account has been disconnected.", { platform: getPlatformName(account.platform) }),
       });
     } catch {
-      toast({ title: t("common:error", "Error"), description: t("profiles.toast.disconnectFailed", "Failed to disconnect account."), variant: "destructive" });
+      // Destructive error toast is surfaced by useDisconnectAccountFromProfile.onError.
     }
     setDisconnectAccount(null);
   };
@@ -362,12 +362,16 @@ export default function Profiles() {
         account={pendingWhatsAppDelete}
         onCancel={() => setPendingWhatsAppDelete(null)}
         onConfirm={async (id) => {
-          await disconnectAccountMutation.mutateAsync(id);
-          toast({
-            title: t("profiles.toast.disconnected", "Account disconnected"),
-            description: t("profiles.toast.disconnectedDesc", "Your {{platform}} account has been disconnected.", { platform: getPlatformName("whatsapp") }),
-          });
-          setPendingWhatsAppDelete(null);
+          try {
+            await disconnectAccountMutation.mutateAsync(id);
+            toast({
+              title: t("profiles.toast.disconnected", "Account disconnected"),
+              description: t("profiles.toast.disconnectedDesc", "Your {{platform}} account has been disconnected.", { platform: getPlatformName("whatsapp") }),
+            });
+            setPendingWhatsAppDelete(null);
+          } catch {
+            // Destructive error toast is surfaced by useDisconnectAccountFromProfile.onError.
+          }
         }}
       />
 

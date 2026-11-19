@@ -7,6 +7,7 @@ import {
   NoYouTubeChannelError,
   type YouTubeOAuthPorts,
 } from "./handler.ts";
+import { revokeGoogleToken } from "./revoke.ts";
 
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID") ?? "";
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "";
@@ -105,6 +106,7 @@ const ports: YouTubeOAuthPorts = {
         },
       };
     },
+    revoke: (token) => revokeGoogleToken(fetch, token),
   },
   accounts: {
     findDefaultProfile: async (userId) => {
@@ -149,6 +151,61 @@ const ports: YouTubeOAuthPorts = {
         .single();
       if (error || !data) throw rpcFailure(error ?? {});
       await recordGrantedScopes(admin, data.id, input.grantedScope);
+    },
+    load: async ({ accountId, userId }) => {
+      const { data, error } = await admin
+        .from("social_accounts")
+        .select("id, user_id, access_token, refresh_token, is_active, auth_provider, account_metadata")
+        .eq("id", accountId)
+        .eq("user_id", userId)
+        .eq("platform", "youtube")
+        .maybeSingle();
+      if (error) throw rpcFailure(error);
+      if (!data || data.auth_provider === "composio") return null;
+      const metadata = data.account_metadata;
+      return {
+        id: data.id as string,
+        userId: data.user_id as string,
+        accessToken: (data.access_token as string | null) ?? null,
+        refreshToken: (data.refresh_token as string | null) ?? null,
+        isActive: Boolean(data.is_active),
+        accountMetadata: metadata && typeof metadata === "object" && !Array.isArray(metadata)
+          ? (metadata as Record<string, unknown>)
+          : null,
+      };
+    },
+    countActiveSharingGrant: async ({ userId, excludeAccountId, refreshToken }) => {
+      const { count, error } = await admin
+        .from("social_accounts")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("platform", "youtube")
+        .eq("is_active", true)
+        .eq("refresh_token", refreshToken)
+        .neq("id", excludeAccountId);
+      if (error || count === null) throw rpcFailure(error ?? {});
+      return count;
+    },
+    clearCredentials: async ({ accountId, userId, updatedAt, accountMetadata }) => {
+      const { data, error } = await admin
+        .from("social_accounts")
+        .update({
+          access_token: null,
+          refresh_token: null,
+          token_expires_at: null,
+          is_active: false,
+          needs_reauth: false,
+          failure_count: 0,
+          last_refresh_error: null,
+          account_metadata: accountMetadata,
+          updated_at: updatedAt,
+        })
+        .eq("id", accountId)
+        .eq("user_id", userId)
+        .eq("platform", "youtube")
+        .select("id")
+        .maybeSingle();
+      if (error || !data) throw rpcFailure(error ?? {});
     },
   },
   clock: { now: () => new Date() },

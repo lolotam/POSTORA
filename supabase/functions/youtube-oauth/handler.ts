@@ -1,10 +1,14 @@
 import { z } from "npm:zod@3.23.8";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { safeReturnTo } from "../_shared/oauthState.ts";
+import type { GoogleRevokeResult } from "./revoke.ts";
+
+export type { GoogleRevokeResult };
 
 const DEFAULT_RETURN_TO = "https://postora.cloud/profiles";
 const ATTEMPT_TTL_SECONDS = 600;
 const GENERIC_ERROR = "Authentication failed. Please try again.";
+const DISCONNECT_GENERIC_ERROR = "Failed to disconnect YouTube account. Please try again.";
 const NO_CHANNEL_ERROR = "The Google account you selected has no YouTube channel. Please sign in with a Google account that has an active YouTube channel.";
 
 export class NoYouTubeChannelError extends Error {
@@ -33,6 +37,15 @@ export interface YouTubeAccountSave {
   grantedScope?: string;
 }
 
+export interface YouTubeDisconnectAccount {
+  id: string;
+  userId: string;
+  accessToken: string | null;
+  refreshToken: string | null;
+  isActive: boolean;
+  accountMetadata: Record<string, unknown> | null;
+}
+
 export interface YouTubeOAuthPorts {
   auth: {
     authenticate(req: Request, bodyUserId?: string): Promise<{ userId: string }>;
@@ -56,10 +69,23 @@ export interface YouTubeOAuthPorts {
       scope?: string;
       channel: { id: string; title: string; avatarUrl: string | null };
     }>;
+    revoke(token: string): Promise<GoogleRevokeResult>;
   };
   accounts: {
     findDefaultProfile(userId: string): Promise<string | null>;
     save(input: YouTubeAccountSave): Promise<void>;
+    load(input: { accountId: string; userId: string }): Promise<YouTubeDisconnectAccount | null>;
+    countActiveSharingGrant(input: {
+      userId: string;
+      excludeAccountId: string;
+      refreshToken: string;
+    }): Promise<number>;
+    clearCredentials(input: {
+      accountId: string;
+      userId: string;
+      updatedAt: string;
+      accountMetadata: Record<string, unknown>;
+    }): Promise<void>;
   };
   clock: { now(): Date };
   log: {
@@ -84,6 +110,16 @@ const CallbackSchema = z.object({
   code: z.string().min(1).max(4096),
   state: z.string().min(1).max(256),
 });
+const DisconnectSchema = z.object({
+  action: z.literal("disconnect"),
+  account_id: z.string().uuid(),
+});
+
+function stripGrantMetadata(metadata: Record<string, unknown> | null): Record<string, unknown> {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
+  const { granted_scopes: _removed, ...rest } = metadata;
+  return rest;
+}
 
 function json(req: Request, body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -135,8 +171,77 @@ export function createYouTubeOAuthHandler(
     } catch {
       console.warn({ event: "youtube_oauth_refusal_log_failed", action, reason });
     }
+    const serverError = action === "disconnect" ? DISCONNECT_GENERIC_ERROR : GENERIC_ERROR;
     // Server-side failures never expose their internal reason to the caller.
-    return json(req, { error: status >= 500 ? GENERIC_ERROR : reason }, status);
+    return json(req, { error: status >= 500 ? serverError : reason }, status);
+  }
+
+  async function handleDisconnect(
+    req: Request,
+    body: unknown,
+    userId: string,
+  ): Promise<Response> {
+    const parsed = DisconnectSchema.safeParse(body);
+    if (!parsed.success) return refuse(req, "disconnect", "invalid_request", userId, 400);
+    const accountId = parsed.data.account_id;
+
+    let account: YouTubeDisconnectAccount | null;
+    try {
+      account = await ports.accounts.load({ accountId, userId });
+    } catch {
+      return refuse(req, "disconnect", "account_read_failed", userId, 500);
+    }
+    if (!account || account.userId !== userId) {
+      return refuse(req, "disconnect", "account_not_found", userId, 404);
+    }
+
+    let revoked = false;
+    let reason: "missing_grant" | "grant_shared" | "already_invalid" | null = null;
+    const refreshToken = account.refreshToken?.trim() || null;
+
+    if (!refreshToken) {
+      reason = "missing_grant";
+    } else {
+      let otherActiveCount: number;
+      try {
+        otherActiveCount = await ports.accounts.countActiveSharingGrant({
+          userId,
+          excludeAccountId: account.id,
+          refreshToken,
+        });
+      } catch {
+        return refuse(req, "disconnect", "grant_count_failed", userId, 500);
+      }
+
+      if (otherActiveCount > 0) {
+        reason = "grant_shared";
+      } else {
+        let revokeResult: GoogleRevokeResult;
+        try {
+          revokeResult = await ports.google.revoke(refreshToken);
+        } catch {
+          return refuse(req, "disconnect", "google_revoke_failed", userId, 502);
+        }
+        if (!revokeResult.ok) {
+          return refuse(req, "disconnect", revokeResult.reason, userId, 502);
+        }
+        revoked = true;
+        reason = revokeResult.alreadyInvalid ? "already_invalid" : null;
+      }
+    }
+
+    try {
+      await ports.accounts.clearCredentials({
+        accountId: account.id,
+        userId,
+        updatedAt: ports.clock.now().toISOString(),
+        accountMetadata: stripGrantMetadata(account.accountMetadata),
+      });
+    } catch {
+      return refuse(req, "disconnect", "account_clear_failed", userId, 500);
+    }
+
+    return json(req, { success: true, revoked, reason });
   }
 
   async function consume(
@@ -251,7 +356,7 @@ export function createYouTubeOAuthHandler(
     const action = body && typeof body === "object"
       ? (body as Record<string, unknown>).action
       : undefined;
-    if (action !== "authorize" && action !== "callback") {
+    if (action !== "authorize" && action !== "callback" && action !== "disconnect") {
       return refuse(req, "request", "Invalid action", null, 400);
     }
 
@@ -260,6 +365,10 @@ export function createYouTubeOAuthHandler(
       userId = (await ports.auth.authenticate(req, bodyUserId(body))).userId;
     } catch {
       return refuse(req, action, "Unauthorized", null, 401);
+    }
+
+    if (action === "disconnect") {
+      return handleDisconnect(req, body, userId);
     }
 
     if (action === "authorize") {
