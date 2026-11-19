@@ -309,23 +309,46 @@ export async function exchangeGoogleRefreshToken(
   };
 }
 
+interface RefreshQueryResult {
+  data: unknown;
+  error: unknown;
+}
+
+/** The client surface the lease store uses; rows stay `unknown` and are narrowed where read. */
+interface YouTubeRefreshClient {
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<RefreshQueryResult>;
+  from(table: string): {
+    select(columns: string): {
+      eq(column: string, value: string): { maybeSingle(): PromiseLike<RefreshQueryResult> };
+    };
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 /**
- * Supabase service-role adapter for the YouTube refresh lease RPCs.
- * Explicit `any` is confined to this infrastructure seam (ARCHITECTURE.md §31).
+ * Supabase service-role adapter for the YouTube refresh lease RPCs. The parameter is
+ * `unknown` because callers hold clients created against different supabase-js versions
+ * and a typed client overflows TypeScript's instantiation depth (TS2589); it is narrowed
+ * to the small surface above on entry.
  */
-// deno-lint-ignore no-explicit-any
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- callers hold clients from different supabase-js versions and a typed client overflows TypeScript's instantiation depth (TS2589)
-export function createSupabaseYouTubeRefreshStore(supabase: any): YouTubeRefreshStore {
+export function createSupabaseYouTubeRefreshStore(admin: unknown): YouTubeRefreshStore {
+  const supabase = admin as YouTubeRefreshClient;
   return {
     async acquireLease(accountId, ttlSeconds) {
-      const { data, error } = await supabase.rpc(
+      const { data: raw, error } = await supabase.rpc(
         "acquire_youtube_refresh_lease",
         {
           p_account_id: accountId,
           p_ttl_seconds: ttlSeconds,
         },
       );
-      if (error || !data || typeof data !== "object") {
+      const data = asRecord(raw);
+      if (error || !data) {
         return { ok: false, reason: "lease_acquire_failed" };
       }
       if (data.ok === true && typeof data.lease_token === "string") {
@@ -357,7 +380,7 @@ export function createSupabaseYouTubeRefreshStore(supabase: any): YouTubeRefresh
     },
 
     async readAccount(accountId) {
-      const { data, error } = await supabase
+      const { data: raw, error } = await supabase
         .from("social_accounts")
         .select(
           "id, access_token, refresh_token, token_expires_at, needs_reauth, is_active, auth_provider",
@@ -367,6 +390,7 @@ export function createSupabaseYouTubeRefreshStore(supabase: any): YouTubeRefresh
       if (error) {
         throw new Error("youtube_account_read_failed");
       }
+      const data = asRecord(raw);
       if (!data) return null;
       return {
         id: String(data.id),
@@ -388,7 +412,7 @@ export function createSupabaseYouTubeRefreshStore(supabase: any): YouTubeRefresh
     },
 
     async storeTokenWithLease(input) {
-      const { data, error } = await supabase.rpc(
+      const { data: raw, error } = await supabase.rpc(
         "store_youtube_refreshed_token_with_lease",
         {
           p_account_id: input.accountId,
@@ -399,7 +423,8 @@ export function createSupabaseYouTubeRefreshStore(supabase: any): YouTubeRefresh
           p_granted_scopes: input.grantedScopes,
         },
       );
-      if (error || !data || typeof data !== "object") {
+      const data = asRecord(raw);
+      if (error || !data) {
         return { ok: false, reason: "store_failed" };
       }
       if (data.ok === true) return { ok: true };
@@ -410,7 +435,7 @@ export function createSupabaseYouTubeRefreshStore(supabase: any): YouTubeRefresh
     },
 
     async recordFailureWithLease(input) {
-      const { data, error } = await supabase.rpc(
+      const { data: raw, error } = await supabase.rpc(
         "record_youtube_refresh_failure_with_lease",
         {
           p_account_id: input.accountId,
@@ -421,7 +446,8 @@ export function createSupabaseYouTubeRefreshStore(supabase: any): YouTubeRefresh
           p_last_alert_sent_at: input.lastAlertSentAt ?? null,
         },
       );
-      if (error || !data || typeof data !== "object") {
+      const data = asRecord(raw);
+      if (error || !data) {
         return { ok: false, reason: "failure_record_failed" };
       }
       if (data.ok === true) {
