@@ -621,6 +621,86 @@ Deno.test("force with no known prior token never reports reused; the lease holde
   if (reuse.ok) assertEquals(reuse.status, "reused");
 });
 
+Deno.test("adminRecovery on a flagged row exchanges instead of reusing a fresh token", async () => {
+  // The whole point of admin recovery is to re-test the grant at Google: a
+  // fresh token on a flagged row must NOT be reported as reused, or the flag
+  // never clears. An unflagged fresh row still reuses (second half).
+  const { state, store } = makeFakeStore({
+    account: {
+      id: ACCOUNT_ID,
+      access_token: synth("fresh", "flagged"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: FRESH_AT,
+      needs_reauth: true,
+    },
+  });
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("prior", "tok"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+      needs_reauth: true,
+    },
+    adminRecovery: true,
+    force: true,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: synth("recovered", "tok"),
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: null,
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "refreshed");
+    assertEquals(outcome.accessToken, synth("recovered", "tok"));
+  }
+  assertEquals(state.stores.length, 1);
+  assertEquals(state.account?.needs_reauth, false);
+});
+
+Deno.test("an unflagged row with a fresh token still reuses under force", async () => {
+  const storedAccess = synth("fresh", "unflagged");
+  const { state, store } = makeFakeStore({
+    account: {
+      id: ACCOUNT_ID,
+      access_token: storedAccess,
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: FRESH_AT,
+      needs_reauth: false,
+    },
+  });
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("different", "prior"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+    },
+    adminRecovery: true,
+    force: true,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => {
+      throw new Error("an unflagged fresh token must be reused, not re-fetched");
+    },
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "reused");
+    assertEquals(outcome.accessToken, storedAccess);
+  }
+  assertEquals(state.stores.length, 0);
+});
+
 Deno.test("provider refusal log maps OAuth codes to fixed labels and never echoes raw provider error text", async () => {
   await withGoogleEnv(async () => {
     const lines: string[] = [];

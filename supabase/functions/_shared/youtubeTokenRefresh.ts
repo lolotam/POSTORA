@@ -169,6 +169,10 @@ function isReusableFreshToken(
   priorAccessToken: string | null | undefined,
 ): fresh is YouTubeStoredAccount & { access_token: string } {
   if (!fresh.access_token) return false;
+  // Both token-reuse success shortcuts refuse a flagged row: under admin
+  // recovery the exchange must run so the store clears the flag, and a
+  // flagged row was never a healthy token to reuse.
+  if (fresh.needs_reauth === true) return false;
   if (youtubeTokenNeedsRefresh(fresh.token_expires_at, nowMs, windowMs)) {
     return false;
   }
