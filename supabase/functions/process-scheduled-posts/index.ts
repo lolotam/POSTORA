@@ -1,6 +1,7 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { mergeDuePosts } from "./dueRequests.ts";
 import { markScheduledPostFailed } from "./markScheduledFailed.ts";
+import { youtubePostDeferral, type ScheduledYouTubeRefreshProbe } from "./youtubePostDeferral.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -13,9 +14,12 @@ import {
   refreshFacebookToken,
   refreshInstagramBusinessToken,
   refreshTikTokToken,
-  refreshYouTubeToken,
   refreshPinterestToken
 } from '../_shared/social-auth.ts';
+import {
+  createSupabaseYouTubeRefreshStore,
+  refreshYouTubeAccountToken,
+} from '../_shared/youtubeTokenRefresh.ts';
 import { metaRefreshStrategy } from '../_shared/refreshEligibility.ts';
 import { redactSensitive } from '../_shared/logging.ts';
 
@@ -193,14 +197,23 @@ Deno.serve(async (req) => {
       try {
         console.log(`Processing scheduled post: ${post.id}`);
 
-        // Check for expiring tokens before processing
+        // One probe per native YouTube account the refresh ran for. When a
+        // retryable refresh refusal leaves the post unpublishable this tick,
+        // the whole post is deferred below: process-post is not called, the
+        // post row is not written, and the next tick selects it again.
+        const youtubeProbes: ScheduledYouTubeRefreshProbe[] = [];
+
+        // Check for expiring tokens before processing. is_active matches the
+        // publish path's own filter: an inactive account never refreshes here
+        // and never defers the post on a refresh refusal.
         if (post.platforms && Array.isArray(post.platforms) && post.platforms.length > 0) {
           // Use selected_account_ids from metadata to only refresh relevant accounts
           const selectedAccountIds = post.metadata?.selected_account_ids;
           let accountQuery = supabaseAdmin
             .from('social_accounts')
             .select('*')
-            .eq('user_id', post.user_id);
+            .eq('user_id', post.user_id)
+            .eq('is_active', true);
 
           if (selectedAccountIds && Array.isArray(selectedAccountIds) && selectedAccountIds.length > 0) {
             accountQuery = accountQuery.in('id', selectedAccountIds);
@@ -213,7 +226,54 @@ Deno.serve(async (req) => {
           const { data: accounts } = await accountQuery;
 
           if (accounts) {
-            for (const account of accounts as SocialAccount[]) {
+            for (const account of accounts as (SocialAccount & { auth_provider?: string | null; needs_reauth?: boolean | null; is_active?: boolean | null })[]) {
+              if (account.platform === 'youtube') {
+                if (account.auth_provider === 'composio') continue;
+                const ytOutcome = await refreshYouTubeAccountToken({
+                  accountId: account.id,
+                  snapshot: {
+                    access_token: account.access_token ?? null,
+                    refresh_token: account.refresh_token ?? null,
+                    token_expires_at: account.token_expires_at ?? null,
+                    needs_reauth: account.needs_reauth === true,
+                  },
+                  store: createSupabaseYouTubeRefreshStore(supabaseAdmin),
+                });
+                youtubeProbes.push({
+                  accountId: account.id,
+                  platform: account.platform,
+                  authProvider: account.auth_provider ?? null,
+                  isActive: account.is_active !== false,
+                  refreshRefusalReason: ytOutcome.ok ? null : ytOutcome.reason,
+                  refreshRefusalRetryable: ytOutcome.ok ? false : ytOutcome.retryable,
+                  storedAccessToken: account.access_token ?? null,
+                  storedTokenExpiresAt: account.token_expires_at ?? null,
+                });
+                if (ytOutcome.ok) {
+                  if (ytOutcome.status !== 'fresh') {
+                    console.log(`[JIT-SCHEDULED] YouTube token ${ytOutcome.status} for account ${account.id} (post: ${post.id})`);
+                  }
+                } else {
+                  console.warn(`[JIT-SCHEDULED] YouTube token not refreshed for account ${account.id} (reason: ${ytOutcome.reason}, post: ${post.id})`);
+                  await supabaseAdmin.from('system_logs').insert({
+                    level: 'warn',
+                    category: 'token',
+                    source: 'process-scheduled-posts',
+                    message: `Token refresh failed for youtube (${ytOutcome.reason})`,
+                    user_id: post.user_id,
+                    metadata: {
+                      post_id: post.id,
+                      platform: account.platform,
+                      account_id: account.id,
+                      reason: ytOutcome.reason,
+                      retryable: ytOutcome.retryable,
+                      needs_reauth: ytOutcome.needsReauth,
+                    },
+                  });
+                }
+                continue;
+              }
+
               if (isTokenExpiring(account.token_expires_at, account.platform)) {
                 console.log(`[JIT-SCHEDULED] Token expiring for ${account.platform} (User: ${account.user_id}, post: ${post.id}), refreshing...`);
                 let refreshResult = null;
@@ -242,9 +302,6 @@ Deno.serve(async (req) => {
                     }
                     case 'tiktok':
                       refreshResult = await refreshTikTokToken(account);
-                      break;
-                    case 'youtube':
-                      refreshResult = await refreshYouTubeToken(account);
                       break;
                     case 'pinterest':
                       refreshResult = await refreshPinterestToken(account);
@@ -295,6 +352,33 @@ Deno.serve(async (req) => {
               }
             }
           }
+        }
+
+        // A retryable YouTube refresh refusal on an account whose stored token
+        // cannot publish yet defers the WHOLE post this tick. process-post is
+        // not called and the post row is left pending/scheduled untouched, so
+        // the next tick selects it again — a refresh that is merely contended
+        // must never end in a permanently failed post. One sanitized line is
+        // logged: reason codes only, never token material.
+        const deferral = youtubePostDeferral(youtubeProbes);
+        if (deferral.defer) {
+          console.log(`[JIT-SCHEDULED] Deferring post ${post.id} this tick: account ${deferral.accountId} refresh refused (${deferral.reason}) and the stored token cannot publish yet`);
+          await supabaseAdmin.from('system_logs').insert({
+            level: 'warn',
+            category: 'token',
+            source: 'process-scheduled-posts',
+            message: 'Scheduled publish deferred: YouTube token refresh is contended and the stored token cannot publish yet',
+            user_id: post.user_id,
+            metadata: {
+              post_id: post.id,
+              platform: 'youtube',
+              account_id: deferral.accountId,
+              reason: deferral.reason,
+              deferred: true,
+            },
+          });
+          results.push({ postId: post.id, status: 'skipped', result: { deferred: true, reason: deferral.reason } });
+          continue;
         }
 
         // Call the process-post function

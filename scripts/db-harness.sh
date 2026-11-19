@@ -167,6 +167,7 @@ SUITES=(
   meta_oauth_attempt_lifecycle.sql
   youtube_oauth_attempts.sql
   youtube_oauth_attempts_v2.sql
+  youtube_refresh_lease.sql
   meta_account_refresh_lifecycle.sql
   meta_oauth_identity_alias.sql
   meta_page_token_reconciliation.sql

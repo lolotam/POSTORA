@@ -29,24 +29,91 @@ function fakeFetch(
   return { calls, fetcher };
 }
 
-function fakeAdmin() {
+function fakeAdmin(options: {
+  account?: {
+    id?: string;
+    access_token?: string | null;
+    refresh_token?: string | null;
+    token_expires_at?: string | null;
+    needs_reauth?: boolean;
+  };
+  acquireResult?: Record<string, unknown>;
+  /** Pops before acquireResult: lets a test hand out the lease on a later call. */
+  acquireResults?: Record<string, unknown>[];
+} = {}) {
   const updates: Array<Record<string, unknown>> = [];
+  const rpcCalls: Array<{ fn: string; params: Record<string, unknown> }> = [];
+  const row = {
+    id: options.account?.id ?? "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    access_token: options.account?.access_token ?? "tok",
+    refresh_token: options.account?.refresh_token === undefined
+      ? "rt"
+      : options.account.refresh_token,
+    token_expires_at: options.account?.token_expires_at ?? new Date(0).toISOString(),
+    needs_reauth: options.account?.needs_reauth ?? false,
+    is_active: true,
+    auth_provider: "native",
+    account_metadata: {
+      granted_scopes: [
+        "https://www.googleapis.com/auth/youtube.force-ssl",
+      ],
+    },
+  };
   return {
     updates,
+    rpcCalls,
+    row,
+    rpc: (fn: string, params: Record<string, unknown>) => {
+      rpcCalls.push({ fn, params });
+      if (fn === "acquire_youtube_refresh_lease") {
+        const next = options.acquireResults?.shift();
+        return Promise.resolve({
+          data: next ?? options.acquireResult ?? {
+            ok: true,
+            lease_token: "55555555-5555-4555-8555-555555555555",
+            expires_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+          error: null,
+        });
+      }
+      if (fn === "release_youtube_refresh_lease") {
+        return Promise.resolve({ data: true, error: null });
+      }
+      if (fn === "store_youtube_refreshed_token_with_lease") {
+        row.access_token = String(params.p_new_access_token);
+        row.token_expires_at = String(params.p_new_token_expires_at);
+        row.needs_reauth = false;
+        updates.push({
+          access_token: params.p_new_access_token,
+          token_expires_at: params.p_new_token_expires_at,
+          needs_reauth: false,
+        });
+        return Promise.resolve({ data: { ok: true }, error: null });
+      }
+      if (fn === "record_youtube_refresh_failure_with_lease") {
+        const isInvalidGrant = params.p_is_invalid_grant === true;
+        if (isInvalidGrant) row.needs_reauth = true;
+        updates.push({
+          needs_reauth: isInvalidGrant,
+          last_refresh_error: params.p_error_message,
+        });
+        return Promise.resolve({
+          data: {
+            ok: true,
+            needs_reauth: isInvalidGrant,
+            failure_count: 1,
+            transitioned: isInvalidGrant,
+            enqueued: 0,
+          },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: { message: `unexpected rpc ${fn}` } });
+    },
     from: () => ({
       select: () => ({
         eq: () => ({
-          maybeSingle: () =>
-            Promise.resolve({
-              data: {
-                account_metadata: {
-                  granted_scopes: [
-                    "https://www.googleapis.com/auth/youtube.force-ssl",
-                  ],
-                },
-              },
-              error: null,
-            }),
+          maybeSingle: () => Promise.resolve({ data: { ...row }, error: null }),
         }),
       }),
       update: (patch: Record<string, unknown>) => {
@@ -268,6 +335,10 @@ const EXPIRED = { ...native, token_expires_at: new Date(0).toISOString() };
 
 function stubGlobalFetch(status: number, body: unknown): () => void {
   const original = globalThis.fetch;
+  const oldId = Deno.env.get("GOOGLE_CLIENT_ID");
+  const oldSecret = Deno.env.get("GOOGLE_CLIENT_SECRET");
+  Deno.env.set("GOOGLE_CLIENT_ID", ["yt", "client", "id"].join("-"));
+  Deno.env.set("GOOGLE_CLIENT_SECRET", ["yt", "client", "secret"].join("-"));
   globalThis.fetch = (() =>
     Promise.resolve(
       new Response(JSON.stringify(body), {
@@ -277,6 +348,10 @@ function stubGlobalFetch(status: number, body: unknown): () => void {
     )) as typeof fetch;
   return () => {
     globalThis.fetch = original;
+    if (oldId === undefined) Deno.env.delete("GOOGLE_CLIENT_ID");
+    else Deno.env.set("GOOGLE_CLIENT_ID", oldId);
+    if (oldSecret === undefined) Deno.env.delete("GOOGLE_CLIENT_SECRET");
+    else Deno.env.set("GOOGLE_CLIENT_SECRET", oldSecret);
   };
 }
 
@@ -297,13 +372,24 @@ Deno.test("a transient refresh failure is upstream and leaves token health alone
   }
 });
 
-Deno.test("an invalid_grant refresh marks the row for reconnect", async () => {
+Deno.test("an invalid_grant refresh marks the row for reconnect via lease RPC and never loops", async () => {
   const restore = stubGlobalFetch(400, { error: "invalid_grant" });
   try {
     const admin = fakeAdmin();
     const result = await listThreads(EXPIRED, { admin }, { channelId: "UC-me" });
     if (result.ok) throw new Error("expected failure");
     assertEquals(result.kind, "unauthorized");
+    assertEquals(
+      admin.rpcCalls.some((c) => c.fn === "acquire_youtube_refresh_lease"),
+      true,
+    );
+    assertEquals(
+      admin.rpcCalls.some((c) =>
+        c.fn === "record_youtube_refresh_failure_with_lease" &&
+        c.params.p_is_invalid_grant === true
+      ),
+      true,
+    );
     assertEquals(admin.updates[0].needs_reauth, true);
     assertEquals(
       admin.updates[0].last_refresh_error,
@@ -311,6 +397,109 @@ Deno.test("an invalid_grant refresh marks the row for reconnect", async () => {
     );
   } finally {
     restore();
+  }
+});
+
+Deno.test("when another worker holds the lease and wrote a fresh token, comments reuse it without calling Google OAuth", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (() => {
+    throw new Error("Google OAuth must not be called when lease is held");
+  }) as typeof fetch;
+  try {
+    const winnerToken = ["winner", "fresh", "tok"].join("-");
+    const admin = fakeAdmin({
+      acquireResult: { ok: false, reason: "lease_held" },
+      account: {
+        access_token: winnerToken,
+        token_expires_at: IN_AN_HOUR,
+        needs_reauth: false,
+      },
+    });
+    const { calls, fetcher } = fakeFetch(() => ({
+      status: 200,
+      body: { items: [thread] },
+    }));
+    const result = await listThreads({ ...EXPIRED }, { admin, fetcher }, {
+      channelId: "UC-me",
+    });
+    if (!result.ok) throw new Error(result.message);
+    assertEquals(calls.length, 1);
+    assertEquals(
+      (calls[0].init?.headers as Record<string, string>).Authorization,
+      `Bearer ${winnerToken}`,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("a 401 on a reused winner token still forces one refresh", async () => {
+  // Another worker holds the lease and has just stored a fresh winner token.
+  // The comment call reuses it, and the provider 401s it anyway (revoked
+  // early): because this call did not mint the token, one forced refresh must
+  // still happen before the call is given up on.
+  const restore = stubGlobalFetch(200, {
+    access_token: ["forced", "fresh"].join("-"),
+    expires_in: 3600,
+  });
+  try {
+    const winnerToken = ["winner", "fresh", "tok"].join("-");
+    const admin = fakeAdmin({
+      acquireResults: [{ ok: false, reason: "lease_held" }],
+      account: {
+        access_token: winnerToken,
+        token_expires_at: IN_AN_HOUR,
+        needs_reauth: false,
+      },
+    });
+    let attempts = 0;
+    const { calls, fetcher } = fakeFetch(() => {
+      attempts += 1;
+      return attempts === 1
+        ? { status: 401, body: { error: { message: "Invalid Credentials" } } }
+        : { status: 200, body: { items: [thread] } };
+    });
+    const result = await listThreads({ ...EXPIRED }, { admin, fetcher }, {
+      channelId: "UC-me",
+    });
+    if (!result.ok) throw new Error(result.message);
+    assertEquals(calls.length, 2);
+    assertEquals(
+      (calls[1].init?.headers as Record<string, string>).Authorization,
+      `Bearer ${["forced", "fresh"].join("-")}`,
+    );
+    // The forced refresh is persisted through the store RPC.
+    assertEquals(admin.updates[0].access_token, ["forced", "fresh"].join("-"));
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("when another worker holds the lease and no fresh token exists, comments return retryable upstream refusal", async () => {
+  const original = globalThis.fetch;
+  let googleCalled = false;
+  globalThis.fetch = (() => {
+    googleCalled = true;
+    throw new Error("Google OAuth must not be called when lease is held");
+  }) as typeof fetch;
+  try {
+    const admin = fakeAdmin({
+      acquireResult: { ok: false, reason: "lease_held" },
+      account: {
+        access_token: "stale-tok",
+        token_expires_at: new Date(0).toISOString(),
+        needs_reauth: false,
+      },
+    });
+    const result = await listThreads({ ...EXPIRED }, { admin }, {
+      channelId: "UC-me",
+    });
+    if (result.ok) throw new Error("expected failure");
+    assertEquals(result.kind, "upstream");
+    assertEquals(googleCalled, false);
+    assertEquals(touchedReauth(admin), false);
+  } finally {
+    globalThis.fetch = original;
   }
 });
 

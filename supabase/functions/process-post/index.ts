@@ -207,7 +207,11 @@ import {
   runYoutubeFollowUps,
   type YoutubeFollowUpDeps,
 } from "./youtubeUploadFollowUps.ts";
-import { refreshYoutubeAccessToken } from "./youtubeTokenRefresh.ts";
+import {
+  refreshYoutubeAccessToken,
+  youtubeJitRefusalLogEntry,
+  youtubeJitRefusalStopsPublish,
+} from "./youtubeTokenRefresh.ts";
 import {
   dropRecordedStory,
   readUnrecordedStory,
@@ -2960,6 +2964,7 @@ Deno.serve(async (req) => {
           accessToken: account.access_token ?? null,
           refreshToken: account.refresh_token ?? null,
           tokenExpiresAt: account.token_expires_at ?? null,
+          needsReauth: account.needs_reauth === true,
         },
       }).catch((error) => {
         console.warn("[JIT] YouTube token refresh failed:", redactProviderText(error));
@@ -2997,23 +3002,29 @@ Deno.serve(async (req) => {
 
       if (!token.reason) continue;
 
+      // A reauthentication refusal stops the publish for this account even
+      // when the cached access token still looks usable: the refresh just
+      // proved the grant is dead. Clearing the in-memory credential makes the
+      // shared admission check refuse the account before the provider is
+      // contacted — the same rule the continuation path applies.
+      if (youtubeJitRefusalStopsPublish(token)) {
+        account.access_token = null;
+      }
+
+      const errorLog = youtubeJitRefusalLogEntry(token, {
+        accountId: account.id,
+        postId: post_id,
+        postSource,
+        userId: post.user_id,
+      });
+      if (!errorLog) {
+        console.log(`[JIT] YouTube token refresh deferred for account ${account.id} (${token.reason}) (source: ${postSource}, post: ${post_id})`);
+        continue;
+      }
+
       console.warn(`[JIT] The YouTube token of account ${account.id} was not refreshed (${token.reason}) (source: ${postSource}, post: ${post_id})`);
 
-      await supabase.from('system_logs').insert({
-        level: 'error',
-        category: 'token',
-        source: 'process-post-jit',
-        message: `YouTube JIT token refresh failed (source: ${postSource})`,
-        user_id: post.user_id,
-        metadata: {
-          event: 'jit_refresh_failed',
-          platform: 'youtube',
-          account_id: account.id,
-          post_id: post_id,
-          post_source: postSource,
-          error: token.reason,
-        },
-      });
+      await supabase.from('system_logs').insert(errorLog);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -9899,20 +9910,22 @@ function buildYoutubeContinuationPorts(
           accessToken: typeof data.access_token === "string" ? data.access_token : null,
           refreshToken: typeof data.refresh_token === "string" ? data.refresh_token : null,
           tokenExpiresAt: typeof data.token_expires_at === "string" ? data.token_expires_at : null,
+          needsReauth: data.needs_reauth === true || metadata.needs_reauth === true,
         },
       });
 
       const usableToken = youtubeCredentialRefusalReason(token.accessToken, token.expiresAt)
         ? null
         : token.accessToken;
+      const needsReauth = data.needs_reauth === true || metadata.needs_reauth === true || token.needsReauth;
       return {
         id: String(data.id),
         userId: String(data.user_id),
         platform: String(data.platform),
         isActive: data.is_active !== false,
         accessToken: usableToken,
-        tokenRefreshPending: usableToken === null && token.reason !== null,
-        needsReauth: data.needs_reauth === true || metadata.needs_reauth === true,
+        tokenRefreshPending: usableToken === null && token.reason !== null && !needsReauth,
+        needsReauth,
       };
     },
 
