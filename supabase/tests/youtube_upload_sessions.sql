@@ -796,7 +796,12 @@ BEGIN
   EXCEPTION WHEN SQLSTATE 'YUS04' THEN
     RAISE NOTICE 'PASS Y7: a replaced media file refuses the resume';
   END;
+  -- The test puts the pinned version back. The identity guard keeps the
+  -- version of a row an open session reads from going back, so the reset
+  -- runs with the triggers off (superuser only, this transaction only).
+  SET LOCAL session_replication_role = replica;
   UPDATE public.media_files SET current_object_version = 1 WHERE id = v_media_a;
+  SET LOCAL session_replication_role = origin;
 
   -- The unchanged post is still carried on.
   PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
@@ -6472,6 +6477,54 @@ BEGIN
   RAISE NOTICE 'PASS Y77: the identity of an admitted media row is fenced in the database';
 END
 $y77_media_identity_guard$;
+
+-- ---------------------------------------------------------------------------
+-- Y78: THE GUARD WORKS FOR THE OWNER, AND THE VERSION ONLY MOVES FORWARD.
+--
+-- The owner is the `authenticated` role, which cannot read the session table.
+-- The guard looks that table up, so it runs as its owner: the owner's own
+-- update neither fails nor depends on a session. While a session is open the
+-- owner may write current_object_version, and writing the pinned value back
+-- must not make the fence match again.
+-- ---------------------------------------------------------------------------
+DO $y78_media_guard_as_owner$
+DECLARE
+  v_acct_c uuid;
+  v_post_c uuid;
+  v_media_c uuid;
+  v_acct_d uuid;
+  v_post_d uuid;
+  v_media_d uuid;
+  v_u_a uuid := 'b1000000-0000-4000-8000-000000000001';
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id INTO v_acct_c, v_post_c, v_media_c
+    FROM pg_temp.new_youtube_fixture('y78c') f;
+  SELECT f.account_id, f.post_id, f.media_id INTO v_acct_d, v_post_d, v_media_d
+    FROM pg_temp.new_youtube_fixture('y78d') f;
+  PERFORM public.admit_youtube_upload(v_post_d, v_acct_d, v_u_a, v_media_d, 4096, 4096, '{}'::jsonb);
+
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_a, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_u_a::text, true);
+  SET LOCAL ROLE authenticated;
+
+  -- No session reads this row: the owner's rename goes through untouched.
+  UPDATE public.media_files SET file_path = 'uploads/y78c-renamed.mp4' WHERE id = v_media_c;
+  ASSERT (SELECT current_object_version FROM public.media_files WHERE id = v_media_c) = 1,
+    'Y78 the owner update of a row no session reads keeps its version';
+
+  -- An open session reads this row: the rename bumps, and writing the pinned
+  -- version back keeps the bumped one.
+  UPDATE public.media_files SET file_path = 'uploads/y78d-renamed.mp4' WHERE id = v_media_d;
+  ASSERT (SELECT current_object_version FROM public.media_files WHERE id = v_media_d) = 2,
+    'Y78 the owner rename bumped the version of the row an open session reads';
+  UPDATE public.media_files SET current_object_version = 1 WHERE id = v_media_d;
+  ASSERT (SELECT current_object_version FROM public.media_files WHERE id = v_media_d) = 2,
+    'Y78 the pinned version written back does not make the fence match again';
+
+  RESET ROLE;
+  RAISE NOTICE 'PASS Y78: the guard works for the owner and the version only moves forward';
+END
+$y78_media_guard_as_owner$;
 
 ROLLBACK;
 
