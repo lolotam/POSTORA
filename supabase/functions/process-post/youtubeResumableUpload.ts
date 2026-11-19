@@ -141,7 +141,7 @@ export type ProviderUploadStatus =
   /** The session is gone. Whether a video exists is unknown. */
   | { kind: "expired" }
   /** The provider refused the request outright. Nothing was stored. */
-  | { kind: "rejected"; status: number; message: string }
+  | { kind: "rejected"; status: number; message: string; reason: YoutubeUploadReason }
   /**
    * The answer does not say what happened. Either the provider is unhealthy,
    * or it answered something this protocol does not allow. The upload may or
@@ -900,7 +900,14 @@ export function classifyProviderStatus(input: ProviderStatusInput): ProviderUplo
   }
 
   if (status >= 400) {
-    return { kind: "rejected", status, message: "The provider refused the upload." };
+    return {
+      kind: "rejected",
+      status,
+      message: "The provider refused the upload.",
+      // The body says WHICH refusal it was: an exhausted quota is not a
+      // credential the provider refuses, and the customer is told apart.
+      reason: providerRefusalReason(status, providerErrorBody(input.bodyText)),
+    };
   }
 
   return { kind: "unknown", reason: `The provider answered ${status}.`, retryable: false };
@@ -922,6 +929,16 @@ async function readProviderStatus(
       bodyText = await response.text();
     } catch {
       return ambiguousWrite("The upload receipt connection ended before the body was read.");
+    }
+  } else {
+    // A refusal names the reason in its body, so the body is read: a quota
+    // that is exhausted is not the same thing as a credential the provider
+    // refuses, and only the body says which one it was. The session request
+    // reads its body for the same reason.
+    try {
+      bodyText = await response.text();
+    } catch {
+      bodyText = "";
     }
   }
   const answer = classifyProviderStatus({
@@ -1116,7 +1133,7 @@ async function resolveProviderAnswer(
         ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: status.message }
         : {
           kind: "failed",
-          reason: providerRefusalReason(status.status),
+          reason: status.reason,
           detail: status.message,
           retryable: false,
         },
@@ -1166,7 +1183,7 @@ async function resolveProviderAnswer(
         ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: probed.message }
         : {
           kind: "failed",
-          reason: providerRefusalReason(probed.status),
+          reason: probed.reason,
           detail: probed.message,
           retryable: false,
         },
@@ -1358,7 +1375,7 @@ async function uploadWithSession(deps: ResumableUploadDeps): Promise<ResumableUp
           ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: probed.message }
           : {
             kind: "failed",
-            reason: providerRefusalReason(probed.status),
+            reason: probed.reason,
             detail: probed.message,
             retryable: false,
           },
@@ -1926,10 +1943,31 @@ export class YoutubeProviderTimeout extends Error {
  * proof that nothing was published. The reason code keeps them apart, and the
  * customer is told which one it was.
  */
-function providerRefusalReason(status: number): YoutubeUploadReason {
-  return status === 401 || status === 403
-    ? YOUTUBE_UPLOAD_REASON.account_unusable
-    : YOUTUBE_UPLOAD_REASON.rejected;
+function providerRefusalReason(status: number, errorData?: unknown): YoutubeUploadReason {
+  if (status === 401 || status === 403) {
+    // A quota that is exhausted is not a credential the provider refuses: the
+    // customer does not have to reconnect, and the upload can go out tomorrow.
+    // The body is the only place the provider says which one it was.
+    if (status === 403 && youtubeUploadErrorReason(errorData) === "quotaExceeded") {
+      return YOUTUBE_UPLOAD_REASON.quota_exceeded;
+    }
+    return YOUTUBE_UPLOAD_REASON.account_unusable;
+  }
+  return YOUTUBE_UPLOAD_REASON.rejected;
+}
+
+/**
+ * The provider's error body, read as the object the reason is named in.
+ *
+ * A body that is not JSON names no reason, and the refusal is classified by
+ * its status alone.
+ */
+function providerErrorBody(bodyText: string): unknown {
+  try {
+    return JSON.parse(bodyText);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1991,9 +2029,7 @@ export async function createYoutubeResumableSession(args: {
     throw new YoutubeProviderRefusal(
       response.status,
       redactProviderText(uploadFailureMessage(response.status, errorData, response.statusText)),
-      response.status === 403 && youtubeUploadErrorReason(errorData) === "quotaExceeded"
-        ? YOUTUBE_UPLOAD_REASON.quota_exceeded
-        : providerRefusalReason(response.status),
+      providerRefusalReason(response.status, errorData),
       parseRetryAfterMs(response.headers.get("retry-after"), Date.now()),
     );
   }

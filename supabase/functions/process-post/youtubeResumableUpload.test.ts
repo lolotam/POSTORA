@@ -728,6 +728,25 @@ Deno.test("quota exhaustion does not suggest reconnecting the account", async ()
   assertEquals(message.toLowerCase().includes("reconnect"), false);
 });
 
+Deno.test("a quota refusal on a write is a quota, not a credential", async () => {
+  // The session was opened, and the write that followed was refused because
+  // the quota is exhausted. That is not the same thing as a credential the
+  // provider refuses: the customer does not have to reconnect, and the
+  // message has to say that the quota is what ran out.
+  const provider = fakeProvider([
+    { status: 200, headers: { Location: SESSION_URI } },
+    { status: 403, body: JSON.stringify({
+      error: { errors: [{ reason: "quotaExceeded" }] },
+    }) },
+  ]);
+  const { outcome } = await run(provider, record());
+  assert(outcome.kind === "failed");
+  assertEquals(outcome.reason, YOUTUBE_UPLOAD_REASON.quota_exceeded);
+  const message = youtubeUploadOutcomeMessage(outcome);
+  assertStringIncludes(message, "quota");
+  assertEquals(message.toLowerCase().includes("reconnect"), false);
+});
+
 Deno.test("durable state write refused means the worker abandoned its work", async () => {
   for (const stateWrite of ["release", "checkpoint"] as const) {
     const provider = fakeProvider(stateWrite === "release"

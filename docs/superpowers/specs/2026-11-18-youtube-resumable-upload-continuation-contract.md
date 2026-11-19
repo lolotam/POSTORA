@@ -1373,7 +1373,7 @@ media of another size all passed a fence that had nothing to compare.
 
 **Is:** each of them fails closed.
 
-* The route **requires** `attemptStartedAt` (`youtube_attempt_missing`), and
+* The route **requires** `attempt_started_at` (`youtube_attempt_missing`), and
   the continuation refuses a request without one (`stale_attempt`).
 * The session's own attempt fence fails closed when the session carries no
   attempt.
@@ -1575,13 +1575,18 @@ build that calls `restore_youtube_pending_post` and
 `process-post` build that relies on the preserved receipt and the uncertainty
 marker: the trigger that copies the outcome of a deleted result row onto the
 post has to exist before that build settles a post whose account was
-disconnected.
+disconnected. Apply `20261118210000_youtube_recovery_hardening.sql`,
+`20261118220000_post_action_claim_status_key.sql` and
+`20261118230000_youtube_refreshed_token_rpc.sql` before the `process-post`
+build that calls the recovery functions, the claim that answers with one
+status, and the token-storing RPC.
 
-**Every migration of this feature is applied in production.** A change to
-their behaviour is therefore a NEW migration and never an edit of an applied
-file (ARCHITECTURE.md §23). The corrected signatures (`p_lease_ms`, the
-attempt column, the extended `checkpoint`, the admission, the fenced
-settlement and the receipt projection) are the ones that run.
+**The five migrations named above were applied to production on 2026-11-18; the
+three migrations added after them were not.** A change to the behaviour of a
+migration that is already applied is therefore a NEW migration and never an
+edit of an applied file (ARCHITECTURE.md §23). The corrected signatures
+(`p_lease_ms`, the attempt column, the extended `checkpoint`, the admission,
+the fenced settlement and the receipt projection) are the ones that run.
 
 ### The order of the three deploys
 

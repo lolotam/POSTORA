@@ -268,7 +268,14 @@ export function createSupabaseYoutubeUploadSessionStore(
       // a refusal, because the mark is durable and a refusal raised inside the
       // function would be undone by the caller's rollback.
       if (record?.state === "reconcile") {
-        return { record: null, refused: "reconcile_required", platformPostId: null };
+        // The row the session owns is still there: the recovery settled it, so
+        // the caller must not record a second one beside it. The row id is
+        // what says so, and the marker the recovery wrote is on the row.
+        return {
+          record: null,
+          refused: "reconcile_required",
+          platformPostId: typeof payload.platform_post_id === "string" ? payload.platform_post_id : null,
+        };
       }
       return {
         record,
@@ -622,7 +629,13 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           return Promise.resolve({ record: payload(session), refused: null, platformPostId: session.platformPostId });
         }
         if (session.state === "reconcile") {
-          return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
+          // The row the session owns is still there, so the refusal names it:
+          // the generic writer must not record a second one beside it.
+          return Promise.resolve({
+            record: null,
+            refused: "reconcile_required",
+            platformPostId: session.platformPostId,
+          });
         }
 
         // THE SAFE RESTART AND THE REBIND
@@ -672,6 +685,10 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           JSON.stringify(session.uploadBody) === JSON.stringify(input.uploadBody) &&
           JSON.stringify(session.expectedContent) === JSON.stringify(input.expectedContent) &&
           session.mediaFileId === input.mediaFileId &&
+          // The version of the file is part of the content: a file that was
+          // replaced in place keeps its id and its length, and the database
+          // refuses an open session whose file changed (YUS04).
+          session.mediaObjectVersion === input.mediaObjectVersion &&
           session.totalBytes === input.totalBytes;
         if (!sameContent) {
           return Promise.resolve({ record: null, refused: "content_changed", platformPostId: null });
@@ -682,7 +699,13 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
             // The last chunk may have been written, so a video may exist and a
             // fresh session could create a second one.
             session.state = "reconcile";
-            return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
+            // The row the session owns is still there, so the refusal names it:
+            // the generic writer must not record a second one beside it.
+            return Promise.resolve({
+              record: null,
+              refused: "reconcile_required",
+              platformPostId: session.platformPostId,
+            });
           }
           reopen(session, input);
         }
@@ -692,7 +715,13 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
             // The failure may already hold a video, so a fresh session could
             // create a second one. Only a human may decide.
             session.state = "reconcile";
-            return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
+            // The row the session owns is still there, so the refusal names it:
+            // the generic writer must not record a second one beside it.
+            return Promise.resolve({
+              record: null,
+              refused: "reconcile_required",
+              platformPostId: session.platformPostId,
+            });
           }
           reopen(session, input);
         }

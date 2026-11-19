@@ -149,6 +149,7 @@ for (const bucket of ["media", "supabase"]) {
         mimeType: "video/mp4",
         currentObjectVersion: 1,
       },
+      allowedWorkspaceIds: new Set<string>(),
       mediaHosts: hosts,
       fetchImpl: mediaFetch(seen) as unknown as typeof fetch,
     });
@@ -178,6 +179,7 @@ Deno.test("a provider row of the current version is used instead of the bucket",
       mimeType: "video/mp4",
       currentObjectVersion: 3,
     },
+    allowedWorkspaceIds: new Set<string>(),
     mediaHosts: hosts,
     fetchImpl: mediaFetch(seen) as unknown as typeof fetch,
   });
@@ -213,6 +215,7 @@ for (const row of [
         mimeType: "video/mp4",
         currentObjectVersion: 2,
       },
+      allowedWorkspaceIds: new Set<string>(),
       mediaHosts: hosts,
       fetchImpl: mediaFetch(seen) as unknown as typeof fetch,
     });
@@ -240,6 +243,7 @@ Deno.test("the read preference decides which provider is used", async () => {
       mimeType: "video/mp4",
       currentObjectVersion: 1,
     },
+    allowedWorkspaceIds: new Set<string>(),
     mediaHosts: hosts,
     fetchImpl: mediaFetch(openinary.seen) as unknown as typeof fetch,
   });
@@ -256,6 +260,7 @@ Deno.test("the read preference decides which provider is used", async () => {
       mimeType: "video/mp4",
       currentObjectVersion: 1,
     },
+    allowedWorkspaceIds: new Set<string>(),
     mediaHosts: hosts,
     fetchImpl: mediaFetch(cloudinary.seen) as unknown as typeof fetch,
   });
@@ -276,6 +281,7 @@ Deno.test("a host outside the approved policy is refused before any request", as
         mimeType: "video/mp4",
         currentObjectVersion: 1,
       },
+      allowedWorkspaceIds: new Set<string>(),
       mediaHosts: new Set<string>(),
       fetchImpl: mediaFetch(seen) as unknown as typeof fetch,
     });
@@ -303,6 +309,7 @@ Deno.test("a source that cannot be read names a stable reason and no URL", async
         mimeType: "video/mp4",
         currentObjectVersion: 1,
       },
+      allowedWorkspaceIds: new Set<string>(),
       mediaHosts: hosts,
       // A host that answers with a status the probe cannot use.
       fetchImpl: (() => Promise.resolve(new Response(null, { status: 500 }))) as unknown as typeof fetch,
@@ -317,3 +324,65 @@ Deno.test("a source that cannot be read names a stable reason and no URL", async
   assertEquals((refused as VideoSourceUnavailableError).message.includes("secret-token"), false);
   assertEquals((refused as VideoSourceUnavailableError).message.includes(HOST), false);
 });
+
+// The workspace authority never comes from the media row: the caller hands in
+// the workspaces the post publishes into, and a partner file of any other
+// workspace is refused no matter what the row says about itself.
+const WORKSPACE = "workspace-1";
+
+Deno.test("partner media of a targeted workspace is signed under the workspace", async () => {
+  const { client, seen } = fixture({ bucket: "partner-media", filePath: `${WORKSPACE}/video.mp4` });
+  const source = await createOwnedVideoSource({
+    supabase: client as never,
+    file: {
+      id: MEDIA_ID,
+      userId: OWNER,
+      filePath: `${WORKSPACE}/video.mp4`,
+      storageBucket: "partner-media",
+      workspaceId: WORKSPACE,
+      mimeType: "video/mp4",
+      currentObjectVersion: 1,
+    },
+    allowedWorkspaceIds: new Set([WORKSPACE]),
+    mediaHosts: hosts,
+    fetchImpl: mediaFetch(seen) as unknown as typeof fetch,
+  });
+
+  assertEquals(source.size, 4);
+  assertEquals(seen.signedBuckets, ["partner-media"]);
+  assertEquals(seen.signedPaths, [`${WORKSPACE}/video.mp4`]);
+});
+
+for (const allowed of [new Set<string>(), new Set(["another-workspace"])]) {
+  Deno.test(`partner media of a workspace the post does not target is refused: ${[...allowed].join(",") || "no targets"}`, async () => {
+    const { client, seen } = fixture({ bucket: "partner-media", filePath: `${WORKSPACE}/video.mp4` });
+    let refused: unknown;
+    try {
+      await createOwnedVideoSource({
+        supabase: client as never,
+        file: {
+          id: MEDIA_ID,
+          userId: OWNER,
+          // The row claims a workspace of its own. That claim is exactly what
+          // may not be trusted: the caller's target set does not name it.
+          filePath: `${WORKSPACE}/video.mp4`,
+          storageBucket: "partner-media",
+          workspaceId: WORKSPACE,
+          mimeType: "video/mp4",
+          currentObjectVersion: 1,
+        },
+        allowedWorkspaceIds: allowed,
+        mediaHosts: hosts,
+        fetchImpl: mediaFetch(seen) as unknown as typeof fetch,
+      });
+    } catch (error) {
+      refused = error;
+    }
+
+    assert(refused instanceof VideoSourceUnavailableError);
+    assertEquals((refused as VideoSourceUnavailableError).reason, YOUTUBE_UPLOAD_REASON.media_unavailable);
+    // Nothing was signed and no host received a request.
+    assertEquals(seen.signedBuckets, []);
+    assertEquals(seen.fetched, []);
+  });
+}

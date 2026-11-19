@@ -198,7 +198,32 @@ export function usePostRetry() {
         user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
       }).select().single();
       if (mediaError) {
-        // The object is already in storage: leaving it there would orphan it.
+        // The insert may have committed and its answer been lost: a gateway
+        // error after the commit is indistinguishable from a failed insert.
+        // The row is reconciled by owner and path before the cleanup, so a
+        // committed row is never left pointing at an object this path deleted.
+        const { data: committedRow, error: reconcileError } = await supabase
+          .from("media_files")
+          .select("id, file_path")
+          .eq("user_id", user.id)
+          .eq("file_path", uploadData.path)
+          .maybeSingle();
+        if (reconcileError) {
+          // The insert is ambiguous and the row cannot be read: the object
+          // stays, because deleting a committed object breaks the library row
+          // that names it.
+          if (isMediaQuotaMessage(mediaError.message)) {
+            throw new Error(mediaQuotaHumanMessage(mediaError.message));
+          }
+          throw mediaError;
+        }
+        if (committedRow) {
+          // The insert committed: the upload stands, and the retry names the
+          // row it actually wrote.
+          return committedRow;
+        }
+        // The insert did not commit, and the object is already in storage:
+        // leaving it there would orphan it.
         await removeUploadedObjects([uploadData.path]);
         if (isMediaQuotaMessage(mediaError.message)) {
           throw new Error(mediaQuotaHumanMessage(mediaError.message));

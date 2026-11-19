@@ -228,3 +228,53 @@ Deno.test("a reopened session keeps the pending row of its first admission", asy
   assertEquals(admitRound, 2);
   assertEquals(claimRound, 2);
 });
+
+Deno.test("a claim that throws after the admission hands the row to the recovery", async () => {
+  const { openYoutubeUploadSession } = await loadProcessPost();
+  const store = {
+    async admit() {
+      return { record: { id: "session-1" }, refused: null, platformPostId: "first-row" };
+    },
+    async claim() {
+      throw new Error("transport lost the claim answer");
+    },
+  };
+
+  let thrown: unknown;
+  try {
+    await openYoutubeUploadSession(store as never, {} as never, "lease-token", 60_000);
+  } catch (error) {
+    thrown = error;
+  }
+
+  // The row the admission created is named, so the generic failure writer
+  // records nothing beside it and the scope keeps the destination.
+  assert(thrown instanceof Error);
+  assertEquals((thrown as { platformPostId?: string | null }).platformPostId, "first-row");
+  assertEquals((thrown as { selfWroteRows?: boolean }).selfWroteRows, true);
+});
+
+Deno.test("a claim that throws before any row exists carries no row id", async () => {
+  const { openYoutubeUploadSession } = await loadProcessPost();
+  const store = {
+    async admit() {
+      return { record: { id: "session-1" }, refused: null, platformPostId: null };
+    },
+    async claim() {
+      throw new Error("transport lost the claim answer");
+    },
+  };
+
+  let thrown: unknown;
+  try {
+    await openYoutubeUploadSession(store as never, {} as never, "lease-token", 60_000);
+  } catch (error) {
+    thrown = error;
+  }
+
+  // Nothing was admitted, so there is no owned row to preserve: the original
+  // error travels unchanged.
+  assert(thrown instanceof Error);
+  assertEquals((thrown as Error).message, "transport lost the claim answer");
+  assertEquals((thrown as { platformPostId?: string | null }).platformPostId, undefined);
+});

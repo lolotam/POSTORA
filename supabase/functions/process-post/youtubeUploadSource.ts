@@ -78,6 +78,7 @@ async function ownedVideoUrl(
   supabase: SupabaseClient,
   file: OwnedVideoFile,
   mediaHosts: Set<string>,
+  allowedWorkspaceIds: ReadonlySet<string>,
 ): Promise<string | null> {
   const row = ownedVideoRow(file);
   const providerRowsByMedia = await loadMediaProviderRows(supabase, [row]);
@@ -85,9 +86,10 @@ async function ownedVideoUrl(
   return await resolveMediaUrl(supabase, row, providerRowsByMedia, {
     preferenceOrder,
     ownerUserId: file.userId,
-    // The admission already proved that the media belongs to the owner of the
-    // post, so the workspace of a partner file is the one the post may read.
-    allowedWorkspaceIds: new Set(file.workspaceId ? [file.workspaceId] : []),
+    // The set is the caller's authority, never the media row itself: the row
+    // is one the owner may rewrite after the admission, and a partner row
+    // that renamed its workspace must not carry the read along with it.
+    allowedWorkspaceIds,
     approvedHosts: mediaHosts,
   });
 }
@@ -101,15 +103,24 @@ async function ownedVideoUrl(
 export async function createOwnedVideoSource(args: {
   supabase: SupabaseClient;
   file: OwnedVideoFile;
+  /**
+   * The workspaces the post publishes into.
+   *
+   * They are read independently of the media row -- from the post's own
+   * target accounts -- because the row is one the owner may rewrite: after
+   * the admission it can name another workspace's partner media, and the
+   * read authority has to be the post's targets, not the row's own word.
+   */
+  allowedWorkspaceIds: ReadonlySet<string>;
   mediaHosts: Set<string>;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<UploadByteSource> {
-  const { supabase, file, mediaHosts } = args;
+  const { supabase, file, mediaHosts, allowedWorkspaceIds } = args;
 
   let url: string | null;
   try {
-    const deliveryUrl = await ownedVideoUrl(supabase, file, mediaHosts);
+    const deliveryUrl = await ownedVideoUrl(supabase, file, mediaHosts, allowedWorkspaceIds);
     url = deliveryUrl ? youtubeStorageReadUrl(deliveryUrl) : null;
   } catch (error) {
     console.error(

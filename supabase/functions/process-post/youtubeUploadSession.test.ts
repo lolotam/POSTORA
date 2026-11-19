@@ -344,7 +344,10 @@ Deno.test("a raised refusal becomes a reason the caller can branch on", async ()
 
 Deno.test("a session that needs a human comes back as a refusal", async () => {
   const { client } = recordingClient({
-    admit_youtube_upload: { session: { id: SESSION_ID, state: "reconcile" } },
+    admit_youtube_upload: {
+      session: { id: SESSION_ID, state: "reconcile" },
+      platform_post_id: PUBLIC_ROW_ID,
+    },
   });
   const store = createSupabaseYoutubeUploadSessionStore(client);
   const result = await store.admit({
@@ -361,6 +364,9 @@ Deno.test("a session that needs a human comes back as a refusal", async () => {
     targetAccountIds: [],
   });
   assertEquals(result.refused, "reconcile_required");
+  // The row the session owns is still there, so the refusal names it: the
+  // generic writer must not record a second row beside it.
+  assertEquals(result.platformPostId, PUBLIC_ROW_ID);
 });
 
 Deno.test("the settlement is asked for with the lease that owns it", async () => {
@@ -562,6 +568,27 @@ Deno.test("a retry with a new version of the same file is rebound to that versio
   assertEquals(retried.record?.confirmedBytes, 0);
 });
 
+Deno.test("an open session whose file was replaced in place is refused", async () => {
+  const store = openStore();
+  const opened = await store.admit({ ...admitInput, mediaFileId: "media-1", mediaObjectVersion: 1 });
+  const sessionId = opened.record!.id;
+
+  // The customer replaced the file under the same name while the upload was
+  // still open. The id and the length are the same, so only the version tells
+  // the two apart, and the provider session holds bytes of the version that is
+  // gone. The database refuses this (YUS04); the double has to refuse it too,
+  // or a test that drives the double proves the wrong thing.
+  const again = await store.admit({
+    ...admitInput,
+    mediaFileId: "media-1",
+    mediaObjectVersion: 2,
+    attemptStartedAt: "2026-11-19T00:00:00.000Z",
+  });
+  assertEquals(again.refused, "content_changed");
+  // The session is left alone: the attempt it belongs to is not re-stamped.
+  assertEquals(store.sessions.get(sessionId)?.attemptStartedAt, opened.record!.attemptStartedAt);
+});
+
 Deno.test("a rebind that names no version is refused", async () => {
   const store = openStore();
   const opened = await store.admit({ ...admitInput, mediaFileId: "media-1", mediaObjectVersion: 1 });
@@ -759,6 +786,9 @@ Deno.test("an upload that may hold a video is never started again", async () => 
   const again = await store.admit(admitInput);
   assertEquals(again.refused, "reconcile_required");
   assertEquals(store.sessions.get(sessionId)?.state, "reconcile");
+  // The row the session owns is still there, so the refusal names it: the
+  // generic writer must not record a second row beside it.
+  assertEquals(again.platformPostId, store.sessions.get(sessionId)?.platformPostId);
 });
 
 Deno.test("only one worker owns a session at a time", async () => {

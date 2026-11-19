@@ -9693,6 +9693,11 @@ function youtubeUploadRefusalMessage(refusal: YoutubeUploadRefusal): string {
  * twice: a session whose provider session expired between the two calls is
  * reopened by the second round, and a session that was reopened is claimed
  * with the same lease.
+ *
+ * The admission commits the public pending row together with the session, so
+ * a claim that THROWS after the admission leaves that row behind. The throw
+ * is converted into an owned failure that carries the row id: the generic
+ * failure writer must not record a second row beside it.
  */
 export async function openYoutubeUploadSession(
   store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
@@ -9705,22 +9710,37 @@ export async function openYoutubeUploadSession(
   platformPostId: string | null;
 }> {
   let platformPostId: string | null = null;
-  for (let round = 0; round < 2; round += 1) {
-    const opened = await store.admit(input);
-    platformPostId = opened.platformPostId ?? platformPostId;
-    if (opened.refused) return { record: null, refused: opened.refused, platformPostId };
-    if (!opened.record) return { record: null, refused: "post_not_found", platformPostId };
+  try {
+    for (let round = 0; round < 2; round += 1) {
+      const opened = await store.admit(input);
+      platformPostId = opened.platformPostId ?? platformPostId;
+      if (opened.refused) return { record: null, refused: opened.refused, platformPostId };
+      if (!opened.record) return { record: null, refused: "post_not_found", platformPostId };
 
-    const claimed = await store.claim({
-      sessionId: opened.record.id,
-      leaseToken,
-      leaseMs,
-    });
-    // The pending row id is the one the session was FIRST admitted with: a
-    // reopened session is admitted again without one, and the row the upload
-    // settles is still the row the first admission created.
-    if (!claimed.refused) return { ...claimed, platformPostId };
-    if (claimed.refused !== "session_expired") return { ...claimed, platformPostId };
+      const claimed = await store.claim({
+        sessionId: opened.record.id,
+        leaseToken,
+        leaseMs,
+      });
+      // The pending row id is the one the session was FIRST admitted with: a
+      // reopened session is admitted again without one, and the row the upload
+      // settles is still the row the first admission created.
+      if (!claimed.refused) return { ...claimed, platformPostId };
+      if (claimed.refused !== "session_expired") return { ...claimed, platformPostId };
+    }
+  } catch (error) {
+    // The admission commits the session AND the public pending row in one
+    // transaction, so a claim that THROWS after the admission (an RPC or a
+    // transport failure) leaves that row behind. The generic failure writer
+    // must not record a second row beside it, and the recovery owns the one
+    // the admission made.
+    if (platformPostId) {
+      throw uploadOwnedFailure(
+        "The upload session could not be taken after its row was created; the upload recovery owns the row.",
+        { platformPostId },
+      );
+    }
+    throw error;
   }
   return { record: null, refused: "session_expired", platformPostId };
 }
@@ -9787,11 +9807,49 @@ function youtubeFollowUpDeps(mediaHosts: Set<string>, canWrite: () => Promise<bo
  * through them, so the worker itself never touches the database and never
  * learns a provider's URL.
  */
+/**
+ * The workspaces a post publishes into.
+ *
+ * The authority is the post's own target accounts, never the media row: a
+ * partner media file may be read when its workspace is one of them. When the
+ * post names no account selection, every account of the owner is a target,
+ * the way the publish run resolves its accounts.
+ */
+async function loadPostTargetWorkspaceIds(
+  supabase: SupabaseClient,
+  postId: string,
+): Promise<ReadonlySet<string>> {
+  const { data: postRow, error: postError } = await supabase
+    .from("posts")
+    .select("user_id, metadata")
+    .eq("id", postId)
+    .maybeSingle();
+  if (postError || !postRow) return new Set<string>();
+  const metadata = (postRow.metadata ?? {}) as Record<string, unknown>;
+  const selected = Array.isArray(metadata.selected_account_ids)
+    ? metadata.selected_account_ids.filter((value): value is string => typeof value === "string")
+    : [];
+  let query = supabase
+    .from("social_accounts")
+    .select("workspace_id")
+    .eq("user_id", String(postRow.user_id));
+  if (selected.length > 0) {
+    query = query.in("id", selected);
+  }
+  const { data: targetAccounts } = await query;
+  return new Set(
+    (targetAccounts ?? [])
+      .map((row: { workspace_id?: string | null }) => row.workspace_id)
+      .filter((workspaceId): workspaceId is string => typeof workspaceId === "string" && workspaceId.length > 0),
+  );
+}
+
 function buildYoutubeContinuationPorts(
   supabase: SupabaseClient,
   store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
   mediaHosts: Set<string>,
   deadlineMs: number,
+  postId: string,
 ): YoutubeContinuationPorts {
   return {
     async loadPost(id) {
@@ -9903,6 +9961,12 @@ function buildYoutubeContinuationPorts(
       // bucket and from the provider rows that match its CURRENT content
       // version. A hard-coded bucket or a stale provider row would upload
       // bytes that are not the video the post names.
+      //
+      // The workspace read authority is the post's own target workspaces,
+      // read from the post's accounts -- never from the media row, which the
+      // owner may have rewritten after the admission to name another
+      // workspace's partner media.
+      const allowedWorkspaceIds = await loadPostTargetWorkspaceIds(supabase, postId);
       return await createOwnedVideoSource({
         supabase,
         file: {
@@ -9915,6 +9979,7 @@ function buildYoutubeContinuationPorts(
           currentObjectVersion: media.currentObjectVersion,
           fileSize: media.fileSize,
         },
+        allowedWorkspaceIds,
         mediaHosts,
       });
     },
@@ -10110,7 +10175,7 @@ async function handleYoutubeUploadContinuation(
   const deadlineMs = workerPublishDeadline(WORKER_STARTED_AT_MS);
 
   const result = await continueYoutubeUpload(
-    buildYoutubeContinuationPorts(supabase, store, mediaHosts, deadlineMs),
+    buildYoutubeContinuationPorts(supabase, store, mediaHosts, deadlineMs, postId),
     {
       postId,
       sessionId,
@@ -10282,10 +10347,15 @@ async function postToYouTube(
   );
 
   if (opened.refused || !opened.record) {
-    if (opened.platformPostId) {
-      return { pendingContinuation: true, pendingPlatformPostId: opened.platformPostId };
-    }
     const refusal = opened.refused ?? "post_not_found";
+    if (opened.platformPostId) {
+      // The row this session owns is already there: the recovery settled it,
+      // and the generic writer must not record a second row beside it. The
+      // marker the recovery wrote is on that row, so the error carries none.
+      throw uploadOwnedFailure(youtubeUploadRefusalMessage(refusal), {
+        platformPostId: opened.platformPostId,
+      });
+    }
     // The refusal carries the uncertain marker when the channel may already
     // hold a video of this post, so the row the outer loop writes is never
     // offered as a retry that could publish a second one.
@@ -10295,6 +10365,9 @@ async function postToYouTube(
   // The public row the upload settles when it finishes.
   const pendingPlatformPostId = opened.platformPostId;
   const uploadSessionId = opened.record.id;
+  // The record the upload runs against, captured before the closure that may
+  // hand the destination over: narrowing does not travel into a callback.
+  const uploadRecord = opened.record;
 
   // A receipt that already exists belongs to an earlier attempt. The video
   // is not uploaded again, and the first comment is not posted again either.
@@ -10303,27 +10376,46 @@ async function postToYouTube(
   // ─────────────────────────────────────────────────────────────────────
   // Step 4: The upload itself.
   // ─────────────────────────────────────────────────────────────────────
-  const outcome = await runResumableVideoUpload({
-    fetchImpl: fetch,
-    store,
-    session: opened.record,
-    leaseToken,
-    accessToken,
-    source,
-    totalBytes: videoSize,
-    mimeType,
-    deadlineMs: publishDeadlineMs,
-    now: () => Date.now(),
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    uploadUrl: uploadRequest.url,
-    uploadBody: uploadRequest.body,
-    // The live state is asked about before the provider is written to. The
-    // lease says this worker owns the upload; only the live state says the
-    // post, the content, the target and the media are still what this worker
-    // saw.
-    effectAuthority: async () =>
-      await store.effectAuthority({ sessionId: uploadSessionId, leaseToken }),
-  });
+  // A throw here is an RPC or transport failure, not an outcome: the row the
+  // admission created is still open, and the upload it names may be on the
+  // provider. The throw is converted into the handoff of an unfinished
+  // upload: the generic failure writer must not record a failed row beside
+  // the pending one.
+  const UPLOAD_THREW = Symbol("youtube-upload-threw");
+  const outcomeOrThrow: ResumableUploadOutcome | typeof UPLOAD_THREW = await (async () => {
+    try {
+      return await runResumableVideoUpload({
+        fetchImpl: fetch,
+        store,
+        session: uploadRecord,
+        leaseToken,
+        accessToken,
+        source,
+        totalBytes: videoSize,
+        mimeType,
+        deadlineMs: publishDeadlineMs,
+        now: () => Date.now(),
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        uploadUrl: uploadRequest.url,
+        uploadBody: uploadRequest.body,
+        // The live state is asked about before the provider is written to. The
+        // lease says this worker owns the upload; only the live state says the
+        // post, the content, the target and the media are still what this worker
+        // saw.
+        effectAuthority: async () =>
+          await store.effectAuthority({ sessionId: uploadSessionId, leaseToken }),
+      });
+    } catch (error) {
+      console.error("[youtube] the upload ended without an outcome:", redactProviderText(error));
+      return UPLOAD_THREW;
+    }
+  })();
+  if (outcomeOrThrow === UPLOAD_THREW) {
+    // The row stays pending and the post stays processing: the continuation
+    // settles the row when the upload is finished.
+    return { pendingContinuation: true, pendingPlatformPostId: pendingPlatformPostId ?? undefined };
+  }
+  const outcome = outcomeOrThrow;
 
   // A file that is still being scanned is a WAIT, not a failure: the scan
   // finishes on its own and the upload continues afterwards. The row stays

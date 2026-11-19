@@ -22,6 +22,7 @@ const mock = vi.hoisted(() => ({
   remove: vi.fn(),
   insertRow: vi.fn(),
   deleteRows: vi.fn(),
+  reconcileRow: vi.fn(),
   sequence: 0,
   mediaRows: 0,
   failInsertSize: -1,
@@ -40,7 +41,7 @@ vi.mock("@/integrations/supabase/client", () => ({
 }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: mock.toast }) }));
 
-const { invoke, from, toast, upload, remove, insertRow, deleteRows } = mock;
+const { invoke, from, toast, upload, remove, insertRow, deleteRows, reconcileRow } = mock;
 
 const post = { id: "post-1", platformResults: [
   { id: "failed-1", platform: "facebook", status: "failed", social_account_id: "account-1" },
@@ -75,9 +76,14 @@ beforeEach(() => {
   invoke.mockResolvedValue({ data: { accepted: true, post_id: "post-1", status: "processing" }, error: null });
   from.mockImplementation((table: string) => {
     if (table !== "media_files") throw new Error(`Unexpected table: ${table}`);
+    const reconcileQuery = {
+      eq: () => reconcileQuery,
+      maybeSingle: () => reconcileRow(),
+    };
     return {
       insert: (payload: MediaPayload) => ({ select: () => ({ single: () => insertRow(payload) }) }),
       delete: () => ({ in: (_column: string, ids: string[]) => deleteRows(ids) }),
+      select: (_columns: string) => reconcileQuery,
     };
   });
   upload.mockImplementation(async (path: string) => {
@@ -98,6 +104,10 @@ beforeEach(() => {
   deleteRows.mockImplementation(async () => {
     mock.log.push("delete");
     return { error: null };
+  });
+  reconcileRow.mockImplementation(async () => {
+    mock.log.push("reconcile");
+    return { data: null, error: null };
   });
   toast.mockImplementation(() => { mock.log.push("toast"); });
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -213,8 +223,47 @@ describe("retry with new media", () => {
     await act(async () => { await result.current.handleRetryWithNewMedia(); });
 
     expect(remove).toHaveBeenCalledWith([mock.insertedPaths[0] ?? upload.mock.calls[0][0]]);
-    // The removal happens after the failed insert and before the failure is reported.
-    expect(mock.log).toEqual(["upload", "insert", "remove", "toast"]);
+    // The ambiguous insert is reconciled before the cleanup, and the removal
+    // happens before the failure is reported.
+    expect(mock.log).toEqual(["upload", "insert", "reconcile", "remove", "toast"]);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Retry failed" }));
+  });
+
+  it("keeps the upload when the insert committed but its answer was lost", async () => {
+    mock.failInsertSize = 10;
+    reconcileRow.mockImplementation(async () => {
+      mock.log.push("reconcile");
+      return { data: { id: "media-committed", file_path: "user-1/committed.jpg" }, error: null };
+    });
+    const { result } = renderRetry();
+    openMediaRetry(result, [goodFile()]);
+
+    await act(async () => { await result.current.handleRetryWithNewMedia(); });
+
+    // The committed row is kept and the object is not deleted: the retry
+    // names the row the insert actually wrote.
+    expect(remove).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", {
+      body: { post_id: post.id, mode: "retry", replacement_media_ids: ["media-committed"] },
+    });
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Retry submitted" }));
+  });
+
+  it("keeps the object when the ambiguous insert cannot be reconciled", async () => {
+    mock.failInsertSize = 10;
+    reconcileRow.mockImplementation(async () => {
+      mock.log.push("reconcile");
+      return { data: null, error: { message: "database unavailable" } };
+    });
+    const { result } = renderRetry();
+    openMediaRetry(result, [goodFile()]);
+
+    await act(async () => { await result.current.handleRetryWithNewMedia(); });
+
+    // The insert is ambiguous and the row cannot be read: the object stays,
+    // because deleting a committed object breaks the library row that names it.
+    expect(remove).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Retry failed" }));
   });

@@ -146,6 +146,30 @@
 --   Y67 the outcome of a destination that goes with the account is kept on the
 --       post: the video id of a published video and the marker of an uncertain
 --       upload both outlive the result row they were written on.
+--   Y68 the settlement fence fails closed, and a candidate the owner poisoned
+--       is refused, never raised: each assertion reaches the field it names.
+--   Y69 the terminal scan leaves out the sessions it cannot classify, even
+--       when the parent carries no attempt either: the guard alone decides.
+--   Y70 the disconnect settles the session under the shared lock: the scope
+--       goes through the helper, and the session row and its receipt are both
+--       read under it.
+--   Y71 a scope with a JSON null or a malformed element is refused, never
+--       emptied: the NULL does not poison the comparison of the valid ones.
+--   Y72 a timestamp with an invalid calendar date is a non-match, not an
+--       abort: the candidate, the rollup marker and a deferred row attempt
+--       are all read through the validating conversion.
+--   Y73 the cancellation scan leaves out the sessions without an attempt, so
+--       their refusal does not starve the cancelled rows behind them.
+--   Y74 the fanout scan leaves out a candidate it can only refuse, so a
+--       poisoned scope does not starve the fanouts behind it.
+--   Y75 the disconnect scan takes the parents in one shared order, so two
+--       disconnects cannot wait on each other holding one parent lock apiece.
+--   Y76 the recovery reads its session under the shared lock: the scope goes
+--       through the helper and the row is read again before the authority
+--       gate and the closure.
+--   Y77 the identity of a media row an open upload reads is fenced in the
+--       database: a change to its bucket, path or workspace bumps the content
+--       version, and the session fence refuses the upload.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -183,13 +207,13 @@ BEGIN
   ON CONFLICT (id) DO NOTHING;
 
   -- The synthetic owners need more than the free plan's two posts a day: this
-  -- suite opens a post per scenario. The quota is a counter on the owner, so
-  -- it is raised here rather than worked around.
+  -- suite opens several posts per scenario. The quota is a counter on the
+  -- owner, so it is raised here rather than worked around.
   INSERT INTO public.user_quotas
     (user_id, max_posts_per_day, max_posts_per_month, max_media_uploads_per_day)
   VALUES
-    (v_u_a, 100, 500, 1000),
-    (v_u_b, 100, 500, 1000)
+    (v_u_a, 1000, 5000, 10000),
+    (v_u_b, 1000, 5000, 10000)
   ON CONFLICT (user_id) DO UPDATE
     SET max_posts_per_day = EXCLUDED.max_posts_per_day,
         max_posts_per_month = EXCLUDED.max_posts_per_month,
@@ -5601,15 +5625,15 @@ $y67_disconnected_outcome$;
 -- ---------------------------------------------------------------------------
 DO $y68_fence_and_poison$
 DECLARE
-  v_acct_a  uuid;
-  v_post_a  uuid;
-  v_media_a uuid;
-  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_lease   uuid := 'e4000000-0000-4000-8000-000000000001';
-  v_attempt timestamptz;
-  v_content jsonb;
-  v_session uuid;
-  v_result  jsonb;
+  v_acct_a        uuid;
+  v_post_a        uuid;
+  v_media_a       uuid;
+  v_u_a           uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_lease         uuid := 'e4000000-0000-4000-8000-000000000001';
+  v_attempt       timestamptz;
+  v_content       jsonb;
+  v_session       uuid;
+  v_result        jsonb;
 BEGIN
   -- THE FENCE FAILS CLOSED.
   --
@@ -5687,7 +5711,9 @@ BEGIN
   PERFORM public.release_youtube_upload_session(v_session, v_lease, 'reconcile',
     'the provider may already hold a video');
 
-  -- The owner writes a timestamp that is not one.
+  -- The owner writes a timestamp that is not one. The session's own attempt
+  -- is kept to restore the candidate with the exact value it enrolled.
+  v_attempt := (SELECT attempt_started_at FROM public.youtube_upload_sessions WHERE id = v_session);
   UPDATE public.posts
      SET metadata = jsonb_set(metadata, '{legacy_notification_candidate,attempt_started_at}',
            to_jsonb('not-a-timestamp'::text))
@@ -5698,6 +5724,13 @@ BEGIN
     'Y68 a candidate that cannot be read is not closed';
   ASSERT (v_result ->> 'reason') = 'no_candidate_for_attempt',
     'Y68 the refusal says the candidate was not usable';
+
+  -- The attempt is readable again, so the next refusals are about the scope
+  -- and not about the attempt.
+  UPDATE public.posts
+     SET metadata = jsonb_set(metadata, '{legacy_notification_candidate,attempt_started_at}',
+           to_jsonb(v_attempt))
+   WHERE id = v_post_a;
 
   -- The owner writes a scope that is not a list.
   UPDATE public.posts
@@ -5730,6 +5763,11 @@ $y68_fence_and_poison$;
 -- nothing when it refuses. A scan that selected such a session would select
 -- it again on the next pass, and the sessions that CAN be settled would never
 -- be reached. The sibling scan leaves them out for the same reason.
+--
+-- The parent carries no attempt either: then the "is this the running
+-- attempt" predicate matches a NULL with a NULL, and ONLY the guard that
+-- names the missing attempt keeps the session out. The test would not detect
+-- a regression in that guard when the parent still carried an attempt.
 -- ---------------------------------------------------------------------------
 DO $y69_terminal_scan$
 DECLARE
@@ -5759,12 +5797,18 @@ BEGIN
     'the provider may already hold a video');
 
   -- The session carries no attempt, so the classifier refuses it, and no
-  -- worker holds its lease any more, so the scan may look at it.
+  -- worker holds its lease any more, so the scan may look at it. The parent
+  -- carries no attempt either: the "is this the running attempt" predicate
+  -- matches NULL with NULL, so the guard that names the missing attempt is
+  -- the one condition that keeps the session out of the scan.
   UPDATE public.youtube_upload_sessions
      SET attempt_started_at = NULL,
          lease_token = NULL,
          lease_expires_at = now() - interval '1 hour'
    WHERE id = v_session;
+  UPDATE public.posts
+     SET processing_started_at = NULL
+   WHERE id = v_post_a;
 
   -- Every other session keeps a live lease, so the scan cannot select it and
   -- the count below is a proof about THIS session alone.
@@ -5817,6 +5861,13 @@ BEGIN
   ASSERT v_lock > 0,
     'Y70 the disconnect writer takes its scope through the shared helper';
 
+  -- The session row is read AGAIN after the lock, not only before it: a read
+  -- that stayed before the lock could use a snapshot that predates a
+  -- concurrent completion, and the settlement would overwrite it.
+  v_receipt := position('SELECT * INTO v_session' IN v_def);
+  ASSERT v_receipt > v_lock,
+    'Y70 the session row is read under the lock';
+
   -- The receipt is read AFTER the lock, not before it.
   v_receipt := position('v_receipt := v_session.video_id' IN v_def);
   ASSERT v_receipt > v_lock,
@@ -5833,6 +5884,594 @@ BEGIN
   RAISE NOTICE 'PASS Y70: the disconnect settles the session under the shared lock';
 END
 $y70_disconnect_lock$;
+
+-- ---------------------------------------------------------------------------
+-- Y71: A SCOPE WITH A JSON NULL OR A MALFORMED ELEMENT IS REFUSED, NEVER
+--      EMPTIED.
+--
+-- A JSON null inside a scope array becomes a SQL NULL. The regex guard did
+-- not reject it, the aggregation carried it into the scope array, and the ANY
+-- comparison with a NULL element answers NULL for every valid account -- so
+-- one poisoned element emptied the whole scope and the closure read a scope
+-- that named nothing. NULL elements are refused with the malformed ones.
+-- ---------------------------------------------------------------------------
+DO $y71_null_scope$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_lease   uuid := 'e4000000-0000-4000-8000-000000000001';
+  v_attempt timestamptz;
+  v_content jsonb;
+  v_session uuid;
+  v_result  jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y71') f;
+
+  -- The worker that owned this attempt is gone, so the closure may be made.
+  UPDATE public.posts
+     SET processing_started_at = now() - public.youtube_upload_attempt_quiet_after() - interval '1 second'
+   WHERE id = v_post_a;
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_a;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_a, v_attempt, v_content,
+    ARRAY[v_acct_a], ARRAY[]::uuid[]);
+
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  -- The worker is gone and the session is left for a human, so the closure
+  -- may be made.
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'reconcile',
+    'the provider may already hold a video');
+
+  -- The owner writes a scope with a JSON null beside the valid account.
+  UPDATE public.posts
+     SET metadata = jsonb_set(metadata, '{legacy_notification_candidate,target_account_ids}',
+           jsonb_build_array(v_acct_a::text, NULL))
+   WHERE id = v_post_a;
+
+  v_result := public.recover_youtube_upload_fanout(v_session, NULL);
+  ASSERT (v_result ->> 'recovered')::boolean IS NOT TRUE,
+    'Y71 a scope with a null element is not closed';
+  ASSERT (v_result ->> 'reason') = 'no_candidate_for_attempt',
+    'Y71 the refusal says the scope was not usable';
+
+  -- And a scope with a malformed element beside the valid account.
+  UPDATE public.posts
+     SET metadata = jsonb_set(metadata, '{legacy_notification_candidate,target_account_ids}',
+           jsonb_build_array(v_acct_a::text, 'not-an-account'))
+   WHERE id = v_post_a;
+
+  v_result := public.recover_youtube_upload_fanout(v_session, NULL);
+  ASSERT (v_result ->> 'reason') = 'no_candidate_for_attempt',
+    'Y71 a scope with a malformed element is refused';
+
+  -- The valid account did not lose its scope to the poisoned element: the
+  -- candidate is unchanged and the fanout is not closed.
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_closed}'
+            FROM public.posts WHERE id = v_post_a) IS DISTINCT FROM 'true',
+    'Y71 the fanout of a poisoned scope is not closed';
+
+  RAISE NOTICE 'PASS Y71: a scope with a null or a malformed element is refused, never emptied';
+END
+$y71_null_scope$;
+
+-- ---------------------------------------------------------------------------
+-- Y72: A TIMESTAMP WITH AN INVALID CALENDAR DATE IS A NON-MATCH, NOT AN ABORT.
+--
+-- The prefix guard accepted any value that LOOKED like a date, and the cast
+-- raised on an invalid calendar date -- one poisoned row aborted the recovery
+-- statement and starved every session behind it. All three sites read the
+-- value through the validating conversion now: a malformed value is a value
+-- that does not match.
+-- ---------------------------------------------------------------------------
+DO $y72_invalid_dates$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_lease   uuid := 'e4000000-0000-4000-8000-000000000001';
+  v_attempt timestamptz;
+  v_content jsonb;
+  v_session uuid;
+  v_row_id  uuid;
+  v_result  jsonb;
+BEGIN
+  -- THE CANDIDATE ATTEMPT. A date that is not on the calendar is a candidate
+  -- of no attempt, refused the way any other non-match is refused.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y72a') f;
+
+  UPDATE public.posts
+     SET processing_started_at = now() - public.youtube_upload_attempt_quiet_after() - interval '1 second'
+   WHERE id = v_post_a;
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_a;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_a, v_attempt, v_content,
+    ARRAY[v_acct_a], ARRAY[]::uuid[]);
+
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'reconcile',
+    'the provider may already hold a video');
+
+  UPDATE public.posts
+     SET metadata = jsonb_set(metadata, '{legacy_notification_candidate,attempt_started_at}',
+           to_jsonb('2026-02-31T00:00:00Z'::text))
+   WHERE id = v_post_a;
+
+  -- Reaching the assertions at all proves the conversion did not raise.
+  v_result := public.recover_youtube_upload_fanout(v_session, NULL);
+  ASSERT (v_result ->> 'recovered')::boolean IS NOT TRUE,
+    'Y72 a candidate with an impossible date is not closed';
+  ASSERT (v_result ->> 'reason') = 'no_candidate_for_attempt',
+    'Y72 an impossible date is a candidate of no attempt';
+
+  -- THE ROLLUP MARKER. A rolled-up post proves its closure with the marker;
+  -- a marker with an impossible date proves nothing, and it does not abort
+  -- the fence either.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y72b') f;
+
+  UPDATE public.posts
+     SET processing_started_at = now() - public.youtube_upload_attempt_quiet_after() - interval '1 second'
+   WHERE id = v_post_a;
+
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_a;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_a,
+    (SELECT processing_started_at FROM public.posts WHERE id = v_post_a),
+    v_content, ARRAY[v_acct_a], ARRAY[]::uuid[]);
+
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'reconcile',
+    'the provider may already hold a video');
+
+  -- The post is failed and carries markers with an impossible date, so
+  -- nothing proves this attempt rolled it up.
+  UPDATE public.posts
+     SET status = 'failed',
+         metadata = metadata || jsonb_build_object(
+           'settlement_rollup_status', 'failed',
+           'settlement_rollup_processing_started_at', '2026-02-31T00:00:00Z')
+   WHERE id = v_post_a;
+
+  v_result := public.recover_youtube_upload_fanout(v_session, NULL);
+  ASSERT (v_result ->> 'reason') = 'post_not_processing',
+    'Y72 an impossible rollup date proves nothing and aborts nothing';
+
+  -- The deferred attempt a result row carries is read by close_post_fanout
+  -- (applied before this migration) with an unvalidated cast; that path is a
+  -- recorded follow-up, not part of this migration.
+  RAISE NOTICE 'PASS Y72: an impossible date is a non-match, never an abort';
+END
+$y72_invalid_dates$;
+
+-- ---------------------------------------------------------------------------
+-- Y73: THE CANCELLATION SCAN LEAVES OUT THE SESSIONS WITHOUT AN ATTEMPT.
+--
+-- The helper refuses a session whose attempt is NULL and changes nothing, so
+-- with it in the scan the same slot is spent on the same refusal on every
+-- pass. The scan leaves it out, and the cancelled row behind it is reached.
+--
+-- The session without an attempt is the OLDER one: with one slot, it is the
+-- one a scan that did not leave it out would pick. The scan reads the whole
+-- table, and the scenarios before this one leave their own cancelled rows
+-- behind, so the order is pinned here instead of trusted to the clock.
+-- ---------------------------------------------------------------------------
+DO $y73_cancel_scan$
+DECLARE
+  v_acct_a uuid;
+  v_post_a uuid;
+  v_media_a uuid;
+  v_acct_b uuid;
+  v_post_b uuid;
+  v_media_b uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_row_a   uuid;
+  v_row_b   uuid;
+  v_result  jsonb;
+BEGIN
+  -- The older session: it carries no attempt, and its post does not either,
+  -- so the "is this the running attempt" predicate matches NULL with NULL
+  -- and nothing else keeps it out of the scan.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y73a') f;
+  PERFORM public.admit_youtube_upload(v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb);
+  v_row_a := (SELECT platform_post_id FROM public.youtube_upload_sessions
+               WHERE post_id = v_post_a);
+  UPDATE public.youtube_upload_sessions
+     SET attempt_started_at = NULL,
+         updated_at = '2000-01-01T00:00:00Z'
+   WHERE post_id = v_post_a;
+  UPDATE public.posts
+     SET status = 'failed', processing_started_at = NULL
+   WHERE id = v_post_a;
+
+  -- The newer session: cancelled, with its attempt still the one the post
+  -- carries, and its row still pending. It sorts right behind the session
+  -- without an attempt, before everything the earlier scenarios left behind.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_b, v_post_b, v_media_b
+    FROM pg_temp.new_youtube_fixture('y73b') f;
+  PERFORM public.admit_youtube_upload(v_post_b, v_acct_b, v_u_a, v_media_b, 4096, 4096, '{}'::jsonb);
+  v_row_b := (SELECT platform_post_id FROM public.youtube_upload_sessions
+               WHERE post_id = v_post_b);
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post_b;
+  UPDATE public.youtube_upload_sessions
+     SET updated_at = '2001-01-01T00:00:00Z'
+   WHERE post_id = v_post_b;
+
+  -- ONE slot. The scan has to spend it on the row it can close: the session
+  -- without an attempt is left out, and the cancelled row behind it is
+  -- reached. Without the guard, the slot would be spent on the refusal of
+  -- the older session, and the count would stay 0.
+  v_result := public.reconcile_youtube_upload_fanouts(1);
+
+  ASSERT (v_result ->> 'cancelled_rows')::integer = 1,
+    'Y73 the slot goes to the cancelled row that can be closed';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_b) = 'failed',
+    'Y73 the cancelled row behind the unclassifiable session is closed';
+  ASSERT (SELECT error_message FROM public.platform_posts WHERE id = v_row_b)
+           = 'youtube_upload_cancelled',
+    'Y73 the closed row carries the reason of the cancellation';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_a) = 'pending',
+    'Y73 the row of the session without an attempt stays pending';
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE post_id = v_post_a) = 'open',
+    'Y73 the session without an attempt is left alone';
+
+  RAISE NOTICE 'PASS Y73: the cancellation scan leaves out the sessions without an attempt';
+END
+$y73_cancel_scan$;
+
+-- ---------------------------------------------------------------------------
+-- Y74: THE FANOUT SCAN LEAVES OUT A CANDIDATE IT CAN ONLY REFUSE.
+--
+-- A candidate whose scope holds a malformed element is refused, and a refusal
+-- changes nothing: with it in the scan, its slot is spent on the same refusal
+-- on every pass, and the fanout behind it is never reached. The scan leaves
+-- the unusable candidate out.
+--
+-- The whole suite is ONE transaction, so every scenario that quieted its
+-- attempt shares the same processing_started_at and the scan order falls to
+-- random session ids. The order is pinned here: the poisoned fanout is the
+-- EARLIEST attempt, so a scan that did not leave it out would spend its one
+-- slot on it. A valid fanout sits right behind it, and a third session
+-- absorbs the terminal scan, so the fanout scan's one slot is the only work
+-- left on the pass.
+-- ---------------------------------------------------------------------------
+DO $y74_fanout_scan$
+DECLARE
+  v_acct_p uuid;
+  v_post_p uuid;
+  v_media_p uuid;
+  v_acct_w uuid;
+  v_post_w uuid;
+  v_media_w uuid;
+  v_acct_v uuid;
+  v_post_v uuid;
+  v_media_v uuid;
+  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_lease    uuid := 'e4000000-0000-4000-8000-000000000001';
+  v_content  jsonb;
+  v_session_p uuid;
+  v_session_w uuid;
+  v_session_v uuid;
+  v_row_w    uuid;
+  v_result   jsonb;
+BEGIN
+  -- The poisoned fanout: the EARLIEST attempt. Its scope names an account
+  -- that is not one, so the recovery can only refuse it.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_p, v_post_p, v_media_p
+    FROM pg_temp.new_youtube_fixture('y74p') f;
+
+  UPDATE public.posts
+     SET processing_started_at = '2000-01-01T00:00:00Z'
+   WHERE id = v_post_p;
+
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_p;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_p,
+    (SELECT processing_started_at FROM public.posts WHERE id = v_post_p),
+    v_content, ARRAY[v_acct_p], ARRAY[]::uuid[]);
+
+  v_session_p := (public.admit_youtube_upload(
+      v_post_p, v_acct_p, v_u_a, v_media_p, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  PERFORM public.claim_youtube_upload_session(v_session_p, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session_p, v_lease, 'reconcile',
+    'the provider may already hold a video');
+
+  -- The owner poisons the scope of the earliest fanout with an element that
+  -- is not an account.
+  UPDATE public.posts
+     SET metadata = jsonb_set(metadata, '{legacy_notification_candidate,target_account_ids}',
+           jsonb_build_array(v_acct_p::text, 'not-an-account'))
+   WHERE id = v_post_p;
+
+  -- The valid fanout: the SECOND attempt, right behind the poisoned one. Its
+  -- row is settled here, the way the settlement of its own attempt would have
+  -- settled it, so the terminal scan cannot spend its slot on this session:
+  -- the fanout scan is the only scan that can reach this candidate.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_w, v_post_w, v_media_w
+    FROM pg_temp.new_youtube_fixture('y74w') f;
+
+  UPDATE public.posts
+     SET processing_started_at = '2000-01-02T00:00:00Z'
+   WHERE id = v_post_w;
+
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_w;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_w,
+    (SELECT processing_started_at FROM public.posts WHERE id = v_post_w),
+    v_content, ARRAY[v_acct_w], ARRAY[]::uuid[]);
+
+  v_session_w := (public.admit_youtube_upload(
+      v_post_w, v_acct_w, v_u_a, v_media_w, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_w := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session_w);
+
+  PERFORM public.claim_youtube_upload_session(v_session_w, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session_w, v_lease, 'reconcile',
+    'the provider may already hold a video');
+
+  -- The row of the valid fanout is settled. The post stays processing, so
+  -- the fanout scan still owes this candidate its closure.
+  UPDATE public.platform_posts
+     SET status = 'failed', error_message = 'y74 the worker of this attempt is gone'
+   WHERE id = v_row_w;
+
+  -- The third session: the oldest one the terminal scan can see. The
+  -- terminal scan settles its row and rolls its post up, so the pass is left
+  -- with exactly one piece of work: the fanout behind the poisoned candidate.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_v, v_post_v, v_media_v
+    FROM pg_temp.new_youtube_fixture('y74v') f;
+
+  UPDATE public.posts
+     SET processing_started_at = '2000-01-03T00:00:00Z'
+   WHERE id = v_post_v;
+
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_v;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_v,
+    (SELECT processing_started_at FROM public.posts WHERE id = v_post_v),
+    v_content, ARRAY[v_acct_v], ARRAY[]::uuid[]);
+
+  v_session_v := (public.admit_youtube_upload(
+      v_post_v, v_acct_v, v_u_a, v_media_v, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  PERFORM public.claim_youtube_upload_session(v_session_v, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session_v, v_lease, 'reconcile',
+    'the provider may already hold a video');
+
+  UPDATE public.youtube_upload_sessions
+     SET updated_at = '1999-01-01T00:00:00Z',
+         -- The lease the claim granted outlives the release, and the terminal
+         -- scan respects a live one: it is expired here, the way the death of
+         -- the worker would have expired it.
+         lease_expires_at = now() - interval '1 minute'
+   WHERE id = v_session_v;
+
+  -- ONE slot per scan. The terminal scan takes the third session. The
+  -- fanout scan has to leave the poisoned candidate out and spend its slot
+  -- on the valid fanout behind it. Without the exclusion, the fanout scan
+  -- would pick the poisoned candidate, the recovery would refuse it, and the
+  -- valid fanout behind it would stay open.
+  v_result := public.reconcile_youtube_upload_fanouts(1);
+
+  ASSERT (v_result -> 'terminal_rows' ->> 'examined')::integer = 1,
+    'Y74 the pass settled the row the terminal scan owns';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_w) = 'failed',
+    'Y74 the row of the valid fanout is the one its own attempt settled';
+  ASSERT (v_result ->> 'fanouts_recovered')::integer = 1,
+    'Y74 the slot of the fanout scan reaches the work behind the poisoned candidate';
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_closed}'
+            FROM public.posts WHERE id = v_post_w) = 'true',
+    'Y74 the valid fanout behind the poisoned candidate is closed';
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_closed}'
+            FROM public.posts WHERE id = v_post_p) IS DISTINCT FROM 'true',
+    'Y74 the poisoned fanout is not closed';
+
+  RAISE NOTICE 'PASS Y74: the fanout scan leaves out a candidate it can only refuse';
+END
+$y74_fanout_scan$;
+
+
+-- ---------------------------------------------------------------------------
+-- Y75: THE DISCONNECT SCAN TAKES THE PARENTS IN ONE SHARED ORDER.
+--
+-- Two disconnects whose sessions share two posts can otherwise scan them in
+-- opposite orders: each transaction holds the first parent lock and waits
+-- for the parent the other holds, and PostgreSQL aborts one of them. The
+-- scan is ordered by parent, then session.
+--
+-- The order is a property of the code, so it is proved on the code.
+-- ---------------------------------------------------------------------------
+DO $y75_disconnect_order$
+DECLARE
+  v_def  text;
+  v_lock integer;
+  v_order integer;
+BEGIN
+  SELECT pg_get_functiondef(p.oid) INTO v_def
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'terminalize_youtube_upload_sessions_of_account';
+  ASSERT v_def IS NOT NULL,
+    'Y75 the disconnect writer exists';
+
+  v_lock := position('youtube_upload_lock_scope' IN v_def);
+  ASSERT v_lock > 0,
+    'Y75 the disconnect writer takes its scope through the shared helper';
+
+  -- The scan orders by parent before any lock is taken: the order is the one
+  -- every writer across parents shares.
+  v_order := position('ORDER BY s.post_id, s.id' IN v_def);
+  ASSERT v_order > 0 AND v_order < v_lock,
+    'Y75 the scan takes the parents in the shared order, before any of them is locked';
+
+  RAISE NOTICE 'PASS Y75: the disconnect scan takes the parents in one shared order';
+END
+$y75_disconnect_order$;
+
+-- ---------------------------------------------------------------------------
+-- Y76: THE RECOVERY READS ITS SESSION UNDER THE SHARED LOCK.
+--
+-- The authority gate and the closure read the session row. A read that stayed
+-- outside the lock could use a snapshot another writer changed in between,
+-- so the scope is taken through the shared lock helper and the row is read
+-- again under it, before the gate and the closure.
+--
+-- The order is a property of the code, so it is proved on the code.
+-- ---------------------------------------------------------------------------
+DO $y76_recovery_lock$
+DECLARE
+  v_def         text;
+  v_stmt        text;
+  v_seen_lock   boolean := false;
+  v_seen_reread boolean := false;
+BEGIN
+  SELECT pg_get_functiondef(p.oid) INTO v_def
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'recover_youtube_upload_fanout';
+  ASSERT v_def IS NOT NULL,
+    'Y76 the recovery writer exists';
+
+  -- Statement by statement: the lock helper comes first, and the session row
+  -- is read again AFTER it. The read before the lock is the existence probe;
+  -- the read that matters is the one under the lock.
+  FOR v_stmt IN SELECT unnest(string_to_array(v_def, ';')) LOOP
+    IF NOT v_seen_lock AND position('youtube_upload_lock_scope' IN v_stmt) > 0 THEN
+      v_seen_lock := true;
+    END IF;
+    IF v_seen_lock AND position('SELECT * INTO v_session' IN v_stmt) > 0 THEN
+      v_seen_reread := true;
+      EXIT;
+    END IF;
+  END LOOP;
+
+  ASSERT v_seen_lock,
+    'Y76 the recovery takes its scope through the shared helper';
+  ASSERT v_seen_reread,
+    'Y76 the session row is read again under the lock';
+
+  RAISE NOTICE 'PASS Y76: the recovery reads its session under the shared lock';
+END
+$y76_recovery_lock$;
+
+-- ---------------------------------------------------------------------------
+-- Y77: THE IDENTITY OF AN ADMITTED MEDIA ROW IS FENCED IN THE DATABASE.
+--
+-- The owner may rewrite a media row's storage_bucket, file_path and
+-- workspace_id at any time, and a direct row update does not pass through
+-- the worker. On a row an OPEN upload session reads, the change bumps the
+-- content version: the session pinned the version it was admitted with, and
+-- the version fence refuses the upload instead of reading the object the row
+-- now names. A row no session reads keeps its old behaviour.
+-- ---------------------------------------------------------------------------
+DO $y77_media_identity_guard$
+DECLARE
+  v_acct_a uuid;
+  v_post_a uuid;
+  v_media_a uuid;
+  v_acct_b uuid;
+  v_post_b uuid;
+  v_media_b uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_lease   uuid := 'e4000000-0000-4000-8000-000000000001';
+  v_session_a uuid;
+BEGIN
+  -- A row an open session reads: an identity change is a replacement, and
+  -- the version the session pinned no longer names the object.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y77a') f;
+  v_session_a := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  UPDATE public.media_files
+     SET file_path = 'uploads/y77a-renamed.mp4'
+   WHERE id = v_media_a;
+
+  ASSERT (SELECT current_object_version FROM public.media_files WHERE id = v_media_a) = 2,
+    'Y77 the identity change bumped the content version the session pinned';
+
+  BEGIN
+    PERFORM public.claim_youtube_upload_session(v_session_a, v_lease, 180000);
+    RAISE EXCEPTION 'Y77 the upload was not refused after its media changed identity';
+  EXCEPTION
+    WHEN SQLSTATE 'YUS03' OR SQLSTATE 'YUS04' THEN
+      RAISE NOTICE 'PASS Y77: the identity change refuses the upload';
+  END;
+
+  -- The same change on a row no open session reads moves nothing.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_b, v_post_b, v_media_b
+    FROM pg_temp.new_youtube_fixture('y77b') f;
+
+  UPDATE public.media_files
+     SET file_path = 'uploads/y77b-renamed.mp4'
+   WHERE id = v_media_b;
+
+  ASSERT (SELECT current_object_version FROM public.media_files WHERE id = v_media_b) = 1,
+    'Y77 a row no open session reads keeps its version';
+
+  RAISE NOTICE 'PASS Y77: the identity of an admitted media row is fenced in the database';
+END
+$y77_media_identity_guard$;
 
 ROLLBACK;
 
