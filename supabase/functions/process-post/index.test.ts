@@ -1,5 +1,6 @@
-import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { anonKey, integrationTest, supabaseUrl } from "../_shared/integrationTestGuard.ts";
+import { YOUTUBE_UPLOAD_REASON, youtubeUploadPublicMessage } from "./youtubeUploadPolicy.ts";
 
 const FUNCTION_URL = `${supabaseUrl}/functions/v1/process-post`;
 const ANON_KEY = anonKey;
@@ -144,4 +145,136 @@ integrationTest("process-post: returns 404 for non-existent post with valid auth
   assertEquals(response.status, 404);
   const body = await response.json();
   assertEquals(body.error, "Post not found");
+});
+
+/**
+ * The entrypoint, loaded with its port stubbed.
+ *
+ * The module binds a port when it is loaded, so the stub is what lets a test
+ * reach the code inside it. The query keeps this a module of its own, so the
+ * other process-post tests keep theirs.
+ */
+async function loadProcessPost(): Promise<typeof import("./index.ts")> {
+  const previousServe = Deno.serve;
+  Deno.serve = ((_registered: (request: Request) => Response | Promise<Response>) => ({
+    finished: Promise.resolve(),
+    shutdown: () => Promise.resolve(),
+  })) as typeof Deno.serve;
+  try {
+    return (await import("./index.ts?process-post-unit-test")) as typeof import("./index.ts");
+  } finally {
+    Deno.serve = previousServe;
+  }
+}
+
+Deno.test("a terminal failure never promises a check that is not coming", async () => {
+  const { youtubeContinuationResponse } = await loadProcessPost();
+  const response = youtubeContinuationResponse({
+    status: "failed",
+    reason: YOUTUBE_UPLOAD_REASON.unknown,
+  });
+
+  assertEquals(response.status, 500);
+  const body = await response.json();
+  // The session was released for good, so the answer is the reconcile one.
+  assertEquals(body.error, youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile));
+  // The reason code is the one the caller matches on, and it is unchanged.
+  assertEquals(body.reason, YOUTUBE_UPLOAD_REASON.unknown);
+  assert(!JSON.stringify(body).includes("checked again shortly"));
+});
+
+Deno.test("a refusal still answers 503 with its own message", async () => {
+  const { youtubeContinuationResponse } = await loadProcessPost();
+  const response = youtubeContinuationResponse({
+    status: "refused",
+    reason: YOUTUBE_UPLOAD_REASON.lease_conflict,
+  });
+
+  // A refusal is safe to repeat: the next reconciler pass looks again.
+  assertEquals(response.status, 503);
+  const body = await response.json();
+  assertEquals(body.error, youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.lease_conflict));
+  assertEquals(body.reason, YOUTUBE_UPLOAD_REASON.lease_conflict);
+});
+
+Deno.test("a reopened session keeps the pending row of its first admission", async () => {
+  const { openYoutubeUploadSession } = await loadProcessPost();
+  const admits: Array<string | null> = ["first-row", null];
+  const claims: Array<string | null> = ["session_expired", null];
+  let admitRound = 0;
+  let claimRound = 0;
+  const store = {
+    async admit() {
+      const platformPostId = admits[admitRound++] ?? null;
+      return { record: { id: "session-1" }, refused: null, platformPostId };
+    },
+    async claim() {
+      const refused = claims[claimRound++] ?? null;
+      return { record: refused ? null : { id: "session-1" }, refused };
+    },
+  };
+
+  const opened = await openYoutubeUploadSession(
+    store as never,
+    {} as never,
+    "lease-token",
+    60_000,
+  );
+
+  // The second admission carried no row id, and the row the upload settles is
+  // still the row the first admission created.
+  assertEquals(opened.platformPostId, "first-row");
+  assertEquals(opened.refused, null);
+  assertEquals(admitRound, 2);
+  assertEquals(claimRound, 2);
+});
+
+Deno.test("a claim that throws after the admission hands the row to the recovery", async () => {
+  const { openYoutubeUploadSession } = await loadProcessPost();
+  const store = {
+    async admit() {
+      return { record: { id: "session-1" }, refused: null, platformPostId: "first-row" };
+    },
+    async claim() {
+      throw new Error("transport lost the claim answer");
+    },
+  };
+
+  let thrown: unknown;
+  try {
+    await openYoutubeUploadSession(store as never, {} as never, "lease-token", 60_000);
+  } catch (error) {
+    thrown = error;
+  }
+
+  // The row the admission created is named, so the generic failure writer
+  // records nothing beside it and the scope keeps the destination.
+  assert(thrown instanceof Error);
+  assertEquals((thrown as { platformPostId?: string | null }).platformPostId, "first-row");
+  assertEquals((thrown as { selfWroteRows?: boolean }).selfWroteRows, true);
+});
+
+Deno.test("a claim that throws before any row exists carries no row id", async () => {
+  const { openYoutubeUploadSession } = await loadProcessPost();
+  const store = {
+    async admit() {
+      return { record: { id: "session-1" }, refused: null, platformPostId: null };
+    },
+    async claim() {
+      throw new Error("transport lost the claim answer");
+    },
+  };
+
+  let thrown: unknown;
+  try {
+    await openYoutubeUploadSession(store as never, {} as never, "lease-token", 60_000);
+  } catch (error) {
+    thrown = error;
+  }
+
+  // Nothing was admitted, so there is no owned row to preserve: the original
+  // error travels unchanged.
+  assert(thrown instanceof Error);
+  assertEquals((thrown as Error).message, "transport lost the claim answer");
+  assertEquals((thrown as { platformPostId?: string | null }).platformPostId, undefined);
 });

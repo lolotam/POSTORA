@@ -74,6 +74,29 @@ export function summarizeRows(rows: PlatformRow[]): ResultsSummary {
   };
 }
 
+/**
+ * The status of a post, from the destinations it has.
+ *
+ * A destination that left its row open is neither a success nor a failure: the
+ * post stays PROCESSING until the destination that owns the row settles it.
+ *
+ * Rolling the post up to a terminal state while a row under it is still open
+ * is how a post ends up "failed" with a publication that was never refused --
+ * and how the customer is offered a retry that publishes a second video.
+ *
+ * The caller uses this where it KNOWS that a destination of OURS is open: a
+ * container that the provider is still processing is not an open row of ours,
+ * and the post may roll up without it.
+ */
+export function parentStatusForDestinations(
+  results: PlatformResultSummary[],
+): "processing" | "completed" | "failed" {
+  if (results.some((result) => result.status === "pending")) return "processing";
+  const hasSuccess = results.some((result) => result.status === "success");
+  const hasFailed = results.some((result) => result.status === "failed");
+  return hasSuccess && !hasFailed ? "completed" : hasFailed && !hasSuccess ? "failed" : "completed";
+}
+
 export interface WebhookResultEntry {
   status: string;
   post_url: string | null;

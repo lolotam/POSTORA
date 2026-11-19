@@ -206,12 +206,9 @@ export function buildYoutubeUploadRequest(
 
   const notifySubscribers = booleanOrDefault(metadata.youtube_notify_subscribers, true);
   const part = parts.join(",");
-  const url =
-    `${YOUTUBE_UPLOAD_ENDPOINT}?uploadType=resumable&part=${part}` +
-    (notifySubscribers ? "" : "&notifySubscribers=false");
 
   return {
-    url,
+    url: buildYoutubeUploadUrl({ part, notifySubscribers }),
     part,
     body,
     notifySubscribers,
@@ -219,13 +216,52 @@ export function buildYoutubeUploadRequest(
   };
 }
 
-export interface YoutubeUploadInit {
-  accessToken: string;
-  videoSize: number;
-  mimeType: string;
-  request: YoutubeUploadRequest;
-  /** Injectable for tests; defaults to the global fetch. */
-  fetchImpl?: typeof fetch;
+/**
+ * The query settings of the provider request.
+ *
+ * They are not part of the body, and they decide what the request DOES: the
+ * parts name the fields the provider is asked to write, and the subscriber
+ * notification says whether the channel's subscribers are told about the
+ * video.
+ *
+ * A worker that opens a provider session later has to make the SAME request,
+ * so these settings travel with the session.
+ */
+export type YoutubeUploadRequestSettings = {
+  mimeType?: string;
+  /** The parts the request writes, as the provider names them. */
+  part: string;
+  /** Whether the channel's subscribers are told about the video. */
+  notifySubscribers: boolean;
+};
+
+/**
+ * The URL of the provider request.
+ *
+ * It is built here and nowhere else, so a request that is made later carries
+ * the same parts and the same subscriber notification as the one that was
+ * approved.
+ */
+export function buildYoutubeUploadUrl(settings: YoutubeUploadRequestSettings): string {
+  return (
+    `${YOUTUBE_UPLOAD_ENDPOINT}?uploadType=resumable&part=${settings.part}` +
+    (settings.notifySubscribers ? "" : "&notifySubscribers=false")
+  );
+}
+
+/**
+ * The settings of a request that is rebuilt from a stored body.
+ *
+ * The parts are the names of the fields the body carries, and the subscriber
+ * notification is the provider's default. It is the fallback for a session
+ * that was admitted without its own settings: the request writes the fields
+ * the body carries and notifies the way YouTube does by default.
+ */
+export function youtubeUploadSettingsFromBody(
+  body: Record<string, unknown>,
+): YoutubeUploadRequestSettings {
+  const part = Object.keys(body).sort().join(",") || "snippet,status";
+  return { part, notifySubscribers: true };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -234,15 +270,19 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** Translates a failed upload handshake into the message the caller shows. */
-function uploadFailureMessage(status: number, errorData: unknown, statusText: string): string {
+export function youtubeUploadErrorReason(errorData: unknown): unknown {
+  const errors = asRecord(asRecord(errorData)?.error)?.errors;
+  return Array.isArray(errors) ? asRecord(errors[0])?.reason : undefined;
+}
+
+export function uploadFailureMessage(status: number, errorData: unknown, statusText: string): string {
   const payload = asRecord(asRecord(errorData)?.error);
   const message = typeof payload?.message === "string" ? payload.message : undefined;
   if (status === 401) {
     return "YouTube authentication expired. Please reconnect your YouTube account.";
   }
   if (status === 403) {
-    const errors = payload?.errors;
-    const reason = Array.isArray(errors) ? asRecord(errors[0])?.reason : undefined;
+    const reason = youtubeUploadErrorReason(errorData);
     if (reason === "quotaExceeded") {
       return "YouTube API quota exceeded. Please try again tomorrow.";
     }
@@ -252,39 +292,4 @@ function uploadFailureMessage(status: number, errorData: unknown, statusText: st
     return `YouTube permission error: ${message || "Access denied"}`;
   }
   return `YouTube API error: ${message || statusText}`;
-}
-
-/**
- * Starts a resumable upload and returns the URL the video bytes go to.
- *
- * The provider's failure modes are translated here so the caller sees the
- * same messages it always has.
- */
-export async function initiateYoutubeUpload(init: YoutubeUploadInit): Promise<string> {
-  const doFetch = init.fetchImpl ?? fetch;
-
-  const initResponse = await doFetch(init.request.url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${init.accessToken}`,
-      "Content-Type": "application/json; charset=UTF-8",
-      "X-Upload-Content-Length": String(init.videoSize),
-      "X-Upload-Content-Type": init.mimeType,
-    },
-    body: JSON.stringify(init.request.body),
-  });
-
-  if (!initResponse.ok) {
-    const errorData = await initResponse.json().catch(() => ({}));
-    console.error("YouTube init error:", errorData);
-    throw new Error(
-      uploadFailureMessage(initResponse.status, errorData, initResponse.statusText),
-    );
-  }
-
-  const uploadUrl = initResponse.headers.get("Location");
-  if (!uploadUrl) {
-    throw new Error("YouTube did not return an upload URL");
-  }
-  return uploadUrl;
 }

@@ -158,14 +158,23 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
       ];
       return Response.json(rows.map(({ id }) => ({
         id,
-        file_path: signingFailure ? `${id}.jpg` : `https://media-fixture.invalid/${id}.jpg`,
+        user_id: OWNER,
+        // A storage object sits under the owner's own prefix; a CDN object
+        // carries the delivery URL.
+        file_path: signingFailure ? `${OWNER}/${id}.jpg` : `https://media-fixture.invalid/${id}.jpg`,
         file_type: "image",
         storage_bucket: signingFailure ? "media" : "openinary",
         mime_type: "image/jpeg",
       })));
     }
     if (table === "media_file_providers") return Response.json([]);
-    if (table === "app_settings") return Response.json(null);
+    if (table === "app_settings") {
+      // The CDN that serves the fixture media has to be a configured origin: a
+      // host the deployment did not name is never read from.
+      return Response.json(url.searchParams.get("key") === "eq.cdn_storage"
+        ? { value: { read_preference: "openinary", openinary: { serverUrl: "https://media-fixture.invalid" } } }
+        : null);
+    }
     if (table === "social_accounts") {
       assertEquals(url.searchParams.get("user_id"), `eq.${OWNER}`);
       assertEquals(url.searchParams.get("id"), `in.(${accountIds.join(",")})`);

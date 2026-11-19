@@ -101,10 +101,16 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
       }
       return Response.json(url.searchParams.get("select")?.includes("platform_posts") ? { ...post, platform_posts: rows } : post);
     }
-    if (table === "media_files") return Response.json(post.media_file_ids.map((id) => ({ id, file_path: `https://media-fixture.invalid/${id}.${mode === "reel" ? "mp4" : "jpg"}`,
+    if (table === "media_files") return Response.json(post.media_file_ids.map((id) => ({ id, user_id: OWNER, file_path: `https://media-fixture.invalid/${id}.${mode === "reel" ? "mp4" : "jpg"}`,
       file_type: mode === "reel" ? "video" : "image", storage_bucket: "openinary", mime_type: mode === "reel" ? "video/mp4" : "image/jpeg" })));
     if (table === "media_file_providers") return Response.json([]);
-    if (table === "app_settings") return Response.json(null);
+    if (table === "app_settings") {
+      // The CDN that serves the fixture media has to be a configured origin: a
+      // host the deployment did not name is never read from.
+      return Response.json(url.searchParams.get("key") === "eq.cdn_storage"
+        ? { value: { read_preference: "openinary", openinary: { serverUrl: "https://media-fixture.invalid" } } }
+        : null);
+    }
     if (table === "rpc/prepare_instagram_story") {
       const args = await request.json();
       assertEquals(args, { p_post_id: POST, p_account_id: ACCOUNT, p_user_id: OWNER });

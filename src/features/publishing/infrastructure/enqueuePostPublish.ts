@@ -6,9 +6,10 @@ interface PublishRequest {
   mode: "publish_now" | "retry" | "retry_story";
   accountIds?: string[];
   resultId?: string;
+  replacementMediaIds?: string[];
 }
 
-type RefusalReason = "not_found" | "not_publishable" | "not_retryable" | "no_targets";
+type RefusalReason = "not_found" | "not_publishable" | "not_retryable" | "no_targets" | "invalid_media";
 type PublishAcceptance =
   | { accepted: true; alreadyRunning: boolean }
   | { accepted: false; reason: RefusalReason | "error" };
@@ -18,13 +19,18 @@ function isRecord(payload: unknown): payload is Record<string, unknown> {
 }
 
 function isRefusal(reason: unknown): reason is RefusalReason {
-  return reason === "not_found" || reason === "not_publishable" || reason === "not_retryable" || reason === "no_targets";
+  return reason === "not_found" || reason === "not_publishable" || reason === "not_retryable" || reason === "no_targets" || reason === "invalid_media";
 }
 
-export async function enqueuePostPublish({ postId, mode, accountIds, resultId }: PublishRequest): Promise<PublishAcceptance> {
+export async function enqueuePostPublish({ postId, mode, accountIds, resultId, replacementMediaIds }: PublishRequest): Promise<PublishAcceptance> {
   try {
     const { data: acknowledgement, error } = await supabase.functions.invoke<unknown>("enqueue-post-publish", {
-      body: { post_id: postId, mode, ...(accountIds ? { account_ids: accountIds } : {}), ...(resultId ? { result_id: resultId } : {}) },
+      body: {
+        post_id: postId, mode,
+        ...(accountIds ? { account_ids: accountIds } : {}),
+        ...(resultId ? { result_id: resultId } : {}),
+        ...(replacementMediaIds ? { replacement_media_ids: replacementMediaIds } : {}),
+      },
     });
     if (error instanceof FunctionsHttpError) {
       const refusal: unknown = await error.context.json();

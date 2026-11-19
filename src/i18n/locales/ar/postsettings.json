@@ -80,6 +80,7 @@
     "thumbnailFile": "ملف الصورة المصغرة",
     "thumbnailSpecHelp": "JPG/PNG/GIF/BMP - يفضل ≤ 2 ميجابايت - الحجم المثالي 1280×720 (16:9).",
     "thumbnailUrl": "رابط الصورة المصغرة",
+    "thumbnailUrlHelp": "للنشر المباشر على يوتيوب، استخدم رابط HTTPS لصورة محفوظة على مصدر وسائط معتمد.",
     "titleOverride": "تخصيص العنوان",
     "titleOverridePlaceholder": "عنوان مخصص لـ YouTube بس (بيستخدم العنوان الأساسي كبديل)",
     "titleOverrideTooltip": "عنوان مخصص لـ YouTube (بيتجاوز الوصف الأساسي)",

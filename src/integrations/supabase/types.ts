@@ -11917,6 +11917,10 @@ export type Database = {
         Args: { p_post_id: string; p_user_id: string }
         Returns: string | null
       }
+      request_post_retry_with_media: {
+        Args: { p_post_id: string; p_user_id: string; p_media_ids: string[]; p_account_ids?: string[] }
+        Returns: Json
+      }
       request_post_retry: {
         Args: { p_post_id: string; p_user_id: string; p_account_ids?: string[] }
         Returns: Json

@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
+import { failedRetryTargets } from "@/hooks/history/retryTargets";
 import { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { CheckCircle2, FileImage, FileVideo, Loader2, RefreshCw, Upload } from "lucide-react";
@@ -23,6 +24,7 @@ interface PlatformResult {
   platform: string;
   status: string | null;
   social_account_id?: string | null;
+  response_data?: Record<string, unknown> | null;
 }
 
 interface PostData {
@@ -52,6 +54,8 @@ export function RetryAccountDialog({
 }: RetryAccountDialogProps) {
   const { t } = useTranslation("history");
 
+  const eligibleAccounts = new Set(failedRetryTargets(post?.platformResults).accountIds);
+
   return (
     <Dialog open={!!post} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
@@ -68,7 +72,7 @@ export function RetryAccountDialog({
               <h4 className="text-sm font-medium text-muted-foreground">{t("retryDialog.failedPlatforms", "Failed Platforms")}</h4>
               <div className="flex flex-wrap gap-2">
                 {post.platformResults
-                  ?.filter((r) => r.status === "failed")
+                  ?.filter((r) => r.status === "failed" && r.social_account_id && eligibleAccounts.has(r.social_account_id))
                   .map((result) => {
                     const accountInfo = result.social_account_id
                       ? accountsCache[result.social_account_id]
