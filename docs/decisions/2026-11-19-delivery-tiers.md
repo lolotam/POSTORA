@@ -15,3 +15,9 @@ The three delivery tiers are recorded as a standing rule in `CLAUDE.md` and `AGE
 - Earlier rule: a PR merges only after Waleed says to merge. The tiers replace it for Light work (merge on green CI). A PR that has a migration, money or permissions/auth still merges only after Waleed's card approval.
 - Earlier rule: every PR is held for review bots. Light skips the bot wait; Medium and Heavy keep it.
 - The implementer order in the tiers (Kimi, MiniMax, GLM, Grok, Claude Sonnet) differs from the earlier instruction of 2026-11-19 that put Antigravity (Gemini 4 Neon, high) first and OpenCode GLM 5.3 Fast as its fallback. This record follows the tier text; whether Antigravity keeps a place in front of the list is left to Waleed.
+
+## Update 2026-11-20: skills per tier and implementer lane
+
+- Waleed agreed to record the skills per tier: Light none; Medium `clean-code-guard` and `test-guard` run by the implementer; Heavy adds `waleed-security-reviewer`; the manager runs `/code-review` once on the whole PR at the end (it is built into Claude Code and not available to other CLIs).
+- Waleed replaced Grok with OpenCode `zai-coding-plan/glm-5.3-flash` in the implementer order. The `vercel/zai/...` GLM ids fail on the Vercel free tier and must not be used.
+- Still open for Waleed: whether Antigravity (Gemini 4 Neon, high) keeps a place in front of Kimi, as he asked on 2026-11-19.
