@@ -44,6 +44,7 @@ export interface YouTubeDisconnectAccount {
   refreshToken: string | null;
   isActive: boolean;
   accountMetadata: Record<string, unknown> | null;
+  updatedAt: string | null;
 }
 
 export interface YouTubeOAuthPorts {
@@ -83,6 +84,7 @@ export interface YouTubeOAuthPorts {
       accountId: string;
       userId: string;
       updatedAt: string;
+      expectedUpdatedAt: string | null;
       accountMetadata: Record<string, unknown>;
     }): Promise<void>;
   };
@@ -233,9 +235,15 @@ export function createYouTubeOAuthHandler(
         accountId: account.id,
         userId,
         updatedAt: ports.clock.now().toISOString(),
+        expectedUpdatedAt: account.updatedAt,
         accountMetadata: stripGrantMetadata(account.accountMetadata),
       });
-    } catch {
+    } catch (error) {
+      // A reconnect that landed while this request awaited Google must not be wiped
+      // by a clear based on the earlier snapshot.
+      if (errorCode(error) === "account_changed") {
+        return refuse(req, "disconnect", "account_changed", userId, 409);
+      }
       return refuse(req, "disconnect", "account_clear_failed", userId, 500);
     }
 

@@ -49,6 +49,7 @@ function fixture(overrides: {
   revokeResult?: GoogleRevokeResult;
   revokeThrows?: boolean;
   clearError?: boolean;
+  clearConflict?: boolean;
 } = {}) {
   const state = opaqueValue();
   const authorizationCode = opaqueValue();
@@ -151,6 +152,7 @@ function fixture(overrides: {
           refreshToken: account.refreshToken,
           isActive: account.isActive,
           accountMetadata: account.metadata,
+          updatedAt: "2026-11-19T11:00:00.000Z",
           ...overrides.disconnectAccount,
         });
       },
@@ -163,6 +165,9 @@ function fixture(overrides: {
         calls.clearCredentials++;
         order.push("clearCredentials");
         if (overrides.clearError) return Promise.reject(new Error("metadata write failed"));
+        if (overrides.clearConflict) {
+          return Promise.reject(Object.assign(new Error("account_changed"), { code: "account_changed" }));
+        }
         account.accessToken = null;
         account.refreshToken = null;
         account.isActive = false;
@@ -631,4 +636,17 @@ Deno.test("revokeGoogleToken posts token in form body (never URL) and classifies
     await revokeGoogleToken(failingFetch, token),
     { ok: false, status: 502, reason: "google_revoke_failed" },
   );
+});
+
+Deno.test("disconnect returns a conflict and keeps a newer reconnection when the account changed meanwhile", async () => {
+  const f = fixture({ activeSharingGrantCount: 0, clearConflict: true });
+  const response = await f.handler(post({ action: "disconnect", account_id: ACCOUNT_ID }));
+  const text = await response.text();
+
+  assertEquals(response.status, 409);
+  assertEquals(JSON.parse(text), { error: "account_changed" });
+  assert(!text.includes(f.accessToken));
+  assert(!text.includes(f.storedRefreshToken));
+  assertEquals(f.account.isActive, true);
+  assertEquals(f.account.refreshToken, f.storedRefreshToken);
 });

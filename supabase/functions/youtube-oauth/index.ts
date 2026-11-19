@@ -155,7 +155,7 @@ const ports: YouTubeOAuthPorts = {
     load: async ({ accountId, userId }) => {
       const { data, error } = await admin
         .from("social_accounts")
-        .select("id, user_id, access_token, refresh_token, is_active, auth_provider, account_metadata")
+        .select("id, user_id, access_token, refresh_token, is_active, auth_provider, account_metadata, updated_at")
         .eq("id", accountId)
         .eq("user_id", userId)
         .eq("platform", "youtube")
@@ -172,12 +172,14 @@ const ports: YouTubeOAuthPorts = {
         accountMetadata: metadata && typeof metadata === "object" && !Array.isArray(metadata)
           ? (metadata as Record<string, unknown>)
           : null,
+        updatedAt: (data.updated_at as string | null) ?? null,
       };
     },
     // Revoking at Google ends the whole authorization of that Google account, and two
     // channels connected separately hold different refresh token strings for the same
-    // authorization. Matching on the token string would miss a sibling and break it, so
-    // any other active native channel of this user blocks the revoke.
+    // authorization, and a native channel may have no refresh token at all. Matching on
+    // the token would miss a sibling and break it, so any other active native channel of
+    // this user blocks the revoke (null auth_provider counts as native).
     countOtherActiveNativeAccounts: async ({ userId, excludeAccountId }) => {
       const { count, error } = await admin
         .from("social_accounts")
@@ -185,13 +187,13 @@ const ports: YouTubeOAuthPorts = {
         .eq("user_id", userId)
         .eq("platform", "youtube")
         .eq("is_active", true)
-        .not("refresh_token", "is", null)
+        .or("auth_provider.is.null,auth_provider.neq.composio")
         .neq("id", excludeAccountId);
       if (error || count === null) throw rpcFailure(error ?? {});
       return count;
     },
-    clearCredentials: async ({ accountId, userId, updatedAt, accountMetadata }) => {
-      const { data, error } = await admin
+    clearCredentials: async ({ accountId, userId, updatedAt, expectedUpdatedAt, accountMetadata }) => {
+      let update = admin
         .from("social_accounts")
         .update({
           access_token: null,
@@ -206,10 +208,17 @@ const ports: YouTubeOAuthPorts = {
         })
         .eq("id", accountId)
         .eq("user_id", userId)
-        .eq("platform", "youtube")
-        .select("id")
-        .maybeSingle();
-      if (error || !data) throw rpcFailure(error ?? {});
+        .eq("platform", "youtube");
+      // Conditional on the snapshot this disconnect decided on: a reconnect that wrote
+      // newer credentials in the meantime changes updated_at and matches no row.
+      update = expectedUpdatedAt === null ? update.is("updated_at", null) : update.eq("updated_at", expectedUpdatedAt);
+      const { data, error } = await update.select("id").maybeSingle();
+      if (error) throw rpcFailure(error);
+      if (!data) {
+        const conflict = new Error("account_changed") as Error & { code?: string };
+        conflict.code = "account_changed";
+        throw conflict;
+      }
     },
   },
   clock: { now: () => new Date() },
