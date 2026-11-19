@@ -256,3 +256,67 @@ Deno.test("refreshNativeYouTubeAccount marks needs_reauth once on invalid_grant"
   assertEquals(result.shouldAlert, true);
   assertEquals(recordedInvalidGrant, 1);
 });
+
+Deno.test("admin force refresh recovers a needs_reauth account under the lease and clears the flag", async () => {
+  const now = Date.parse("2026-11-20T12:00:00.000Z");
+  let stored = false;
+  const result = await refreshNativeYouTubeAccount(
+    {
+      id: "account-1",
+      user_id: "owner-1",
+      access_token: ["stale", "acc"].join("-"),
+      refresh_token: ["old", "ref"].join("-"),
+      token_expires_at: new Date(now - 60_000).toISOString(),
+      needs_reauth: true,
+    },
+    {
+      admin: {},
+      force: true,
+      adminRecovery: true,
+      store: leaseStore({
+        storeTokenWithLease: async () => {
+          stored = true;
+          return { ok: true };
+        },
+      }),
+      nowMs: () => now,
+      exchange: async () => ({
+        ok: true,
+        accessToken: ["recovered", "acc"].join("-"),
+        expiresIn: 3600,
+        refreshToken: null,
+        scope: null,
+      }),
+    },
+  );
+  assertEquals(result.status, "refreshed");
+  assertEquals(result.accessToken, ["recovered", "acc"].join("-"));
+  assertEquals(stored, true);
+});
+
+Deno.test("without the admin recovery option a needs_reauth account is still refused", async () => {
+  const now = Date.parse("2026-11-20T12:00:00.000Z");
+  let exchanged = false;
+  const result = await refreshNativeYouTubeAccount(
+    {
+      id: "account-1",
+      user_id: "owner-1",
+      access_token: ["stale", "acc"].join("-"),
+      refresh_token: ["old", "ref"].join("-"),
+      token_expires_at: new Date(now - 60_000).toISOString(),
+      needs_reauth: true,
+    },
+    {
+      admin: {},
+      force: true,
+      store: leaseStore(),
+      nowMs: () => now,
+      exchange: async () => {
+        exchanged = true;
+        throw new Error("must not exchange without adminRecovery");
+      },
+    },
+  );
+  assertEquals(result.status, "needs_reauth");
+  assertEquals(exchanged, false);
+});

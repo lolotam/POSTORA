@@ -207,7 +207,7 @@ import {
   runYoutubeFollowUps,
   type YoutubeFollowUpDeps,
 } from "./youtubeUploadFollowUps.ts";
-import { refreshYoutubeAccessToken } from "./youtubeTokenRefresh.ts";
+import { refreshYoutubeAccessToken, youtubeJitRefusalStopsPublish } from "./youtubeTokenRefresh.ts";
 import {
   dropRecordedStory,
   readUnrecordedStory,
@@ -2997,6 +2997,15 @@ Deno.serve(async (req) => {
       }
 
       if (!token.reason) continue;
+
+      // A reauthentication refusal stops the publish for this account even
+      // when the cached access token still looks usable: the refresh just
+      // proved the grant is dead. Clearing the in-memory credential makes the
+      // shared admission check refuse the account before the provider is
+      // contacted — the same rule the continuation path applies.
+      if (youtubeJitRefusalStopsPublish(token)) {
+        account.access_token = null;
+      }
 
       console.warn(`[JIT] The YouTube token of account ${account.id} was not refreshed (${token.reason}) (source: ${postSource}, post: ${post_id})`);
 

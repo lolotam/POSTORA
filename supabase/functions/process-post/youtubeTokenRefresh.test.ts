@@ -1,6 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
-import { refreshYoutubeAccessToken } from "./youtubeTokenRefresh.ts";
+import {
+  refreshYoutubeAccessToken,
+  youtubeJitRefusalStopsPublish,
+} from "./youtubeTokenRefresh.ts";
 
 // The fake credentials are BUILT, not written down. A literal that looks like
 // a token is a secret to every scanner that reads the diff, and a scanner that
@@ -235,4 +238,113 @@ Deno.test("invalid_grant marks needs_reauth via fenced RPC", async () => {
     assertEquals(result.accessToken, null);
     assertEquals(recordedInvalidGrant, true);
   });
+});
+
+Deno.test("no refresh token returns the stored token while the credential policy still accepts it", async () => {
+  await withGoogleEnv(async () => {
+    const storedToken = fake("still-valid");
+    // Inside the refresh window, still strictly in the future: the credential
+    // policy accepts it, and the old behaviour handed it back so the publish
+    // could proceed.
+    const storedExpiry = new Date(NOW + 10 * 60_000).toISOString();
+
+    let googleCalled = false;
+    const db = createClient("https://db.invalid", fake("fixture"), {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (input, init) => {
+          const url = new URL(new Request(input, init).url);
+          if (url.pathname.endsWith("/rpc/acquire_youtube_refresh_lease")) {
+            return Promise.resolve(
+              Response.json({ ok: false, reason: "lease_held" }),
+            );
+          }
+          return Promise.resolve(Response.json({
+            id: "account-1",
+            access_token: storedToken,
+            refresh_token: null,
+            token_expires_at: storedExpiry,
+            needs_reauth: false,
+          }));
+        },
+      },
+    });
+
+    const result = await refreshYoutubeAccessToken({
+      supabase: db,
+      account: {
+        id: "account-1",
+        accessToken: storedToken,
+        refreshToken: null,
+        tokenExpiresAt: storedExpiry,
+      },
+      nowMs: NOW,
+      fetchImpl: () => {
+        googleCalled = true;
+        return Promise.reject(new Error("must not call Google without a refresh token"));
+      },
+    });
+
+    assertEquals(result.accessToken, storedToken);
+    assertEquals(result.reason, "no_refresh_token");
+    assertEquals(result.refreshed, false);
+    assertEquals(result.needsReauth, false);
+    assertEquals(googleCalled, false);
+  });
+});
+
+Deno.test("no refresh token with an expired stored credential still refuses", async () => {
+  await withGoogleEnv(async () => {
+    const db = createClient("https://db.invalid", fake("fixture"), {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        fetch: (input, init) => {
+          const url = new URL(new Request(input, init).url);
+          return Promise.resolve(Response.json({
+            id: "account-1",
+            access_token: fake("stale"),
+            refresh_token: null,
+            token_expires_at: new Date(NOW - 60_000).toISOString(),
+            needs_reauth: false,
+          }));
+        },
+      },
+    });
+
+    const result = await refreshYoutubeAccessToken({
+      supabase: db,
+      account: {
+        id: "account-1",
+        accessToken: fake("stale"),
+        refreshToken: null,
+        tokenExpiresAt: new Date(NOW - 60_000).toISOString(),
+      },
+      nowMs: NOW,
+      fetchImpl: () => Promise.reject(new Error("must not call Google")),
+    });
+
+    assertEquals(result.accessToken, null);
+    assertEquals(result.reason, "no_refresh_token");
+  });
+});
+
+Deno.test("a reauthentication refusal stops the publish for the account; retryable and happy outcomes do not", () => {
+  // invalid_grant (or an account already flagged needs_reauth): the stored
+  // grant is dead even when the cached access token still looks usable. The
+  // publish for this account must stop — the same rule the continuation path
+  // applies when youtubeCredentialRefusalReason meets a null token.
+  assertEquals(
+    youtubeJitRefusalStopsPublish({ accessToken: null, needsReauth: true }),
+    true,
+  );
+  // A retryable refusal (lease held, refresh in progress) is not a dead grant.
+  assertEquals(
+    youtubeJitRefusalStopsPublish({ accessToken: null, needsReauth: false }),
+    false,
+  );
+  // A returned token never stops the publish.
+  assertEquals(
+    youtubeJitRefusalStopsPublish({ accessToken: fake("tok"), needsReauth: false }),
+    false,
+  );
 });

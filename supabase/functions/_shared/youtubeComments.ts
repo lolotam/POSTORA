@@ -145,7 +145,10 @@ async function nativeToken(
       ok: true,
       value: {
         token: outcome.accessToken,
-        refreshed: outcome.status !== "fresh",
+        // Only a token this call minted counts as refreshed: a reused token
+        // (e.g. a winner another worker committed) may still 401, and that 401
+        // must get its one forced refresh.
+        refreshed: outcome.status === "refreshed",
       },
     };
   }

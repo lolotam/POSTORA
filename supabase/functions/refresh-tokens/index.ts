@@ -628,9 +628,15 @@ async function refreshSingleAccount(
         }
 
       case 'youtube': {
+        // The administrator force-refresh routes deliberately include accounts
+        // already flagged needs_reauth, so the exchange runs under the lease
+        // with adminRecovery; the store RPC clears the flag only when the new
+        // token is persisted. The cron sweep never sets this: it filters
+        // needs_reauth accounts out of its query.
         const ytResult = await refreshNativeYouTubeAccount(account, {
           admin: supabaseAdmin,
           force: _force,
+          adminRecovery: _force === true,
           maxFailures: MAX_FAILURES_BEFORE_REAUTH,
         });
         if (ytResult.status === 'refreshed' && ytResult.accessToken) {

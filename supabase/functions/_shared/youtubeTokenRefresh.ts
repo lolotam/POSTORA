@@ -127,6 +127,14 @@ export interface RefreshYouTubeAccountOptions {
    * invalid_grant ALWAYS records needs_reauth via recordFailureWithLease.
    */
   recordTransientFailure?: boolean;
+  /**
+   * Administrator recovery mode (force-refresh routes). Permits the token
+   * exchange to run under the lease for an account already flagged
+   * needs_reauth: the store RPC clears the flag as part of the persisted
+   * write. Ordinary publishing refusals never set this, so a needs_reauth
+   * account keeps refusing until an administrator or the user reconnects.
+   */
+  adminRecovery?: boolean;
   maxFailures?: number;
   lastAlertSentAt?: string | null;
   refreshWindowMs?: number;
@@ -164,7 +172,11 @@ function isReusableFreshToken(
   if (youtubeTokenNeedsRefresh(fresh.token_expires_at, nowMs, windowMs)) {
     return false;
   }
-  if (force && priorAccessToken && fresh.access_token === priorAccessToken) {
+  // Under force the stored token is only reused when it is provably NOT the
+  // token the caller just saw fail: a known prior that differs. Without a
+  // known prior there is nothing to compare, and reuse would re-send the very
+  // token the caller suspects, so the lease holder refreshes instead.
+  if (force && (!priorAccessToken || fresh.access_token === priorAccessToken)) {
     return false;
   }
   return true;
@@ -179,6 +191,34 @@ function defaultLog(level: "warn" | "error" | "info", message: string): void {
   if (level === "error") console.error(message);
   else if (level === "warn") console.warn(message);
   else console.log(message);
+}
+
+/**
+ * OAuth error codes Google documents for the token endpoint. Each maps to the
+ * fixed label it keeps in the log: a code the provider sends is a fact, the
+ * string the provider sends is untrusted text.
+ */
+const KNOWN_OAUTH_ERROR_CODES: ReadonlySet<string> = new Set([
+  "invalid_grant",
+  "temporarily_unavailable",
+  "invalid_client",
+  "invalid_request",
+  "unauthorized_client",
+  "invalid_scope",
+  "server_error",
+]);
+
+/**
+ * The fixed log label for a provider refusal code. A recognized OAuth code is
+ * echoed as itself; anything else — including a hostile endpoint echoing
+ * credential-shaped text — collapses to one fixed label. The raw value never
+ * reaches a log line.
+ */
+function sanitizedProviderErrorCode(providerError: string | null): string {
+  if (!providerError) return "http_error";
+  return KNOWN_OAUTH_ERROR_CODES.has(providerError)
+    ? providerError
+    : "unrecognized_provider_error";
 }
 
 /**
@@ -263,7 +303,7 @@ export async function exchangeGoogleRefreshToken(
         providerError === "temporarily_unavailable");
     log(
       "warn",
-      `[youtube-refresh] provider refused refresh for account=${options.accountId} status=${response.status} code=${providerError ?? "http_error"}`,
+      `[youtube-refresh] provider refused refresh for account=${options.accountId} status=${response.status} code=${sanitizedProviderErrorCode(providerError)}`,
     );
     return {
       ok: false,
@@ -546,6 +586,7 @@ export async function refreshYouTubeAccountToken(
     accountId,
     snapshot,
     force = false,
+    adminRecovery = false,
     recordTransientFailure = false,
     maxFailures = 3,
     lastAlertSentAt = null,
@@ -557,8 +598,9 @@ export async function refreshYouTubeAccountToken(
   const nowMs = options.nowMs ?? (() => Date.now());
   const log = options.log ?? defaultLog;
 
-  // Fast-path checks on caller-provided snapshot.
-  if (snapshot?.needs_reauth === true) {
+  // Fast-path checks on caller-provided snapshot. Admin recovery skips the
+  // refusal: its whole purpose is to re-test a flagged account at Google.
+  if (!adminRecovery && snapshot?.needs_reauth === true) {
     return {
       ok: false,
       status: "needs_reauth",
@@ -673,7 +715,7 @@ export async function refreshYouTubeAccountToken(
       };
     }
 
-    if (current.needs_reauth === true) {
+    if (current.needs_reauth === true && !adminRecovery) {
       return {
         ok: false,
         status: "needs_reauth",

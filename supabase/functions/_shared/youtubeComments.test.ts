@@ -38,6 +38,8 @@ function fakeAdmin(options: {
     needs_reauth?: boolean;
   };
   acquireResult?: Record<string, unknown>;
+  /** Pops before acquireResult: lets a test hand out the lease on a later call. */
+  acquireResults?: Record<string, unknown>[];
 } = {}) {
   const updates: Array<Record<string, unknown>> = [];
   const rpcCalls: Array<{ fn: string; params: Record<string, unknown> }> = [];
@@ -64,8 +66,9 @@ function fakeAdmin(options: {
     rpc: (fn: string, params: Record<string, unknown>) => {
       rpcCalls.push({ fn, params });
       if (fn === "acquire_youtube_refresh_lease") {
+        const next = options.acquireResults?.shift();
         return Promise.resolve({
-          data: options.acquireResult ?? {
+          data: next ?? options.acquireResult ?? {
             ok: true,
             lease_token: "55555555-5555-4555-8555-555555555555",
             expires_at: new Date(Date.now() + 60_000).toISOString(),
@@ -427,6 +430,48 @@ Deno.test("when another worker holds the lease and wrote a fresh token, comments
     );
   } finally {
     globalThis.fetch = original;
+  }
+});
+
+Deno.test("a 401 on a reused winner token still forces one refresh", async () => {
+  // Another worker holds the lease and has just stored a fresh winner token.
+  // The comment call reuses it, and the provider 401s it anyway (revoked
+  // early): because this call did not mint the token, one forced refresh must
+  // still happen before the call is given up on.
+  const restore = stubGlobalFetch(200, {
+    access_token: ["forced", "fresh"].join("-"),
+    expires_in: 3600,
+  });
+  try {
+    const winnerToken = ["winner", "fresh", "tok"].join("-");
+    const admin = fakeAdmin({
+      acquireResults: [{ ok: false, reason: "lease_held" }],
+      account: {
+        access_token: winnerToken,
+        token_expires_at: IN_AN_HOUR,
+        needs_reauth: false,
+      },
+    });
+    let attempts = 0;
+    const { calls, fetcher } = fakeFetch(() => {
+      attempts += 1;
+      return attempts === 1
+        ? { status: 401, body: { error: { message: "Invalid Credentials" } } }
+        : { status: 200, body: { items: [thread] } };
+    });
+    const result = await listThreads({ ...EXPIRED }, { admin, fetcher }, {
+      channelId: "UC-me",
+    });
+    if (!result.ok) throw new Error(result.message);
+    assertEquals(calls.length, 2);
+    assertEquals(
+      (calls[1].init?.headers as Record<string, string>).Authorization,
+      `Bearer ${["forced", "fresh"].join("-")}`,
+    );
+    // The forced refresh is persisted through the store RPC.
+    assertEquals(admin.updates[0].access_token, ["forced", "fresh"].join("-"));
+  } finally {
+    restore();
   }
 });
 

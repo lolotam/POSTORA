@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
 import {
   createSupabaseYouTubeRefreshStore,
+  exchangeGoogleRefreshToken,
   refreshYouTubeAccountToken,
   type AcquireLeaseResult,
   type RecordFailureWithLeaseResult,
@@ -560,4 +561,222 @@ Deno.test("fresh snapshot fast-path skips lease and Google entirely", async () =
   }
   assertEquals(googleCalls, 0);
   assertEquals(state.acquires.length, 0);
+});
+
+Deno.test("force with no known prior token never reports reused; the lease holder refreshes", async () => {
+  const { state, store } = makeFakeStore({
+    account: {
+      id: ACCOUNT_ID,
+      access_token: synth("fresh", "but", "suspect"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: FRESH_AT,
+      needs_reauth: false,
+    },
+  });
+
+  // The caller does not know which token it last saw, so force has nothing to
+  // compare against: reuse would silently re-send the very token the caller
+  // suspects. The lease holder must refresh instead.
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      refresh_token: synth("stored", "refresh"),
+    },
+    force: true,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: synth("forced", "fresh"),
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: null,
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "refreshed");
+    assertEquals(outcome.accessToken, synth("forced", "fresh"));
+  }
+  assertEquals(state.stores.length, 1);
+
+  // A prior token that differs from the stored one is still reusable: the
+  // stored fresh token is provably not the one that just failed.
+  const reuse = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("different", "prior"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+    },
+    force: true,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => {
+      throw new Error("must not call Google when a different fresh token was stored");
+    },
+  });
+  assertEquals(reuse.ok, true);
+  if (reuse.ok) assertEquals(reuse.status, "reused");
+});
+
+Deno.test("provider refusal log maps OAuth codes to fixed labels and never echoes raw provider error text", async () => {
+  await withGoogleEnv(async () => {
+    const lines: string[] = [];
+    const log = (level: "warn" | "error" | "info", message: string) => {
+      lines.push(message);
+    };
+
+    // A provider error string nobody recognizes, built to look exactly like
+    // the credential-shaped text a hostile endpoint would echo back.
+    const credentialShaped = ["ya29", "bearer", "secret-value"].join("-");
+    const refused = await exchangeGoogleRefreshToken(synth("stored", "refresh"), {
+      accountId: ACCOUNT_ID,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            error: credentialShaped,
+            error_description: `${credentialShaped} tells more`,
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        ),
+      log,
+    });
+
+    assertEquals(refused.ok, false);
+    if (!refused.ok) {
+      assertEquals(refused.reason, "refresh_refused");
+      assertEquals(refused.status, 400);
+    }
+    const all = lines.join("\n");
+    assertEquals(all.includes(credentialShaped), false);
+    assertEquals(all.includes("unrecognized_provider_error"), true);
+    assertEquals(all.includes("status=400"), true);
+
+    // A recognized OAuth code keeps its fixed label.
+    lines.length = 0;
+    await exchangeGoogleRefreshToken(synth("stored", "refresh"), {
+      accountId: ACCOUNT_ID,
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ error: "invalid_grant" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }),
+      log,
+    });
+    assertEquals(lines.join("\n").includes("code=invalid_grant"), true);
+    assertEquals(lines.join("\n").includes("secret-value"), false);
+  });
+});
+
+Deno.test("adminRecovery exchanges under the lease for a needs_reauth account and the store clears the flag", async () => {
+  const { state, store } = makeFakeStore({
+    account: {
+      id: ACCOUNT_ID,
+      access_token: synth("stale", "tok"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+      needs_reauth: true,
+    },
+  });
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("stale", "tok"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+      needs_reauth: true,
+    },
+    adminRecovery: true,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: synth("recovered", "tok"),
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: null,
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) {
+    assertEquals(outcome.status, "refreshed");
+    assertEquals(outcome.accessToken, synth("recovered", "tok"));
+  }
+  assertEquals(state.stores.length, 1);
+  // The flag clears only through the persisted write, never in place.
+  assertEquals(state.account?.needs_reauth, false);
+});
+
+Deno.test("without adminRecovery a needs_reauth account is still refused without an exchange", async () => {
+  const { state, store } = makeFakeStore({
+    account: {
+      id: ACCOUNT_ID,
+      access_token: synth("stale", "tok"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+      needs_reauth: true,
+    },
+  });
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("stale", "tok"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+      needs_reauth: true,
+    },
+    store,
+    nowMs: () => NOW,
+    exchange: async () => {
+      throw new Error("must not exchange without adminRecovery");
+    },
+  });
+
+  assertEquals(outcome.ok, false);
+  if (!outcome.ok) {
+    assertEquals(outcome.status, "needs_reauth");
+    assertEquals(outcome.needsReauth, true);
+  }
+  assertEquals(state.acquires.length, 0);
+  assertEquals(state.stores.length, 0);
+});
+
+Deno.test("adminRecovery reads needs_reauth from the database row, not only the snapshot", async () => {
+  const { state, store } = makeFakeStore({
+    account: {
+      id: ACCOUNT_ID,
+      access_token: synth("stale", "tok"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+      needs_reauth: true,
+    },
+  });
+
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    snapshot: {
+      access_token: synth("stale", "tok"),
+      refresh_token: synth("stored", "refresh"),
+      token_expires_at: EXPIRED_AT,
+    },
+    adminRecovery: true,
+    store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: synth("recovered", "tok"),
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: null,
+    }),
+  });
+
+  assertEquals(outcome.ok, true);
+  if (outcome.ok) assertEquals(outcome.status, "refreshed");
+  assertEquals(state.stores.length, 1);
 });

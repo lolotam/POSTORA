@@ -17,6 +17,7 @@ import {
   YOUTUBE_TOKEN_REFRESH_WINDOW_MS,
   youtubeTokenNeedsRefresh,
 } from "../_shared/youtubeTokenRefresh.ts";
+import { youtubeCredentialRefusalReason } from "./youtubeUploadPolicy.ts";
 
 export { YOUTUBE_TOKEN_REFRESH_WINDOW_MS, youtubeTokenNeedsRefresh };
 
@@ -41,6 +42,24 @@ export interface YoutubeTokenResult {
   reason: string | null;
   /** True when the account requires user reconnection (e.g. invalid_grant). */
   needsReauth: boolean;
+}
+
+/**
+ * Whether the publish for this account must STOP.
+ *
+ * A reauthentication refusal (accessToken null + needsReauth) means the stored
+ * grant is dead even when the cached access token still looks usable: the
+ * provider would refuse it after the refresh recorded invalid_grant. The
+ * initial publish applies the same rule the continuation path applies — a
+ * credential the refresh could not confirm is not sent — so the caller clears
+ * the in-memory credential and the shared admission check refuses the account
+ * before the provider is contacted. Retryable refusals are NOT a dead grant
+ * and never stop a publish on their own.
+ */
+export function youtubeJitRefusalStopsPublish(
+  token: Pick<YoutubeTokenResult, "accessToken" | "needsReauth">,
+): boolean {
+  return token.accessToken === null && token.needsReauth;
 }
 
 /**
@@ -76,6 +95,31 @@ export async function refreshYoutubeAccessToken(args: {
       reason: null,
       needsReauth: false,
     };
+  }
+
+  // A missing refresh token is not by itself a refused credential: the old
+  // behaviour handed the stored token back and let the shared credential
+  // policy decide. That behaviour is kept, because a token inside its refresh
+  // window is still one the provider accepts — the publish path and the
+  // continuation read the SAME rule from youtubeCredentialRefusalReason.
+  // Expired credentials, invalid_grant and lease refusals keep returning
+  // nothing.
+  if (outcome.reason === "no_refresh_token" && account.accessToken) {
+    const nowMsValue = args.nowMs ?? Date.now();
+    const credentialRefusal = youtubeCredentialRefusalReason(
+      account.accessToken,
+      account.tokenExpiresAt,
+      nowMsValue,
+    );
+    if (credentialRefusal === null) {
+      return {
+        accessToken: account.accessToken,
+        refreshed: false,
+        expiresAt: account.tokenExpiresAt,
+        reason: outcome.reason,
+        needsReauth: false,
+      };
+    }
   }
 
   return {

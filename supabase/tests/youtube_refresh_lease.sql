@@ -341,8 +341,125 @@ END
 $l5$;
 
 -- ---------------------------------------------------------------------------
+-- L5b. Reconnect fence (migration 20261120130000): a credential-changing
+--      UPDATE of a youtube row deletes its lease, so a refresh started under
+--      the OLD credentials is fenced out of the new connection. Health-only
+--      updates keep the lease, and a normal refresh still works.
+-- ---------------------------------------------------------------------------
+DO $l5b$
+DECLARE
+  a_yt   uuid := '0ed20001-0000-4000-8000-000000000011';
+  a_fb   uuid := '0ed20003-0000-4000-8000-000000000013';
+  t      uuid;
+  r      jsonb;
+  v_acc  public.social_accounts%ROWTYPE;
+BEGIN
+  -- Deterministic baseline: the earlier blocks left refreshed credentials and
+  -- needs_reauth behind; normalize to a clean connected account.
+  UPDATE public.social_accounts
+     SET access_token = 'access-initial', refresh_token = 'refresh-initial',
+         needs_reauth = false, failure_count = 0, last_refresh_error = NULL
+   WHERE id = a_yt;
+  DELETE FROM public.youtube_token_refresh_leases WHERE social_account_id = a_yt;
+
+  -- 1) Success path: reconnect between acquire and store fences the holder.
+  t := (public.acquire_youtube_refresh_lease(a_yt, 60) ->> 'lease_token')::uuid;
+  ASSERT t IS NOT NULL, 'L5b lease acquired for the success-path fence';
+
+  UPDATE public.social_accounts
+     SET access_token = 'access-reconnected', refresh_token = 'refresh-reconnected'
+   WHERE id = a_yt;
+
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.youtube_token_refresh_leases WHERE social_account_id = a_yt
+  ), 'L5b reconnect update deleted the lease row';
+
+  r := public.store_youtube_refreshed_token_with_lease(
+    a_yt, t, 'access-from-stale', clock_timestamp() + interval '1 hour',
+    'refresh-from-stale', NULL
+  );
+  ASSERT r = '{"ok": false, "reason": "lease_not_held"}'::jsonb,
+    format('L5b stale holder on the success path refused: got %s', r);
+
+  SELECT * INTO v_acc FROM public.social_accounts WHERE id = a_yt;
+  ASSERT v_acc.access_token = 'access-reconnected'
+     AND v_acc.refresh_token = 'refresh-reconnected',
+    'L5b stale holder wrote nothing onto the reconnected credentials';
+
+  -- 2) invalid_grant path: a stale holder must not escalate onto the new
+  --    connection either.
+  UPDATE public.social_accounts
+     SET needs_reauth = false, failure_count = 0
+   WHERE id = a_yt;
+  t := (public.acquire_youtube_refresh_lease(a_yt, 60) ->> 'lease_token')::uuid;
+
+  UPDATE public.social_accounts
+     SET access_token = 'access-reconnected-2'
+   WHERE id = a_yt;
+
+  r := public.record_youtube_refresh_failure_with_lease(
+    a_yt, t, 'YouTube refresh failed: invalid_grant', true
+  );
+  ASSERT r = '{"ok": false, "reason": "lease_not_held"}'::jsonb,
+    format('L5b stale holder on the invalid_grant path refused: got %s', r);
+
+  SELECT * INTO v_acc FROM public.social_accounts WHERE id = a_yt;
+  ASSERT v_acc.needs_reauth IS FALSE AND v_acc.failure_count = 0,
+    'L5b stale holder escalated nothing onto the new connection';
+
+  -- 3) A refresh_token-only change fences too (a re-consent that returns no
+  --    new access text still rotates the grant).
+  t := (public.acquire_youtube_refresh_lease(a_yt, 60) ->> 'lease_token')::uuid;
+  UPDATE public.social_accounts
+     SET refresh_token = 'refresh-rotated-by-reconnect'
+   WHERE id = a_yt;
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.youtube_token_refresh_leases WHERE social_account_id = a_yt
+  ), 'L5b refresh_token-only change deleted the lease row';
+  r := public.store_youtube_refreshed_token_with_lease(
+    a_yt, t, 'access-from-stale', clock_timestamp() + interval '1 hour', NULL, NULL
+  );
+  ASSERT r = '{"ok": false, "reason": "lease_not_held"}'::jsonb,
+    format('L5b stale holder after refresh_token rotation refused: got %s', r);
+
+  -- 4) A health-only update keeps the lease, and a normal refresh still works
+  --    under the trigger (the store UPDATE fires it; the sequence stays safe).
+  t := (public.acquire_youtube_refresh_lease(a_yt, 60) ->> 'lease_token')::uuid;
+  UPDATE public.social_accounts SET needs_reauth = true WHERE id = a_yt;
+  ASSERT EXISTS (
+    SELECT 1 FROM public.youtube_token_refresh_leases
+     WHERE social_account_id = a_yt AND lease_token = t
+  ), 'L5b health-only update must not delete the lease';
+
+  r := public.store_youtube_refreshed_token_with_lease(
+    a_yt, t, 'access-normal-refresh', clock_timestamp() + interval '1 hour',
+    NULL, NULL
+  );
+  ASSERT (r ->> 'ok')::boolean IS TRUE,
+    format('L5b normal refresh works with the fence installed: got %s', r);
+  SELECT * INTO v_acc FROM public.social_accounts WHERE id = a_yt;
+  ASSERT v_acc.access_token = 'access-normal-refresh' AND v_acc.needs_reauth IS FALSE,
+    'L5b normal refresh stored its token and cleared health';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.youtube_token_refresh_leases WHERE social_account_id = a_yt
+  ), 'L5b the store sequence still releases the lease';
+
+  -- 5) A non-youtube credential change is untouched by the fence: the UPDATE
+  --    must simply succeed (the WHEN guard scopes the trigger to youtube).
+  UPDATE public.social_accounts SET access_token = 'fb-rotated' WHERE id = a_fb;
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.youtube_token_refresh_leases WHERE social_account_id = a_fb
+  ), 'L5b facebook row holds no lease by construction';
+
+  -- Cleanup the baseline lease state for the remaining blocks.
+  DELETE FROM public.youtube_token_refresh_leases WHERE social_account_id = a_yt;
+END
+$l5b$;
+
+-- ---------------------------------------------------------------------------
 -- L6. Structural security boundary: RLS on, zero policies, zero PUBLIC grants
 --     (aclexplode grantee = 0), SECURITY DEFINER and search_path pinned.
+--     Extended with the reconnect fence trigger (migration 20261120130000).
 -- ---------------------------------------------------------------------------
 DO $l6$
 BEGIN
@@ -375,6 +492,33 @@ BEGIN
              'public.store_youtube_refreshed_token_with_lease(uuid, uuid, text, timestamptz, text, text[])'::regprocedure,
              'public.record_youtube_refresh_failure_with_lease(uuid, uuid, text, boolean, integer, timestamptz)'::regprocedure)),
     'L6 every lease RPC is SECURITY DEFINER with search_path=public, pg_temp';
+  ASSERT EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgrelid = 'public.social_accounts'::regclass
+       AND tgname = 'trg_social_accounts_youtube_credential_revoke_refresh_lease'
+       AND NOT tgisinternal
+  ), 'L6 the reconnect fence trigger must exist on social_accounts';
+  ASSERT (
+    SELECT position('UPDATE OF access_token, refresh_token' in pg_get_triggerdef(t.oid)) > 0
+       AND position('IS DISTINCT FROM' in pg_get_triggerdef(t.oid)) > 0
+       AND position('youtube' in pg_get_triggerdef(t.oid)) > 0
+      FROM pg_trigger t
+     WHERE t.tgrelid = 'public.social_accounts'::regclass
+       AND t.tgname = 'trg_social_accounts_youtube_credential_revoke_refresh_lease'
+  ), 'L6 the fence must fire on actual credential change of youtube rows only';
+  ASSERT (
+    SELECT p.prosecdef AND 'search_path=public, pg_temp' = ANY (p.proconfig)
+      FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+     WHERE t.tgrelid = 'public.social_accounts'::regclass
+       AND t.tgname = 'trg_social_accounts_youtube_credential_revoke_refresh_lease'
+  ), 'L6 the fence function must be SECURITY DEFINER with pinned search_path';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(p.proacl) x
+     WHERE p.oid = 'public.delete_youtube_refresh_lease_on_credential_change()'::regprocedure
+       AND x.grantee IN (0,
+         (SELECT oid FROM pg_roles WHERE rolname = 'anon'),
+         (SELECT oid FROM pg_roles WHERE rolname = 'authenticated'))
+  ), 'L6 browser roles and PUBLIC hold no EXECUTE on the fence function';
 END
 $l6$;
 
@@ -521,7 +665,9 @@ DECLARE
   a_race uuid := '0ed90002-0000-4000-8000-000000000002';
   r_a jsonb;
   r_b jsonb;
-  v_waited integer := 0;
+  v_a_pid integer;
+  v_b_pid integer;
+  v_deadline timestamptz;
 BEGIN
   -- Race 1: fresh acquire (no existing lease row).
   -- Session A acquires inside an open transaction and holds the row lock.
@@ -533,17 +679,26 @@ BEGIN
     ) AS t(res jsonb);
   ASSERT (r_a ->> 'ok')::boolean IS TRUE, format('L9 race1 A acquired: got %s', r_a);
 
-  -- Session B starts acquiring concurrently and MUST block on A's lock.
+  SELECT pid INTO v_a_pid
+    FROM extensions.dblink('yrl_a', 'SELECT pg_backend_pid()') AS t(pid int);
+  SELECT pid INTO v_b_pid
+    FROM extensions.dblink('yrl_b', 'SELECT pg_backend_pid()') AS t(pid int);
+
+  -- Session B starts acquiring concurrently and MUST block on A's lock. The
+  -- block is required to be real and attributable: pg_blocking_pids must name
+  -- A as B's blocker on a bounded deadline BEFORE A commits. A busy-only
+  -- check could pass on request-formatting lag; this cannot.
   PERFORM extensions.dblink_send_query(
     'yrl_b',
     format('SELECT public.acquire_youtube_refresh_lease(%L::uuid, 60)', a_race)
   );
-  WHILE v_waited < 20 AND extensions.dblink_is_busy('yrl_b') = 1 LOOP
-    PERFORM pg_sleep(0.02);
-    v_waited := v_waited + 1;
+  v_deadline := clock_timestamp() + interval '5 seconds';
+  WHILE clock_timestamp() < v_deadline LOOP
+    EXIT WHEN v_a_pid = ANY (pg_blocking_pids(v_b_pid));
+    PERFORM pg_sleep(0.05);
   END LOOP;
-  ASSERT extensions.dblink_is_busy('yrl_b') = 1,
-    'L9 race1 B must block while A holds the uncommitted lease insert';
+  ASSERT v_a_pid = ANY (pg_blocking_pids(v_b_pid)),
+    'L9 race1 A must appear as B blocker before commit';
 
   -- Commit A; B unblocks and MUST see A's live lease and be refused.
   PERFORM extensions.dblink_exec('yrl_a', 'COMMIT');
@@ -571,7 +726,9 @@ DECLARE
   v_prev_tok uuid;
   r_a2 jsonb;
   r_b2 jsonb;
-  v_waited integer := 0;
+  v_a_pid integer;
+  v_b_pid integer;
+  v_deadline timestamptz;
 BEGIN
   SELECT lease_token INTO v_prev_tok
     FROM public.youtube_token_refresh_leases
@@ -588,16 +745,22 @@ BEGIN
      AND (r_a2 ->> 'lease_token')::uuid <> v_prev_tok,
     format('L9 race2 A took over expired lease: got %s', r_a2);
 
+  SELECT pid INTO v_a_pid
+    FROM extensions.dblink('yrl_a', 'SELECT pg_backend_pid()') AS t(pid int);
+  SELECT pid INTO v_b_pid
+    FROM extensions.dblink('yrl_b', 'SELECT pg_backend_pid()') AS t(pid int);
+
   PERFORM extensions.dblink_send_query(
     'yrl_b',
     format('SELECT public.acquire_youtube_refresh_lease(%L::uuid, 60)', a_race)
   );
-  WHILE v_waited < 20 AND extensions.dblink_is_busy('yrl_b') = 1 LOOP
-    PERFORM pg_sleep(0.02);
-    v_waited := v_waited + 1;
+  v_deadline := clock_timestamp() + interval '5 seconds';
+  WHILE clock_timestamp() < v_deadline LOOP
+    EXIT WHEN v_a_pid = ANY (pg_blocking_pids(v_b_pid));
+    PERFORM pg_sleep(0.05);
   END LOOP;
-  ASSERT extensions.dblink_is_busy('yrl_b') = 1,
-    'L9 race2 B must block while A holds the uncommitted takeover';
+  ASSERT v_a_pid = ANY (pg_blocking_pids(v_b_pid)),
+    'L9 race2 A must appear as B blocker before commit';
 
   PERFORM extensions.dblink_exec('yrl_a', 'COMMIT');
   SELECT res INTO r_b2 FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
@@ -610,6 +773,199 @@ BEGIN
     'L9 race2 table holds winner A2 token';
 END
 $l9_race2$;
+
+-- ---------------------------------------------------------------------------
+-- L9 race3 (migration 20261120130000, finding F): a contender that waits for
+-- the row lock must stamp its takeover AFTER the wait, not at its send time.
+-- B is given the minimum ttl so the pre-fix stamps (captured at send) would
+-- produce a lease born already expired; the post-fix stamps keep it live.
+--
+-- The lease row is prepared OUTSIDE the DO block, at top level, and
+-- autocommitted: a setup UPDATE inside the block would make the block's own
+-- transaction hold the row lock its dblink sessions wait on.
+-- ---------------------------------------------------------------------------
+UPDATE public.youtube_token_refresh_leases
+   SET acquired_at = clock_timestamp() - interval '2 minutes',
+       expires_at  = clock_timestamp() - interval '1 second'
+ WHERE social_account_id = '0ed90002-0000-4000-8000-000000000002';
+
+DO $l9_race3$
+DECLARE
+  a_race uuid := '0ed90002-0000-4000-8000-000000000002';
+  r_a3 jsonb;
+  r_b3 jsonb;
+  v_a_tok uuid;
+  v_b_tok uuid;
+  v_a_pid integer;
+  v_b_pid integer;
+  v_b_send timestamptz;
+  v_deadline timestamptz;
+  v_row public.youtube_token_refresh_leases%ROWTYPE;
+BEGIN
+  SELECT pid INTO v_a_pid
+    FROM extensions.dblink('yrl_a', 'SELECT pg_backend_pid()') AS t(pid int);
+  SELECT pid INTO v_b_pid
+    FROM extensions.dblink('yrl_b', 'SELECT pg_backend_pid()') AS t(pid int);
+
+  -- A takes over inside a transaction with the MINIMUM ttl (5s) and sits on
+  -- the row lock.
+  PERFORM extensions.dblink_exec('yrl_a', 'BEGIN');
+  SELECT res INTO r_a3
+    FROM extensions.dblink(
+      'yrl_a',
+      format('SELECT public.acquire_youtube_refresh_lease(%L::uuid, 5)', a_race)
+    ) AS t(res jsonb);
+  ASSERT (r_a3 ->> 'ok')::boolean IS TRUE, format('L9 race3 A took over: got %s', r_a3);
+  v_a_tok := (r_a3 ->> 'lease_token')::uuid;
+
+  -- B acquires while A sits on the lock. v_b_send is B's pre-wait moment on
+  -- purpose: the fix under test must not let this moment become B's
+  -- acquired_at.
+  v_b_send := clock_timestamp();
+  PERFORM extensions.dblink_send_query(
+    'yrl_b',
+    format('SELECT public.acquire_youtube_refresh_lease(%L::uuid, 60)', a_race)
+  );
+
+  v_deadline := clock_timestamp() + interval '5 seconds';
+  WHILE clock_timestamp() < v_deadline LOOP
+    EXIT WHEN v_a_pid = ANY (pg_blocking_pids(v_b_pid));
+    PERFORM pg_sleep(0.05);
+  END LOOP;
+  ASSERT v_a_pid = ANY (pg_blocking_pids(v_b_pid)),
+    'L9 race3 A must appear as B blocker before commit';
+
+  -- Hold the wait past A's whole 5-second window, so B unblocks onto an
+  -- EXPIRED lease and takes over.
+  PERFORM pg_sleep(6);
+
+  PERFORM extensions.dblink_exec('yrl_a', 'COMMIT');
+  SELECT res INTO r_b3 FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
+  PERFORM * FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
+
+  ASSERT (r_b3 ->> 'ok')::boolean IS TRUE,
+    format('L9 race3 B took over the expired lease after the wait: got %s', r_b3);
+  v_b_tok := (r_b3 ->> 'lease_token')::uuid;
+  ASSERT v_b_tok <> v_a_tok, 'L9 race3 takeover mints a new lease_token';
+
+  SELECT * INTO v_row
+    FROM public.youtube_token_refresh_leases
+   WHERE social_account_id = a_race;
+  ASSERT v_row.lease_token = v_b_tok, 'L9 race3 table holds winner B token';
+
+  -- THE FIX: B's stamps are captured after its lock wait, not at send time.
+  ASSERT v_row.acquired_at >= v_b_send + interval '4 seconds',
+    format('L9 race3 acquired_at must postdate the lock wait (acquired_at %s, sent %s)',
+      v_row.acquired_at, v_b_send);
+  ASSERT v_row.expires_at > clock_timestamp(),
+    'L9 race3 the takeover lease is born live, never pre-expired';
+  ASSERT v_row.expires_at - v_row.acquired_at >= interval '59 seconds'
+     AND v_row.expires_at - v_row.acquired_at <= interval '60 seconds',
+    'L9 race3 the requested ttl is honored from the post-lock clock';
+END
+$l9_race3$;
+
+-- ---------------------------------------------------------------------------
+-- L11 (migration 20261120130000, finding G): both write RPCs lock the ACCOUNT
+-- row before they check the lease, matching the deletion order (account row,
+-- then cascade to the lease). Proven discriminator: with A holding ONLY the
+-- account row lock, a write presenting a WRONG token must block — a
+-- lease-first order would answer stale_lease immediately.
+--
+-- The lease the writes are fenced on is acquired OUTSIDE the DO blocks, at
+-- top level, and autocommitted: setup writes inside a block would make the
+-- block's own transaction hold the lease row lock the blocked write needs
+-- after the rollback, deadlocking the proof against itself.
+-- ---------------------------------------------------------------------------
+DELETE FROM public.youtube_token_refresh_leases
+ WHERE social_account_id = '0ed90002-0000-4000-8000-000000000002';
+
+SELECT public.acquire_youtube_refresh_lease('0ed90002-0000-4000-8000-000000000002', 60);
+
+UPDATE public.youtube_token_refresh_leases
+   SET expires_at = clock_timestamp() + interval '10 minutes'
+ WHERE social_account_id = '0ed90002-0000-4000-8000-000000000002';
+
+DO $l11_lock_order$
+DECLARE
+  a_race uuid := '0ed90002-0000-4000-8000-000000000002';
+  r_b jsonb;
+  v_a_pid integer;
+  v_b_pid integer;
+  v_deadline timestamptz;
+BEGIN
+  SELECT pid INTO v_a_pid
+    FROM extensions.dblink('yrl_a', 'SELECT pg_backend_pid()') AS t(pid int);
+  SELECT pid INTO v_b_pid
+    FROM extensions.dblink('yrl_b', 'SELECT pg_backend_pid()') AS t(pid int);
+
+  -- A locks ONLY the account row (no credential columns: the reconnect fence
+  -- must not fire) and holds it uncommitted.
+  PERFORM extensions.dblink_exec('yrl_a', 'BEGIN');
+  PERFORM extensions.dblink_exec('yrl_a',
+    format('UPDATE public.social_accounts SET platform_username = %L WHERE id = %L',
+      'yrl-race-locked', a_race));
+
+  -- B presents a WRONG lease token to the store RPC.
+  PERFORM extensions.dblink_send_query('yrl_b',
+    format('SELECT public.store_youtube_refreshed_token_with_lease(%L::uuid, %L::uuid, %L, clock_timestamp() + interval ''1 hour'', NULL, NULL)',
+      a_race, gen_random_uuid()::text, 'access-lock-order-probe'));
+
+  v_deadline := clock_timestamp() + interval '5 seconds';
+  WHILE clock_timestamp() < v_deadline LOOP
+    EXIT WHEN v_a_pid = ANY (pg_blocking_pids(v_b_pid));
+    PERFORM pg_sleep(0.05);
+  END LOOP;
+  ASSERT v_a_pid = ANY (pg_blocking_pids(v_b_pid)),
+    'L11 store must lock the account row before the lease-token check';
+
+  PERFORM extensions.dblink_exec('yrl_a', 'ROLLBACK');
+  SELECT res INTO r_b FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
+  PERFORM * FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
+
+  ASSERT (r_b ->> 'ok')::boolean IS FALSE AND r_b ->> 'reason' = 'stale_lease',
+    format('L11 blocked store still refused the wrong token: got %s', r_b);
+END
+$l11_lock_order$;
+
+DO $l11_lock_order_record$
+DECLARE
+  a_race uuid := '0ed90002-0000-4000-8000-000000000002';
+  v_a_pid integer;
+  v_b_pid integer;
+  v_deadline timestamptz;
+  r_b jsonb;
+BEGIN
+  SELECT pid INTO v_a_pid
+    FROM extensions.dblink('yrl_a', 'SELECT pg_backend_pid()') AS t(pid int);
+  SELECT pid INTO v_b_pid
+    FROM extensions.dblink('yrl_b', 'SELECT pg_backend_pid()') AS t(pid int);
+
+  PERFORM extensions.dblink_exec('yrl_a', 'BEGIN');
+  PERFORM extensions.dblink_exec('yrl_a',
+    format('UPDATE public.social_accounts SET platform_username = %L WHERE id = %L',
+      'yrl-race-locked-record', a_race));
+
+  PERFORM extensions.dblink_send_query('yrl_b',
+    format('SELECT public.record_youtube_refresh_failure_with_lease(%L::uuid, %L::uuid, %L, true)',
+      a_race, gen_random_uuid()::text, 'YouTube refresh failed: lock order probe'));
+
+  v_deadline := clock_timestamp() + interval '5 seconds';
+  WHILE clock_timestamp() < v_deadline LOOP
+    EXIT WHEN v_a_pid = ANY (pg_blocking_pids(v_b_pid));
+    PERFORM pg_sleep(0.05);
+  END LOOP;
+  ASSERT v_a_pid = ANY (pg_blocking_pids(v_b_pid)),
+    'L11 record must lock the account row before the lease-token check';
+
+  PERFORM extensions.dblink_exec('yrl_a', 'ROLLBACK');
+  SELECT res INTO r_b FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
+  PERFORM * FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
+
+  ASSERT (r_b ->> 'ok')::boolean IS FALSE AND r_b ->> 'reason' = 'stale_lease',
+    format('L11 blocked record still refused the wrong token: got %s', r_b);
+END
+$l11_lock_order_record$;
 
 SELECT extensions.dblink_disconnect('yrl_a');
 SELECT extensions.dblink_disconnect('yrl_b');

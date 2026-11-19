@@ -44,6 +44,8 @@ export async function refreshNativeYouTubeAccount(
   deps: {
     admin: unknown;
     force?: boolean;
+    /** Administrator recovery: allow the exchange for a needs_reauth account. */
+    adminRecovery?: boolean;
     maxFailures?: number;
     store?: YouTubeRefreshStore;
     exchange?: (refreshToken: string) => Promise<GoogleRefreshExchangeResult>;
@@ -68,6 +70,7 @@ export async function refreshNativeYouTubeAccount(
       needs_reauth: account.needs_reauth ?? false,
     },
     force: deps.force ?? false,
+    adminRecovery: deps.adminRecovery ?? false,
     recordTransientFailure: true,
     maxFailures: deps.maxFailures ?? 3,
     lastAlertSentAt: canAlert ? new Date(now).toISOString() : null,
