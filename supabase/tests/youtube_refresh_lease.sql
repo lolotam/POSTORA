@@ -659,6 +659,12 @@ SELECT extensions.dblink_connect(
   'yrl_b',
   format('dbname=%s user=%s application_name=yrl_race_b', current_database(), current_user)
 );
+-- Third session for the L11 lock-order probes (L8): it locks the lease row
+-- with FOR UPDATE NOWAIT while B is parked, proving B has not locked it yet.
+SELECT extensions.dblink_connect(
+  'yrl_c',
+  format('dbname=%s user=%s application_name=yrl_race_c', current_database(), current_user)
+);
 
 DO $l9_race1$
 DECLARE
@@ -958,7 +964,7 @@ $l9_race4$;
 -- L11 (migration 20261120130000, finding G): both write RPCs lock the ACCOUNT
 -- row before they check the lease, matching the deletion order (account row,
 -- then cascade to the lease). Proven discriminator: with A holding ONLY the
--- account row lock, a write presenting a WRONG token must block â€” a
+-- account row lock, a write presenting a WRONG token must block — a
 -- lease-first order would answer stale_lease immediately.
 --
 -- The lease the writes are fenced on is acquired OUTSIDE the DO blocks, at
@@ -979,6 +985,7 @@ DO $l11_lock_order$
 DECLARE
   a_race uuid := '0ed90002-0000-4000-8000-000000000002';
   r_b jsonb;
+  v_probe_token uuid;
   v_a_pid integer;
   v_b_pid integer;
   v_deadline timestamptz;
@@ -1008,6 +1015,21 @@ BEGIN
   ASSERT v_a_pid = ANY (pg_blocking_pids(v_b_pid)),
     'L11 store must lock the account row before the lease-token check';
 
+  -- L8: while B is parked, a THIRD session must be able to take the lease
+  -- row with FOR UPDATE NOWAIT. That proves B has NOT locked the lease yet —
+  -- it is waiting on the ACCOUNT row, which is the account-before-lease
+  -- order. A lease-first order parks B on the lease row and this NOWAIT
+  -- fails with 55P03. The probe lock is released before B is unblocked.
+  PERFORM extensions.dblink_exec('yrl_c', 'BEGIN');
+  SELECT lease_token INTO v_probe_token
+    FROM extensions.dblink(
+      'yrl_c',
+      format('SELECT lease_token FROM public.youtube_token_refresh_leases WHERE social_account_id = %L FOR UPDATE NOWAIT', a_race)
+    ) AS t(lease_token uuid);
+  ASSERT v_probe_token IS NOT NULL,
+    'L8 store probe: the lease row must be free while B waits (B is parked on the account row)';
+  PERFORM extensions.dblink_exec('yrl_c', 'ROLLBACK');
+
   PERFORM extensions.dblink_exec('yrl_a', 'ROLLBACK');
   SELECT res INTO r_b FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
   PERFORM * FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
@@ -1020,6 +1042,7 @@ $l11_lock_order$;
 DO $l11_lock_order_record$
 DECLARE
   a_race uuid := '0ed90002-0000-4000-8000-000000000002';
+  v_probe_token uuid;
   v_a_pid integer;
   v_b_pid integer;
   v_deadline timestamptz;
@@ -1047,6 +1070,17 @@ BEGIN
   ASSERT v_a_pid = ANY (pg_blocking_pids(v_b_pid)),
     'L11 record must lock the account row before the lease-token check';
 
+  -- L8, record probe: same discriminator as the store probe above.
+  PERFORM extensions.dblink_exec('yrl_c', 'BEGIN');
+  SELECT lease_token INTO v_probe_token
+    FROM extensions.dblink(
+      'yrl_c',
+      format('SELECT lease_token FROM public.youtube_token_refresh_leases WHERE social_account_id = %L FOR UPDATE NOWAIT', a_race)
+    ) AS t(lease_token uuid);
+  ASSERT v_probe_token IS NOT NULL,
+    'L8 record probe: the lease row must be free while B waits (B is parked on the account row)';
+  PERFORM extensions.dblink_exec('yrl_c', 'ROLLBACK');
+
   PERFORM extensions.dblink_exec('yrl_a', 'ROLLBACK');
   SELECT res INTO r_b FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
   PERFORM * FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
@@ -1058,6 +1092,7 @@ $l11_lock_order_record$;
 
 SELECT extensions.dblink_disconnect('yrl_a');
 SELECT extensions.dblink_disconnect('yrl_b');
+SELECT extensions.dblink_disconnect('yrl_c');
 
 DELETE FROM public.youtube_token_refresh_leases
  WHERE social_account_id = '0ed90002-0000-4000-8000-000000000002';
