@@ -65,10 +65,17 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
   END IF;
 
+  -- Serialize on the ACCOUNT row FIRST, before the lease row is inspected or
+  -- any clock is sampled — the same account-before-lease order the write RPCs
+  -- use (deletion order). Two concurrent first-time acquires queue here, so
+  -- the loser of a first insert waits BEFORE it forms its row: its stamps are
+  -- captured after the wait, and a rival that rolls back can never leave it a
+  -- lease born already expired.
   SELECT sa.id, sa.platform, sa.auth_provider
     INTO v_account
     FROM public.social_accounts AS sa
-   WHERE sa.id = p_account_id;
+   WHERE sa.id = p_account_id
+   FOR UPDATE;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'account_not_found');

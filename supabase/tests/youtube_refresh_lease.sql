@@ -866,6 +866,95 @@ END
 $l9_race3$;
 
 -- ---------------------------------------------------------------------------
+-- L9 race4 (L5): a first-time acquire that ROLLS BACK after the wait must
+-- leave B a LIVE lease with post-wait stamps. B serialises on the ACCOUNT
+-- row before it touches the lease or samples a clock, so a contender that
+-- waited for a rolled-back insert can never carry stamps taken before its
+-- wait (which would hand it a lease born already expired).
+--
+-- The lease row is cleared OUTSIDE the DO block, at top level, and
+-- autocommitted, so the block's own transaction holds no lease-row lock its
+-- dblink sessions could wait on.
+-- ---------------------------------------------------------------------------
+DELETE FROM public.youtube_token_refresh_leases
+ WHERE social_account_id = '0ed90002-0000-4000-8000-000000000002';
+
+DO $l9_race4$
+DECLARE
+  a_race uuid := '0ed90002-0000-4000-8000-000000000002';
+  r_a4 jsonb;
+  r_b4 jsonb;
+  v_a_tok uuid;
+  v_b_tok uuid;
+  v_a_pid integer;
+  v_b_pid integer;
+  v_b_send timestamptz;
+  v_deadline timestamptz;
+  v_row public.youtube_token_refresh_leases%ROWTYPE;
+BEGIN
+  SELECT pid INTO v_a_pid
+    FROM extensions.dblink('yrl_a', 'SELECT pg_backend_pid()') AS t(pid int);
+  SELECT pid INTO v_b_pid
+    FROM extensions.dblink('yrl_b', 'SELECT pg_backend_pid()') AS t(pid int);
+
+  -- A: first-time acquire (no row exists) with the MINIMUM ttl, inside an
+  -- open transaction.
+  PERFORM extensions.dblink_exec('yrl_a', 'BEGIN');
+  SELECT res INTO r_a4
+    FROM extensions.dblink(
+      'yrl_a',
+      format('SELECT public.acquire_youtube_refresh_lease(%L::uuid, 5)', a_race)
+    ) AS t(res jsonb);
+  ASSERT (r_a4 ->> 'ok')::boolean IS TRUE, format('L9 race4 A acquired first lease: got %s', r_a4);
+  v_a_tok := (r_a4 ->> 'lease_token')::uuid;
+
+  -- B acquires concurrently. v_b_send is B's pre-wait moment on purpose: the
+  -- stamps B eventually carries must not come from this moment.
+  v_b_send := clock_timestamp();
+  PERFORM extensions.dblink_send_query(
+    'yrl_b',
+    format('SELECT public.acquire_youtube_refresh_lease(%L::uuid, 60)', a_race)
+  );
+
+  v_deadline := clock_timestamp() + interval '5 seconds';
+  WHILE clock_timestamp() < v_deadline LOOP
+    EXIT WHEN v_a_pid = ANY (pg_blocking_pids(v_b_pid));
+    PERFORM pg_sleep(0.05);
+  END LOOP;
+  ASSERT v_a_pid = ANY (pg_blocking_pids(v_b_pid)),
+    'L9 race4 A must appear as B blocker before rollback';
+
+  -- Hold the wait past A's whole 5-second window, then ROLL A BACK: no lease
+  -- row survives, and B must win the first-time race with FRESH stamps.
+  PERFORM pg_sleep(6);
+
+  PERFORM extensions.dblink_exec('yrl_a', 'ROLLBACK');
+  SELECT res INTO r_b4 FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
+  PERFORM * FROM extensions.dblink_get_result('yrl_b') AS t(res jsonb);
+
+  ASSERT (r_b4 ->> 'ok')::boolean IS TRUE,
+    format('L9 race4 B won the first-time race after A rolled back: got %s', r_b4);
+  v_b_tok := (r_b4 ->> 'lease_token')::uuid;
+  ASSERT v_b_tok <> v_a_tok, 'L9 race4 B mints its own lease_token';
+
+  SELECT * INTO v_row
+    FROM public.youtube_token_refresh_leases
+   WHERE social_account_id = a_race;
+  ASSERT v_row.lease_token = v_b_tok, 'L9 race4 table holds winner B token';
+
+  -- THE FIX: B's stamps are captured after its wait, not at send time.
+  ASSERT v_row.acquired_at >= v_b_send + interval '4 seconds',
+    format('L9 race4 acquired_at must postdate the wait (acquired_at %s, sent %s)',
+      v_row.acquired_at, v_b_send);
+  ASSERT v_row.expires_at > clock_timestamp(),
+    'L9 race4 the lease is born LIVE, never pre-expired by a rolled-back rival';
+  ASSERT v_row.expires_at - v_row.acquired_at >= interval '59 seconds'
+     AND v_row.expires_at - v_row.acquired_at <= interval '60 seconds',
+    'L9 race4 the requested ttl is honored from the post-lock clock';
+END
+$l9_race4$;
+
+-- ---------------------------------------------------------------------------
 -- L11 (migration 20261120130000, finding G): both write RPCs lock the ACCOUNT
 -- row before they check the lease, matching the deletion order (account row,
 -- then cascade to the lease). Proven discriminator: with A holding ONLY the
