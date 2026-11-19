@@ -165,6 +165,7 @@ SUITES=(
   instagram_durable_collection_jobs.sql
   meta_pending_selection_secret_boundary.sql
   meta_oauth_attempt_lifecycle.sql
+  youtube_oauth_attempts.sql
   meta_account_refresh_lifecycle.sql
   meta_oauth_identity_alias.sql
   meta_page_token_reconciliation.sql
