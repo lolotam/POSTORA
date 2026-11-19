@@ -484,7 +484,7 @@ BEGIN
        'public.record_youtube_refresh_failure_with_lease(uuid, uuid, text, boolean, integer, timestamptz)'::regprocedure)
        AND x.grantee = 0),
     'L6 PUBLIC holds no EXECUTE on any lease RPC';
-  ASSERT (SELECT bool_and(p.prosecdef AND 'search_path=public, pg_temp' = ANY (p.proconfig))
+  ASSERT (SELECT bool_and(COALESCE(p.prosecdef AND 'search_path=public, pg_temp' = ANY (p.proconfig), false))
             FROM pg_proc p
            WHERE p.oid IN (
              'public.acquire_youtube_refresh_lease(uuid, integer)'::regprocedure,
