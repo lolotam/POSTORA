@@ -2,13 +2,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { recordGrantedScopes } from "../_shared/youtubeGrantedScopes.ts";
+import {
+  createYouTubeOAuthHandler,
+  NoYouTubeChannelError,
+  type YouTubeOAuthPorts,
+} from "./handler.ts";
 
-import { restrictedCorsHeaders } from "../_shared/cors.ts";
-
-const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
-const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID") ?? "";
+const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 // IMPORTANT: Google requires an EXACT string match for redirect_uri against the
 // value registered in Google Cloud Console. On self-hosted Supabase, SUPABASE_URL
@@ -22,426 +25,149 @@ const YOUTUBE_REDIRECT_URI =
   Deno.env.get("YOUTUBE_REDIRECT_URI") ??
   `${PUBLIC_API_ORIGIN}/functions/v1/youtube-oauth`;
 
-// OAuth itself succeeded but the Google account has no YouTube channel.
-// Unlike other failures, this message is intentionally user-facing and must
-// not be sanitized away — the user needs to know to pick a different account.
-class NoYouTubeChannelError extends Error {
-  constructor() {
-    super(
-      "The Google account you selected has no YouTube channel. Please sign in with a Google account that has an active YouTube channel.",
-    );
-  }
+const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+function rpcFailure(error: { code?: string; message?: string }): Error {
+  const failure = new Error("rpc_failed") as Error & { code?: string };
+  failure.code = error.code;
+  return failure;
 }
 
-function base64UrlEncode(input: string) {
-  return btoa(input)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function base64UrlDecode(input: string) {
-  const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padLength = (4 - (base64.length % 4)) % 4;
-  return atob(base64 + "=".repeat(padLength));
-}
-
-async function hmacSha256Base64Url(message: string, secret: string) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-
-  const sig = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(message),
-  );
-
-  const bytes = new Uint8Array(sig);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return base64UrlEncode(bin);
-}
-
-async function buildSignedState(payload: Record<string, unknown>) {
-  if (!GOOGLE_CLIENT_SECRET) throw new Error("GOOGLE_CLIENT_SECRET not configured");
-  const raw = JSON.stringify(payload);
-  const sig = await hmacSha256Base64Url(raw, GOOGLE_CLIENT_SECRET);
-  return `${base64UrlEncode(raw)}.${sig}`;
-}
-
-async function verifyAndParseState(state: string) {
-  if (!GOOGLE_CLIENT_SECRET) throw new Error("GOOGLE_CLIENT_SECRET not configured");
-
-  const [encoded, sig] = state.split(".");
-  if (!encoded || !sig) throw new Error("Invalid state format");
-
-  const raw = base64UrlDecode(encoded);
-  const expected = await hmacSha256Base64Url(raw, GOOGLE_CLIENT_SECRET);
-  if (expected !== sig) throw new Error("Invalid state signature");
-
-  return JSON.parse(raw) as {
-    user_id: string;
-    social_profile_id: string | null;
-    return_to: string;
-  };
-}
-
-Deno.serve(async (req) => {
-  const corsHeaders = restrictedCorsHeaders(req);
-  // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-  const redirectUri = YOUTUBE_REDIRECT_URI;
-
-  try {
-    // OAuth callback from Google: GET /functions/v1/youtube-oauth?code=...&state=...
-    if (req.method === "GET") {
-      const url = new URL(req.url);
-      const code = url.searchParams.get("code");
-      const state = url.searchParams.get("state");
-
-      if (!code || !state) {
-        return new Response("Missing code/state", { status: 400 });
-      }
-
-      const { user_id, social_profile_id, return_to } = await verifyAndParseState(state);
-
-      const result = await completeOAuth({
-        code,
-        user_id,
-        social_profile_id,
-        redirect_uri: redirectUri,
+const ports: YouTubeOAuthPorts = {
+  auth: {
+    authenticate: async (req, bodyUserId) => {
+      const auth = await authenticateCaller(req, bodyUserId);
+      return { userId: auth.userId };
+    },
+  },
+  attempts: {
+    create: async ({ userId, socialProfileId, returnTo, ttlSeconds }) => {
+      const { data, error } = await admin.rpc("create_youtube_oauth_attempt_v2", {
+        p_user_id: userId,
+        p_social_profile_id: socialProfileId,
+        p_return_to: returnTo,
+        p_ttl_seconds: ttlSeconds,
       });
-
-      // Redirect back to app
-      const returnUrl = new URL(return_to);
-      returnUrl.searchParams.set("connected", "youtube");
-      if (social_profile_id) returnUrl.searchParams.set("profile_id", social_profile_id);
-      returnUrl.searchParams.set("channel", result.channelTitle);
-
-      return Response.redirect(returnUrl.toString(), 302);
-    }
-
-    // POST-based API (called from the app)
-    const body = await req.json().catch(() => ({}));
-    const action = body?.action;
-
-    console.log("YouTube OAuth action:", action);
-
-    // Generate authorization URL
-    if (action === "authorize") {
-      if (!GOOGLE_CLIENT_ID) throw new Error("GOOGLE_CLIENT_ID not configured");
-      if (!GOOGLE_CLIENT_SECRET) throw new Error("GOOGLE_CLIENT_SECRET not configured");
-
-      const auth = await authenticateCaller(req, body?.user_id);
-      const userId = auth.userId;
-      const socialProfileId = (body?.social_profile_id as string | null | undefined) ?? null;
-      const returnTo = body?.return_to as string | undefined;
-
-      if (!returnTo) throw new Error("Missing return_to");
-
-      // Narrow scopes matching what Google has approved for this app.
-      // Broad `auth/youtube` is a restricted scope that triggers extra verification.
-      const scopes = [
-        "https://www.googleapis.com/auth/youtube.readonly",
-        "https://www.googleapis.com/auth/youtube.upload",
-        // Comment reads, replies, moderation, and deletion all require this scope.
-        "https://www.googleapis.com/auth/youtube.force-ssl",
-      ].join(" ");
-
-      const state = await buildSignedState({
-        user_id: userId,
-        social_profile_id: socialProfileId,
-        return_to: returnTo,
+      if (error || !data?.nonce) throw rpcFailure(error ?? {});
+      return { nonce: data.nonce as string };
+    },
+    consume: async (nonce) => {
+      const { data, error } = await admin.rpc("consume_youtube_oauth_attempt_by_nonce", {
+        p_nonce: nonce,
       });
-
-      const params = new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        redirect_uri: redirectUri,
-        response_type: "code",
-        scope: scopes,
-        access_type: "offline",
-        prompt: "consent",
-        include_granted_scopes: "true",
-        state,
-      });
-
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-      console.log("Generated YouTube auth URL (redirect_uri)", redirectUri);
-
-      return new Response(JSON.stringify({ url: authUrl, redirect_uri: redirectUri }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Back-compat: allow app-driven callback (POST)
-    if (action === "callback") {
-      const auth = await authenticateCaller(req, body?.user_id);
-      const code = body?.code as string | undefined;
-      const social_profile_id = (body?.social_profile_id as string | null | undefined) ?? null;
-
-      if (!code) throw new Error("Missing code");
-
-      const result = await completeOAuth({
-        code,
-        user_id: auth.userId,
-        social_profile_id,
-        redirect_uri: redirectUri,
-      });
-
-      return new Response(JSON.stringify({ success: true, username: result.channelTitle }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Refresh token
-    if (action === "refresh") {
+      if (error) throw rpcFailure(error);
+      if (!data?.ok) return { ok: false, reason: String(data?.reason ?? "invalid_request") };
+      return {
+        ok: true,
+        userId: data.user_id as string,
+        socialProfileId: data.social_profile_id as string,
+        returnTo: (data.return_to as string | null) ?? null,
+      };
+    },
+  },
+  google: {
+    complete: async (code) => {
       if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
         throw new Error("Google credentials not configured");
       }
-      if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-        throw new Error("Supabase credentials not configured");
-      }
-
-      const accountId = body?.account_id as string | undefined;
-      let currentRefreshToken = body?.refresh_token as string | undefined;
-
-      if (!accountId) throw new Error("Missing account_id");
-
-      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-      // If refresh_token not provided, fetch it from the database
-      if (!currentRefreshToken) {
-        console.log("Fetching refresh token from database for account:", accountId);
-        const { data: account, error: fetchError } = await supabase
-          .from("social_accounts")
-          .select("refresh_token")
-          .eq("id", accountId)
-          .single();
-
-        if (fetchError || !account) {
-          console.error("Failed to fetch account:", fetchError);
-          throw new Error("Account not found");
-        }
-
-        currentRefreshToken = account.refresh_token;
-        if (!currentRefreshToken) {
-          throw new Error("No refresh token available. Please reconnect your YouTube account.");
-        }
-      }
-
-      console.log("Refreshing YouTube token for account:", accountId);
-
       const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           client_id: GOOGLE_CLIENT_ID,
           client_secret: GOOGLE_CLIENT_SECRET,
-          refresh_token: currentRefreshToken,
-          grant_type: "refresh_token",
+          code,
+          grant_type: "authorization_code",
+          redirect_uri: YOUTUBE_REDIRECT_URI,
         }),
       });
-
       const tokenData = await tokenResponse.json();
-      console.log("Token refresh response status:", tokenResponse.status);
+      if (tokenData.error) throw new Error("google_token_exchange_failed");
 
-      if (tokenData.error) {
-        console.error("Token refresh error:", tokenData);
-        throw new Error(tokenData.error_description || tokenData.error || "Failed to refresh token");
-      }
+      const channelResponse = await fetch(
+        "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+        { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
+      );
+      const channelData = await channelResponse.json();
+      if (channelData.error) throw new Error("google_channel_lookup_failed");
+      const channel = channelData.items?.[0];
+      if (!channel) throw new NoYouTubeChannelError();
 
-      const { error: updateError } = await supabase
-        .from("social_accounts")
-        .update({
-          access_token: tokenData.access_token,
-          token_expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
-          // A successful refresh means the credentials are healthy again; clearing these
-          // keeps the UI from showing a red Reconnect button over a working token.
-          needs_reauth: false,
-          failure_count: 0,
-          last_refresh_error: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", accountId);
-
-      if (updateError) {
-        console.error("Failed to update token:", updateError);
-        throw new Error("Failed to save refreshed token");
-      }
-
-      await recordGrantedScopes(supabase, accountId, tokenData.scope);
-
-      console.log("YouTube token refreshed successfully");
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    return new Response(JSON.stringify({ error: "Invalid action" }), {
-      status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  } catch (error: unknown) {
-    console.error("YouTube OAuth error:", error);
-    const isNoChannel = error instanceof NoYouTubeChannelError;
-    // Sanitized error message to prevent schema leakage; the no-channel
-    // message is deliberately exempt (see NoYouTubeChannelError).
-    const safeMessage = isNoChannel
-      ? error.message
-      : "Authentication failed. Please try again.";
-
-    // If this was a GET callback, redirect back with error so user doesn't get stuck on a blank page
-    if (req.method === "GET") {
-      const url = new URL(req.url);
-      const state = url.searchParams.get("state");
-      try {
-        if (state) {
-          const parsed = await verifyAndParseState(state);
-          const returnUrl = new URL(parsed.return_to);
-          returnUrl.searchParams.set(
-            "error",
-            isNoChannel ? "NO_YOUTUBE_CHANNEL" : "youtube_oauth_failed",
-          );
-          returnUrl.searchParams.set("error_description", safeMessage);
-          return Response.redirect(returnUrl.toString(), 302);
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    return new Response(
-      JSON.stringify(
-        isNoChannel
-          ? { error: safeMessage, code: "NO_YOUTUBE_CHANNEL" }
-          : { error: safeMessage },
-      ),
-      {
-        status: isNoChannel ? 400 : 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      },
-    );
-  }
-});
-
-async function completeOAuth(params: {
-  code: string;
-  user_id: string;
-  social_profile_id: string | null;
-  redirect_uri: string;
-}) {
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-    throw new Error("Google credentials not configured");
-  }
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error("Supabase credentials not configured");
-  }
-
-  console.log("Exchanging code for access token");
-
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      client_secret: GOOGLE_CLIENT_SECRET,
-      code: params.code,
-      grant_type: "authorization_code",
-      redirect_uri: params.redirect_uri,
-    }),
-  });
-
-  const tokenData = await tokenResponse.json();
-  console.log("Token response status:", tokenResponse.status);
-
-  if (tokenData.error) {
-    console.error("Token error:", tokenData);
-    throw new Error(tokenData.error_description || tokenData.error || "Failed to get access token");
-  }
-
-  const { access_token, refresh_token, expires_in, scope } = tokenData as {
-    access_token: string;
-    refresh_token?: string;
-    expires_in: number;
-    scope?: string;
-  };
-
-  const channelResponse = await fetch(
-    "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
-    {
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-      },
+      return {
+        accessToken: tokenData.access_token as string,
+        refreshToken: (tokenData.refresh_token as string | undefined) ?? undefined,
+        expiresIn: tokenData.expires_in as number,
+        scope: tokenData.scope as string | undefined,
+        channel: {
+          id: channel.id as string,
+          title: (channel.snippet?.title as string | undefined) ?? "YouTube",
+          avatarUrl: (channel.snippet?.thumbnails?.default?.url as string | undefined) ?? null,
+        },
+      };
     },
-  );
+  },
+  accounts: {
+    findDefaultProfile: async (userId) => {
+      const { data, error } = await admin
+        .from("social_profiles")
+        .select("id")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw rpcFailure(error);
+      return (data?.id as string | undefined) ?? null;
+    },
+    save: async (input) => {
+      const avatarUrl = await cacheAvatarToCdn(input.avatarUrl, input.userId, "youtube", input.channelId);
+      // Optional columns are omitted rather than nulled: on conflict the upsert only
+      // touches the columns present, so a re-consent that returns no refresh_token
+      // keeps the stored one and account_metadata is never overwritten.
+      const { data, error } = await admin
+        .from("social_accounts")
+        .upsert(
+          {
+            user_id: input.userId,
+            platform: "youtube",
+            platform_user_id: input.channelId,
+            platform_username: input.channelTitle,
+            access_token: input.accessToken,
+            ...(input.refreshToken ? { refresh_token: input.refreshToken } : {}),
+            token_expires_at: input.tokenExpiresAt,
+            avatar_url: avatarUrl,
+            is_active: true,
+            connected_at: input.connectedAt,
+            updated_at: input.updatedAt,
+            social_profile_id: input.socialProfileId,
+            needs_reauth: false,
+            failure_count: 0,
+            last_refresh_error: null,
+          },
+          { onConflict: "user_id,platform,platform_user_id" },
+        )
+        .select("id")
+        .single();
+      if (error || !data) throw rpcFailure(error ?? {});
+      await recordGrantedScopes(admin, data.id, input.grantedScope);
+    },
+  },
+  clock: { now: () => new Date() },
+  log: {
+    refusal: async ({ action, reason, userId }) => {
+      await admin.from("system_logs").insert({
+        level: "warn",
+        category: "oauth",
+        source: "youtube-oauth",
+        message: "YouTube OAuth request refused",
+        user_id: userId,
+        metadata: { action, reason },
+      });
+    },
+  },
+};
 
-  const channelData = await channelResponse.json();
-  console.log("Channel info response status:", channelResponse.status);
-
-  if (channelData.error) {
-    console.error("Channel error:", channelData);
-    throw new Error(channelData.error.message || "Failed to get channel info");
-  }
-
-  const channel = channelData.items?.[0];
-  if (!channel) throw new NoYouTubeChannelError();
-
-  const channelId = channel.id as string;
-  const channelTitle = (channel.snippet?.title as string | undefined) ?? "YouTube";
-  const rawAvatarUrl = (channel.snippet?.thumbnails?.default?.url as string | undefined) ?? null;
-
-  console.log("Channel found:", channelTitle);
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  // YouTube access tokens expire in ~1 hour, but refresh tokens are long-lived
-  // We'll set expiry based on actual expires_in but tokens auto-refresh
-  const tokenExpiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
-
-  // Cache avatar to Cloudinary for permanent storage
-  const avatarUrl = await cacheAvatarToCdn(rawAvatarUrl, params.user_id, "youtube", channelId);
-
-  const { data: savedAccount, error: dbError } = await supabase
-    .from("social_accounts")
-    .upsert(
-      {
-        user_id: params.user_id,
-        platform: "youtube",
-        platform_user_id: channelId,
-        platform_username: channelTitle,
-        access_token,
-        refresh_token: refresh_token ?? null,
-        token_expires_at: tokenExpiresAt,
-        avatar_url: avatarUrl,
-        is_active: true,
-        connected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        social_profile_id: params.social_profile_id || null,
-        // Reset health tracking on successful reconnection
-        needs_reauth: false,
-        failure_count: 0,
-        last_refresh_error: null,
-      },
-      {
-        onConflict: "user_id,platform,platform_user_id",
-      },
-    )
-    .select("id")
-    .single();
-
-  if (dbError) {
-    console.error("Database error:", dbError);
-    throw new Error("Failed to save account");
-  }
-
-  await recordGrantedScopes(supabase, savedAccount.id, scope);
-
-  console.log("YouTube account saved successfully");
-  return { channelTitle };
-}
+Deno.serve(createYouTubeOAuthHandler(ports, {
+  clientId: GOOGLE_CLIENT_ID,
+  redirectUri: YOUTUBE_REDIRECT_URI,
+  trustedAppOrigin: Deno.env.get("PUBLIC_APP_ORIGIN"),
+}));
