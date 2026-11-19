@@ -5,21 +5,23 @@
  * The scheduler refreshes YouTube tokens before it kicks process-post. A
  * retryable refresh refusal (refresh_in_progress, lease_acquire_failed, any
  * retryable_refusal) is not a dead credential — another worker is refreshing —
- * but when the stored token is expired or inside the refresh window, a publish
- * started now would reach the provider with a credential it refuses, and the
- * per-post failure handler would mark the post PERMANENTLY failed. That is
- * exactly what a retryable refusal must never do.
+ * but when the stored credential would be refused by the publication policy,
+ * a publish started now would fail for a reason that says nothing about the
+ * video, and the per-post failure handler would mark the post PERMANENTLY
+ * failed. That is exactly what a retryable refusal must never do.
  *
- * The decision: when the stored token cannot publish yet, defer the WHOLE post
- * this tick. Nothing is written and process-post is not called, so the next
- * tick selects the post again under its same expectation. When the stored
- * token is still usable, the post proceeds as today.
+ * The decision uses the SAME policy the publish path applies to the credential
+ * (youtubeCredentialRefusalReason): expired credentials and credentials
+ * without an expiry or a token defer; a token that is still publishable —
+ * even one inside the refresh window — proceeds.
+ *
+ * When the stored credential cannot publish yet, defer the WHOLE post this
+ * tick. Nothing is written and process-post is not called, so the next tick
+ * selects the post again under its same expectation. When the stored token is
+ * still usable, the post proceeds as today.
  */
 
-import {
-  YOUTUBE_TOKEN_REFRESH_WINDOW_MS,
-  youtubeTokenNeedsRefresh,
-} from "../_shared/youtubeTokenRefresh.ts";
+import { youtubeCredentialRefusalReason } from "../process-post/youtubeUploadPolicy.ts";
 
 /** One account the scheduler tried to refresh before kicking process-post. */
 export interface ScheduledYouTubeRefreshProbe {
@@ -61,11 +63,9 @@ export interface YouTubePostDeferral {
  */
 export function youtubePostDeferral(
   probes: ScheduledYouTubeRefreshProbe[],
-  options: { nowMs?: number; refreshWindowMs?: number } = {},
+  options: { nowMs?: number } = {},
 ): YouTubePostDeferral {
   const nowMs = options.nowMs ?? Date.now();
-  const refreshWindowMs = options.refreshWindowMs ??
-    YOUTUBE_TOKEN_REFRESH_WINDOW_MS;
 
   for (const probe of probes) {
     if (probe.platform !== "youtube") continue;
@@ -75,10 +75,15 @@ export function youtubePostDeferral(
     // inactive accounts on its own).
     if (probe.isActive === false) continue;
     if (!probe.refreshRefusalRetryable) continue;
-    // A publish would fail: the token is expired or inside the refresh window.
-    // The other worker is already refreshing, so the post waits one tick.
+    // A publish would fail: the credential the row still holds fails the
+    // shared publication policy. The other worker is already refreshing, so
+    // the post waits one tick.
     if (
-      youtubeTokenNeedsRefresh(probe.storedTokenExpiresAt, nowMs, refreshWindowMs)
+      youtubeCredentialRefusalReason(
+        probe.storedAccessToken,
+        probe.storedTokenExpiresAt,
+        nowMs,
+      ) !== null
     ) {
       return {
         defer: true,

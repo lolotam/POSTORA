@@ -44,21 +44,53 @@ Deno.test("contention with an expired stored token defers the whole post", () =>
   assertEquals(decision.reason, "refresh_in_progress");
 });
 
-Deno.test("contention inside the refresh window also defers", () => {
-  // 10 minutes left is still inside the 30-minute refresh window: a publish
-  // started now would carry a token the provider may refuse.
+Deno.test("contention inside the refresh window still proceeds when the token is publishable", () => {
+  // 10 minutes left is inside the refresh window but strictly publishable:
+  // the decision follows the publication credential policy, not the refresh
+  // window, so the post goes out instead of waiting a tick.
   const decision = youtubePostDeferral(
     [
       probe({
         refreshRefusalReason: "lease_acquire_failed",
         refreshRefusalRetryable: true,
+        storedAccessToken: "stored-tok",
         storedTokenExpiresAt: new Date(NOW + 10 * 60_000).toISOString(),
       }),
     ],
     { nowMs: NOW },
   );
+  assertEquals(decision.defer, false);
+});
+
+Deno.test("contention with a missing expiry defers", () => {
+  const decision = youtubePostDeferral(
+    [
+      probe({
+        refreshRefusalReason: "refresh_in_progress",
+        refreshRefusalRetryable: true,
+        storedAccessToken: "stored-tok",
+        storedTokenExpiresAt: null,
+      }),
+    ],
+    { nowMs: NOW },
+  );
   assertEquals(decision.defer, true);
-  assertEquals(decision.reason, "lease_acquire_failed");
+  assertEquals(decision.reason, "refresh_in_progress");
+});
+
+Deno.test("contention with a missing access token defers", () => {
+  const decision = youtubePostDeferral(
+    [
+      probe({
+        refreshRefusalReason: "refresh_in_progress",
+        refreshRefusalRetryable: true,
+        storedAccessToken: null,
+        storedTokenExpiresAt: USABLE_AT,
+      }),
+    ],
+    { nowMs: NOW },
+  );
+  assertEquals(decision.defer, true);
 });
 
 Deno.test("contention with a still-usable stored token proceeds", () => {
