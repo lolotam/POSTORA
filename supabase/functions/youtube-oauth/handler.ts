@@ -75,10 +75,9 @@ export interface YouTubeOAuthPorts {
     findDefaultProfile(userId: string): Promise<string | null>;
     save(input: YouTubeAccountSave): Promise<void>;
     load(input: { accountId: string; userId: string }): Promise<YouTubeDisconnectAccount | null>;
-    countActiveSharingGrant(input: {
+    countOtherActiveNativeAccounts(input: {
       userId: string;
       excludeAccountId: string;
-      refreshToken: string;
     }): Promise<number>;
     clearCredentials(input: {
       accountId: string;
@@ -204,10 +203,9 @@ export function createYouTubeOAuthHandler(
     } else {
       let otherActiveCount: number;
       try {
-        otherActiveCount = await ports.accounts.countActiveSharingGrant({
+        otherActiveCount = await ports.accounts.countOtherActiveNativeAccounts({
           userId,
           excludeAccountId: account.id,
-          refreshToken,
         });
       } catch {
         return refuse(req, "disconnect", "grant_count_failed", userId, 500);

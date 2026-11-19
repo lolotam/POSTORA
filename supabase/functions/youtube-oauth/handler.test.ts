@@ -63,7 +63,7 @@ function fixture(overrides: {
     save: 0,
     defaultProfile: 0,
     load: 0,
-    countActiveSharingGrant: 0,
+    countOtherActiveNativeAccounts: 0,
     clearCredentials: 0,
   };
   const order: string[] = [];
@@ -154,8 +154,8 @@ function fixture(overrides: {
           ...overrides.disconnectAccount,
         });
       },
-      countActiveSharingGrant: () => {
-        calls.countActiveSharingGrant++;
+      countOtherActiveNativeAccounts: () => {
+        calls.countOtherActiveNativeAccounts++;
         if (overrides.countGrantError) return Promise.reject(new Error("grant count failed"));
         return Promise.resolve(overrides.activeSharingGrantCount ?? 0);
       },
@@ -389,7 +389,7 @@ Deno.test("unauthenticated disconnect is refused before loading accounts or call
   assertEquals(response.status, 401);
   assertEquals(await response.json(), { error: "Unauthorized" });
   assertEquals(f.calls.load, 0);
-  assertEquals(f.calls.countActiveSharingGrant, 0);
+  assertEquals(f.calls.countOtherActiveNativeAccounts, 0);
   assertEquals(f.calls.revoke, 0);
   assertEquals(f.calls.clearCredentials, 0);
   assertEquals(f.logs, [{ action: "disconnect", reason: "Unauthorized", userId: null }]);
@@ -414,7 +414,7 @@ Deno.test("disconnect refuses another user's account with 404 and touches nothin
   assertEquals(response.status, 404);
   assertEquals(await response.json(), { error: "account_not_found" });
   assertEquals(f.calls.load, 1);
-  assertEquals(f.calls.countActiveSharingGrant, 0);
+  assertEquals(f.calls.countOtherActiveNativeAccounts, 0);
   assertEquals(f.calls.revoke, 0);
   assertEquals(f.calls.clearCredentials, 0);
   assertEquals(f.account.isActive, true);
@@ -428,7 +428,7 @@ Deno.test("disconnect refuses an account whose owner disagrees with the caller",
 
   assertEquals(response.status, 404);
   assertEquals(await response.json(), { error: "account_not_found" });
-  assertEquals(f.calls.countActiveSharingGrant, 0);
+  assertEquals(f.calls.countOtherActiveNativeAccounts, 0);
   assertEquals(f.calls.revoke, 0);
   assertEquals(f.calls.clearCredentials, 0);
   assertEquals(f.logs, [{ action: "disconnect", reason: "account_not_found", userId: USER_ID }]);
@@ -441,7 +441,7 @@ Deno.test("disconnect revokes at Google then clears local credentials when last 
 
   assertEquals(response.status, 200);
   assertEquals(JSON.parse(text), { success: true, revoked: true, reason: null });
-  assertEquals(f.calls.countActiveSharingGrant, 1);
+  assertEquals(f.calls.countOtherActiveNativeAccounts, 1);
   assertEquals(f.calls.revoke, 1);
   assertEquals(f.revokedTokens, [f.storedRefreshToken]);
   assertEquals(f.calls.clearCredentials, 1);
@@ -461,7 +461,7 @@ Deno.test("disconnect skips Google revoke when sibling channels share the active
 
   assertEquals(response.status, 200);
   assertEquals(JSON.parse(text), { success: true, revoked: false, reason: "grant_shared" });
-  assertEquals(f.calls.countActiveSharingGrant, 1);
+  assertEquals(f.calls.countOtherActiveNativeAccounts, 1);
   assertEquals(f.calls.revoke, 0);
   assertEquals(f.calls.clearCredentials, 1);
   assertEquals(f.account.accessToken, null);
@@ -479,7 +479,7 @@ Deno.test("disconnect with missing grant skips Google revoke and clears local cr
 
   assertEquals(response.status, 200);
   assertEquals(JSON.parse(text), { success: true, revoked: false, reason: "missing_grant" });
-  assertEquals(f.calls.countActiveSharingGrant, 0);
+  assertEquals(f.calls.countOtherActiveNativeAccounts, 0);
   assertEquals(f.calls.revoke, 0);
   assertEquals(f.calls.clearCredentials, 1);
   assertEquals(f.account.accessToken, null);
@@ -549,7 +549,7 @@ Deno.test("disconnect fails closed on account/metadata read failure", async () =
 
   assertEquals(response.status, 500);
   assertEquals(JSON.parse(text), { error: "Failed to disconnect YouTube account. Please try again." });
-  assertEquals(f.calls.countActiveSharingGrant, 0);
+  assertEquals(f.calls.countOtherActiveNativeAccounts, 0);
   assertEquals(f.calls.revoke, 0);
   assertEquals(f.calls.clearCredentials, 0);
   assert(!text.includes(f.accessToken));

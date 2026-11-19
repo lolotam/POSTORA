@@ -174,14 +174,18 @@ const ports: YouTubeOAuthPorts = {
           : null,
       };
     },
-    countActiveSharingGrant: async ({ userId, excludeAccountId, refreshToken }) => {
+    // Revoking at Google ends the whole authorization of that Google account, and two
+    // channels connected separately hold different refresh token strings for the same
+    // authorization. Matching on the token string would miss a sibling and break it, so
+    // any other active native channel of this user blocks the revoke.
+    countOtherActiveNativeAccounts: async ({ userId, excludeAccountId }) => {
       const { count, error } = await admin
         .from("social_accounts")
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)
         .eq("platform", "youtube")
         .eq("is_active", true)
-        .eq("refresh_token", refreshToken)
+        .not("refresh_token", "is", null)
         .neq("id", excludeAccountId);
       if (error || count === null) throw rpcFailure(error ?? {});
       return count;
