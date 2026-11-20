@@ -6,8 +6,14 @@ import {
   type YouTubeResourcesPorts,
   type YouTubeTokenResult,
 } from "./handler.ts";
-import { YOUTUBE_SCOPE, type YouTubeChannelDetails, type YouTubeVideosPage } from "./contracts.ts";
+import {
+  YOUTUBE_SCOPE,
+  type YouTubeChannelDetails,
+  type YouTubeVideoDetails,
+  type YouTubeVideosPage,
+} from "./contracts.ts";
 import type { YouTubeReadResult } from "./youtubeReadClient.ts";
+import { YOUTUBE_RESOURCE_REQUEST_EXAMPLES } from "./requestExamples.fixture.ts";
 
 const ENDPOINT = "https://api.postora.cloud/functions/v1/youtube-resources";
 const USER_ID = "0ee00001-0000-4000-8000-000000000001";
@@ -43,6 +49,24 @@ const CHANNEL: YouTubeChannelDetails = {
   statistics: { view_count: 1, subscriber_count: 1, subscriber_count_hidden: false, video_count: 1 },
 };
 
+const VIDEO: YouTubeVideoDetails = {
+  id: "videoAAAAAAA",
+  channel_id: CHANNEL_ID,
+  title: "First video",
+  description: "",
+  thumbnail_url: null,
+  published_at: null,
+  tags: [],
+  category_id: null,
+  default_language: null,
+  duration_iso8601: "PT1M",
+  privacy_status: "public",
+  upload_status: "processed",
+  made_for_kids: false,
+  statistics: { view_count: 1, like_count: 0, comment_count: 0 },
+  url: "https://www.youtube.com/watch?v=videoAAAAAAA",
+};
+
 function request(body: unknown, method = "POST"): Request {
   return new Request(ENDPOINT, {
     method,
@@ -68,13 +92,15 @@ function fixture(overrides: {
   tokenResults?: YouTubeTokenResult[];
   channelResults?: Array<YouTubeReadResult<YouTubeChannelDetails>>;
   uploadResults?: Array<YouTubeReadResult<YouTubeVideosPage>>;
+  videoResults?: Array<YouTubeReadResult<YouTubeVideoDetails>>;
   rateLimit?: { allowed: boolean; retryAfterSeconds: number };
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
   const refreshToken = crypto.randomUUID() + crypto.randomUUID();
-  const calls = { auth: 0, load: 0, tokens: 0, channel: 0, uploads: 0, rateLimit: 0 };
+  const calls = { auth: 0, load: 0, tokens: 0, channel: 0, uploads: 0, video: 0, rateLimit: 0 };
   const forceFlags: boolean[] = [];
   const uploadInputs: Array<{ channelId: string; pageSize: number; pageToken?: string }> = [];
+  const videoInputs: Array<{ channelId: string; videoId: string }> = [];
   const logs: YouTubeResourceRefusal[] = [];
   let minted = 0;
   const account: YouTubeResourceAccount = {
@@ -151,7 +177,12 @@ function fixture(overrides: {
         calls.uploads++;
         return Promise.resolve(queued ?? { ok: true, value: pageOf(25, "CAUQAA", 60) });
       },
-      getVideo: () => Promise.reject(new Error("not used in this test")),
+      getVideo: (_token, input) => {
+        videoInputs.push(input);
+        const queued = overrides.videoResults?.[calls.video];
+        calls.video++;
+        return Promise.resolve(queued ?? { ok: true, value: VIDEO });
+      },
     },
     rateLimit: {
       check: () => {
@@ -166,6 +197,7 @@ function fixture(overrides: {
     forceFlags,
     logs,
     uploadInputs,
+    videoInputs,
     accessToken,
     refreshToken,
   };
@@ -329,7 +361,7 @@ Deno.test("channel returns the provider answer with provider freshness and no cr
   const body = JSON.parse(text);
   assertEquals(body.freshness.source, "provider");
   assertEquals(body.data, CHANNEL);
-  assertEquals(calls, { auth: 1, load: 1, tokens: 1, channel: 1, uploads: 0, rateLimit: 1 });
+  assertEquals(calls, { auth: 1, load: 1, tokens: 1, channel: 1, uploads: 0, video: 0, rateLimit: 1 });
 });
 
 Deno.test("a foreign account never reaches the token store or the provider", async () => {
@@ -491,3 +523,43 @@ Deno.test("a failed listing is an error, never an empty page", async () => {
   assertEquals(response.status, 502);
   assertEquals("data" in (await response.json()), false);
 });
+
+const VIDEO_REQUEST = { operation: "video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" };
+
+Deno.test("video reads the details against the stored channel", async () => {
+  const { handler, videoInputs } = fixture();
+  const response = await handler(request(VIDEO_REQUEST));
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).data, VIDEO);
+  assertEquals(videoInputs, [{ channelId: CHANNEL_ID, videoId: "videoAAAAAAA" }]);
+});
+
+Deno.test("a video the provider layer rejects as foreign is the same 404 as an unknown account", async () => {
+  const { handler } = fixture({
+    videoResults: [{ ok: false, code: "not_found", unauthorized: false }],
+  });
+  const foreignVideo = await handler(request(VIDEO_REQUEST));
+  const foreignAccount = await handler(request({ ...VIDEO_REQUEST, account_id: FOREIGN_ACCOUNT_ID }));
+  assertEquals(foreignVideo.status, 404);
+  // The status and the body are the same; only the request id differs between two requests.
+  const { request_id: videoId, ...videoRest } = await foreignVideo.json();
+  const { request_id: accountId, ...accountRest } = await foreignAccount.json();
+  assertEquals(videoId !== accountId, true);
+  assertEquals(videoRest, accountRest);
+  assertEquals(videoRest, { error: "not_found" });
+});
+
+Deno.test("a malformed video id is refused before any account read", async () => {
+  const { handler, calls } = fixture();
+  const response = await handler(request({ ...VIDEO_REQUEST, video_id: "../channels?mine=true" }));
+  assertEquals(response.status, 400);
+  assertEquals([calls.load, calls.video], [0, 0]);
+});
+
+for (const [name, body] of Object.entries(YOUTUBE_RESOURCE_REQUEST_EXAMPLES)) {
+  Deno.test(`the handler accepts the shared ${name} request example`, async () => {
+    const { handler } = fixture();
+    const response = await handler(request(body));
+    assertEquals(response.status, 200);
+  });
+}

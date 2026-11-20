@@ -63,7 +63,13 @@ const VideosRequest = z.object({
   page_size: z.number().int().min(1).max(YOUTUBE_VIDEOS_MAX_PAGE_SIZE).optional(),
   page_token: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/).optional(),
 }).strict();
-const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, ChannelRequest, VideosRequest]);
+// The id class Google itself uses; a path-shaped value never reaches the provider.
+const VideoRequest = z.object({
+  operation: z.literal("video"),
+  account_id: AccountId,
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
+}).strict();
+const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, ChannelRequest, VideosRequest, VideoRequest]);
 
 // Same shape as _shared/auth-helper.ts, defined locally on purpose: authenticateCaller
 // returns claims.sub unchecked, so the handler re-checks the identity shape itself.
@@ -255,9 +261,10 @@ export function createYouTubeResourcesHandler(
       });
     }
     const refusedOperation = parsed.data.operation;
-    // Narrowed here so both provider-backed operations share one admission path,
+    // Narrowed here so every provider-backed operation shares one admission path,
     // one repeat-on-401 path and one response shape.
     const videos = refusedOperation === "videos" ? parsed.data : null;
+    const video = refusedOperation === "video" ? parsed.data : null;
     try {
       const admission = await admit(account, userId);
       // admit refuses a row without a stored channel as reconnect_required, so the
@@ -274,15 +281,20 @@ export function createYouTubeResourcesHandler(
           ? { retry_after_seconds: admission.retryAfterSeconds }
           : undefined);
       }
-      const result = videos === null
+      // The provider layer owns the foreign-video answer: getVideo refuses a video of
+      // another channel as not_found, and the handler adds no second rule.
+      const result = videos !== null
         ? await providerRead(account, (accessToken) =>
-          ports.youtube.getChannel(accessToken, { channelId }))
-        : await providerRead(account, (accessToken) =>
           ports.youtube.listUploads(accessToken, {
             channelId,
             pageSize: videos.page_size ?? YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE,
             ...(videos.page_token ? { pageToken: videos.page_token } : {}),
-          }));
+          }))
+        : video !== null
+        ? await providerRead(account, (accessToken) =>
+          ports.youtube.getVideo(accessToken, { channelId, videoId: video.video_id }))
+        : await providerRead(account, (accessToken) =>
+          ports.youtube.getChannel(accessToken, { channelId }));
       if (!result.ok) {
         return await refuse(req, {
           operation: refusedOperation,
