@@ -94,6 +94,8 @@ function fixture(overrides: {
   uploadResults?: Array<YouTubeReadResult<YouTubeVideosPage>>;
   videoResults?: Array<YouTubeReadResult<YouTubeVideoDetails>>;
   rateLimit?: { allowed: boolean; retryAfterSeconds: number };
+  tokenError?: boolean;
+  rateLimitError?: boolean;
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
   const refreshToken = crypto.randomUUID() + crypto.randomUUID();
@@ -159,6 +161,7 @@ function fixture(overrides: {
     },
     tokens: {
       get: (_account, options) => {
+        if (overrides.tokenError) return Promise.reject(new Error("token store unavailable"));
         forceFlags.push(options.force);
         const queued = overrides.tokenResults?.[calls.tokens];
         calls.tokens++;
@@ -187,6 +190,7 @@ function fixture(overrides: {
     rateLimit: {
       check: () => {
         calls.rateLimit++;
+        if (overrides.rateLimitError) return Promise.reject(new Error("rate limit read failed"));
         return Promise.resolve(overrides.rateLimit ?? { allowed: true, retryAfterSeconds: 0 });
       },
     },
@@ -601,3 +605,50 @@ for (const [name, body] of Object.entries(YOUTUBE_RESOURCE_REQUEST_EXAMPLES)) {
     assertEquals(response.status, 200);
   });
 }
+
+Deno.test("a throwing token store is an internal error and leaks nothing", async () => {
+  const { handler, calls } = fixture({ tokenError: true });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 500);
+  const text = await response.text();
+  assertEquals(text.includes("token store unavailable"), false);
+  assertEquals(JSON.parse(text), { error: "internal_error", request_id: REQUEST_ID });
+  assertEquals(calls.channel, 0);
+});
+
+Deno.test("a throwing rate limiter is an internal error", async () => {
+  const { handler } = fixture({ rateLimitError: true });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 500);
+  const text = await response.text();
+  assertEquals(text.includes("rate limit read failed"), false);
+  assertEquals(JSON.parse(text).error, "internal_error");
+});
+
+Deno.test("a row without a stored channel is reconnect_required before any token read", async () => {
+  const { handler, calls } = fixture({ account: { channelId: null } });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 409);
+  assertEquals((await response.json()).error, "reconnect_required");
+  assertEquals([calls.tokens, calls.channel, calls.rateLimit], [0, 0, 0]);
+});
+
+Deno.test("the single forced-refresh repeat also covers the videos operation", async () => {
+  const { handler, calls, forceFlags } = fixture({
+    uploadResults: [{ ok: false, code: "reconnect_required", unauthorized: true }],
+  });
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 200);
+  assertEquals(forceFlags, [false, true]);
+  assertEquals(calls.uploads, 2);
+});
+
+Deno.test("the single forced-refresh repeat also covers the video operation", async () => {
+  const { handler, calls, forceFlags } = fixture({
+    videoResults: [{ ok: false, code: "reconnect_required", unauthorized: true }],
+  });
+  const response = await handler(request(VIDEO_REQUEST));
+  assertEquals(response.status, 200);
+  assertEquals(forceFlags, [false, true]);
+  assertEquals(calls.video, 2);
+});
