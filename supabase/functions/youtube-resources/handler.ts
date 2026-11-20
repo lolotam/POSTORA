@@ -5,9 +5,11 @@ import {
   YOUTUBE_RESOURCE_ERROR_STATUS,
   YOUTUBE_RESOURCES_SCHEMA_VERSION,
   type YouTubeAccountCapabilities,
+  type YouTubeChannelDetails,
   type YouTubeResourceErrorCode,
   type YouTubeResourceSuccess,
 } from "./contracts.ts";
+import type { YouTubeReadClient, YouTubeReadResult } from "./youtubeReadClient.ts";
 
 export interface YouTubeResourceAccount {
   id: string;
@@ -30,6 +32,10 @@ export interface YouTubeResourceRefusal {
   requestId: string;
 }
 
+export type YouTubeTokenResult =
+  | { ok: true; accessToken: string; minted: boolean }
+  | { ok: false; code: "reconnect_required" | "upstream_unavailable" };
+
 export interface YouTubeResourcesPorts {
   auth: { authenticate(req: Request): Promise<{ userId: string }> };
   accounts: {
@@ -38,12 +44,17 @@ export interface YouTubeResourcesPorts {
   clock: { now(): Date };
   ids: { requestId(): string };
   log: { refusal(entry: YouTubeResourceRefusal): Promise<void> };
+  tokens: {
+    get(account: YouTubeResourceAccount, options: { force: boolean }): Promise<YouTubeTokenResult>;
+  };
+  youtube: YouTubeReadClient;
+  rateLimit: { check(userId: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> };
 }
 
-const CapabilitiesRequest = z.object({
-  operation: z.literal("capabilities"),
-  account_id: z.string().uuid(),
-}).strict();
+const AccountId = z.string().uuid();
+const CapabilitiesRequest = z.object({ operation: z.literal("capabilities"), account_id: AccountId }).strict();
+const ChannelRequest = z.object({ operation: z.literal("channel"), account_id: AccountId }).strict();
+const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, ChannelRequest]);
 
 // Same shape as _shared/auth-helper.ts, defined locally on purpose: authenticateCaller
 // returns claims.sub unchecked, so the handler re-checks the identity shape itself.
@@ -80,6 +91,49 @@ export function createYouTubeResourcesHandler(
         headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
       },
     );
+  }
+
+  // One admission path for every provider-backed operation, in spec order: Composio,
+  // the derived browse capability, the stored channel, then the per-user limit.
+  // Returns the refusal code, or null when the provider may be called.
+  async function admit(
+    account: YouTubeResourceAccount,
+    userId: string,
+  ): Promise<{ code: YouTubeResourceErrorCode; retryAfterSeconds?: number } | null> {
+    if (account.authProvider === "composio") return { code: "provider_unsupported" };
+    const browse = deriveYouTubeCapabilities({
+      id: account.id,
+      channelId: account.channelId,
+      channelTitle: account.channelTitle,
+      authProvider: account.authProvider,
+      needsReauth: account.needsReauth,
+      hasAccessToken: Boolean(account.accessToken),
+      hasRefreshToken: Boolean(account.refreshToken),
+      accountMetadata: account.accountMetadata,
+    }).capabilities.browse;
+    if (browse.state === "unavailable") return { code: browse.reason };
+    if (account.channelId === null) return { code: "reconnect_required" };
+    const decision = await ports.rateLimit.check(userId);
+    if (!decision.allowed) return { code: "rate_limited", retryAfterSeconds: decision.retryAfterSeconds };
+    return null;
+  }
+
+  // One provider read, with the single forced-refresh repeat after a 401 — and only
+  // when the token was not minted by this request: a fresh token that Google rejects
+  // will reject its replacement too, and the refresh budget is not wasted.
+  async function providerRead<T>(
+    account: YouTubeResourceAccount,
+    read: (accessToken: string) => Promise<YouTubeReadResult<T>>,
+  ): Promise<YouTubeReadResult<T>> {
+    const token = await ports.tokens.get(account, { force: false });
+    if (!token.ok) return { ok: false, code: token.code, unauthorized: false };
+    const result = await read(token.accessToken);
+    if (!result.ok && result.unauthorized && !token.minted) {
+      const refreshed = await ports.tokens.get(account, { force: true });
+      if (!refreshed.ok) return { ok: false, code: refreshed.code, unauthorized: false };
+      return await read(refreshed.accessToken);
+    }
+    return result;
   }
 
   return async (req: Request): Promise<Response> => {
@@ -136,7 +190,7 @@ export function createYouTubeResourcesHandler(
         requestId,
       });
     }
-    const parsed = CapabilitiesRequest.safeParse(body);
+    const parsed = RequestSchema.safeParse(body);
     if (!parsed.success) {
       return await refuse(req, {
         operation,
@@ -170,24 +224,75 @@ export function createYouTubeResourcesHandler(
         requestId,
       });
     }
-    const envelope: YouTubeResourceSuccess<YouTubeAccountCapabilities> = {
-      schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
-      request_id: requestId,
-      freshness: { fetched_at: ports.clock.now().toISOString(), source: "database" },
-      data: deriveYouTubeCapabilities({
-        id: account.id,
-        channelId: account.channelId,
-        channelTitle: account.channelTitle,
-        authProvider: account.authProvider,
-        needsReauth: account.needsReauth,
-        hasAccessToken: Boolean(account.accessToken),
-        hasRefreshToken: Boolean(account.refreshToken),
-        accountMetadata: account.accountMetadata,
-      }),
-    };
-    return new Response(JSON.stringify(envelope), {
-      status: 200,
-      headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
-    });
+    if (parsed.data.operation === "capabilities") {
+      const envelope: YouTubeResourceSuccess<YouTubeAccountCapabilities> = {
+        schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
+        request_id: requestId,
+        freshness: { fetched_at: ports.clock.now().toISOString(), source: "database" },
+        data: deriveYouTubeCapabilities({
+          id: account.id,
+          channelId: account.channelId,
+          channelTitle: account.channelTitle,
+          authProvider: account.authProvider,
+          needsReauth: account.needsReauth,
+          hasAccessToken: Boolean(account.accessToken),
+          hasRefreshToken: Boolean(account.refreshToken),
+          accountMetadata: account.accountMetadata,
+        }),
+      };
+      return new Response(JSON.stringify(envelope), {
+        status: 200,
+        headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
+      });
+    }
+    const refusedOperation = parsed.data.operation;
+    try {
+      const admission = await admit(account, userId);
+      // admit refuses a row without a stored channel as reconnect_required, so the
+      // local null check mirrors its decision and gives the provider call a string.
+      const channelId = admission === null ? account.channelId : null;
+      if (admission !== null || channelId === null) {
+        return await refuse(req, {
+          operation: refusedOperation,
+          code: admission?.code ?? "reconnect_required",
+          userId,
+          accountId,
+          requestId,
+        }, admission?.retryAfterSeconds !== undefined
+          ? { retry_after_seconds: admission.retryAfterSeconds }
+          : undefined);
+      }
+      const result = await providerRead(account, (accessToken) =>
+        ports.youtube.getChannel(accessToken, { channelId }));
+      if (!result.ok) {
+        return await refuse(req, {
+          operation: refusedOperation,
+          code: result.code,
+          userId,
+          accountId,
+          requestId,
+        });
+      }
+      const envelope: YouTubeResourceSuccess<YouTubeChannelDetails> = {
+        schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
+        request_id: requestId,
+        freshness: { fetched_at: ports.clock.now().toISOString(), source: "provider" },
+        data: result.value,
+      };
+      return new Response(JSON.stringify(envelope), {
+        status: 200,
+        headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
+      });
+    } catch {
+      // An unexpected admission or read failure is an internal error; nothing from
+      // the exception reaches the caller.
+      return await refuse(req, {
+        operation: refusedOperation,
+        code: "internal_error",
+        userId,
+        accountId,
+        requestId,
+      });
+    }
   };
 }
