@@ -23,6 +23,46 @@ const MISSING_SCOPE: YouTubeCapabilityState = { state: "unavailable", reason: "m
 const AVAILABLE: YouTubeCapabilityState = { state: "available" };
 const UNKNOWN: YouTubeCapabilityState = { state: "unknown" };
 
+/** The facts every per-capability rule of spec section 3.3 reads. */
+interface DerivationContext {
+  composio: boolean;
+  needsReconnect: boolean;
+  scopes: { readonly: YouTubeScopeState; upload: YouTubeScopeState; force_ssl: YouTubeScopeState };
+  hasRecordedList: boolean;
+}
+
+// Spec section 3.3 rule 4: Composio first, then connection, then the readonly scope.
+function browseCapability({ composio, needsReconnect, scopes }: DerivationContext): YouTubeCapabilityState {
+  if (composio) return { state: "unavailable", reason: "provider_unsupported" };
+  if (needsReconnect) return RECONNECT;
+  if (scopes.readonly === "granted") return AVAILABLE;
+  return scopes.readonly === "unknown" ? UNKNOWN : MISSING_SCOPE;
+}
+
+// Rule 5: connection first; an unverified managed-provider upload is never presented as
+// available; upload or force-ssl both allow uploads; an empty recorded list stays unknown.
+function uploadCapability({ composio, needsReconnect, scopes, hasRecordedList }: DerivationContext): YouTubeCapabilityState {
+  if (needsReconnect) return RECONNECT;
+  if (composio) return UNKNOWN;
+  if (scopes.upload === "granted" || scopes.force_ssl === "granted") return AVAILABLE;
+  return hasRecordedList ? MISSING_SCOPE : UNKNOWN;
+}
+
+// Rule 6: reconnect wins, then the existing comment rule unchanged - no second rule.
+// The row's auth_provider is passed through untouched; the shared rule owns its meaning.
+function commentsCapability({ needsReconnect, authProvider, accountMetadata }: {
+  needsReconnect: boolean;
+  authProvider: string | null;
+  accountMetadata: unknown;
+}): YouTubeCapabilityState {
+  if (needsReconnect) return RECONNECT;
+  const capable = youtubeCommentCapability({
+    auth_provider: authProvider,
+    account_metadata: accountMetadata,
+  }) === "capable";
+  return capable ? AVAILABLE : MISSING_SCOPE;
+}
+
 // Spec section 3.3: one pure function per row, no provider call, no I/O. The comment
 // capability stays the existing rule (youtubeCommentCapability); no second rule is written.
 export function deriveYouTubeCapabilities(
@@ -39,51 +79,29 @@ export function deriveYouTubeCapabilities(
   };
   const needsReconnect = account.needsReauth ||
     (!composio && !account.hasAccessToken && !account.hasRefreshToken);
-  const connection = needsReconnect ? "reconnect_required" : "ok";
-
-  let browse: YouTubeCapabilityState;
-  if (composio) {
-    browse = { state: "unavailable", reason: "provider_unsupported" };
-  } else if (needsReconnect) {
-    browse = RECONNECT;
-  } else if (scopes.readonly === "granted") {
-    browse = AVAILABLE;
-  } else if (scopes.readonly === "unknown") {
-    browse = UNKNOWN;
-  } else {
-    browse = MISSING_SCOPE;
-  }
-
-  let upload: YouTubeCapabilityState;
-  if (needsReconnect) {
-    upload = RECONNECT;
-  } else if (composio) {
-    upload = UNKNOWN;
-  } else if (scopes.upload === "granted" || scopes.force_ssl === "granted") {
-    upload = AVAILABLE;
-  } else if (recorded.length === 0) {
-    upload = UNKNOWN;
-  } else {
-    upload = MISSING_SCOPE;
-  }
-
-  const comments: YouTubeCapabilityState = needsReconnect
-    ? RECONNECT
-    : youtubeCommentCapability({
-      auth_provider: account.authProvider,
-      account_metadata: account.accountMetadata,
-    }) === "capable"
-    ? AVAILABLE
-    : MISSING_SCOPE;
+  const context: DerivationContext = {
+    composio,
+    needsReconnect,
+    scopes,
+    hasRecordedList: recorded.length > 0,
+  };
 
   return {
     account_id: account.id,
     channel_id: account.channelId,
     channel_title: account.channelTitle,
     provider: composio ? "composio" : "native",
-    connection,
+    connection: needsReconnect ? "reconnect_required" : "ok",
     scopes,
-    capabilities: { browse, upload, comments },
+    capabilities: {
+      browse: browseCapability(context),
+      upload: uploadCapability(context),
+      comments: commentsCapability({
+        needsReconnect,
+        authProvider: account.authProvider,
+        accountMetadata: account.accountMetadata,
+      }),
+    },
     quota: YOUTUBE_RESOURCE_QUOTA_POLICY,
   };
 }

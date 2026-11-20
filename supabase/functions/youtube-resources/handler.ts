@@ -94,6 +94,8 @@ export function createYouTubeResourcesHandler(
     try {
       userId = (await ports.auth.authenticate(req)).userId;
     } catch {
+      // Every auth failure is the same unauthorized answer; the thrown reason
+      // (missing header, bad JWT, service-role bearer) never reaches the caller.
       return refuse(req, {
         operation,
         code: "unauthorized",
@@ -106,6 +108,7 @@ export function createYouTubeResourcesHandler(
     try {
       body = await req.json();
     } catch {
+      // Malformed JSON is a client error; the raw parse error text is not echoed.
       return refuse(req, {
         operation,
         code: "invalid_request",
@@ -129,6 +132,8 @@ export function createYouTubeResourcesHandler(
     try {
       account = await ports.accounts.load({ accountId, userId });
     } catch {
+      // A failed read must never look like a missing row: this refusal is what
+      // separates a database outage (500) from an unknown account (404).
       return refuse(req, {
         operation,
         code: "internal_error",
