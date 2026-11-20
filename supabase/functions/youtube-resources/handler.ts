@@ -284,19 +284,24 @@ export function createYouTubeResourcesHandler(
           : undefined);
       }
       // The provider layer owns the foreign-video answer: getVideo refuses a video of
-      // another channel as not_found, and the handler adds no second rule.
-      const result = videos !== null
-        ? await providerRead(account, (accessToken) =>
-          ports.youtube.listUploads(accessToken, {
-            channelId,
-            pageSize: videos.page_size ?? YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE,
-            ...(videos.page_token ? { pageToken: videos.page_token } : {}),
-          }))
-        : video !== null
-        ? await providerRead(account, (accessToken) =>
-          ports.youtube.getVideo(accessToken, { channelId, videoId: video.video_id }))
-        : await providerRead(account, (accessToken) =>
-          ports.youtube.getChannel(accessToken, { channelId }));
+      // another channel as not_found, and the handler adds no second rule. The read is
+      // typed as unknown here because the envelope is serialized, not consumed.
+      const result = await providerRead(
+        account,
+        (accessToken): Promise<YouTubeReadResult<unknown>> => {
+          if (videos !== null) {
+            return ports.youtube.listUploads(accessToken, {
+              channelId,
+              pageSize: videos.page_size ?? YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE,
+              ...(videos.page_token ? { pageToken: videos.page_token } : {}),
+            });
+          }
+          if (video !== null) {
+            return ports.youtube.getVideo(accessToken, { channelId, videoId: video.video_id });
+          }
+          return ports.youtube.getChannel(accessToken, { channelId });
+        },
+      );
       if (!result.ok) {
         return await refuse(req, {
           operation: refusedOperation,
