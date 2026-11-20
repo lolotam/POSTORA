@@ -4,8 +4,9 @@ import { deriveYouTubeCapabilities } from "./capabilities.ts";
 import {
   YOUTUBE_RESOURCE_ERROR_STATUS,
   YOUTUBE_RESOURCES_SCHEMA_VERSION,
+  YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE,
+  YOUTUBE_VIDEOS_MAX_PAGE_SIZE,
   type YouTubeAccountCapabilities,
-  type YouTubeChannelDetails,
   type YouTubeResourceErrorCode,
   type YouTubeResourceSuccess,
 } from "./contracts.ts";
@@ -54,7 +55,15 @@ export interface YouTubeResourcesPorts {
 const AccountId = z.string().uuid();
 const CapabilitiesRequest = z.object({ operation: z.literal("capabilities"), account_id: AccountId }).strict();
 const ChannelRequest = z.object({ operation: z.literal("channel"), account_id: AccountId }).strict();
-const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, ChannelRequest]);
+// The cursor is opaque and bound to the caller's own uploads playlist; the class cap
+// keeps it off the URL in ways Google never produces.
+const VideosRequest = z.object({
+  operation: z.literal("videos"),
+  account_id: AccountId,
+  page_size: z.number().int().min(1).max(YOUTUBE_VIDEOS_MAX_PAGE_SIZE).optional(),
+  page_token: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/).optional(),
+}).strict();
+const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, ChannelRequest, VideosRequest]);
 
 // Same shape as _shared/auth-helper.ts, defined locally on purpose: authenticateCaller
 // returns claims.sub unchecked, so the handler re-checks the identity shape itself.
@@ -246,6 +255,9 @@ export function createYouTubeResourcesHandler(
       });
     }
     const refusedOperation = parsed.data.operation;
+    // Narrowed here so both provider-backed operations share one admission path,
+    // one repeat-on-401 path and one response shape.
+    const videos = refusedOperation === "videos" ? parsed.data : null;
     try {
       const admission = await admit(account, userId);
       // admit refuses a row without a stored channel as reconnect_required, so the
@@ -262,8 +274,15 @@ export function createYouTubeResourcesHandler(
           ? { retry_after_seconds: admission.retryAfterSeconds }
           : undefined);
       }
-      const result = await providerRead(account, (accessToken) =>
-        ports.youtube.getChannel(accessToken, { channelId }));
+      const result = videos === null
+        ? await providerRead(account, (accessToken) =>
+          ports.youtube.getChannel(accessToken, { channelId }))
+        : await providerRead(account, (accessToken) =>
+          ports.youtube.listUploads(accessToken, {
+            channelId,
+            pageSize: videos.page_size ?? YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE,
+            ...(videos.page_token ? { pageToken: videos.page_token } : {}),
+          }));
       if (!result.ok) {
         return await refuse(req, {
           operation: refusedOperation,
@@ -273,7 +292,7 @@ export function createYouTubeResourcesHandler(
           requestId,
         });
       }
-      const envelope: YouTubeResourceSuccess<YouTubeChannelDetails> = {
+      const envelope: YouTubeResourceSuccess<unknown> = {
         schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
         request_id: requestId,
         freshness: { fetched_at: ports.clock.now().toISOString(), source: "provider" },

@@ -6,7 +6,7 @@ import {
   type YouTubeResourcesPorts,
   type YouTubeTokenResult,
 } from "./handler.ts";
-import { YOUTUBE_SCOPE, type YouTubeChannelDetails } from "./contracts.ts";
+import { YOUTUBE_SCOPE, type YouTubeChannelDetails, type YouTubeVideosPage } from "./contracts.ts";
 import type { YouTubeReadResult } from "./youtubeReadClient.ts";
 
 const ENDPOINT = "https://api.postora.cloud/functions/v1/youtube-resources";
@@ -15,6 +15,21 @@ const ACCOUNT_ID = "0ee20001-0000-4000-8000-000000000021";
 const FOREIGN_ACCOUNT_ID = "0ee20002-0000-4000-8000-000000000022";
 const REQUEST_ID = "0ee90001-0000-4000-8000-000000000091";
 const CHANNEL_ID = "UCfixturechannel000000001";
+
+function pageOf(size: number, nextPageToken: string | null, total: number): YouTubeVideosPage {
+  return {
+    items: Array.from({ length: size }, (_, index) => ({
+      id: `video${String(index).padStart(6, "0")}`,
+      title: `Video ${index}`,
+      thumbnail_url: null,
+      published_at: null,
+      privacy_status: "public",
+      url: `https://www.youtube.com/watch?v=video${String(index).padStart(6, "0")}`,
+    })),
+    next_page_token: nextPageToken,
+    total_results: total,
+  };
+}
 
 const CHANNEL: YouTubeChannelDetails = {
   id: CHANNEL_ID,
@@ -52,12 +67,14 @@ function fixture(overrides: {
   slowLog?: boolean;
   tokenResults?: YouTubeTokenResult[];
   channelResults?: Array<YouTubeReadResult<YouTubeChannelDetails>>;
+  uploadResults?: Array<YouTubeReadResult<YouTubeVideosPage>>;
   rateLimit?: { allowed: boolean; retryAfterSeconds: number };
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
   const refreshToken = crypto.randomUUID() + crypto.randomUUID();
-  const calls = { auth: 0, load: 0, tokens: 0, channel: 0, rateLimit: 0 };
+  const calls = { auth: 0, load: 0, tokens: 0, channel: 0, uploads: 0, rateLimit: 0 };
   const forceFlags: boolean[] = [];
+  const uploadInputs: Array<{ channelId: string; pageSize: number; pageToken?: string }> = [];
   const logs: YouTubeResourceRefusal[] = [];
   let minted = 0;
   const account: YouTubeResourceAccount = {
@@ -128,7 +145,12 @@ function fixture(overrides: {
         calls.channel++;
         return Promise.resolve(queued ?? { ok: true, value: CHANNEL });
       },
-      listUploads: () => Promise.reject(new Error("not used in this test")),
+      listUploads: (_token, input) => {
+        uploadInputs.push(input);
+        const queued = overrides.uploadResults?.[calls.uploads];
+        calls.uploads++;
+        return Promise.resolve(queued ?? { ok: true, value: pageOf(25, "CAUQAA", 60) });
+      },
       getVideo: () => Promise.reject(new Error("not used in this test")),
     },
     rateLimit: {
@@ -143,6 +165,7 @@ function fixture(overrides: {
     calls,
     forceFlags,
     logs,
+    uploadInputs,
     accessToken,
     refreshToken,
   };
@@ -306,7 +329,7 @@ Deno.test("channel returns the provider answer with provider freshness and no cr
   const body = JSON.parse(text);
   assertEquals(body.freshness.source, "provider");
   assertEquals(body.data, CHANNEL);
-  assertEquals(calls, { auth: 1, load: 1, tokens: 1, channel: 1, rateLimit: 1 });
+  assertEquals(calls, { auth: 1, load: 1, tokens: 1, channel: 1, uploads: 0, rateLimit: 1 });
 });
 
 Deno.test("a foreign account never reaches the token store or the provider", async () => {
@@ -406,4 +429,65 @@ Deno.test("a provider quota refusal is quota_exceeded", async () => {
   const response = await handler(request(CHANNEL_REQUEST));
   assertEquals(response.status, 429);
   assertEquals((await response.json()).error, "quota_exceeded");
+});
+
+Deno.test("videos defaults to 25 per page for the stored channel", async () => {
+  const { handler, uploadInputs } = fixture();
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.data.items.length, 25);
+  assertEquals(body.data.next_page_token, "CAUQAA");
+  assertEquals(uploadInputs, [{ channelId: CHANNEL_ID, pageSize: 25 }]);
+});
+
+Deno.test("sixty uploads are reachable in three pages", async () => {
+  const { handler, uploadInputs } = fixture({
+    uploadResults: [
+      { ok: true, value: pageOf(25, "PAGE2", 60) },
+      { ok: true, value: pageOf(25, "PAGE3", 60) },
+      { ok: true, value: pageOf(10, null, 60) },
+    ],
+  });
+  let token: string | null = null;
+  let total = 0;
+  for (let page = 0; page < 3; page++) {
+    const response = await handler(request({
+      operation: "videos",
+      account_id: ACCOUNT_ID,
+      ...(token ? { page_token: token } : {}),
+    }));
+    const body = await response.json();
+    total += body.data.items.length;
+    token = body.data.next_page_token;
+  }
+  assertEquals(total, 60);
+  assertEquals(token, null);
+  assertEquals(uploadInputs.map((input) => input.pageToken), [undefined, "PAGE2", "PAGE3"]);
+});
+
+Deno.test("a page size above fifty and a malformed token are refused before any provider call", async () => {
+  const { handler, calls } = fixture();
+  const tooLarge = await handler(request({ operation: "videos", account_id: ACCOUNT_ID, page_size: 51 }));
+  const badToken = await handler(request({ operation: "videos", account_id: ACCOUNT_ID, page_token: "has space" }));
+  assertEquals([tooLarge.status, badToken.status], [400, 400]);
+  assertEquals([calls.load, calls.uploads], [0, 0]);
+});
+
+Deno.test("a cursor Google rejects is invalid_cursor", async () => {
+  const { handler } = fixture({
+    uploadResults: [{ ok: false, code: "invalid_cursor", unauthorized: false }],
+  });
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID, page_token: "STALE" }));
+  assertEquals(response.status, 400);
+  assertEquals((await response.json()).error, "invalid_cursor");
+});
+
+Deno.test("a failed listing is an error, never an empty page", async () => {
+  const { handler } = fixture({
+    uploadResults: [{ ok: false, code: "upstream_unavailable", unauthorized: false }],
+  });
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 502);
+  assertEquals("data" in (await response.json()), false);
 });
