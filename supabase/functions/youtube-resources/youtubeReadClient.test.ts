@@ -82,6 +82,41 @@ Deno.test("a hidden subscriber count is null, not zero", async () => {
   });
 });
 
+Deno.test("counter strings that are not plain digits are absent data, not zero", async () => {
+  const { fetchImpl } = fakeFetch(200, {
+    items: [{
+      id: CHANNEL_ID,
+      statistics: {
+        viewCount: "1e3",
+        subscriberCount: " ",
+        videoCount: "0x10",
+      },
+    }],
+  });
+  const result = await client(fetchImpl).getChannel("t", { channelId: CHANNEL_ID });
+  assertEquals(result.ok && result.value.statistics, {
+    view_count: null,
+    subscriber_count: null,
+    subscriber_count_hidden: false,
+    video_count: null,
+  });
+});
+
+Deno.test("a plain digit string and a real number still count", async () => {
+  const { fetchImpl } = fakeFetch(200, {
+    items: [
+      { id: CHANNEL_ID, statistics: { viewCount: "123", videoCount: 7 } },
+    ],
+  });
+  const result = await client(fetchImpl).getChannel("t", { channelId: CHANNEL_ID });
+  assertEquals(result.ok && result.value.statistics, {
+    view_count: 123,
+    subscriber_count: null,
+    subscriber_count_hidden: false,
+    video_count: 7,
+  });
+});
+
 const GOOGLE_ERRORS: Array<[string, number, unknown, YouTubeResourceErrorCode, boolean]> = [
   ["scope", 403, { error: { message: "secret provider text", errors: [{ reason: "insufficientPermissions" }] } }, "missing_scope", false],
   ["quota", 403, { error: { errors: [{ reason: "quotaExceeded" }] } }, "quota_exceeded", false],

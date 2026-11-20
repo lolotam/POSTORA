@@ -54,10 +54,14 @@ type ReadBody =
   | { ok: true; body: unknown }
   | FailedRead;
 
-// Google counts come back as decimal strings; a non-finite value is absent data, not zero.
+// Google counts come back as decimal strings; anything that is not plain digits is
+// absent data, not zero.
 function count(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string") {
+    // "" and " " parse as 0 and "0x10"/"1e3" parse as numbers; Google never sends
+    // those for a counter, so they mean the field is absent.
+    if (!/^\d+$/.test(value)) return null;
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
