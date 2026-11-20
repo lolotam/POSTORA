@@ -1,10 +1,17 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
+import { checkUserRateLimit } from "../_shared/rate-limiter.ts";
+import { uploadsPlaylistId } from "../_shared/youtubeComments.ts";
+import { createSupabaseYouTubeRefreshStore, refreshYouTubeAccountToken } from "../_shared/youtubeTokenRefresh.ts";
 import {
   createYouTubeResourcesHandler,
   type YouTubeResourceAccount,
   type YouTubeResourcesPorts,
 } from "./handler.ts";
+import { YOUTUBE_RESOURCE_QUOTA_POLICY } from "./contracts.ts";
+import { toRateLimitDecision } from "./rateLimit.ts";
+import { tokenResultFromOutcome } from "./tokens.ts";
+import { createYouTubeReadClient } from "./youtubeReadClient.ts";
 
 // A stalled PostgREST request must not hold the whole function: the account read and the
 // awaited refusal-log insert both fail at this deadline and the handler answers
@@ -22,6 +29,9 @@ const admin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
   { global: { fetch: fetchWithDeadline } },
 );
+
+const refreshStore = createSupabaseYouTubeRefreshStore(admin);
+const { per_user_burst: BURST, per_user_daily: DAILY } = YOUTUBE_RESOURCE_QUOTA_POLICY;
 
 const ACCOUNT_COLUMNS =
   "id, user_id, platform_user_id, platform_username, auth_provider, needs_reauth, access_token, refresh_token, token_expires_at, account_metadata";
@@ -51,6 +61,40 @@ function toAccount(row: unknown): YouTubeResourceAccount | null {
 }
 
 const ports: YouTubeResourcesPorts = {
+  // Tokens come only from the lease-based refresh helper: the handler never reaches
+  // Google's token endpoint, and an on-demand read never records a transient failure
+  // or requests the administrator recovery mode. snapshot carries the already-loaded row.
+  tokens: {
+    get: async (account, { force }) =>
+      tokenResultFromOutcome(
+        await refreshYouTubeAccountToken({
+          accountId: account.id,
+          snapshot: {
+            access_token: account.accessToken,
+            refresh_token: account.refreshToken,
+            token_expires_at: account.tokenExpiresAt,
+            needs_reauth: account.needsReauth,
+          },
+          force,
+          recordTransientFailure: false,
+          store: refreshStore,
+        }),
+      ),
+  },
+  youtube: createYouTubeReadClient({ fetchImpl: fetch, uploadsPlaylistIdFor: uploadsPlaylistId }),
+  rateLimit: {
+    check: async (userId) => {
+      const burst = toRateLimitDecision(
+        await checkUserRateLimit(admin, "youtube-resources:burst", userId, BURST.limit, BURST.window_seconds),
+        BURST.window_seconds,
+      );
+      if (!burst.allowed) return burst;
+      return toRateLimitDecision(
+        await checkUserRateLimit(admin, "youtube-resources:day", userId, DAILY.limit, DAILY.window_seconds),
+        DAILY.window_seconds,
+      );
+    },
+  },
   auth: {
     // One argument on purpose: a body user_id would let a service-role bearer through,
     // and this endpoint only serves user JWT callers (spec section 3.2).
