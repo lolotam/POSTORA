@@ -54,7 +54,16 @@ const ports: YouTubeResourcesPorts = {
         .eq("platform", "youtube")
         .eq("is_active", true)
         .maybeSingle();
-      if (error) throw new Error("account_read_failed");
+      if (error) {
+        // PostgREST error code only: enough to tell an outage from a constraint
+        // error, never the message or any row data.
+        console.error({
+          event: "youtube_resources_db_error",
+          op: "account_load",
+          code: typeof error.code === "string" ? error.code : "unknown",
+        });
+        throw new Error("account_read_failed");
+      }
       return toAccount(data);
     },
   },
@@ -70,7 +79,14 @@ const ports: YouTubeResourcesPorts = {
         user_id: userId,
         metadata: { operation, code, account_id: accountId, request_id: requestId },
       });
-      if (error) throw new Error("refusal_log_failed");
+      if (error) {
+        console.error({
+          event: "youtube_resources_db_error",
+          op: "refusal_log",
+          code: typeof error.code === "string" ? error.code : "unknown",
+        });
+        throw new Error("refusal_log_failed");
+      }
     },
   },
 };
