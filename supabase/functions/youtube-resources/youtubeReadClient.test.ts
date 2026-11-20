@@ -111,3 +111,128 @@ Deno.test("a body that is not the documented shape is upstream_unavailable, not 
   const result = await client(fetchImpl).getChannel("t", { channelId: CHANNEL_ID });
   assertEquals(result, { ok: false, code: "upstream_unavailable", unauthorized: false });
 });
+
+Deno.test("listUploads pages the channel's own uploads playlist", async () => {
+  const { fetchImpl, requests } = fakeFetch(200, {
+    nextPageToken: "CAUQAA",
+    pageInfo: { totalResults: 60 },
+    items: [
+      {
+        snippet: {
+          title: "First video",
+          publishedAt: "2026-11-01T00:00:00Z",
+          resourceId: { videoId: "videoAAAAAAA" },
+          thumbnails: { default: { url: "https://i.ytimg.example/a.jpg" } },
+        },
+        contentDetails: { videoId: "videoAAAAAAA", videoPublishedAt: "2026-10-31T00:00:00Z" },
+        status: { privacyStatus: "unlisted" },
+      },
+      { snippet: { title: "Item without a video id" } },
+    ],
+  });
+  const result = await client(fetchImpl).listUploads("t", {
+    channelId: CHANNEL_ID,
+    pageSize: 25,
+    pageToken: "CAoQAA",
+  });
+
+  assertEquals(requests[0].url.pathname, "/youtube/v3/playlistItems");
+  assertEquals(requests[0].url.searchParams.get("playlistId"), `UU${CHANNEL_ID.slice(2)}`);
+  assertEquals(requests[0].url.searchParams.get("maxResults"), "25");
+  assertEquals(requests[0].url.searchParams.get("pageToken"), "CAoQAA");
+  assertEquals(requests[0].url.searchParams.get("part"), "snippet,contentDetails,status");
+  assertEquals(result, {
+    ok: true,
+    value: {
+      items: [{
+        id: "videoAAAAAAA",
+        title: "First video",
+        thumbnail_url: "https://i.ytimg.example/a.jpg",
+        published_at: "2026-10-31T00:00:00Z",
+        privacy_status: "unlisted",
+        url: "https://www.youtube.com/watch?v=videoAAAAAAA",
+      }],
+      next_page_token: "CAUQAA",
+      total_results: 60,
+    },
+  });
+});
+
+Deno.test("the first page sends no pageToken and the last page has none to give", async () => {
+  const { fetchImpl, requests } = fakeFetch(200, { items: [] });
+  const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 50 });
+  assertEquals(requests[0].url.searchParams.has("pageToken"), false);
+  assertEquals(result, { ok: true, value: { items: [], next_page_token: null, total_results: null } });
+});
+
+Deno.test("a 400 on a request that carried a page token is invalid_cursor", async () => {
+  const { fetchImpl } = fakeFetch(400, { error: { errors: [{ reason: "invalidPageToken" }] } });
+  const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25, pageToken: "bad" });
+  assertEquals(result, { ok: false, code: "invalid_cursor", unauthorized: false });
+});
+
+Deno.test("a 400 without a page token is upstream_unavailable", async () => {
+  const { fetchImpl } = fakeFetch(400, { error: {} });
+  const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
+  assertEquals(result, { ok: false, code: "upstream_unavailable", unauthorized: false });
+});
+
+Deno.test("getVideo returns the details of a video of the bound channel", async () => {
+  const { fetchImpl, requests } = fakeFetch(200, {
+    items: [{
+      id: "videoAAAAAAA",
+      snippet: {
+        channelId: CHANNEL_ID,
+        title: "First video",
+        description: "Body",
+        publishedAt: "2026-10-31T00:00:00Z",
+        tags: ["one", "two"],
+        categoryId: "22",
+        defaultLanguage: "ar",
+        thumbnails: { high: { url: "https://i.ytimg.example/high.jpg" } },
+      },
+      contentDetails: { duration: "PT4M13S" },
+      statistics: { viewCount: "10", likeCount: "2", commentCount: "1" },
+      status: { privacyStatus: "public", uploadStatus: "processed", madeForKids: false },
+    }],
+  });
+  const result = await client(fetchImpl).getVideo("t", { channelId: CHANNEL_ID, videoId: "videoAAAAAAA" });
+
+  assertEquals(requests[0].url.pathname, "/youtube/v3/videos");
+  assertEquals(requests[0].url.searchParams.get("id"), "videoAAAAAAA");
+  assertEquals(result, {
+    ok: true,
+    value: {
+      id: "videoAAAAAAA",
+      channel_id: CHANNEL_ID,
+      title: "First video",
+      description: "Body",
+      thumbnail_url: "https://i.ytimg.example/high.jpg",
+      published_at: "2026-10-31T00:00:00Z",
+      tags: ["one", "two"],
+      category_id: "22",
+      default_language: "ar",
+      duration_iso8601: "PT4M13S",
+      privacy_status: "public",
+      upload_status: "processed",
+      made_for_kids: false,
+      statistics: { view_count: 10, like_count: 2, comment_count: 1 },
+      url: "https://www.youtube.com/watch?v=videoAAAAAAA",
+    },
+  });
+});
+
+Deno.test("a video of another channel and an absent video are the same not_found", async () => {
+  const foreign = fakeFetch(200, { items: [{ id: "videoBBBBBBB", snippet: { channelId: "UCanotherchannel0000000002" } }] });
+  const absent = fakeFetch(200, { items: [] });
+  const input = { channelId: CHANNEL_ID, videoId: "videoBBBBBBB" };
+  assertEquals(
+    await client(foreign.fetchImpl).getVideo("t", input),
+    await client(absent.fetchImpl).getVideo("t", input),
+  );
+  assertEquals(await client(absent.fetchImpl).getVideo("t", input), {
+    ok: false,
+    code: "not_found",
+    unauthorized: false,
+  });
+});
