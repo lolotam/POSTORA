@@ -676,6 +676,54 @@
       "savedDesc": "منطقتك الزمنية المفضلة دلوقتي {{timezone}}."
     }
   },
+  "youtubeManagement": {
+    "accountLabel": "القناة",
+    "accountsError": "Postora معرفش يقرا الحسابات المربوطة. مفيش حاجة اتغيّرت.",
+    "countersNote": "الأرقام دي جاية من YouTube، ومش تقارير مدة مشاهدة.",
+    "fetchedAt": "آخر تحديث {{time}}",
+    "goToProfiles": "افتح الملفات",
+    "loading": "جاري التحميل…",
+    "noAccounts": "مفيش قناة YouTube مربوطة لسه.",
+    "refresh": "تحديث",
+    "subtitle": "تصفّح قناتك والفيديوهات المرفوعة عليها.",
+    "title": "قناة YouTube",
+    "notice": {
+      "cursorStale": "القائمة اتغيّرت من ناحية YouTube. حمّلها من الأول تاني.",
+      "generic": "حصلت مشكلة وإحنا بنحمّل المحتوى ده.",
+      "missingScope": "Postora معندوش صلاحية يقرا القناة دي. اربطها تاني ووافق على عرض حساب YouTube بتاعك.",
+      "notFound": "YouTube ملقاش المحتوى ده للقناة المربوطة.",
+      "providerUnsupported": "القناة دي مربوطة عن طريق الموصّل المُدار، وده لسه مش بيدعم التصفّح.",
+      "quotaExceeded": "الحد اليومي بتاع YouTube لـ Postora خلص. بيتجدد عند نص الليل بتوقيت المحيط الهادئ.",
+      "rateLimited": "طلبات كتير. جرّب تاني بعد حوالي {{minutes}} دقيقة.",
+      "reconnectRequired": "القناة دي محتاجة تتربط تاني قبل ما Postora يقدر يقراها.",
+      "sessionExpired": "جلستك خلصت. سجّل دخولك تاني أو حدّث الصفحة.",
+      "upstreamUnavailable": "YouTube مردّش. مفيش حاجة اتغيّرت."
+    },
+    "retry": "جرّب تاني",
+    "library": {
+      "empty": "القناة دي مفيهاش فيديوهات مرفوعة لسه.",
+      "loadMore": "حمّل أكتر",
+      "moreAvailable": "فيه نتايج كمان، حمّل الصفحة الجاية.",
+      "title": "الفيديوهات المرفوعة"
+    },
+    "detail": {
+      "comments": "التعليقات",
+      "duration": "المدة",
+      "likes": "الإعجابات",
+      "notAvailable": "مش متاح",
+      "openOnYouTube": "افتح على YouTube",
+      "privacy": "الخصوصية",
+      "select": "اختار فيديو عشان تشوف تفاصيله.",
+      "tags": "الوسوم",
+      "views": "المشاهدات"
+    },
+    "stats": {
+      "hidden": "مخفي",
+      "subscribers": "المشتركين",
+      "videos": "الفيديوهات",
+      "views": "المشاهدات"
+    }
+  },
   "deleteWhatsApp": {
     "title": "حذف الحساب \"{{name}}\"؟",
     "warning": "سيؤدي هذا إلى حذف الحساب وإعداد وكيل الذكاء الاصطناعي الخاص به نهائيًا.",

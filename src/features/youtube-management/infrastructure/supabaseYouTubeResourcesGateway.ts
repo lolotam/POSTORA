@@ -1,0 +1,132 @@
+import { supabase } from "@/integrations/supabase/client";
+import { toYouTubeResourceError, YouTubeResourceError } from "../domain/errors";
+import type {
+  YouTubeAccountCapabilities,
+  YouTubeChannelDetails,
+  YouTubeResourceSuccess,
+  YouTubeVideoDetails,
+  YouTubeVideosPage,
+} from "../domain/types";
+import type { YouTubeResourcesGateway } from "../application/ports";
+
+// A stalled edge call must not hang the screen: abort after 15 seconds.
+export const YOUTUBE_GATEWAY_TIMEOUT_MS = 15000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNumberOrNull(value: unknown): value is number | null {
+  return typeof value === "number" ? Number.isFinite(value) : value === null;
+}
+
+// Contract envelope: the documented schema version, a request id, a freshness
+// stamp, and a data object that the per-operation validator then narrows.
+function isEnvelopeFor<T>(
+  payload: unknown,
+  isData: (value: unknown) => boolean,
+): payload is YouTubeResourceSuccess<T> {
+  if (!isRecord(payload)) return false;
+  if (payload.schema_version !== 1) return false;
+  if (typeof payload.request_id !== "string") return false;
+  if (!isRecord(payload.freshness) || typeof payload.freshness.fetched_at !== "string") return false;
+  if (!isRecord(payload.data) || !isData(payload.data)) return false;
+  return true;
+}
+
+// The fields below are the ones the UI actually reads; a payload that is
+// missing any of them never reaches a component.
+function isCapabilitiesData(value: unknown): value is YouTubeAccountCapabilities {
+  if (!isRecord(value) || typeof value.account_id !== "string" || !isRecord(value.quota)) return false;
+  const capabilities = value.capabilities;
+  return isRecord(capabilities) && isRecord(capabilities.browse) && typeof capabilities.browse.state === "string";
+}
+
+function isChannelData(value: unknown): value is YouTubeChannelDetails {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string") return false;
+  const stats = value.statistics;
+  return isRecord(stats)
+    && typeof stats.subscriber_count_hidden === "boolean"
+    && isNumberOrNull(stats.view_count)
+    && isNumberOrNull(stats.subscriber_count)
+    && isNumberOrNull(stats.video_count);
+}
+
+function isVideosData(value: unknown): value is YouTubeVideosPage {
+  if (!isRecord(value) || !Array.isArray(value.items)) return false;
+  return value.next_page_token === null || typeof value.next_page_token === "string";
+}
+
+function isVideoData(value: unknown): value is YouTubeVideoDetails {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "string" || typeof value.title !== "string" || typeof value.description !== "string" || typeof value.url !== "string") return false;
+  if (!Array.isArray(value.tags)) return false;
+  if (value.duration_iso8601 !== null && typeof value.duration_iso8601 !== "string") return false;
+  const stats = value.statistics;
+  return isRecord(stats)
+    && isNumberOrNull(stats.view_count)
+    && isNumberOrNull(stats.like_count)
+    && isNumberOrNull(stats.comment_count);
+}
+
+// One helper does every call: never a user id in the body (identity comes
+// from the Authorization header server-side), an explicit finite timeout, and
+// a failure always throws a YouTubeResourceError with the server's stable
+// code — a malformed or empty answer is never handed to the UI as a resource.
+async function call<T>(
+  body: Record<string, unknown>,
+  isData: (value: unknown) => boolean,
+): Promise<YouTubeResourceSuccess<T>> {
+  let data: YouTubeResourceSuccess<T> | null = null;
+  let error: { context?: unknown } | null = null;
+  try {
+    const result = await supabase.functions.invoke<YouTubeResourceSuccess<T>>("youtube-resources", {
+      body,
+      timeout: YOUTUBE_GATEWAY_TIMEOUT_MS,
+    });
+    data = result.data ?? null;
+    error = (result.error ?? null) as { context?: unknown } | null;
+  } catch (thrown) {
+    // A network failure or the timeout abort above rejects; both are
+    // upstream failures, never empty resources.
+    error = thrown as { context?: unknown };
+  }
+  if (error) {
+    const context = error.context;
+    const payload: unknown = context instanceof Response
+      ? await context.clone().json().catch(() => null)
+      : null;
+    throw toYouTubeResourceError(payload);
+  }
+  if (data === null || !isEnvelopeFor<T>(data, isData)) {
+    throw new YouTubeResourceError("upstream_unavailable");
+  }
+  return data;
+}
+
+export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway {
+  getCapabilities(accountId: string): Promise<YouTubeResourceSuccess<YouTubeAccountCapabilities>> {
+    return call({ operation: "capabilities", account_id: accountId }, isCapabilitiesData);
+  }
+
+  getChannel(accountId: string): Promise<YouTubeResourceSuccess<YouTubeChannelDetails>> {
+    return call({ operation: "channel", account_id: accountId }, isChannelData);
+  }
+
+  listVideos(params: { accountId: string; pageToken?: string | null }): Promise<YouTubeResourceSuccess<YouTubeVideosPage>> {
+    return call(
+      {
+        operation: "videos",
+        account_id: params.accountId,
+        ...(params.pageToken ? { page_token: params.pageToken } : {}),
+      },
+      isVideosData,
+    );
+  }
+
+  getVideo(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<YouTubeVideoDetails>> {
+    return call({ operation: "video", account_id: params.accountId, video_id: params.videoId }, isVideoData);
+  }
+}
+
+export const defaultYouTubeResourcesGateway = new SupabaseYouTubeResourcesGateway();
