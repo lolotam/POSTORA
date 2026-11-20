@@ -59,7 +59,8 @@ describe("YouTubeVideoLibrary", () => {
       <YouTubeVideoLibrary videos={[]} selectedVideoId={null} onSelect={vi.fn()}
         hasMore isLoadingMore={false} onLoadMore={onLoadMore} />,
     );
-    expect(screen.getByText("This channel has no uploaded videos yet.")).toBeInTheDocument();
+    expect(screen.queryByText("This channel has no uploaded videos yet.")).not.toBeInTheDocument();
+    expect(screen.getByText("More results are available, load the next page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });

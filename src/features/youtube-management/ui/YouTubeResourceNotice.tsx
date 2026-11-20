@@ -8,6 +8,9 @@ export interface YouTubeResourceNoticeProps {
   code: YouTubeResourceErrorCode;
   retryAfterSeconds: number | null;
   onRetry: () => void;
+  // Overrides the code's default sentence (a non-provider failure whose
+  // audience text differs); the retry/link behaviour still follows the code.
+  message?: string;
 }
 
 /**
@@ -16,7 +19,7 @@ export interface YouTubeResourceNoticeProps {
  * failures offer a retry, and reconnect-shaped codes link to Profiles.
  */
 export function YouTubeResourceNotice(props: YouTubeResourceNoticeProps): JSX.Element {
-  const { code, retryAfterSeconds, onRetry } = props;
+  const { code, retryAfterSeconds, onRetry, message: customMessage } = props;
   const { t } = useTranslation("accounts");
 
   let message: string;
@@ -65,7 +68,7 @@ export function YouTubeResourceNotice(props: YouTubeResourceNoticeProps): JSX.El
   return (
     <Alert role="alert">
       <AlertDescription className="space-y-2">
-        <p>{message}</p>
+        <p>{customMessage ?? message}</p>
         <div className="flex flex-wrap items-center gap-2">
           {linkToProfiles ? (
             <Button asChild size="sm" variant="outline">

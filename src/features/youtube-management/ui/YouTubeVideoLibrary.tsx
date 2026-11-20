@@ -22,9 +22,15 @@ export function YouTubeVideoLibrary(props: YouTubeVideoLibraryProps): JSX.Elemen
   return (
     <div className="space-y-2">
       {videos.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {t("youtubeManagement.library.empty", "This channel has no uploaded videos yet.")}
-        </p>
+        hasMore ? (
+          <p className="text-sm text-muted-foreground">
+            {t("youtubeManagement.library.moreAvailable", "More results are available, load the next page")}
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {t("youtubeManagement.library.empty", "This channel has no uploaded videos yet.")}
+          </p>
+        )
       ) : (
         <>
           <h3 className="text-sm font-semibold text-muted-foreground">

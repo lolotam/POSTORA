@@ -231,4 +231,82 @@ describe("YouTubeManagementScreen", () => {
     expect(await screen.findByRole("button", { name: /Other video/ })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /Repeated video/ })).toHaveLength(1);
   });
+
+  it("keeps cached pages visible when a Refresh of the list fails and retries the whole list", async () => {
+    const videoItem = (id: string) => ({
+      id, title: `Video ${id}`, thumbnail_url: null, published_at: null, privacy_status: "public", url: "https://www.youtube.com/watch?v=x",
+    });
+    const pageOf = (items: ReturnType<typeof videoItem>[], next: string | null) => envelope({
+      items, next_page_token: next, total_results: null,
+    });
+    const listVideos = vi.fn()
+      .mockImplementationOnce(() => Promise.resolve(pageOf([videoItem("one")], "P2")))
+      .mockImplementationOnce(() => Promise.reject(new YouTubeResourceError("upstream_unavailable")))
+      .mockImplementationOnce(() => Promise.reject(new YouTubeResourceError("upstream_unavailable")))
+      .mockImplementationOnce(() => Promise.resolve(pageOf([videoItem("two")], null)));
+    const base = gateway();
+    const fake: YouTubeResourcesGateway = { ...base, listVideos: listVideos as unknown as YouTubeResourcesGateway["listVideos"] };
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+    await screen.findByRole("button", { name: /Video one/ });
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("YouTube did not answer");
+    expect(screen.getByRole("button", { name: /Video one/ })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByRole("button", { name: /Video two/ })).toBeInTheDocument();
+    expect(listVideos).toHaveBeenCalledTimes(4);
+    expect(listVideos).toHaveBeenLastCalledWith({ accountId: "acc-a", pageToken: null });
+  });
+
+  it("disables Load more while a refresh is pending and does not fetch the next page", async () => {
+    const videoItem = (id: string) => ({
+      id, title: `Video ${id}`, thumbnail_url: null, published_at: null, privacy_status: "public", url: "https://www.youtube.com/watch?v=x",
+    });
+    const pageOf = (items: ReturnType<typeof videoItem>[], next: string | null) => envelope({
+      items, next_page_token: next, total_results: null,
+    });
+    const channelData = (accountId: string) => ({
+      id: `UC-${accountId}`, title: `Channel of ${accountId}`, description: "", custom_url: null, thumbnail_url: null,
+      published_at: null, country: null, privacy_status: "public",
+      statistics: { view_count: 1, subscriber_count: 1, subscriber_count_hidden: false, video_count: 1 },
+    });
+    const base = gateway();
+    const fake: YouTubeResourcesGateway = {
+      ...base,
+      getChannel: vi.fn()
+        .mockImplementationOnce((accountId: string) => Promise.resolve(envelope(channelData(accountId))))
+        .mockImplementationOnce(() => new Promise(() => {})) as unknown as YouTubeResourcesGateway["getChannel"],
+      listVideos: vi.fn()
+        .mockImplementationOnce(() => Promise.resolve(pageOf([videoItem("one")], "P2")))
+        .mockImplementationOnce(() => new Promise(() => {})) as unknown as YouTubeResourcesGateway["listVideos"],
+    };
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+    await screen.findByRole("button", { name: /Video one/ });
+    await screen.findByRole("heading", { name: "Channel of acc-a" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    const loadMore = await screen.findByRole("button", { name: "Load more" });
+    expect(loadMore).toBeDisabled();
+    const callsAfterRefresh = vi.mocked(fake.listVideos).mock.calls.length;
+    await userEvent.click(loadMore);
+    expect(vi.mocked(fake.listVideos)).toHaveBeenCalledTimes(callsAfterRefresh);
+  });
+
+  it("shows an accounts error with a retry instead of the empty state", async () => {
+    const onRetryAccounts = vi.fn();
+    await renderScreen(
+      <YouTubeManagementScreen
+        accounts={[]} accountsLoading={false} accountsError={new Error("read failed")}
+        onRetryAccounts={onRetryAccounts} gateway={gateway()} />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Postora could not read your connected accounts. Nothing was changed.");
+    expect(screen.queryByText("No YouTube channel is connected yet.")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetryAccounts).toHaveBeenCalledTimes(1);
+  });
 });

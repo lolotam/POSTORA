@@ -678,6 +678,7 @@
   },
   "youtubeManagement": {
     "accountLabel": "القناة",
+    "accountsError": "Postora معرفش يقرا الحسابات المربوطة. مفيش حاجة اتغيّرت.",
     "countersNote": "الأرقام دي جاية من YouTube، ومش تقارير مدة مشاهدة.",
     "fetchedAt": "آخر تحديث {{time}}",
     "goToProfiles": "افتح الملفات",
@@ -702,6 +703,7 @@
     "library": {
       "empty": "القناة دي مفيهاش فيديوهات مرفوعة لسه.",
       "loadMore": "حمّل أكتر",
+      "moreAvailable": "فيه نتايج كمان، حمّل الصفحة الجاية.",
       "title": "الفيديوهات المرفوعة"
     },
     "detail": {

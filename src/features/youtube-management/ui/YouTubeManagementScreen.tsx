@@ -21,12 +21,16 @@ export interface YouTubeManagementScreenProps {
   accounts: readonly YouTubeAccountOption[];
   accountsLoading: boolean;
   gateway?: YouTubeResourcesGateway;
+  // The page's connected-accounts query can fail; the screen then offers a
+  // retry instead of pretending no channel is connected.
+  accountsError?: unknown;
+  onRetryAccounts?: () => void;
 }
 
 // The composition root of the feature: the only ui/ file allowed to import
 // infrastructure (for the default gateway), which every test replaces.
 export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JSX.Element {
-  const { accounts, accountsLoading, gateway = defaultYouTubeResourcesGateway } = props;
+  const { accounts, accountsLoading, gateway = defaultYouTubeResourcesGateway, accountsError, onRetryAccounts } = props;
   const { t } = useTranslation("accounts");
 
   const [pickedAccountId, setPickedAccountId] = useState<string | null>(null);
@@ -100,6 +104,15 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
 
       {accountsLoading ? (
         <p className="text-sm text-muted-foreground">{t("youtubeManagement.loading", "Loading…")}</p>
+      ) : accountsError !== undefined && accountsError !== null ? (
+        <div className="space-y-2">
+          <YouTubeResourceNotice
+            code="upstream_unavailable"
+            retryAfterSeconds={null}
+            onRetry={() => onRetryAccounts?.()}
+            message={t("youtubeManagement.accountsError", "Postora could not read your connected accounts. Nothing was changed.")}
+          />
+        </div>
       ) : accounts.length === 0 ? (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">{t("youtubeManagement.noAccounts", "No YouTube channel is connected yet.")}</p>
@@ -161,14 +174,22 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                           : () => void videos.fetchNextPage()
                       }
                     />
+                  ) : videos.isError ? (
+                    <YouTubeResourceNotice
+                      code={errorCode(videos.error)}
+                      retryAfterSeconds={retryHint(videos.error)}
+                      onRetry={() => void videos.refetch()}
+                    />
                   ) : null}
                   <YouTubeVideoLibrary
                     videos={videoItems}
                     selectedVideoId={selectedVideoId}
                     onSelect={(videoId) => setPickedVideo({ accountId: activeAccountId, videoId })}
                     hasMore={videos.hasNextPage}
-                    isLoadingMore={videos.isFetchingNextPage}
-                    onLoadMore={() => void videos.fetchNextPage()}
+                    isLoadingMore={videos.isFetching}
+                    onLoadMore={() => {
+                      if (!videos.isFetching) void videos.fetchNextPage();
+                    }}
                   />
                 </div>
               ) : videos.isError ? (
