@@ -322,6 +322,25 @@ Deno.test("malformed JSON is an invalid_request and is logged", async () => {
   assertEquals(logs.map((entry) => entry.code), ["invalid_request"]);
 });
 
+Deno.test("refusals after the body parse carry the requested operation in the log", async () => {
+  const { handler, logs } = fixture();
+  const foreign = await handler(request({ operation: "channel", account_id: FOREIGN_ACCOUNT_ID }));
+  assertEquals(foreign.status, 404);
+  assertEquals(logs.map((entry) => entry.operation), ["channel"]);
+  const unknownOperation = await handler(request({ operation: "bogus", account_id: ACCOUNT_ID }));
+  assertEquals(unknownOperation.status, 400);
+  // An arbitrary operation string is never echoed into the log.
+  assertEquals(logs[1].operation, "unknown");
+  assertEquals(logs[1].code, "invalid_request");
+});
+
+Deno.test("a malformed body is logged with the unknown operation", async () => {
+  const { handler, logs } = fixture();
+  const response = await handler(rawRequest("{not json"));
+  assertEquals(response.status, 400);
+  assertEquals(logs.map((entry) => entry.operation), ["unknown"]);
+});
+
 Deno.test("a preflight is answered with 204 and the restricted CORS headers", async () => {
   const { handler, calls } = fixture();
   const response = await handler(new Request(ENDPOINT, { method: "OPTIONS" }));

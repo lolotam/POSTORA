@@ -73,6 +73,17 @@ const VideoRequest = z.object({
 }).strict();
 const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, ChannelRequest, VideosRequest, VideoRequest]);
 
+// The audit label for a refusal: the requested operation when the body names one of
+// the known literals, "unknown" otherwise. An arbitrary body string is never echoed
+// into the log, and refusals before the body is read cannot know the operation.
+function requestedOperationOf(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "unknown";
+  const requested = (body as Record<string, unknown>).operation;
+  return requested === "capabilities" || requested === "channel" || requested === "videos" || requested === "video"
+    ? requested
+    : "unknown";
+}
+
 // Same shape as _shared/auth-helper.ts, defined locally on purpose: authenticateCaller
 // returns claims.sub unchecked, so the handler re-checks the identity shape itself.
 const USER_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -158,10 +169,11 @@ export function createYouTubeResourcesHandler(
       return new Response(null, { status: 204, headers: restrictedCorsHeaders(req) });
     }
     const requestId = ports.ids.requestId();
-    const operation = "capabilities";
+    // Refusals before the body is understood carry the unknown label.
+    const unknownOperation = "unknown";
     if (req.method !== "POST") {
       return await refuse(req, {
-        operation,
+        operation: unknownOperation,
         code: "method_not_allowed",
         userId: null,
         accountId: null,
@@ -175,7 +187,7 @@ export function createYouTubeResourcesHandler(
       // Every auth failure is the same unauthorized answer; the thrown reason
       // (missing header, bad JWT, service-role bearer) never reaches the caller.
       return await refuse(req, {
-        operation,
+        operation: unknownOperation,
         code: "unauthorized",
         userId: null,
         accountId: null,
@@ -187,7 +199,7 @@ export function createYouTubeResourcesHandler(
       // without a subject (the public anon key) yields a non-identity here. It is an
       // anonymous caller: refuse it before any account read, without a log row.
       return await refuse(req, {
-        operation,
+        operation: unknownOperation,
         code: "unauthorized",
         userId: null,
         accountId: null,
@@ -200,17 +212,18 @@ export function createYouTubeResourcesHandler(
     } catch {
       // Malformed JSON is a client error; the raw parse error text is not echoed.
       return await refuse(req, {
-        operation,
+        operation: unknownOperation,
         code: "invalid_request",
         userId,
         accountId: null,
         requestId,
       });
     }
+    const requestedOperation = requestedOperationOf(body);
     const parsed = RequestSchema.safeParse(body);
     if (!parsed.success) {
       return await refuse(req, {
-        operation,
+        operation: requestedOperation,
         code: "invalid_request",
         userId,
         accountId: null,
@@ -225,7 +238,7 @@ export function createYouTubeResourcesHandler(
       // A failed read must never look like a missing row: this refusal is what
       // separates a database outage (500) from an unknown account (404).
       return await refuse(req, {
-        operation,
+        operation: requestedOperation,
         code: "internal_error",
         userId,
         accountId,
@@ -234,7 +247,7 @@ export function createYouTubeResourcesHandler(
     }
     if (!account || account.userId !== userId) {
       return await refuse(req, {
-        operation,
+        operation: requestedOperation,
         code: "not_found",
         userId,
         accountId,
