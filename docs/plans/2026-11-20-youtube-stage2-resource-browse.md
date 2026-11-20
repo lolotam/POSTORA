@@ -53,6 +53,8 @@ Each task below also states its own tier, so a reviewer can see which tasks carr
 | `supabase/functions/youtube-resources/index.ts` | 2a-4, extended 2b-6 | Adapter and port wiring |
 | `supabase/functions/youtube-resources/youtubeReadClient.ts` | 2b-1, extended 2b-2 | `createYouTubeReadClient` |
 | `supabase/functions/youtube-resources/tokens.ts` | 2b-6 | `tokenResultFromOutcome` |
+| `supabase/functions/youtube-resources/rateLimit.ts` | 2b-6 | `toRateLimitDecision` |
+| `supabase/functions/youtube-resources/requestExamples.fixture.ts` | 2b-5 | Request bodies shared by the Deno handler test and the Vitest gateway test |
 | `src/features/youtube-management/**` | 2c-1 to 2c-6 | Frontend feature |
 | `src/pages/youtube/YouTubeManagementPage.tsx` | 2c-7 | Page consumer |
 
@@ -67,6 +69,8 @@ Branch: `git fetch origin && git checkout --no-track -b T3-CODE/youtube-stage2a-
 **Tier:** Medium (pure types and constants, but it is the public API contract).
 
 **Files:** create `supabase/functions/youtube-resources/contracts.ts` and `supabase/functions/youtube-resources/contracts.test.ts`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** `contracts.ts` must have no `import` statement and use no Deno API, because the Vite frontend imports it later. No `any`. No `eslint-disable`. Commit only the two files.
 
@@ -228,6 +232,8 @@ git commit -m "feat(youtube): resource contract types and error codes" -- supaba
 
 **Files:** create `supabase/functions/youtube-resources/capabilities.ts` and `supabase/functions/youtube-resources/capabilities.test.ts`.
 
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
+
 **Rules for this task:** pure function, no I/O, no `any`, no `eslint-disable`. Reuse the existing comment rule; do not write a second one. Commit only the two files.
 
 **You depend on (already on `main`, in `supabase/functions/_shared/youtubeCommentCapability.ts`):**
@@ -387,7 +393,9 @@ git commit -m "feat(youtube): derive per-account capability contract" -- supabas
 
 **Files:** create `supabase/functions/youtube-resources/handler.ts` and `supabase/functions/youtube-resources/handler.test.ts`.
 
-**Rules for this task:** the handler does no I/O of its own; everything goes through `ports`. Identity comes only from `ports.auth.authenticate(req)`; a `user_id` in the body is refused by the strict schema. A foreign account and a missing account must produce byte-identical responses. No token may appear in a response. No `any`, no `eslint-disable`. Use `restrictedCorsHeaders` from `../_shared/cors.ts`, never the wildcard `corsHeaders`. Commit only the two files.
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
+
+**Rules for this task:** the handler does no I/O of its own; everything goes through `ports`. Identity comes only from `ports.auth.authenticate(req)`; a `user_id` in the body is refused by the strict schema. A foreign account and a missing account must produce the same status and the same body (apart from `request_id`, which is fixed in the tests). No token may appear in a response. No `any`, no `eslint-disable`. Use `restrictedCorsHeaders` from `../_shared/cors.ts`, never the wildcard `corsHeaders`. Commit only the two files.
 
 **You depend on:**
 
@@ -626,6 +634,8 @@ git commit -m "feat(youtube): owner-bound capabilities operation" -- supabase/fu
 
 **Files:** create `supabase/functions/youtube-resources/index.ts`; modify `.github/workflows/ci.yml`; modify `CLAUDE.md` (one table row).
 
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
+
 **Rules for this task:** `index.ts` contains wiring only, no business rule. The service-role client never leaves this file. Never pass a body `user_id` to `authenticateCaller`. The account query must filter on the caller, on `platform = 'youtube'` and on `is_active = true`. Rows from the untyped client are `unknown`: narrow them, do not cast to `any`. `system_logs.category` only accepts `auth`, `edge`, `database`, `token`, `post`, `system`, `ai`, `scheduler`, `webhook`, `payment`, `media` (migration `20260928120000_store_events_worker.sql`): use `edge`. Commit only the three files.
 
 **You depend on:**
@@ -755,7 +765,7 @@ git commit -m "feat(youtube): serve youtube-resources and test it in CI" -- supa
 
 ## Task 2a-5: pull request for stage 2a (orchestrator)
 
-**Tier:** Heavy.
+**Tier:** Heavy (the PR carries the stage's authentication and ownership boundary).
 
 - [ ] Inspect the full diff. Run `clean-code-guard` on the four production files, `test-guard` on the three test files and `docs-guard` on the `CLAUDE.md` row.
 - [ ] `git push origin HEAD:T3-CODE/youtube-stage2a-capabilities`. Open a PR to `main` titled `feat(youtube): capability contract endpoint (stage 2a)`. The body states "Tier: HEAVY", lists the production call site (`supabase/functions/youtube-resources/index.ts` serves `createYouTubeResourcesHandler`, which calls `deriveYouTubeCapabilities`), states that no browser calls the endpoint until stage 2c, and ends with the Claude Code attribution line.
@@ -773,6 +783,8 @@ Branch (after 2a is merged): `git fetch origin && git checkout --no-track -b T3-
 **Tier:** Medium (provider adapter behind a fake `fetch`; no auth decision).
 
 **Files:** modify `supabase/functions/youtube-resources/contracts.ts` (append types only); create `supabase/functions/youtube-resources/youtubeReadClient.ts` and `supabase/functions/youtube-resources/youtubeReadClient.test.ts`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** every provider call has a timeout (`AbortSignal.timeout`). The client returns stable codes only: never Google's `error.message`, never the request URL. It never writes to the database and never changes `account_metadata`. Validate the provider body with Zod; every provider field is optional so a missing field becomes `null`, not a crash. `contracts.ts` stays import-free. No `any`, no `eslint-disable`. Commit only the three files.
 
@@ -1008,9 +1020,11 @@ git commit -m "feat(youtube): typed native read client with channel details" -- 
 
 ## Task 2b-2: read client `listUploads` and `getVideo`
 
-**Tier:** Medium.
+**Tier:** Medium (provider adapter behind a fake `fetch`; the channel-ownership check of a video lives here, so review it with care).
 
 **Files:** modify `supabase/functions/youtube-resources/youtubeReadClient.ts` and `supabase/functions/youtube-resources/youtubeReadClient.test.ts`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** the playlist ID is computed inside the client from `options.uploadsPlaylistIdFor(input.channelId)`; no caller passes a playlist ID. A video whose `snippet.channelId` differs from `input.channelId` is `not_found`, exactly like an absent video. Stable codes only, no provider text. No `any`, no `eslint-disable`. Commit only the two files.
 
@@ -1181,6 +1195,8 @@ git commit -m "feat(youtube): read client lists uploads and reads video details"
 **Tier:** Heavy (OAuth token use, ownership, rate limit).
 
 **Files:** modify `supabase/functions/youtube-resources/handler.ts` and `supabase/functions/youtube-resources/handler.test.ts`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** a refused request makes zero token reads and zero provider calls; the tests prove it with counters. The handler never calls Google or the token endpoint itself: it uses `ports.tokens` and `ports.youtube`. At most one repeat, and only after a 401 on a token this request did not mint. A Composio row never reaches `ports.youtube`. No token in any response. No `any`, no `eslint-disable`. Keep every existing test green. Commit only the two files.
 
@@ -1427,6 +1443,8 @@ git commit -m "feat(youtube): owner-bound channel details operation" -- supabase
 
 **Files:** modify `supabase/functions/youtube-resources/handler.ts` and `supabase/functions/youtube-resources/handler.test.ts`.
 
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
+
 **Rules for this task:** reuse `admit` and `providerRead` from task 2b-3; do not write a second admission path. The browser never sends a playlist or channel ID. `page_size` is capped at 50 by the schema. No `any`, no `eslint-disable`. Commit only the two files.
 
 **You depend on (same file, task 2b-3):**
@@ -1561,11 +1579,22 @@ git commit -m "feat(youtube): paginated uploads operation" -- supabase/functions
 
 **Tier:** Heavy (same boundary as 2b-3).
 
-**Files:** modify `supabase/functions/youtube-resources/handler.ts` and `supabase/functions/youtube-resources/handler.test.ts`.
+**Files:** modify `supabase/functions/youtube-resources/handler.ts` and `supabase/functions/youtube-resources/handler.test.ts`; create `supabase/functions/youtube-resources/requestExamples.fixture.ts`.
 
-**Rules for this task:** reuse `admit` and `providerRead`. The handler passes the stored `channelId` to `ports.youtube.getVideo`, which refuses videos of another channel as `not_found`; the handler must not add a second, different answer for that case. No `any`, no `eslint-disable`. Commit only the two files.
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
-**You depend on (same file):** `admit`, `providerRead` (signatures in task 2b-4), and `ports.youtube.getVideo(accessToken, { channelId, videoId }): Promise<YouTubeReadResult<YouTubeVideoDetails>>`.
+**Rules for this task:** reuse `admit` and `providerRead`. The fixture file has no `import` and no Deno API, because a Vitest test imports it later. The handler passes the stored `channelId` to `ports.youtube.getVideo`, which refuses videos of another channel as `not_found`; the handler must not add a second, different answer for that case. No `any`, no `eslint-disable`. Commit only the three files.
+
+**You depend on (same file, already written):**
+
+```ts
+// Returns the refusal code, or null when the provider may be called.
+async function admit(account: YouTubeResourceAccount, userId: string): Promise<{ code: YouTubeResourceErrorCode; retryAfterSeconds?: number } | null>;
+// One read, with the single forced-refresh repeat after a 401.
+async function providerRead<T>(account: YouTubeResourceAccount, read: (accessToken: string) => Promise<YouTubeReadResult<T>>): Promise<YouTubeReadResult<T>>;
+// ports.youtube.getVideo(accessToken, { channelId, videoId }): Promise<YouTubeReadResult<YouTubeVideoDetails>>
+// YouTubeReadResult<T> = { ok: true; value: T } | { ok: false; code: YouTubeResourceErrorCode; unauthorized: boolean }
+```
 
 - [ ] **Step 1: add the failing tests.** In `fixture`, add `calls.video` (start 0), `videoInputs: Array<{ channelId: string; videoId: string }>`, an override `videoResults?: Array<YouTubeReadResult<YouTubeVideoDetails>>`, and replace the `getVideo` stub with one that records the input and answers `queued ?? { ok: true, value: VIDEO }`, where:
 
@@ -1620,6 +1649,36 @@ Deno.test("a malformed video id is refused before any account read", async () =>
 });
 ```
 
+Create the shared fixture `requestExamples.fixture.ts` (the gateway test of stage 2c sends these exact bodies, which is what ties the browser side to this handler):
+
+```ts
+// Request bodies both sides agree on. The Deno handler test proves the handler accepts each one;
+// the Vitest gateway test proves the browser sends each one. Keep it import-free.
+export const EXAMPLE_ACCOUNT_ID = "0ee20001-0000-4000-8000-000000000021";
+export const EXAMPLE_VIDEO_ID = "videoAAAAAAA";
+export const EXAMPLE_PAGE_TOKEN = "CAUQAA";
+
+export const YOUTUBE_RESOURCE_REQUEST_EXAMPLES = {
+  capabilities: { operation: "capabilities", account_id: EXAMPLE_ACCOUNT_ID },
+  channel: { operation: "channel", account_id: EXAMPLE_ACCOUNT_ID },
+  videosFirstPage: { operation: "videos", account_id: EXAMPLE_ACCOUNT_ID },
+  videosNextPage: { operation: "videos", account_id: EXAMPLE_ACCOUNT_ID, page_token: EXAMPLE_PAGE_TOKEN },
+  video: { operation: "video", account_id: EXAMPLE_ACCOUNT_ID, video_id: EXAMPLE_VIDEO_ID },
+} as const;
+```
+
+And append to `handler.test.ts` (import `YOUTUBE_RESOURCE_REQUEST_EXAMPLES` from `./requestExamples.fixture.ts`; `EXAMPLE_ACCOUNT_ID` equals the test file's `ACCOUNT_ID`):
+
+```ts
+for (const [name, body] of Object.entries(YOUTUBE_RESOURCE_REQUEST_EXAMPLES)) {
+  Deno.test(`the handler accepts the shared ${name} request example`, async () => {
+    const { handler } = fixture();
+    const response = await handler(request(body));
+    assertEquals(response.status, 200);
+  });
+}
+```
+
 - [ ] **Step 2: run and confirm they fail.**
 
 - [ ] **Step 3: implement.** Add to the union:
@@ -1639,17 +1698,21 @@ After the account load and `admit`: `providerRead(account, (accessToken) => port
 - [ ] **Step 5: commit.**
 
 ```bash
-git add supabase/functions/youtube-resources/handler.ts supabase/functions/youtube-resources/handler.test.ts
-git commit -m "feat(youtube): channel-bound video details operation" -- supabase/functions/youtube-resources/handler.ts supabase/functions/youtube-resources/handler.test.ts
+git add supabase/functions/youtube-resources/handler.ts supabase/functions/youtube-resources/handler.test.ts supabase/functions/youtube-resources/requestExamples.fixture.ts
+git commit -m "feat(youtube): channel-bound video details operation" -- supabase/functions/youtube-resources/handler.ts supabase/functions/youtube-resources/handler.test.ts supabase/functions/youtube-resources/requestExamples.fixture.ts
 ```
 
 ## Task 2b-6: wire tokens, the read client and the rate limit into `index.ts`
 
 **Tier:** Heavy (the only place that touches real credentials).
 
-**Files:** create `supabase/functions/youtube-resources/tokens.ts` and `supabase/functions/youtube-resources/tokens.test.ts`; modify `supabase/functions/youtube-resources/index.ts`; modify `CLAUDE.md` (the row added in stage 2a).
+**Files:** create `supabase/functions/youtube-resources/tokens.ts`, `supabase/functions/youtube-resources/tokens.test.ts`, `supabase/functions/youtube-resources/rateLimit.ts` and `supabase/functions/youtube-resources/rateLimit.test.ts`; modify `supabase/functions/youtube-resources/index.ts`; modify `CLAUDE.md` (the row added in stage 2a).
 
-**Rules for this task:** tokens come only from `refreshYouTubeAccountToken`. `recordTransientFailure` stays `false` (an on-demand read must not raise `failure_count`). Never set `adminRecovery`. The only import from `_shared/youtubeComments.ts` is `uploadsPlaylistId`. No token in any log line. No `any`, no `eslint-disable`. Commit only the four files.
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
+
+**Rules for this task:** tokens come only from `refreshYouTubeAccountToken`. `recordTransientFailure` stays `false` (an on-demand read must not raise `failure_count`). Never set `adminRecovery`. The only import from `_shared/youtubeComments.ts` is `uploadsPlaylistId`. No token in any log line. No `any`, no `eslint-disable`. Commit only the six files.
+
+**Known mismatch you must handle:** the SQL function `check_rate_limit` (`supabase/manual-sql/20260627213616_rate_limit_buckets.sql`) returns JSON with the key `retry_after`, while the TypeScript type `RpcRateLimitResult` in `_shared/rate-limiter.ts` names it `retryAfter` and the helper only casts. At runtime `retryAfter` can therefore be `undefined`. Do not change `_shared/rate-limiter.ts` in this task. Read the result as `unknown` through `toRateLimitDecision` below, which accepts both spellings.
 
 **You depend on (on `main`):**
 
@@ -1730,7 +1793,43 @@ Deno.test("a lease held elsewhere or a transient failure is upstream_unavailable
 });
 ```
 
-- [ ] **Step 2: run and confirm it fails** because `./tokens.ts` does not exist.
+Also write `rateLimit.test.ts`:
+
+```ts
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { toRateLimitDecision } from "./rateLimit.ts";
+
+Deno.test("an allowed result lets the request through", () => {
+  assertEquals(toRateLimitDecision({ allowed: true, count: 3, remaining: 27, retry_after: 0 }, 600), {
+    allowed: true,
+    retryAfterSeconds: 0,
+  });
+});
+
+Deno.test("a refusal reads the wait from the database's snake_case key", () => {
+  assertEquals(toRateLimitDecision({ allowed: false, count: 30, remaining: 0, retry_after: 240 }, 600), {
+    allowed: false,
+    retryAfterSeconds: 240,
+  });
+});
+
+Deno.test("a refusal also accepts the camelCase key of the TypeScript type", () => {
+  assertEquals(toRateLimitDecision({ allowed: false, retryAfter: 90 }, 600), {
+    allowed: false,
+    retryAfterSeconds: 90,
+  });
+});
+
+Deno.test("a refusal without a usable wait falls back to the whole window", () => {
+  assertEquals(toRateLimitDecision({ allowed: false }, 600), { allowed: false, retryAfterSeconds: 600 });
+});
+
+Deno.test("an unreadable result keeps the helper's fail-open behaviour", () => {
+  assertEquals(toRateLimitDecision(null, 600), { allowed: true, retryAfterSeconds: 0 });
+});
+```
+
+- [ ] **Step 2: run and confirm both fail** because `./tokens.ts` and `./rateLimit.ts` do not exist.
 
 - [ ] **Step 3: implement `tokens.ts`:**
 
@@ -1751,6 +1850,29 @@ export function tokenResultFromOutcome(outcome: YouTubeRefreshOutcome): YouTubeT
 }
 ```
 
+Implement `rateLimit.ts`:
+
+```ts
+export interface YouTubeRateLimitDecision {
+  allowed: boolean;
+  retryAfterSeconds: number;
+}
+
+// `result` is what checkUserRateLimit resolved with. It is read as unknown because the database
+// answers `retry_after` while the TypeScript type says `retryAfter`.
+export function toRateLimitDecision(result: unknown, windowSeconds: number): YouTubeRateLimitDecision {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+  const record = result as Record<string, unknown>;
+  if (record.allowed !== false) return { allowed: true, retryAfterSeconds: 0 };
+  const wait = [record.retry_after, record.retryAfter].find(
+    (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
+  );
+  return { allowed: false, retryAfterSeconds: wait ?? windowSeconds };
+}
+```
+
 - [ ] **Step 4: wire the three ports in `index.ts`.** Add the imports and, inside `ports`:
 
 ```ts
@@ -1758,6 +1880,7 @@ import { checkUserRateLimit } from "../_shared/rate-limiter.ts";
 import { uploadsPlaylistId } from "../_shared/youtubeComments.ts";
 import { createSupabaseYouTubeRefreshStore, refreshYouTubeAccountToken } from "../_shared/youtubeTokenRefresh.ts";
 import { YOUTUBE_RESOURCE_QUOTA_POLICY } from "./contracts.ts";
+import { toRateLimitDecision } from "./rateLimit.ts";
 import { tokenResultFromOutcome } from "./tokens.ts";
 import { createYouTubeReadClient } from "./youtubeReadClient.ts";
 
@@ -1784,10 +1907,15 @@ const { per_user_burst: BURST, per_user_daily: DAILY } = YOUTUBE_RESOURCE_QUOTA_
   youtube: createYouTubeReadClient({ fetchImpl: fetch, uploadsPlaylistIdFor: uploadsPlaylistId }),
   rateLimit: {
     check: async (userId) => {
-      const burst = await checkUserRateLimit(admin, "youtube-resources:burst", userId, BURST.limit, BURST.window_seconds);
-      if (!burst.allowed) return { allowed: false, retryAfterSeconds: burst.retryAfter };
-      const daily = await checkUserRateLimit(admin, "youtube-resources:day", userId, DAILY.limit, DAILY.window_seconds);
-      return { allowed: daily.allowed, retryAfterSeconds: daily.allowed ? 0 : daily.retryAfter };
+      const burst = toRateLimitDecision(
+        await checkUserRateLimit(admin, "youtube-resources:burst", userId, BURST.limit, BURST.window_seconds),
+        BURST.window_seconds,
+      );
+      if (!burst.allowed) return burst;
+      return toRateLimitDecision(
+        await checkUserRateLimit(admin, "youtube-resources:day", userId, DAILY.limit, DAILY.window_seconds),
+        DAILY.window_seconds,
+      );
     },
   },
 ```
@@ -1808,21 +1936,24 @@ git grep -n "oauth2.googleapis.com\|adminRecovery" -- supabase/functions/youtube
 git grep -n "youtubeComments.ts" -- supabase/functions/youtube-resources/                 # exactly one line: the uploadsPlaylistId import
 ```
 
+`_shared/rate-limiter.ts` is already typechecked in CI through `_shared/aiImageAtlasRoute.ts`, and `_shared/youtubeComments.ts` and `_shared/youtubeTokenRefresh.ts` through the step `Typecheck and test YouTube refresh lease`. If `deno check` on `index.ts` still fails inside one of those shared files, stop and report the exact error; do not edit a shared file to make it pass.
+
 - [ ] **Step 7: commit.**
 
 ```bash
-git add supabase/functions/youtube-resources/tokens.ts supabase/functions/youtube-resources/tokens.test.ts supabase/functions/youtube-resources/index.ts CLAUDE.md
-git commit -m "feat(youtube): wire lease-based tokens, read client and rate limit" -- supabase/functions/youtube-resources/tokens.ts supabase/functions/youtube-resources/tokens.test.ts supabase/functions/youtube-resources/index.ts CLAUDE.md
+git add supabase/functions/youtube-resources/tokens.ts supabase/functions/youtube-resources/tokens.test.ts supabase/functions/youtube-resources/rateLimit.ts supabase/functions/youtube-resources/rateLimit.test.ts supabase/functions/youtube-resources/index.ts CLAUDE.md
+git commit -m "feat(youtube): wire lease-based tokens, read client and rate limit" -- supabase/functions/youtube-resources/tokens.ts supabase/functions/youtube-resources/tokens.test.ts supabase/functions/youtube-resources/rateLimit.ts supabase/functions/youtube-resources/rateLimit.test.ts supabase/functions/youtube-resources/index.ts CLAUDE.md
 ```
 
 ## Task 2b-7: pull request for stage 2b (orchestrator)
 
-**Tier:** Heavy.
+**Tier:** Heavy (the PR carries OAuth token use against Google).
 
 - [ ] Before review, re-check the Google field names used by the Zod schemas in `youtubeReadClient.ts` against the resource pages for `channels`, `playlistItems` and `videos` (spec section 9) and record the result in the PR body.
 - [ ] Inspect the full diff, run `clean-code-guard`, `test-guard` and `docs-guard`.
-- [ ] `git push origin HEAD:T3-CODE/youtube-stage2b-resource-browse`. PR title `feat(youtube): native resource browse API (stage 2b)`. The body states "Tier: HEAVY", the production call sites (`index.ts` calls `createYouTubeReadClient`, `tokenResultFromOutcome`, `refreshYouTubeAccountToken`, `checkUserRateLimit`), the units each operation spends, that no browser calls the endpoint until stage 2c, and ends with the Claude Code attribution line.
+- [ ] `git push origin HEAD:T3-CODE/youtube-stage2b-resource-browse`. PR title `feat(youtube): native resource browse API (stage 2b)`. The body states "Tier: HEAVY", the production call sites (`index.ts` calls `createYouTubeReadClient`, `tokenResultFromOutcome`, `toRateLimitDecision`, `refreshYouTubeAccountToken`, `checkUserRateLimit`), the units each operation spends, that no browser calls the endpoint until stage 2c, and ends with the Claude Code attribution line.
 - [ ] Merge only on green CI for the exact head commit and after the review rounds of the tier.
+- [ ] Before the merge, confirm with a read-only query (owner or orchestrator, through `supabase_postora_mcp`) that `public.check_rate_limit` exists in production. It lives in `supabase/manual-sql/`, not in `supabase/migrations/`, and `checkUserRateLimit` fails open when the RPC errors, so a missing function would silently switch the guard off.
 - [ ] After the Dokploy schedule has deployed, and only with an account the owner authorises for the check: one `channel`, one `videos` and one `video` call answer 200; a `video` call with the ID of a video from another channel answers 404; a channel with zero uploads is called once and Google's real answer is recorded in the PR.
 
 ---
@@ -1838,6 +1969,8 @@ Translation namespace for every screen string: `accounts` (already registered in
 **Tier:** Medium (pure code).
 
 **Files:** create `src/features/youtube-management/domain/types.ts`, `src/features/youtube-management/domain/errors.ts`, `src/features/youtube-management/domain/accountOptions.ts`, `src/features/youtube-management/domain/errors.test.ts`, `src/features/youtube-management/domain/accountOptions.test.ts`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** domain code imports no React, no Supabase client, no browser API (ARCHITECTURE.md §4). The contract is not redefined: `types.ts` re-exports it from the edge function's `contracts.ts`, the same way `src/features/instagram-insights/domain/types.ts` does. No `any`, no `eslint-disable`. Commit only the five files.
 
@@ -1967,13 +2100,20 @@ export function toYouTubeAccountOptions(accounts: readonly YouTubeAccountSource[
 
 - [ ] **Step 4: verify.** `npx vitest run src/features/youtube-management/domain` and `npm run typecheck`.
 
-- [ ] **Step 5: commit** the five files with `git commit -m "feat(youtube-management): domain types, errors and account options" -- <the five files>`.
+- [ ] **Step 5: commit.**
+
+```bash
+git add src/features/youtube-management/domain/types.ts src/features/youtube-management/domain/errors.ts src/features/youtube-management/domain/accountOptions.ts src/features/youtube-management/domain/errors.test.ts src/features/youtube-management/domain/accountOptions.test.ts
+git commit -m "feat(youtube-management): domain types, errors and account options" -- src/features/youtube-management/domain/types.ts src/features/youtube-management/domain/errors.ts src/features/youtube-management/domain/accountOptions.ts src/features/youtube-management/domain/errors.test.ts src/features/youtube-management/domain/accountOptions.test.ts
+```
 
 ## Task 2c-2: gateway port and Supabase gateway
 
-**Tier:** Medium.
+**Tier:** Medium (browser-side adapter of an authenticated endpoint; no auth rule of its own, no migration).
 
 **Files:** create `src/features/youtube-management/application/ports.ts`, `src/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway.ts`, `src/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway.test.ts`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** the infrastructure file is the only file of the feature that imports `@/integrations/supabase/client` (ARCHITECTURE.md §11). The gateway never sends a user ID. A failed call throws `YouTubeResourceError` with the server's stable code; it never returns an empty result for a failure. No `any`, no `eslint-disable`. Commit only the three files.
 
@@ -1984,6 +2124,9 @@ export function toYouTubeAccountOptions(accounts: readonly YouTubeAccountSource[
 export class YouTubeResourceError extends Error { readonly code: YouTubeResourceErrorCode; readonly retryAfterSeconds: number | null; constructor(code: YouTubeResourceErrorCode, retryAfterSeconds?: number | null) }
 export function toYouTubeResourceError(payload: unknown): YouTubeResourceError;
 // ../domain/types: YouTubeAccountCapabilities, YouTubeChannelDetails, YouTubeVideosPage, YouTubeVideoDetails, YouTubeResourceSuccess<T>
+// supabase/functions/youtube-resources/requestExamples.fixture.ts (on main since stage 2b, import-free):
+//   EXAMPLE_ACCOUNT_ID, EXAMPLE_VIDEO_ID, EXAMPLE_PAGE_TOKEN,
+//   YOUTUBE_RESOURCE_REQUEST_EXAMPLES = { capabilities, channel, videosFirstPage, videosNextPage, video }
 ```
 
 - [ ] **Step 1: write the failing test** `supabaseYouTubeResourcesGateway.test.ts`:
@@ -1991,6 +2134,12 @@ export function toYouTubeResourceError(payload: unknown): YouTubeResourceError;
 ```ts
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  EXAMPLE_ACCOUNT_ID,
+  EXAMPLE_PAGE_TOKEN,
+  EXAMPLE_VIDEO_ID,
+  YOUTUBE_RESOURCE_REQUEST_EXAMPLES,
+} from "../../../../supabase/functions/youtube-resources/requestExamples.fixture";
 import { YouTubeResourceError } from "../domain/errors";
 import { SupabaseYouTubeResourcesGateway } from "./supabaseYouTubeResourcesGateway";
 
@@ -2029,6 +2178,26 @@ describe("YouTube resources gateway", () => {
     expect(supabase.functions.invoke).toHaveBeenCalledWith("youtube-resources", {
       body: { operation: "videos", account_id: "acc-1" },
     });
+  });
+
+  it("sends exactly the request bodies the edge handler's shared examples define", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({ data: envelope({}), error: null });
+    const gateway = new SupabaseYouTubeResourcesGateway();
+
+    await gateway.getCapabilities(EXAMPLE_ACCOUNT_ID);
+    await gateway.getChannel(EXAMPLE_ACCOUNT_ID);
+    await gateway.listVideos({ accountId: EXAMPLE_ACCOUNT_ID });
+    await gateway.listVideos({ accountId: EXAMPLE_ACCOUNT_ID, pageToken: EXAMPLE_PAGE_TOKEN });
+    await gateway.getVideo({ accountId: EXAMPLE_ACCOUNT_ID, videoId: EXAMPLE_VIDEO_ID });
+
+    const sent = vi.mocked(supabase.functions.invoke).mock.calls.map((call) => call[1]?.body);
+    expect(sent).toEqual([
+      YOUTUBE_RESOURCE_REQUEST_EXAMPLES.capabilities,
+      YOUTUBE_RESOURCE_REQUEST_EXAMPLES.channel,
+      YOUTUBE_RESOURCE_REQUEST_EXAMPLES.videosFirstPage,
+      YOUTUBE_RESOURCE_REQUEST_EXAMPLES.videosNextPage,
+      YOUTUBE_RESOURCE_REQUEST_EXAMPLES.video,
+    ]);
   });
 
   it("turns a refusal into the server's stable code", async () => {
@@ -2101,13 +2270,20 @@ Bodies: `{ operation: "capabilities", account_id }`, `{ operation: "channel", ac
 
 - [ ] **Step 4: verify.** `npx vitest run src/features/youtube-management/infrastructure`, `npm run typecheck`.
 
-- [ ] **Step 5: commit** the three files with `git commit -m "feat(youtube-management): resources gateway" -- <the three files>`.
+- [ ] **Step 5: commit.**
+
+```bash
+git add src/features/youtube-management/application/ports.ts src/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway.ts src/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway.test.ts
+git commit -m "feat(youtube-management): resources gateway" -- src/features/youtube-management/application/ports.ts src/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway.ts src/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway.test.ts
+```
 
 ## Task 2c-3: query hooks
 
-**Tier:** Medium.
+**Tier:** Medium (client state only; the risk is showing one account's data under another, which the tests cover).
 
 **Files:** create `src/features/youtube-management/application/queryKeys.ts`, `useYouTubeCapabilities.ts`, `useYouTubeChannel.ts`, `useYouTubeVideos.ts`, `useYouTubeVideo.ts` and `useYouTubeVideos.test.tsx`, all in `src/features/youtube-management/application/`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** application code imports no infrastructure and no Supabase client; the gateway arrives as a parameter (ARCHITECTURE.md §4). Every query key contains the user ID and the account ID. Never use `placeholderData` or `keepPreviousData`: after an account switch the previous account's data must not be returned. No `refetchInterval`. No `any`, no `eslint-disable`. Commit only the six files.
 
@@ -2246,13 +2422,20 @@ The test in step 1 passes `retry: false` at the client level but the hook's own 
 
 - [ ] **Step 4: verify.** `npx vitest run src/features/youtube-management/application`, `npm run typecheck`.
 
-- [ ] **Step 5: commit** the six files with `git commit -m "feat(youtube-management): account-scoped query hooks" -- <the six files>`.
+- [ ] **Step 5: commit.**
+
+```bash
+git add src/features/youtube-management/application/queryKeys.ts src/features/youtube-management/application/useYouTubeCapabilities.ts src/features/youtube-management/application/useYouTubeChannel.ts src/features/youtube-management/application/useYouTubeVideos.ts src/features/youtube-management/application/useYouTubeVideo.ts src/features/youtube-management/application/useYouTubeVideos.test.tsx
+git commit -m "feat(youtube-management): account-scoped query hooks" -- src/features/youtube-management/application/queryKeys.ts src/features/youtube-management/application/useYouTubeCapabilities.ts src/features/youtube-management/application/useYouTubeChannel.ts src/features/youtube-management/application/useYouTubeVideos.ts src/features/youtube-management/application/useYouTubeVideo.ts src/features/youtube-management/application/useYouTubeVideos.test.tsx
+```
 
 ## Task 2c-4: notice, account picker and channel summary components
 
-**Tier:** Medium.
+**Tier:** Medium (presentational UI and i18n, but more than the 150 lines a Light task allows).
 
 **Files:** create in `src/features/youtube-management/ui/`: `YouTubeResourceNotice.tsx`, `YouTubeAccountPicker.tsx`, `YouTubeChannelSummary.tsx`, `__tests__/YouTubeResourceNotice.test.tsx`, `__tests__/YouTubeChannelSummary.test.tsx`. Modify `src/i18n/locales/ar/accounts.json`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** presentational components only: props in, callbacks out, no gateway and no query hook inside them. Every string is `t("literal.key", "English default")` under `useTranslation("accounts")`; never build a key from a variable (the i18n gate cannot see it, and the bundle key becomes an orphan). Add the Arabic entry for every key in this same task, and add no key you do not use. Counters are labelled as YouTube counters, never as watch time. No `any`, no `eslint-disable`. Commit only the six files.
 
@@ -2410,19 +2593,40 @@ npm run check:i18n
 npx eslint src/features/youtube-management
 ```
 
-- [ ] **Step 5: commit** the six files with `git commit -m "feat(youtube-management): notice, account picker and channel summary" -- <the six files>`.
+- [ ] **Step 5: commit.**
+
+```bash
+git add src/features/youtube-management/ui/YouTubeResourceNotice.tsx src/features/youtube-management/ui/YouTubeAccountPicker.tsx src/features/youtube-management/ui/YouTubeChannelSummary.tsx src/features/youtube-management/ui/__tests__/YouTubeResourceNotice.test.tsx src/features/youtube-management/ui/__tests__/YouTubeChannelSummary.test.tsx src/i18n/locales/ar/accounts.json
+git commit -m "feat(youtube-management): notice, account picker and channel summary" -- src/features/youtube-management/ui/YouTubeResourceNotice.tsx src/features/youtube-management/ui/YouTubeAccountPicker.tsx src/features/youtube-management/ui/YouTubeChannelSummary.tsx src/features/youtube-management/ui/__tests__/YouTubeResourceNotice.test.tsx src/features/youtube-management/ui/__tests__/YouTubeChannelSummary.test.tsx src/i18n/locales/ar/accounts.json
+```
 
 ## Task 2c-5: video library and video detail components
 
-**Tier:** Medium.
+**Tier:** Medium (presentational UI and i18n, above the Light size limit).
 
 **Files:** create in `src/features/youtube-management/ui/`: `YouTubeVideoLibrary.tsx`, `YouTubeVideoDetail.tsx`, `__tests__/YouTubeVideoLibrary.test.tsx`, `__tests__/YouTubeVideoDetail.test.tsx`. Modify `src/i18n/locales/ar/accounts.json`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** presentational components only. An empty list and a failed list are different states: the library renders the empty text only when it is given zero items and no error; the caller renders errors with `YouTubeResourceNotice`. Literal `t()` keys under `useTranslation("accounts")`, Arabic entry for each key in this task, no unused key. External links open with `target="_blank"` and `rel="noopener noreferrer"`. No `any`, no `eslint-disable`. Commit only the five files.
 
 **You depend on:** `YouTubeVideoListItem`, `YouTubeVideoDetails` from `../domain/types`.
 
-- [ ] **Step 1: write the failing tests** (use the same `renderUi` helper as task 2c-4; copy it into each file).
+- [ ] **Step 1: write the failing tests.** Put this helper at the top of each of the two test files:
+
+```tsx
+import type { ReactElement } from "react";
+import { render } from "@testing-library/react";
+import { createInstance } from "i18next";
+import { I18nextProvider } from "react-i18next";
+import { MemoryRouter } from "react-router-dom";
+
+async function renderUi(ui: ReactElement) {
+  const i18n = createInstance();
+  await i18n.init({ lng: "en", resources: { en: { accounts: {} } }, defaultNS: "accounts" });
+  return render(<MemoryRouter><I18nextProvider i18n={i18n}>{ui}</I18nextProvider></MemoryRouter>);
+}
+```
 
 `__tests__/YouTubeVideoLibrary.test.tsx`:
 
@@ -2561,17 +2765,24 @@ Keys to add to `src/i18n/locales/ar/accounts.json` under `youtubeManagement`:
 | `youtubeManagement.detail.tags` | Tags | الوسوم |
 | `youtubeManagement.detail.notAvailable` | Not available | مش متاح |
 
-Reuse `youtubeManagement.fetchedAt` from task 2c-4 for the fetch time. Every key in the table must be used by a component of this task, otherwise `npm run check:i18n` reports it as an orphan.
+For the fetch time, call the key that already exists in the bundle: `t("youtubeManagement.fetchedAt", "Updated {{time}}", { time })`. Do not add it again. Every key in the table must be used by a component of this task, otherwise `npm run check:i18n` reports it as an orphan.
 
 - [ ] **Step 4: verify.** Same four commands as task 2c-4.
 
-- [ ] **Step 5: commit** the five files with `git commit -m "feat(youtube-management): video library and detail" -- <the five files>`.
+- [ ] **Step 5: commit.**
+
+```bash
+git add src/features/youtube-management/ui/YouTubeVideoLibrary.tsx src/features/youtube-management/ui/YouTubeVideoDetail.tsx src/features/youtube-management/ui/__tests__/YouTubeVideoLibrary.test.tsx src/features/youtube-management/ui/__tests__/YouTubeVideoDetail.test.tsx src/i18n/locales/ar/accounts.json
+git commit -m "feat(youtube-management): video library and detail" -- src/features/youtube-management/ui/YouTubeVideoLibrary.tsx src/features/youtube-management/ui/YouTubeVideoDetail.tsx src/features/youtube-management/ui/__tests__/YouTubeVideoLibrary.test.tsx src/features/youtube-management/ui/__tests__/YouTubeVideoDetail.test.tsx src/i18n/locales/ar/accounts.json
+```
 
 ## Task 2c-6: the screen, the public API and the layering test
 
-**Tier:** Medium.
+**Tier:** Medium (composition of the feature; no auth, money or schema change).
 
 **Files:** create `src/features/youtube-management/ui/YouTubeManagementScreen.tsx`, `src/features/youtube-management/ui/__tests__/YouTubeManagementScreen.test.tsx`, `src/features/youtube-management/tests/architecture.test.ts`, `src/features/youtube-management/index.ts`. Modify `src/i18n/locales/ar/accounts.json`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** `YouTubeManagementScreen.tsx` is the only file under `ui/` that imports from `infrastructure/` (for the default gateway). The screen takes the account list as a prop; it does not import `useSocialAccounts` or any other legacy hook. When capabilities say browse is `unavailable`, the channel, videos and video hooks stay disabled. Changing the account clears the selected video. Literal `t()` keys, Arabic entry for each key in this task. No `any`, no `eslint-disable`. Commit only the five files.
 
@@ -2751,7 +2962,7 @@ Keys to add to `src/i18n/locales/ar/accounts.json` under `youtubeManagement`:
 | `youtubeManagement.refresh` | Refresh | تحديث |
 | `youtubeManagement.detail.select` | Select a video to see its details. | اختار فيديو عشان تشوف تفاصيله. |
 
-Reuse `youtubeManagement.goToProfiles` for the Profiles link.
+For the Profiles link, call the key that already exists in the bundle: `t("youtubeManagement.goToProfiles", "Open Profiles")`. Do not add it again. Every key in the table must be used by this task's screen.
 
 - [ ] **Step 4: verify.**
 
@@ -2762,13 +2973,20 @@ npm run check:i18n
 npx eslint src/features/youtube-management
 ```
 
-- [ ] **Step 5: commit** the five files with `git commit -m "feat(youtube-management): management screen and public API" -- <the five files>`.
+- [ ] **Step 5: commit.**
+
+```bash
+git add src/features/youtube-management/ui/YouTubeManagementScreen.tsx src/features/youtube-management/ui/__tests__/YouTubeManagementScreen.test.tsx src/features/youtube-management/tests/architecture.test.ts src/features/youtube-management/index.ts src/i18n/locales/ar/accounts.json
+git commit -m "feat(youtube-management): management screen and public API" -- src/features/youtube-management/ui/YouTubeManagementScreen.tsx src/features/youtube-management/ui/__tests__/YouTubeManagementScreen.test.tsx src/features/youtube-management/tests/architecture.test.ts src/features/youtube-management/index.ts src/i18n/locales/ar/accounts.json
+```
 
 ## Task 2c-7: feature flag, page, route and sidebar entry
 
-**Tier:** Medium.
+**Tier:** Medium (touches shared navigation and the flag registry in five existing files; the flag is a UI switch, not a permission).
 
 **Files:** create `src/pages/youtube/YouTubeManagementPage.tsx` and `src/features/youtube-management/tests/wiring.test.tsx`. Modify `src/hooks/useFeatureFlags.tsx`, `src/components/admin/FeatureFlagIndicator.tsx`, `src/pages/admin/AdminFeatureFlags.tsx`, `src/components/AnimatedRoutes.tsx`, `src/components/layout/DashboardLayout.tsx`, `src/i18n/locales/ar/nav.json`.
+
+**Fixed rules (every task):** never deploy and never apply anything to production; never run `npx supabase functions deploy`; never run `git add -A` or `git add .`; add no `eslint-disable` and no `any`; no live Google call in a test.
 
 **Rules for this task:** this task is what makes the feature reachable; without it the modules are dead (ARCHITECTURE.md §1). The flag is `youtubeManagement` (database key `feature_youtube_management`), default `false`. No migration: `useFeatureFlags` falls back to `DEFAULT_FLAGS` when `app_settings` has no row, and the admin page upserts the row on the first toggle. The flag only hides UI; never rely on it for authorization. The page imports the feature only through `@/features/youtube-management` (no deep import). No `any`, no `eslint-disable`. Commit only the eight files.
 
@@ -2889,11 +3107,16 @@ npx eslint src/features/youtube-management src/pages/youtube src/hooks/useFeatur
 git grep -n "YouTubeManagementScreen" -- src/pages    # the production call site
 ```
 
-- [ ] **Step 7: commit** the eight files with `git commit -m "feat(youtube-management): flagged page, route and sidebar entry" -- <the eight files>`.
+- [ ] **Step 7: commit.**
+
+```bash
+git add src/pages/youtube/YouTubeManagementPage.tsx src/features/youtube-management/tests/wiring.test.tsx src/hooks/useFeatureFlags.tsx src/components/admin/FeatureFlagIndicator.tsx src/pages/admin/AdminFeatureFlags.tsx src/components/AnimatedRoutes.tsx src/components/layout/DashboardLayout.tsx src/i18n/locales/ar/nav.json
+git commit -m "feat(youtube-management): flagged page, route and sidebar entry" -- src/pages/youtube/YouTubeManagementPage.tsx src/features/youtube-management/tests/wiring.test.tsx src/hooks/useFeatureFlags.tsx src/components/admin/FeatureFlagIndicator.tsx src/pages/admin/AdminFeatureFlags.tsx src/components/AnimatedRoutes.tsx src/components/layout/DashboardLayout.tsx src/i18n/locales/ar/nav.json
+```
 
 ## Task 2c-8: pull request for stage 2c (orchestrator)
 
-**Tier:** Medium.
+**Tier:** Medium (frontend only; no auth rule, money or migration).
 
 - [ ] Inspect the full diff, run `clean-code-guard` and `test-guard`. Run `npm run test`, `npm run typecheck`, `npm run check:i18n`, `npm run lint` and `npm run build`.
 - [ ] `git push origin HEAD:T3-CODE/youtube-stage2c-management-ui`. PR title `feat(youtube): channel browser page (stage 2c)`. The body states "Tier: MEDIUM", names the production call sites (`src/pages/youtube/YouTubeManagementPage.tsx` renders `YouTubeManagementScreen`; `src/components/AnimatedRoutes.tsx` registers `/youtube`), states that the flag is off by default, and ends with the Claude Code attribution line.

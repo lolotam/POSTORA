@@ -49,7 +49,9 @@ Verified by reading `origin/main` at `546b88ac` on 2026-11-20.
 | Google errors are already classified | `classifyGoogleError(status, body)` in `_shared/youtubeApiErrors.ts` returns `scope_missing`, `quota`, `unauthorized`, `not_found`, `forbidden` or `upstream` |
 | The comment poller spends from the same Google project quota | `supabase/functions/youtube-poll-comments/poll.ts` calls `listThreads` once per eligible channel per run; `CLAUDE.md` lists the cron as every 5 minutes |
 | There is no quota counter for YouTube anywhere in the repository | `git grep -n quota supabase/functions/_shared/youtube*.ts` finds only the error class and comments |
-| A per-user rate limiter exists and needs no migration | `checkUserRateLimit(supabaseAdmin, endpoint, userId, maxRequests, windowSeconds)` in `_shared/rate-limiter.ts`. It answers `allowed: true` when its RPC fails (fail open) |
+| A per-user rate limiter exists in the code | `checkUserRateLimit(supabaseAdmin, endpoint, userId, maxRequests, windowSeconds)` in `_shared/rate-limiter.ts` calls the SQL function `check_rate_limit`. It answers `allowed: true` when the RPC fails (fail open). `_shared/aiImageAtlasRoute.ts` already uses it |
+| That SQL function is not in `supabase/migrations/` | It is defined in `supabase/manual-sql/20260627213616_rate_limit_buckets.sql` (manual execution, per `docs/security/audit-2026-06.md`). It is a fixed window that starts at the caller's first request and returns `retry_after` in seconds. Whether it is present in production was **not** checked for this document; the 2b rollout checks it |
+| The limiter's TypeScript type and its SQL disagree on one key | The SQL returns `retry_after`; `RpcRateLimitResult` declares `retryAfter` and the helper only casts, so `retryAfter` can be `undefined` at runtime. Stage 2 reads the result defensively and does not change the shared helper; the mismatch is reported to the owner as a possible follow-up |
 | Edge workers are short-lived | `docs/runbooks/deploy-edge-function.md`: `workerTimeoutMs` is 150 s and a worker serves several requests in that lifetime. Server memory is therefore not a dependable cache |
 | A merge to `main` deploys edge functions within about two minutes | `docs/runbooks/deploy-edge-function.md`, "Automatic deploy (Dokploy Schedule)". The schedule sends `OPTIONS` to each changed function to prove it boots |
 | The reference frontend feature layout | `src/features/instagram-insights/{domain,application,infrastructure,ui,tests}` with `index.ts`, consumed by `src/pages/analytics/InstagramAnalytics.tsx` |
@@ -214,7 +216,7 @@ Which scopes Google accepts for `channels.list`, `playlistItems.list` and `video
 
 Common rules for `channel`, `videos` and `video`:
 
-1. The account is loaded with the service-role client and the filter `id = account_id AND user_id = <caller> AND platform = 'youtube' AND is_active = true`. No row means `not_found`. The response is byte-identical for an unknown ID, another user's ID, a non-YouTube account and an inactive account, so IDs cannot be enumerated.
+1. The account is loaded with the service-role client and the filter `id = account_id AND user_id = <caller> AND platform = 'youtube' AND is_active = true`. No row means `not_found`. The status and the body are the same for an unknown ID, another user's ID, a non-YouTube account and an inactive account (only `request_id` differs between two requests), so IDs cannot be enumerated.
 2. A Composio row owned by the caller gives `provider_unsupported` (decision D3). It is the caller's own account, so the specific code leaks nothing.
 3. `capabilities.browse` is derived. `unavailable/reconnect_required` gives `reconnect_required`; `unavailable/missing_scope` gives `missing_scope`. Both happen before any provider call. `unknown` proceeds (decision D5). A row with no stored channel ID gives `reconnect_required`.
 4. The per-user rate limit is checked (section 5). A refusal gives `rate_limited`.
@@ -377,7 +379,7 @@ The existing consumer in the same bucket is the comment poller: every 5 minutes 
 ### 5.3 Guard (recommended option, decision D4)
 
 1. **Validate before calling.** An invalid request costs a unit at Google, so the schema and the ownership check run first. A refused request reaches no provider.
-2. **Per-user rate limit** on the three provider operations, through the existing `checkUserRateLimit`: 30 requests per 600 seconds (endpoint key `youtube-resources:burst`) and 300 requests per 86,400 seconds (endpoint key `youtube-resources:day`). One request is one unit, so one user can spend at most 300 units per day, 3% of the documented default. The helper fails open when its RPC errors; that is accepted because the limit is a budget guard, not a security boundary (ownership is enforced separately).
+2. **Per-user rate limit** on the three provider operations, through the existing `checkUserRateLimit`: 30 requests per 600 seconds (endpoint key `youtube-resources:burst`) and 300 requests per 86,400 seconds (endpoint key `youtube-resources:day`). One request is one unit, so one user can spend at most 300 units per day, 3% of the documented default. The helper fails open when its RPC errors; that is accepted because the limit is a budget guard, not a security boundary (ownership is enforced separately). The window is fixed, not sliding: it starts at the user's first request and the counter resets when it ends.
 3. **No polling, no background refresh.** The feature only calls Google on a user action.
 4. **Honest quota errors.** When Google refuses for quota, the answer is `quota_exceeded` and the UI says the limit resets at midnight Pacific Time. Nothing is retried.
 
@@ -438,7 +440,7 @@ Screen behaviour:
 
 1. Identity comes only from the JWT. The body never carries a user identifier; strict schemas refuse one.
 2. The service-role client is used only inside `index.ts` adapters, and every account read filters on the authenticated user and on `platform = 'youtube'`.
-3. Foreign and missing identifiers are indistinguishable (`not_found`, same body, same status).
+3. Foreign and missing identifiers are indistinguishable (`not_found`, same status, same body apart from `request_id`).
 4. Refused requests make zero provider calls and read zero credentials beyond the single owned-row lookup. Tests assert this with call counters.
 5. No token, authorization header or provider body appears in a response or a log line. Tests assert that the serialised response does not contain the fixture token strings.
 6. Tokens are obtained only through `refreshYouTubeAccountToken`. The function has no other path to Google's token endpoint.
@@ -462,8 +464,11 @@ Screen behaviour:
 | Frontend ui | Vitest and Testing Library | Each notice state, empty state, load more, account switch clears the detail panel |
 | Feature layering | Vitest (`tests/architecture.test.ts`) | Only infrastructure imports the Supabase client; application and domain import no infrastructure |
 | Route wiring | Vitest | The page is reachable at `/youtube` and the sidebar entry follows the flag |
+| Browser-to-handler contract | Deno and Vitest, one shared fixture | `supabase/functions/youtube-resources/requestExamples.fixture.ts` holds one request body per operation. The Deno handler test proves the handler accepts each; the Vitest gateway test proves the gateway sends each |
 
 No SQL suite is needed under the recommended options because there is no migration. No test calls Google.
+
+The parent plan's exit criterion for this stage is a "fixture-driven UI-to-handler integration [that] exercises actual wiring, including foreign channel denial". No single test process runs both React (Vitest) and the Deno handler in this repository, so this specification substitutes three linked proofs: the shared request fixture above ties the gateway to the handler's schemas; the screen test drives the real hooks and components through the gateway port; and the handler and read-client tests prove the denial of a foreign account and of a foreign channel's video. A browser-level end-to-end test is left to the authorised demo of the parent plan's stage 6.
 
 ## 9. Official references
 
@@ -492,7 +497,7 @@ Three pull requests, each deployable on its own (decision D7).
 Rollout steps:
 
 1. Merge 2a after CI and review. The Dokploy schedule deploys the function within about two minutes and probes it with `OPTIONS`. Verify with one authenticated `capabilities` call for an owned account and one for a random UUID (expect `not_found`).
-2. Merge 2b the same way. Verify, with an account the owner authorises for the check, one `channel` call, one `videos` call and one `video` call, and one `video` call with the ID of a video from another channel (expect `not_found`). Also check a channel with zero uploads and record what Google answers; this document maps a 404 there to `not_found`, not to an empty list.
+2. Before merging 2b, confirm with a read-only query that `public.check_rate_limit` exists in production (it comes from `supabase/manual-sql/`, and the helper fails open without it). Then merge 2b the same way. Verify, with an account the owner authorises for the check, one `channel` call, one `videos` call and one `video` call, and one `video` call with the ID of a video from another channel (expect `not_found`). Also check a channel with zero uploads and record what Google answers; this document maps a 404 there to `not_found`, not to an empty list.
 3. Merge 2c. The frontend deploys on the push to `main`. The page stays hidden because the flag defaults to off.
 4. The owner turns the flag on in Admin, Feature Flags. Before that, confirm that a non-admin session can read the new `app_settings` key the same way it reads the other `feature_` keys.
 
@@ -503,7 +508,7 @@ Rollback:
 - Hide the feature: turn the flag off. No deploy needed.
 - Remove the frontend: revert the 2c merge; the frontend redeploys on push.
 - Remove the backend: revert the 2a and 2b merges. The schedule mirrors `origin/main`, so the function directory disappears from the volume on the next tick. There is no schema and no stored data to clean up.
-- The rate limiter rows in `rate_limit_buckets` expire by their window and need no cleanup.
+- The rate limiter leaves at most two small rows per user in `rate_limit_buckets`. The same manual SQL file defines `cleanup_rate_limit_buckets()`; whether its cron schedule is active in production was not checked. The rows are harmless if they stay.
 
 Nothing in this stage is applied to production by hand.
 
