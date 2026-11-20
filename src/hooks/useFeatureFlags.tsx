@@ -86,6 +86,8 @@ export interface FeatureFlags {
   analyticsInstagram: boolean;
   analyticsThreads: boolean;
   analyticsTiktok: boolean;
+  // YouTube channel management page (stage 2c)
+  youtubeManagement: boolean;
 }
 
 // Title required settings stored separately
@@ -166,6 +168,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   analyticsInstagram: false,
   analyticsThreads: false,
   analyticsTiktok: false,
+  youtubeManagement: false,
 };
 
 export const DEFAULT_TITLE_SETTINGS: TitleRequiredSettings = {
@@ -245,6 +248,7 @@ export const FLAG_KEYS = [
   "feature_analytics_instagram",
   "feature_analytics_threads",
   "feature_analytics_tiktok",
+  "feature_youtube_management",
 ];
 
 export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
@@ -319,6 +323,7 @@ export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
   feature_analytics_instagram: "analyticsInstagram",
   feature_analytics_threads: "analyticsThreads",
   feature_analytics_tiktok: "analyticsTiktok",
+  feature_youtube_management: "youtubeManagement",
 };
 
 // Channel name for realtime broadcast
@@ -405,6 +410,7 @@ const FEATURE_DISPLAY_NAMES: Record<keyof FeatureFlags, string> = {
   analyticsInstagram: "Analytics: Instagram",
   analyticsThreads: "Analytics: Threads",
   analyticsTiktok: "Analytics: TikTok",
+  youtubeManagement: "YouTube Channel",
 };
 
 // All flags enabled for admins - they always have full access
@@ -480,6 +486,7 @@ const ALL_FLAGS_ENABLED: FeatureFlags = {
   analyticsInstagram: true,
   analyticsThreads: true,
   analyticsTiktok: true,
+  youtubeManagement: true,
 };
 
 export function useFeatureFlags() {
@@ -602,6 +609,7 @@ export function useFeatureFlags() {
         analyticsInstagram: globalFlagMap["feature_analytics_instagram"] ?? DEFAULT_FLAGS.analyticsInstagram,
         analyticsThreads: globalFlagMap["feature_analytics_threads"] ?? DEFAULT_FLAGS.analyticsThreads,
         analyticsTiktok: globalFlagMap["feature_analytics_tiktok"] ?? DEFAULT_FLAGS.analyticsTiktok,
+        youtubeManagement: globalFlagMap["feature_youtube_management"] ?? DEFAULT_FLAGS.youtubeManagement,
       };
 
       // Defensive merge: defaults <- previous cache <- current DB result.
