@@ -507,7 +507,7 @@ Rollback:
 
 - Hide the feature: turn the flag off. No deploy needed.
 - Remove the frontend: revert the 2c merge; the frontend redeploys on push.
-- Remove the backend: revert the 2a and 2b merges. The schedule mirrors `origin/main`, so the function directory disappears from the volume on the next tick. There is no schema and no stored data to clean up.
+- Remove the backend: revert the 2b merge first, then the 2a merge (2b rewrites 2a's `handler.ts`, `index.ts`, `contracts.ts`, `.github/workflows/ci.yml` and `CLAUDE.md`, so reverting 2a first conflicts), or revert the combined range in one commit. The schedule mirrors `origin/main`, so the function directory disappears from the volume on the next tick. There is no schema and no stored data to clean up.
 - The rate limiter leaves at most two small rows per user in `rate_limit_buckets`. The same manual SQL file defines `cleanup_rate_limit_buckets()`; whether its cron schedule is active in production was not checked. The rows are harmless if they stay.
 
 Nothing in this stage is applied to production by hand.
@@ -539,6 +539,7 @@ Frontend:
 - [ ] A user with no YouTube account sees the empty state with a link to Profiles.
 - [ ] Switching account never shows a video or a channel of the previous account, including while the new one loads.
 - [ ] More than 25 videos are reachable with "Load more".
+- [ ] The Refresh control refetches the channel and the video list.
 - [ ] `reconnect_required`, `missing_scope`, `provider_unsupported`, `quota_exceeded`, `rate_limited` and `upstream_unavailable` each render a distinct message; none renders as an empty list.
 - [ ] Every new string has an Arabic entry and `npm run check:i18n` passes.
 - [ ] No new `eslint-disable` and no new `any` in the diff.

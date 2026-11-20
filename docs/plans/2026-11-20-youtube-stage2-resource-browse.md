@@ -22,7 +22,7 @@ These apply to every task. Each task repeats the ones it can break.
 - No access token, refresh token, authorization header, Google error text or SQL text in any response, log line, test fixture file or commit. Test tokens are random values created inside the test.
 - No live Google call in any test. Provider behaviour is faked through ports or a fake `fetch`.
 - Access tokens come only from `refreshYouTubeAccountToken` in `_shared/youtubeTokenRefresh.ts`. Never call Google's token endpoint from new code.
-- Do not import `callYouTube`, `listChannelVideos` or `videoTitles` from `_shared/youtubeComments.ts`. The only symbol stage 2 may import from that file is `uploadsPlaylistId`.
+- Do not import `listChannelVideos` or `videoTitles` from `_shared/youtubeComments.ts` (`callYouTube` is module-private and cannot be imported anyway). The only symbol stage 2 may import from that file is `uploadsPlaylistId`.
 - Composio-managed accounts (`auth_provider = 'composio'`) never reach the native read client.
 - Deno commands (run from the repository root):
   - `deno check --node-modules-dir=none --import-map=.github/deno/process-post-import-map.json <files>`
@@ -1950,6 +1950,7 @@ git commit -m "feat(youtube): wire lease-based tokens, read client and rate limi
 **Tier:** Heavy (the PR carries OAuth token use against Google).
 
 - [ ] Before review, re-check the Google field names used by the Zod schemas in `youtubeReadClient.ts` against the resource pages for `channels`, `playlistItems` and `videos` (spec section 9) and record the result in the PR body.
+- [ ] Re-check the `page_token` regex `^[A-Za-z0-9_-]{1,256}$` against the characters of a real `nextPageToken` observed from the API. If a real token carries another character, widen the regex to any 1 to 256 printable ASCII characters (or reduce it to a length cap) in the same PR: the token is relayed URL-encoded against the caller's own playlist, so the strict class adds no security and a mismatch would turn every "Load more" past page 1 into `400 invalid_request`.
 - [ ] Inspect the full diff, run `clean-code-guard`, `test-guard` and `docs-guard`.
 - [ ] `git push origin HEAD:T3-CODE/youtube-stage2b-resource-browse`. PR title `feat(youtube): native resource browse API (stage 2b)`. The body states "Tier: HEAVY", the production call sites (`index.ts` calls `createYouTubeReadClient`, `tokenResultFromOutcome`, `toRateLimitDecision`, `refreshYouTubeAccountToken`, `checkUserRateLimit`), the units each operation spends, that no browser calls the endpoint until stage 2c, and ends with the Claude Code attribution line.
 - [ ] Merge only on green CI for the exact head commit and after the review rounds of the tier.
@@ -2001,6 +2002,7 @@ describe("toYouTubeResourceError", () => {
 describe("isRetryableYouTubeError", () => {
   it("retries only transient failures", () => {
     expect(isRetryableYouTubeError("upstream_unavailable")).toBe(true);
+    expect(isRetryableYouTubeError("internal_error")).toBe(false);
     expect(isRetryableYouTubeError("quota_exceeded")).toBe(false);
     expect(isRetryableYouTubeError("rate_limited")).toBe(false);
     expect(isRetryableYouTubeError("not_found")).toBe(false);
@@ -2073,7 +2075,7 @@ export class YouTubeResourceError extends Error {
 }
 
 export function toYouTubeResourceError(payload: unknown): YouTubeResourceError;   // unknown shape or code -> "upstream_unavailable"
-export function isRetryableYouTubeError(code: YouTubeResourceErrorCode): boolean; // true only for "upstream_unavailable" and "internal_error"
+export function isRetryableYouTubeError(code: YouTubeResourceErrorCode): boolean; // true only for "upstream_unavailable"; "internal_error" is NOT retried because it means the server-side read just failed
 ```
 
 `accountOptions.ts`:
@@ -2416,7 +2418,7 @@ export function useYouTubeVideos(options: { gateway: YouTubeResourcesGateway; ac
 export function useYouTubeVideo(options: { gateway: YouTubeResourcesGateway; accountId: string | null; videoId: string | null; enabled: boolean }): UseQueryResult<YouTubeResourceSuccess<YouTubeVideoDetails>, Error>;
 ```
 
-Common options: `queryKey: youtubeResourceKey(userId, accountId, "<resource>", videoId)`, `enabled: Boolean(enabled && accountId && user?.id)` (and `videoId` for the video hook), `staleTime` from the constants, `refetchOnWindowFocus: false`, `retry: youtubeResourceRetry`. `useYouTubeVideos` uses `useInfiniteQuery` with `initialPageParam: null as string | null`, `queryFn: ({ pageParam }) => gateway.listVideos({ accountId, pageToken: pageParam })` and `getNextPageParam: (last) => last.data.next_page_token ?? undefined`. `userId` is `useAuth().user?.id ?? "anonymous"`.
+`useYouTubeCapabilities` takes only `{ gateway, accountId }` (no `enabled` option) and is enabled when `Boolean(accountId && user?.id)`; the other hooks also take `enabled`. Common options: `queryKey: youtubeResourceKey(userId, accountId, "<resource>", videoId)`, `enabled: Boolean(enabled && accountId && user?.id)` (and `videoId` for the video hook), `staleTime` from the constants, `refetchOnWindowFocus: false`, `retry: youtubeResourceRetry`. `useYouTubeVideos` uses `useInfiniteQuery` with `initialPageParam: null as string | null`, `queryFn: ({ pageParam }) => gateway.listVideos({ accountId, pageToken: pageParam })` and `getNextPageParam: (last) => last.data.next_page_token ?? undefined`. `userId` is `useAuth().user?.id ?? "anonymous"`.
 
 The test in step 1 passes `retry: false` at the client level but the hook's own `retry` wins; `quota_exceeded` is not retryable, so the gateway is called once.
 
@@ -2579,7 +2581,7 @@ Keys to add under a new top-level object `"youtubeManagement"` in `src/i18n/loca
 | `youtubeManagement.notice.missingScope` | Postora does not have permission to read this channel. Reconnect it and allow viewing your YouTube account. | Postora معندوش صلاحية يقرا القناة دي. اربطها تاني ووافق على عرض حساب YouTube بتاعك. |
 | `youtubeManagement.notice.providerUnsupported` | This channel is connected through the managed connector, which does not support browsing yet. | القناة دي مربوطة عن طريق الموصّل المُدار، وده لسه مش بيدعم التصفّح. |
 | `youtubeManagement.notice.quotaExceeded` | YouTube's daily limit for Postora is used up. It resets at midnight Pacific Time. | الحد اليومي بتاع YouTube لـ Postora خلص. بيتجدد عند نص الليل بتوقيت المحيط الهادئ. |
-| `youtubeManagement.notice.rateLimited` | Too many requests. Try again in {{minutes}} minutes. | طلبات كتير. جرّب تاني بعد {{minutes}} دقيقة. |
+| `youtubeManagement.notice.rateLimited` | Too many requests. Try again in about {{minutes}} min. | طلبات كتير. جرّب تاني بعد حوالي {{minutes}} دقيقة. |
 | `youtubeManagement.notice.notFound` | YouTube could not find this content for the connected channel. | YouTube ملقاش المحتوى ده للقناة المربوطة. |
 | `youtubeManagement.notice.upstreamUnavailable` | YouTube did not answer. Nothing was changed. | YouTube مردّش. مفيش حاجة اتغيّرت. |
 | `youtubeManagement.notice.generic` | Something went wrong while loading this content. | حصلت مشكلة وإحنا بنحمّل المحتوى ده. |
@@ -2803,7 +2805,7 @@ useYouTubeVideo({ gateway, accountId, videoId, enabled })
 
 - [ ] **Step 1: write the failing tests.**
 
-`ui/__tests__/YouTubeManagementScreen.test.tsx`:
+`ui/__tests__/YouTubeManagementScreen.test.tsx`. In addition to the cases in the code block below, add one more test that clicks the screen's Refresh control (`youtubeManagement.refresh`) and asserts that the fake gateway's `getChannel` and `listVideos` are called again (the queries refetch). The screen's Refresh behaviour needs a test like every other behaviour here.
 
 ```tsx
 import type { ReactElement } from "react";
@@ -2914,7 +2916,7 @@ describe("YouTubeManagementScreen", () => {
 });
 ```
 
-`tests/architecture.test.ts`: copy `src/features/instagram-insights/tests/architecture.test.ts` and change three things: `FEATURE_ROOT` to `"src/features/youtube-management"`, the `describe` title to `"youtube-management layering"`, and both mentions of `InstagramPerformanceScreen` to `YouTubeManagementScreen`.
+`tests/architecture.test.ts`: copy `src/features/instagram-insights/tests/architecture.test.ts` and change three things: `FEATURE_ROOT` to `"src/features/youtube-management"`, the `describe` title to `"youtube-management layering"`, and every occurrence of `InstagramPerformanceScreen` to `YouTubeManagementScreen`. There are three in that file: the test title, the `/ui/InstagramPerformanceScreen.tsx` `endsWith` exclusion and the `filesImportingInfrastructure` list. The copied test fails until all three are renamed.
 
 - [ ] **Step 2: run and confirm they fail** (`npx vitest run src/features/youtube-management`).
 
@@ -3065,7 +3067,7 @@ describe("YouTube management wiring", () => {
 - [ ] **Step 3: add the flag.** Mirror the existing flag `analyticsTiktok` / `feature_analytics_tiktok`. Run `git grep -n "analyticsTiktok\|feature_analytics_tiktok" -- src` and add a matching `youtubeManagement` / `feature_youtube_management` line next to every hit in these places:
   - `src/hooks/useFeatureFlags.tsx`: the `FeatureFlags` interface (`youtubeManagement: boolean;`), `DEFAULT_FLAGS` (`false`), `FLAG_KEYS` (`"feature_youtube_management"`), `FLAG_KEY_MAP` (`feature_youtube_management: "youtubeManagement"`), `FEATURE_DISPLAY_NAMES` (`"YouTube Channel"`), `ALL_FLAGS_ENABLED` (`true`), and the `baseFromDb` object (`youtubeManagement: globalFlagMap["feature_youtube_management"] ?? DEFAULT_FLAGS.youtubeManagement,`).
   - `src/components/admin/FeatureFlagIndicator.tsx`: `FLAG_LABELS` (`youtubeManagement: "YouTube Channel"`).
-  - `src/pages/admin/AdminFeatureFlags.tsx`: one entry in the feature list (`{ key: "feature_youtube_management", label: "YouTube Channel", description: "Show the YouTube channel browser in the sidebar", icon: Music }`, using an icon the file already imports) and one line in the category map (`feature_youtube_management: "Analytics"`).
+  - `src/pages/admin/AdminFeatureFlags.tsx`: one entry in the feature list (`{ key: "feature_youtube_management", label: "YouTube Channel", description: "Show the YouTube channel browser in the sidebar", icon: Music }`, using an icon the file already imports). Do NOT look for a category map in this file: `AdminFeatureFlags.tsx` builds its categories from the `app_settings` row `feature_flag_categories`, which is edited in the admin UI, and sends unlisted flags to "Uncategorized". The new flag therefore starts as "Uncategorized"; after enabling it, the owner assigns the "Analytics" category in Admin → Feature Flags (this is a manual step recorded in the PR body, not code).
   - The `DashboardLayout.tsx` hit is handled in step 5.
 
 - [ ] **Step 4: create the page** `src/pages/youtube/YouTubeManagementPage.tsx`:
