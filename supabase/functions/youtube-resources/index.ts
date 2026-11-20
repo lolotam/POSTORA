@@ -6,9 +6,21 @@ import {
   type YouTubeResourcesPorts,
 } from "./handler.ts";
 
+// A stalled PostgREST request must not hold the whole function: the account read and the
+// awaited refusal-log insert both fail at this deadline and the handler answers
+// internal_error or logs a warning. The audit insert is never retried.
+const DB_REQUEST_TIMEOUT_MS = 8_000;
+
+function fetchWithDeadline(input: Request | URL | string, init?: RequestInit): Promise<Response> {
+  const deadline = AbortSignal.timeout(DB_REQUEST_TIMEOUT_MS);
+  const signal = init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
+  return fetch(input, { ...init, signal });
+}
+
 const admin = createClient(
   Deno.env.get("SUPABASE_URL") ?? "",
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+  { global: { fetch: fetchWithDeadline } },
 );
 
 const ACCOUNT_COLUMNS =
