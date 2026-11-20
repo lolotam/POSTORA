@@ -681,6 +681,11 @@
     "countersNote": "الأرقام دي جاية من YouTube، ومش تقارير مدة مشاهدة.",
     "fetchedAt": "آخر تحديث {{time}}",
     "goToProfiles": "افتح الملفات",
+    "loading": "جاري التحميل…",
+    "noAccounts": "مفيش قناة YouTube مربوطة لسه.",
+    "refresh": "تحديث",
+    "subtitle": "تصفّح قناتك والفيديوهات المرفوعة عليها.",
+    "title": "قناة YouTube",
     "notice": {
       "generic": "حصلت مشكلة وإحنا بنحمّل المحتوى ده.",
       "missingScope": "Postora معندوش صلاحية يقرا القناة دي. اربطها تاني ووافق على عرض حساب YouTube بتاعك.",
@@ -704,6 +709,7 @@
       "notAvailable": "مش متاح",
       "openOnYouTube": "افتح على YouTube",
       "privacy": "الخصوصية",
+      "select": "اختار فيديو عشان تشوف تفاصيله.",
       "tags": "الوسوم",
       "views": "المشاهدات"
     },
