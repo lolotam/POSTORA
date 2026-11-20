@@ -676,6 +676,29 @@
       "savedDesc": "منطقتك الزمنية المفضلة دلوقتي {{timezone}}."
     }
   },
+  "youtubeManagement": {
+    "accountLabel": "القناة",
+    "countersNote": "الأرقام دي جاية من YouTube، ومش تقارير مدة مشاهدة.",
+    "fetchedAt": "آخر تحديث {{time}}",
+    "goToProfiles": "افتح الملفات",
+    "notice": {
+      "generic": "حصلت مشكلة وإحنا بنحمّل المحتوى ده.",
+      "missingScope": "Postora معندوش صلاحية يقرا القناة دي. اربطها تاني ووافق على عرض حساب YouTube بتاعك.",
+      "notFound": "YouTube ملقاش المحتوى ده للقناة المربوطة.",
+      "providerUnsupported": "القناة دي مربوطة عن طريق الموصّل المُدار، وده لسه مش بيدعم التصفّح.",
+      "quotaExceeded": "الحد اليومي بتاع YouTube لـ Postora خلص. بيتجدد عند نص الليل بتوقيت المحيط الهادئ.",
+      "rateLimited": "طلبات كتير. جرّب تاني بعد حوالي {{minutes}} دقيقة.",
+      "reconnectRequired": "القناة دي محتاجة تتربط تاني قبل ما Postora يقدر يقراها.",
+      "upstreamUnavailable": "YouTube مردّش. مفيش حاجة اتغيّرت."
+    },
+    "retry": "جرّب تاني",
+    "stats": {
+      "hidden": "مخفي",
+      "subscribers": "المشتركين",
+      "videos": "الفيديوهات",
+      "views": "المشاهدات"
+    }
+  },
   "deleteWhatsApp": {
     "title": "حذف الحساب \"{{name}}\"؟",
     "warning": "سيؤدي هذا إلى حذف الحساب وإعداد وكيل الذكاء الاصطناعي الخاص به نهائيًا.",
