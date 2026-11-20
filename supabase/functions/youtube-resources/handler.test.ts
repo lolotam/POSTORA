@@ -501,7 +501,13 @@ Deno.test("sixty uploads are reachable in three pages", async () => {
 Deno.test("a page size above fifty and a malformed token are refused before any provider call", async () => {
   const { handler, calls } = fixture();
   const tooLarge = await handler(request({ operation: "videos", account_id: ACCOUNT_ID, page_size: 51 }));
-  const badToken = await handler(request({ operation: "videos", account_id: ACCOUNT_ID, page_token: "has space" }));
+  const badToken = await handler(request({
+    operation: "videos",
+    account_id: ACCOUNT_ID,
+    // Google cursors are opaque; only the 256-character cap is enforced, so a
+    // malformed cursor here is one that is too long.
+    page_token: "a".repeat(257),
+  }));
   assertEquals([tooLarge.status, badToken.status], [400, 400]);
   assertEquals([calls.load, calls.uploads], [0, 0]);
 });

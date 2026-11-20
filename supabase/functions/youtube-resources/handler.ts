@@ -55,13 +55,15 @@ export interface YouTubeResourcesPorts {
 const AccountId = z.string().uuid();
 const CapabilitiesRequest = z.object({ operation: z.literal("capabilities"), account_id: AccountId }).strict();
 const ChannelRequest = z.object({ operation: z.literal("channel"), account_id: AccountId }).strict();
-// The cursor is opaque and bound to the caller's own uploads playlist; the class cap
-// keeps it off the URL in ways Google never produces.
+// The cursor is opaque and bound to the caller's own uploads playlist. Real Google
+// tokens observed on Data API list methods are longer base64 strings that carry the
+// `=` padding character, so no character class is enforced — only a sanity length cap.
+// A strict class here would turn every "Load more" past page 1 into 400 invalid_request.
 const VideosRequest = z.object({
   operation: z.literal("videos"),
   account_id: AccountId,
   page_size: z.number().int().min(1).max(YOUTUBE_VIDEOS_MAX_PAGE_SIZE).optional(),
-  page_token: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/).optional(),
+  page_token: z.string().min(1).max(256).optional(),
 }).strict();
 // The id class Google itself uses; a path-shaped value never reaches the provider.
 const VideoRequest = z.object({
