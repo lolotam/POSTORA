@@ -38,6 +38,42 @@ Deno.test("needs_reauth and a missing refresh token both ask for a reconnect", (
   );
 });
 
+Deno.test("a permanent Google refresh refusal asks for a reconnect, not a retry", () => {
+  // invalid_client / unauthorized_client land here: retrying can never succeed,
+  // so the answer is reconnect_required, not upstream_unavailable (502 "try again").
+  assertEquals(
+    tokenResultFromOutcome({ ...failure, ok: false, status: "failed", reason: "refresh_refused" }),
+    { ok: false, code: "reconnect_required" },
+  );
+  assertEquals(
+    tokenResultFromOutcome({
+      ...failure,
+      ok: false,
+      status: "retryable_refusal",
+      retryable: false,
+      reason: "refresh_refused",
+    }),
+    { ok: false, code: "reconnect_required" },
+  );
+});
+
+Deno.test("a vanished account row and a held lease stay upstream_unavailable", () => {
+  assertEquals(
+    tokenResultFromOutcome({ ...failure, ok: false, status: "failed", reason: "account_not_found" }),
+    { ok: false, code: "upstream_unavailable" },
+  );
+  assertEquals(
+    tokenResultFromOutcome({
+      ...failure,
+      ok: false,
+      status: "retryable_refusal",
+      retryable: true,
+      reason: "lease_hold",
+    }),
+    { ok: false, code: "upstream_unavailable" },
+  );
+});
+
 Deno.test("a lease held elsewhere or a transient failure is upstream_unavailable", () => {
   assertEquals(
     tokenResultFromOutcome({ ...failure, ok: false, status: "retryable_refusal", retryable: true, reason: "refresh_in_progress" }),
