@@ -11,8 +11,12 @@ export interface YouTubeChannelSummaryProps {
 // YouTube hides stays "Hidden", not zero.
 export function YouTubeChannelSummary(props: YouTubeChannelSummaryProps): JSX.Element {
   const { channel, fetchedAt } = props;
-  const { t } = useTranslation("accounts");
+  const { t, i18n } = useTranslation("accounts");
   const format = new Intl.NumberFormat();
+  const parsedAt = new Date(fetchedAt);
+  const fetchedLabel = Number.isNaN(parsedAt.getTime())
+    ? null
+    : new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(parsedAt);
 
   return (
     <Card>
@@ -45,9 +49,11 @@ export function YouTubeChannelSummary(props: YouTubeChannelSummaryProps): JSX.El
         <p className="text-xs text-muted-foreground">
           {t("youtubeManagement.countersNote", "Counters come from YouTube. They are not watch-time reports.")}
         </p>
-        <p className="text-xs text-muted-foreground">
-          {t("youtubeManagement.fetchedAt", "Updated {{time}}", { time: fetchedAt })}
-        </p>
+        {fetchedLabel === null ? null : (
+          <p className="text-xs text-muted-foreground">
+            {t("youtubeManagement.fetchedAt", "Updated {{time}}", { time: fetchedLabel })}
+          </p>
+        )}
       </CardContent>
     </Card>
   );

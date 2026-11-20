@@ -33,9 +33,13 @@ function Counter({ label, value, notAvailable }: { label: string; value: number 
 
 export function YouTubeVideoDetail(props: YouTubeVideoDetailProps): JSX.Element {
   const { video, fetchedAt } = props;
-  const { t } = useTranslation("accounts");
+  const { t, i18n } = useTranslation("accounts");
   const notAvailable = t("youtubeManagement.detail.notAvailable", "Not available");
   const duration = formatIsoDuration(video.duration_iso8601);
+  const parsedAt = new Date(fetchedAt);
+  const fetchedLabel = Number.isNaN(parsedAt.getTime())
+    ? null
+    : new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(parsedAt);
 
   return (
     <Card>
@@ -61,9 +65,11 @@ export function YouTubeVideoDetail(props: YouTubeVideoDetailProps): JSX.Element 
             <p className="text-sm">{video.tags.join(", ")}</p>
           </div>
         ) : null}
-        <p className="text-xs text-muted-foreground">
-          {t("youtubeManagement.fetchedAt", "Updated {{time}}", { time: fetchedAt })}
-        </p>
+        {fetchedLabel === null ? null : (
+          <p className="text-xs text-muted-foreground">
+            {t("youtubeManagement.fetchedAt", "Updated {{time}}", { time: fetchedLabel })}
+          </p>
+        )}
         <a
           href={video.url}
           target="_blank"

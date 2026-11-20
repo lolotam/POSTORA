@@ -44,4 +44,18 @@ describe("YouTubeResourceNotice", () => {
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+
+  it("explains an expired session without offering a retry", async () => {
+    await renderUi(<YouTubeResourceNotice code="unauthorized" retryAfterSeconds={null} onRetry={vi.fn()} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Your session expired. Sign in again or reload the page.");
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("offers to reload a changed list when the cursor is stale", async () => {
+    const onRetry = vi.fn();
+    await renderUi(<YouTubeResourceNotice code="invalid_cursor" retryAfterSeconds={null} onRetry={onRetry} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("The list changed on YouTube's side. Load it again from the beginning.");
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
 });

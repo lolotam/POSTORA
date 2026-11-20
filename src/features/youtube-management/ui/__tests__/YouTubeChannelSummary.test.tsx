@@ -32,4 +32,10 @@ describe("YouTubeChannelSummary", () => {
     expect(screen.getByText("7")).toBeInTheDocument();
     expect(screen.getByText("Counters come from YouTube. They are not watch-time reports.")).toBeInTheDocument();
   });
+
+  it("never prints the raw ISO fetch timestamp", async () => {
+    await renderUi(<YouTubeChannelSummary channel={channel} fetchedAt="2026-11-20T10:00:00.000Z" />);
+    expect(screen.queryByText(/2026-11-20T10:00:00\.000Z/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^Updated /)).toBeInTheDocument();
+  });
 });

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import type { YouTubeResourceErrorCode } from "../domain/types";
+import type { YouTubeResourceErrorCode, YouTubeVideoListItem } from "../domain/types";
 import { YouTubeResourceError } from "../domain/errors";
 import type { YouTubeAccountOption } from "../domain/accountOptions";
 import { useYouTubeCapabilities } from "../application/useYouTubeCapabilities";
@@ -30,10 +30,15 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
   const { t } = useTranslation("accounts");
 
   const [pickedAccountId, setPickedAccountId] = useState<string | null>(null);
+  // The selection is bound to the account it was made under: when the active
+  // account changes (picker or fallback), the old video id must not refire.
+  const [pickedVideo, setPickedVideo] = useState<{ accountId: string; videoId: string } | null>(null);
   const activeAccountId = pickedAccountId !== null && accounts.some((account) => account.id === pickedAccountId)
     ? pickedAccountId
     : accounts[0]?.id ?? null;
-  const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const selectedVideoId = pickedVideo !== null && pickedVideo.accountId === activeAccountId
+    ? pickedVideo.videoId
+    : null;
 
   const capabilities = useYouTubeCapabilities({ gateway, accountId: activeAccountId });
   const browse = capabilities.data?.data.capabilities.browse;
@@ -48,12 +53,41 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
   const retryHint = (error: unknown): number | null =>
     error instanceof YouTubeResourceError ? error.retryAfterSeconds : null;
 
-  const videoItems = videos.data?.pages.flatMap((page) => page.data.items) ?? [];
+  // Flatten with the first occurrence kept: a video can appear on two pages.
+  const seenVideoIds = new Set<string>();
+  const videoItems: YouTubeVideoListItem[] = [];
+  for (const page of videos.data?.pages ?? []) {
+    for (const item of page.data.items) {
+      if (!seenVideoIds.has(item.id)) {
+        seenVideoIds.add(item.id);
+        videoItems.push(item);
+      }
+    }
+  }
 
+  const browseUnavailable = browse?.state === "unavailable";
+  const refreshBusy = capabilities.isFetching || channel.isFetching || videos.isFetching || video.isFetching;
+
+  // A refused capability means every read is refused; Refresh must not spend
+  // the user's quota by refetching against it.
   const refresh = () => {
-    void channel.refetch();
-    void videos.refetch();
+    if (browseUnavailable) return;
+    void capabilities.refetch();
+    if (canBrowse) {
+      void channel.refetch();
+      void videos.refetch();
+      if (selectedVideoId !== null) void video.refetch();
+    }
   };
+
+  const nextPageFailed = videos.isFetchNextPageError;
+  const nextPageErrorCode = nextPageFailed ? errorCode(videos.error) : null;
+
+  const loadingLine = (
+    <p role="status" className="text-sm text-muted-foreground">
+      {t("youtubeManagement.loading", "Loading…")}
+    </p>
+  );
 
   return (
     <div className="space-y-4">
@@ -81,10 +115,10 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
               selectedId={activeAccountId}
               onSelect={(accountId) => {
                 setPickedAccountId(accountId);
-                setSelectedVideoId(null);
+                setPickedVideo(null);
               }}
             />
-            <Button size="sm" variant="outline" onClick={refresh}>
+            <Button size="sm" variant="outline" disabled={browseUnavailable || refreshBusy} onClick={refresh}>
               {t("youtubeManagement.refresh", "Refresh")}
             </Button>
           </div>
@@ -95,7 +129,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
               retryAfterSeconds={retryHint(capabilities.error)}
               onRetry={() => void capabilities.refetch()}
             />
-          ) : browse?.state === "unavailable" ? (
+          ) : browseUnavailable && browse ? (
             <YouTubeResourceNotice
               code={browse.reason}
               retryAfterSeconds={null}
@@ -103,6 +137,8 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             />
           ) : (
             <div className="space-y-4">
+              {capabilities.isPending ? loadingLine : null}
+
               {channel.isError ? (
                 <YouTubeResourceNotice
                   code={errorCode(channel.error)}
@@ -111,24 +147,37 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                 />
               ) : channel.data ? (
                 <YouTubeChannelSummary channel={channel.data.data} fetchedAt={channel.data.freshness.fetched_at} />
-              ) : null}
+              ) : channel.isPending ? loadingLine : null}
 
-              {videos.isError ? (
+              {videos.data ? (
+                <div className="space-y-3">
+                  {nextPageFailed && nextPageErrorCode !== null ? (
+                    <YouTubeResourceNotice
+                      code={nextPageErrorCode}
+                      retryAfterSeconds={retryHint(videos.error)}
+                      onRetry={
+                        nextPageErrorCode === "invalid_cursor"
+                          ? () => void videos.refetch()
+                          : () => void videos.fetchNextPage()
+                      }
+                    />
+                  ) : null}
+                  <YouTubeVideoLibrary
+                    videos={videoItems}
+                    selectedVideoId={selectedVideoId}
+                    onSelect={(videoId) => setPickedVideo({ accountId: activeAccountId, videoId })}
+                    hasMore={videos.hasNextPage}
+                    isLoadingMore={videos.isFetchingNextPage}
+                    onLoadMore={() => void videos.fetchNextPage()}
+                  />
+                </div>
+              ) : videos.isError ? (
                 <YouTubeResourceNotice
                   code={errorCode(videos.error)}
                   retryAfterSeconds={retryHint(videos.error)}
                   onRetry={() => void videos.refetch()}
                 />
-              ) : videos.data ? (
-                <YouTubeVideoLibrary
-                  videos={videoItems}
-                  selectedVideoId={selectedVideoId}
-                  onSelect={setSelectedVideoId}
-                  hasMore={videos.hasNextPage}
-                  isLoadingMore={videos.isFetchingNextPage}
-                  onLoadMore={() => void videos.fetchNextPage()}
-                />
-              ) : null}
+              ) : videos.isPending ? loadingLine : null}
 
               {video.isError ? (
                 <YouTubeResourceNotice
@@ -142,7 +191,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                 <p className="text-sm text-muted-foreground">
                   {t("youtubeManagement.detail.select", "Select a video to see its details.")}
                 </p>
-              ) : null}
+              ) : video.isPending ? loadingLine : null}
             </div>
           )}
         </div>

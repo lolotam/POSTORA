@@ -45,4 +45,14 @@ describe("YouTubeVideoDetail", () => {
     await renderUi(<YouTubeVideoDetail video={details} fetchedAt="2026-11-20T10:00:00.000Z" />);
     expect(screen.getByText("Not available")).toBeInTheDocument();
   });
+
+  it("formats the fetch time and hides the line when the date is unreadable", async () => {
+    const { unmount } = await renderUi(<YouTubeVideoDetail video={details} fetchedAt="2026-11-20T10:00:00.000Z" />);
+    expect(screen.queryByText(/2026-11-20T10:00:00/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^Updated /)).toBeInTheDocument();
+    unmount();
+
+    await renderUi(<YouTubeVideoDetail video={details} fetchedAt="not-a-date" />);
+    expect(screen.queryByText(/^Updated /)).not.toBeInTheDocument();
+  });
 });

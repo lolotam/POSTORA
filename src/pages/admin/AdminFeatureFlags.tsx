@@ -90,7 +90,7 @@ const FEATURE_FLAGS = [
   { key: "feature_analytics_instagram", label: "Analytics: Instagram", description: "Show Instagram entry in the Analytics dropdown in the sidebar", icon: Instagram },
   { key: "feature_analytics_threads", label: "Analytics: Threads", description: "Show Threads entry in the Analytics dropdown in the sidebar", icon: MessageCircle },
   { key: "feature_analytics_tiktok", label: "Analytics: TikTok", description: "Show TikTok entry in the Analytics dropdown in the sidebar", icon: Music },
-  { key: "feature_youtube_management", label: "YouTube Channel", description: "Show the YouTube channel browser in the sidebar", icon: Music },
+  { key: "feature_youtube_management", label: "YouTube Channel", description: "Show the YouTube channel browser in the sidebar", icon: Youtube },
   // Ad Manager dropdown
   { key: "feature_ad_manager", label: "Ad Manager", description: "Show Ad Manager entry in the Ad Manager dropdown in the sidebar", icon: Megaphone },
   { key: "feature_ad_analytics", label: "Ad Analytics", description: "Show Ad Analytics entry in the Ad Manager dropdown in the sidebar", icon: BarChart3 },

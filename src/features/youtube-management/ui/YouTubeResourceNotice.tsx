@@ -45,6 +45,13 @@ export function YouTubeResourceNotice(props: YouTubeResourceNoticeProps): JSX.El
     case "not_found":
       message = t("youtubeManagement.notice.notFound", "YouTube could not find this content for the connected channel.");
       break;
+    case "unauthorized":
+      message = t("youtubeManagement.notice.sessionExpired", "Your session expired. Sign in again or reload the page.");
+      break;
+    case "invalid_cursor":
+      message = t("youtubeManagement.notice.cursorStale", "The list changed on YouTube's side. Load it again from the beginning.");
+      retryable = true;
+      break;
     case "upstream_unavailable":
       message = t("youtubeManagement.notice.upstreamUnavailable", "YouTube did not answer. Nothing was changed.");
       retryable = true;
