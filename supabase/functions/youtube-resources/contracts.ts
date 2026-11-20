@@ -107,6 +107,9 @@ export interface YouTubeVideoListItem {
   url: string;
 }
 
+// An empty page may still carry Google's next_page_token (a page of placeholder
+// entries, or a 404 on a not-yet-created uploads playlist): key pagination on
+// next_page_token, never on items.length.
 export interface YouTubeVideosPage {
   items: YouTubeVideoListItem[];
   next_page_token: string | null;

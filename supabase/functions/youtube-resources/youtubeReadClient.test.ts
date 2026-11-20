@@ -212,6 +212,22 @@ Deno.test("a 400 without a page token is upstream_unavailable", async () => {
   assertEquals(result, { ok: false, code: "upstream_unavailable", unauthorized: false });
 });
 
+Deno.test("a page of placeholders without video ids keeps the cursor and empties the list", async () => {
+  const { fetchImpl } = fakeFetch(200, {
+    nextPageToken: "NEXTTOKEN",
+    pageInfo: { totalResults: 2 },
+    items: [
+      { snippet: { title: "Placeholder one" } },
+      { snippet: { title: "Placeholder two" } },
+    ],
+  });
+  const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
+  assertEquals(result, {
+    ok: true,
+    value: { items: [], next_page_token: "NEXTTOKEN", total_results: 2 },
+  });
+});
+
 Deno.test("getVideo returns the details of a video of the bound channel", async () => {
   const { fetchImpl, requests } = fakeFetch(200, {
     items: [{
