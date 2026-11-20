@@ -692,6 +692,21 @@
       "upstreamUnavailable": "YouTube مردّش. مفيش حاجة اتغيّرت."
     },
     "retry": "جرّب تاني",
+    "library": {
+      "empty": "القناة دي مفيهاش فيديوهات مرفوعة لسه.",
+      "loadMore": "حمّل أكتر",
+      "title": "الفيديوهات المرفوعة"
+    },
+    "detail": {
+      "comments": "التعليقات",
+      "duration": "المدة",
+      "likes": "الإعجابات",
+      "notAvailable": "مش متاح",
+      "openOnYouTube": "افتح على YouTube",
+      "privacy": "الخصوصية",
+      "tags": "الوسوم",
+      "views": "المشاهدات"
+    },
     "stats": {
       "hidden": "مخفي",
       "subscribers": "المشتركين",
