@@ -228,9 +228,18 @@ const ports: YouTubeOAuthPorts = {
       const { error } = await admin
         .from("system_logs")
         .insert(buildRefusalLogRow({ action, reason, userId }));
-      // A swallowed insert failure hides refusals from operations entirely; the
-      // handler's refuse() catch logs youtube_oauth_refusal_log_failed instead.
-      if (error) throw rpcFailure(error);
+      // The throw lets refuse()'s catch run, but that catch only logs the
+      // refusal's action/reason, not why the insert failed — so the database
+      // error itself is logged here (code/message are not secrets; no row
+      // content).
+      if (error) {
+        console.warn({
+          event: "youtube_oauth_refusal_insert_failed",
+          code: error.code,
+          message: error.message,
+        });
+        throw rpcFailure(error);
+      }
     },
   },
 };

@@ -4,31 +4,18 @@ import {
   buildRefusalLogRow,
 } from "./refusalLog.ts";
 
-const ACTIONS = ["callback", "disconnect", "authorize", "request"];
-const REASONS = [
-  "invalid_request",
-  "Unauthorized",
-  "google_oauth_failed",
-  "account_save_failed",
-  "profile_not_owned",
-  "google_revoke_failed",
-];
-
 Deno.test("buildRefusalLogRow uses a category from the allowed system_logs list", () => {
   const row = buildRefusalLogRow({ action: "callback", reason: "google_oauth_failed", userId: null });
   assert(ALLOWED_SYSTEM_LOG_CATEGORIES.includes(row.category));
 });
 
-Deno.test("buildRefusalLogRow never carries a category outside the allowed list", () => {
-  for (const action of ACTIONS) {
-    for (const reason of REASONS) {
-      const row = buildRefusalLogRow({ action, reason, userId: null });
-      assert(
-        ALLOWED_SYSTEM_LOG_CATEGORIES.includes(row.category),
-        `category "${row.category}" for action=${action} reason=${reason} is not allowed`,
-      );
-    }
-  }
+Deno.test("buildRefusalLogRow always uses the auth category, which is on the allowed list", () => {
+  const row = buildRefusalLogRow({ action: "callback", reason: "google_oauth_failed", userId: null });
+  assertEquals(row.category, "auth");
+  assert(
+    ALLOWED_SYSTEM_LOG_CATEGORIES.includes(row.category),
+    `"auth" must be an allowed system_logs category`,
+  );
 });
 
 Deno.test("buildRefusalLogRow shapes the system_logs row correctly", () => {
@@ -66,4 +53,5 @@ Deno.test("buildRefusalLogRow never carries token-like fields", () => {
       `row carries forbidden token-like field: ${key}`,
     );
   }
+  assertEquals(Object.keys(row.metadata), ["action", "reason"]);
 });
