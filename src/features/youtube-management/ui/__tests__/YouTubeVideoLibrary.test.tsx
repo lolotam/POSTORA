@@ -52,4 +52,15 @@ describe("YouTubeVideoLibrary", () => {
     expect(screen.getByText("This channel has no uploaded videos yet.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
+
+  it("still offers Load more when an empty page carries a token", async () => {
+    const onLoadMore = vi.fn();
+    await renderUi(
+      <YouTubeVideoLibrary videos={[]} selectedVideoId={null} onSelect={vi.fn()}
+        hasMore isLoadingMore={false} onLoadMore={onLoadMore} />,
+    );
+    expect(screen.getByText("This channel has no uploaded videos yet.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
 });
