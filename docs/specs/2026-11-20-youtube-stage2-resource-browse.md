@@ -547,6 +547,10 @@ Frontend:
 
 The first option of every row is the recommendation. The plan is written against the first options.
 
+**Owner decisions, 2026-11-20 (Waleed, by approval cards):** every recommendation above is approved as written. D1 to D6 and D8 take their first option; D3 is "capabilities only" (browse answers `provider_unsupported` for Composio accounts); D7 and D9 are three independent PRs with 2a Heavy, 2b Heavy and 2c Medium. The plan stands as written. Nothing in this stage needs a database migration under these choices.
+
+Process notes agreed with the owner for this stage: the Heavy tasks (2a and 2b) get one Codex Astra 6.2 debate round on this plan before implementation starts; implementation is by OpenCode `zai-coding-plan/glm-5.3-flash` (the model list offers `low`, `high` and `max`, no `medium`); the implementer runs `clean-code-guard`, `test-guard` and, on Heavy tasks, `waleed-security-reviewer`; the manager runs `/code-review` once on each whole PR.
+
 | # | Decision | Options (recommended first) | Reason for the recommendation | Plan tasks that change otherwise |
 |---|---|---|---|---|
 | D1 | Where are browse results cached? | **A. Browser memory only (React Query), no server cache.** B. Database cache table with a TTL (new migration). C. No cache at all | No migration, no stored YouTube data, so no retention question to answer before Google's review | B adds a Heavy migration task and an SQL suite before 2b-3, plus a retention decision from the parent specification |
