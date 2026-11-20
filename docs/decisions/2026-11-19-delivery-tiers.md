@@ -21,3 +21,7 @@ The three delivery tiers are recorded as a standing rule in `CLAUDE.md` and `AGE
 - Waleed agreed to record the skills per tier: Light none; Medium `clean-code-guard` and `test-guard` run by the implementer; Heavy adds `waleed-security-reviewer`; the manager runs `/code-review` once on the whole PR at the end (it is built into Claude Code and not available to other CLIs).
 - Waleed replaced Grok with OpenCode `zai-coding-plan/glm-5.3-flash` in the implementer order. The `vercel/zai/...` GLM ids fail on the Vercel free tier and must not be used.
 - Still open for Waleed: whether Antigravity (Gemini 4 Neon, high) keeps a place in front of Kimi, as he asked on 2026-11-19.
+
+## Update 2026-11-20 (opening sessions)
+
+- Waleed made it a standing rule that every session the manager opens goes through `delegate_task` (it notifies the manager when the work finishes); another tool is allowed only with "message me when done" in the brief, and running sessions are never polled.

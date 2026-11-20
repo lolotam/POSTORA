@@ -84,6 +84,7 @@ Owner rule from Waleed, 2026-11-19 (reference: PosPay PP-195, `lolotam/PayPos.sy
 - **Heavy:** the same, and the implementer also runs `waleed-security-reviewer` (three guard skills in total); the manager runs `/code-review` once on the whole PR; then PR and CI.
 - The manager runs no skill after each stage, only the single final `/code-review`.
 6. **Plan summary after every merge**, in three parts: «ما تم» (main tasks done, with PR numbers), «الباقي» (each remaining main task with its sub-tasks underneath and their status), «التوصية». Side tasks are folded into the plan under their main task, and any roadmap or status file is kept in sync. Every report ends with these headings exactly: «المطلوب منك»، «الخطوة الجاية اللي أنصح بيها»، «ملاحظة» (write «مفيش» when there is nothing).
+7. **Opening sessions.** Every session the manager opens for work (implementer, reviewer, debater) is opened with `delegate_task`, because `delegate_task` notifies the manager automatically when the work finishes. If another tool is ever unavoidable, the brief must say "message me when done" with the manager thread's link. Never poll a running session (`task_status`, `sleep`, watchers): its completion wakes the manager. Waleed, 2026-11-20.
 
 ## Project Overview
 
