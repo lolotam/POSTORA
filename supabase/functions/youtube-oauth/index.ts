@@ -8,6 +8,7 @@ import {
   type YouTubeOAuthPorts,
 } from "./handler.ts";
 import { revokeGoogleToken } from "./revoke.ts";
+import { buildRefusalLogRow } from "./refusalLog.ts";
 
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID") ?? "";
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "";
@@ -224,14 +225,12 @@ const ports: YouTubeOAuthPorts = {
   clock: { now: () => new Date() },
   log: {
     refusal: async ({ action, reason, userId }) => {
-      await admin.from("system_logs").insert({
-        level: "warn",
-        category: "oauth",
-        source: "youtube-oauth",
-        message: "YouTube OAuth request refused",
-        user_id: userId,
-        metadata: { action, reason },
-      });
+      const { error } = await admin
+        .from("system_logs")
+        .insert(buildRefusalLogRow({ action, reason, userId }));
+      // A swallowed insert failure hides refusals from operations entirely; the
+      // handler's refuse() catch logs youtube_oauth_refusal_log_failed instead.
+      if (error) throw rpcFailure(error);
     },
   },
 };
