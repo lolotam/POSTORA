@@ -530,6 +530,19 @@ Deno.test("a failed listing is an error, never an empty page", async () => {
   assertEquals("data" in (await response.json()), false);
 });
 
+Deno.test("a channel with zero uploads answers 200 with the empty page", async () => {
+  // The read client maps Google's 404 playlistNotFound to this empty page; the
+  // handler relays it as success and must not turn it into an error.
+  const { handler } = fixture({
+    uploadResults: [{ ok: true, value: { items: [], next_page_token: null, total_results: 0 } }],
+  });
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.data, { items: [], next_page_token: null, total_results: 0 });
+  assertEquals(body.freshness.source, "provider");
+});
+
 const VIDEO_REQUEST = { operation: "video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" };
 
 Deno.test("video reads the details against the stored channel", async () => {

@@ -236,3 +236,26 @@ Deno.test("a video of another channel and an absent video are the same not_found
     unauthorized: false,
   });
 });
+
+Deno.test("a 404 on the derived uploads playlist is an empty page, not not_found", async () => {
+  // A newly created channel has no uploads playlist yet: Google answers 404
+  // playlistNotFound. The playlist id is derived from the stored channel id, so
+  // this answer cannot be steered by the caller.
+  const { fetchImpl } = fakeFetch(404, { error: { errors: [{ reason: "playlistNotFound" }] } });
+  const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
+  assertEquals(result, { ok: true, value: { items: [], next_page_token: null, total_results: 0 } });
+});
+
+Deno.test("a Google 404 on channels and videos is still not_found", async () => {
+  const notFoundBody = { error: { errors: [{ reason: "playlistNotFound" }] } };
+  const channel = fakeFetch(404, notFoundBody);
+  const video = fakeFetch(404, notFoundBody);
+  assertEquals(
+    await client(channel.fetchImpl).getChannel("t", { channelId: CHANNEL_ID }),
+    { ok: false, code: "not_found", unauthorized: false },
+  );
+  assertEquals(
+    await client(video.fetchImpl).getVideo("t", { channelId: CHANNEL_ID, videoId: "videoAAAAAAA" }),
+    { ok: false, code: "not_found", unauthorized: false },
+  );
+});

@@ -237,6 +237,13 @@ export function createYouTubeReadClient(options: YouTubeReadClientOptions): YouT
       if (input.pageToken !== undefined) query.pageToken = input.pageToken;
       const read = await send("playlistItems", query, accessToken);
       if (!read.ok) {
+        // A channel with zero uploads has no uploads playlist yet, so Google answers
+        // 404 playlistNotFound. The playlist id is derived from the stored channel id,
+        // so this answer cannot be steered by the caller: it is the empty page, not a
+        // missing resource. Every other status keeps its mapping.
+        if (read.status === 404) {
+          return { ok: true, value: { items: [], next_page_token: null, total_results: 0 } };
+        }
         // A stale or copied cursor is a client error, not an upstream failure.
         const code: YouTubeResourceErrorCode = read.status === 400 && input.pageToken !== undefined
           ? "invalid_cursor"
