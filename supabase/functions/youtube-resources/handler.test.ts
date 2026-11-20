@@ -4,8 +4,16 @@ import {
   type YouTubeResourceAccount,
   type YouTubeResourceRefusal,
   type YouTubeResourcesPorts,
+  type YouTubeTokenResult,
 } from "./handler.ts";
-import { YOUTUBE_SCOPE } from "./contracts.ts";
+import {
+  YOUTUBE_SCOPE,
+  type YouTubeChannelDetails,
+  type YouTubeVideoDetails,
+  type YouTubeVideosPage,
+} from "./contracts.ts";
+import type { YouTubeReadResult } from "./youtubeReadClient.ts";
+import { YOUTUBE_RESOURCE_REQUEST_EXAMPLES } from "./requestExamples.fixture.ts";
 
 const ENDPOINT = "https://api.postora.cloud/functions/v1/youtube-resources";
 const USER_ID = "0ee00001-0000-4000-8000-000000000001";
@@ -13,6 +21,51 @@ const ACCOUNT_ID = "0ee20001-0000-4000-8000-000000000021";
 const FOREIGN_ACCOUNT_ID = "0ee20002-0000-4000-8000-000000000022";
 const REQUEST_ID = "0ee90001-0000-4000-8000-000000000091";
 const CHANNEL_ID = "UCfixturechannel000000001";
+
+function pageOf(size: number, nextPageToken: string | null, total: number): YouTubeVideosPage {
+  return {
+    items: Array.from({ length: size }, (_, index) => ({
+      id: `video${String(index).padStart(6, "0")}`,
+      title: `Video ${index}`,
+      thumbnail_url: null,
+      published_at: null,
+      privacy_status: "public",
+      url: `https://www.youtube.com/watch?v=video${String(index).padStart(6, "0")}`,
+    })),
+    next_page_token: nextPageToken,
+    total_results: total,
+  };
+}
+
+const CHANNEL: YouTubeChannelDetails = {
+  id: CHANNEL_ID,
+  title: "Fixture channel",
+  description: "",
+  custom_url: null,
+  thumbnail_url: null,
+  published_at: null,
+  country: null,
+  privacy_status: "public",
+  statistics: { view_count: 1, subscriber_count: 1, subscriber_count_hidden: false, video_count: 1 },
+};
+
+const VIDEO: YouTubeVideoDetails = {
+  id: "videoAAAAAAA",
+  channel_id: CHANNEL_ID,
+  title: "First video",
+  description: "",
+  thumbnail_url: null,
+  published_at: null,
+  tags: [],
+  category_id: null,
+  default_language: null,
+  duration_iso8601: "PT1M",
+  privacy_status: "public",
+  upload_status: "processed",
+  made_for_kids: false,
+  statistics: { view_count: 1, like_count: 0, comment_count: 0 },
+  url: "https://www.youtube.com/watch?v=videoAAAAAAA",
+};
 
 function request(body: unknown, method = "POST"): Request {
   return new Request(ENDPOINT, {
@@ -36,10 +89,20 @@ function fixture(overrides: {
   account?: Partial<YouTubeResourceAccount>;
   loadError?: boolean;
   slowLog?: boolean;
+  tokenResults?: YouTubeTokenResult[];
+  channelResults?: Array<YouTubeReadResult<YouTubeChannelDetails>>;
+  uploadResults?: Array<YouTubeReadResult<YouTubeVideosPage>>;
+  videoResults?: Array<YouTubeReadResult<YouTubeVideoDetails>>;
+  rateLimit?: { allowed: boolean; retryAfterSeconds: number };
+  tokenError?: boolean;
+  rateLimitError?: boolean;
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
   const refreshToken = crypto.randomUUID() + crypto.randomUUID();
-  const calls = { auth: 0, load: 0 };
+  const calls = { auth: 0, load: 0, tokens: 0, channel: 0, uploads: 0, video: 0, rateLimit: 0 };
+  const forceFlags: boolean[] = [];
+  const uploadInputs: Array<{ channelId: string; pageSize: number; pageToken?: string }> = [];
+  const videoInputs: Array<{ channelId: string; videoId: string }> = [];
   const logs: YouTubeResourceRefusal[] = [];
   let minted = 0;
   const account: YouTubeResourceAccount = {
@@ -96,8 +159,52 @@ function fixture(overrides: {
         return Promise.resolve();
       },
     },
+    tokens: {
+      get: (_account, options) => {
+        if (overrides.tokenError) return Promise.reject(new Error("token store unavailable"));
+        forceFlags.push(options.force);
+        const queued = overrides.tokenResults?.[calls.tokens];
+        calls.tokens++;
+        return Promise.resolve(queued ?? { ok: true, accessToken, minted: false });
+      },
+    },
+    youtube: {
+      getChannel: () => {
+        const queued = overrides.channelResults?.[calls.channel];
+        calls.channel++;
+        return Promise.resolve(queued ?? { ok: true, value: CHANNEL });
+      },
+      listUploads: (_token, input) => {
+        uploadInputs.push(input);
+        const queued = overrides.uploadResults?.[calls.uploads];
+        calls.uploads++;
+        return Promise.resolve(queued ?? { ok: true, value: pageOf(25, "CAUQAA", 60) });
+      },
+      getVideo: (_token, input) => {
+        videoInputs.push(input);
+        const queued = overrides.videoResults?.[calls.video];
+        calls.video++;
+        return Promise.resolve(queued ?? { ok: true, value: VIDEO });
+      },
+    },
+    rateLimit: {
+      check: () => {
+        calls.rateLimit++;
+        if (overrides.rateLimitError) return Promise.reject(new Error("rate limit read failed"));
+        return Promise.resolve(overrides.rateLimit ?? { allowed: true, retryAfterSeconds: 0 });
+      },
+    },
   };
-  return { handler: createYouTubeResourcesHandler(ports), calls, logs, accessToken, refreshToken };
+  return {
+    handler: createYouTubeResourcesHandler(ports),
+    calls,
+    forceFlags,
+    logs,
+    uploadInputs,
+    videoInputs,
+    accessToken,
+    refreshToken,
+  };
 }
 
 Deno.test("a request without a valid user is refused before any account read", async () => {
@@ -219,6 +326,25 @@ Deno.test("malformed JSON is an invalid_request and is logged", async () => {
   assertEquals(logs.map((entry) => entry.code), ["invalid_request"]);
 });
 
+Deno.test("refusals after the body parse carry the requested operation in the log", async () => {
+  const { handler, logs } = fixture();
+  const foreign = await handler(request({ operation: "channel", account_id: FOREIGN_ACCOUNT_ID }));
+  assertEquals(foreign.status, 404);
+  assertEquals(logs.map((entry) => entry.operation), ["channel"]);
+  const unknownOperation = await handler(request({ operation: "bogus", account_id: ACCOUNT_ID }));
+  assertEquals(unknownOperation.status, 400);
+  // An arbitrary operation string is never echoed into the log.
+  assertEquals(logs[1].operation, "unknown");
+  assertEquals(logs[1].code, "invalid_request");
+});
+
+Deno.test("a malformed body is logged with the unknown operation", async () => {
+  const { handler, logs } = fixture();
+  const response = await handler(rawRequest("{not json"));
+  assertEquals(response.status, 400);
+  assertEquals(logs.map((entry) => entry.operation), ["unknown"]);
+});
+
 Deno.test("a preflight is answered with 204 and the restricted CORS headers", async () => {
   const { handler, calls } = fixture();
   const response = await handler(new Request(ENDPOINT, { method: "OPTIONS" }));
@@ -245,4 +371,284 @@ Deno.test("a composio row answers with browse unsupported and upload unknown", a
   assertEquals(body.data.connection, "ok");
   assertEquals(body.data.capabilities.browse, { state: "unavailable", reason: "provider_unsupported" });
   assertEquals(body.data.capabilities.upload, { state: "unknown" });
+});
+
+const CHANNEL_REQUEST = { operation: "channel", account_id: ACCOUNT_ID };
+
+Deno.test("channel returns the provider answer with provider freshness and no credential", async () => {
+  const { handler, accessToken, calls } = fixture();
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 200);
+  const text = await response.text();
+  assertEquals(text.includes(accessToken), false);
+  const body = JSON.parse(text);
+  assertEquals(body.freshness.source, "provider");
+  assertEquals(body.data, CHANNEL);
+  assertEquals(calls, { auth: 1, load: 1, tokens: 1, channel: 1, uploads: 0, video: 0, rateLimit: 1 });
+});
+
+Deno.test("a foreign account never reaches the token store or the provider", async () => {
+  const { handler, calls } = fixture();
+  const response = await handler(request({ operation: "channel", account_id: FOREIGN_ACCOUNT_ID }));
+  assertEquals(response.status, 404);
+  assertEquals([calls.tokens, calls.channel, calls.rateLimit], [0, 0, 0]);
+});
+
+Deno.test("a composio account is provider_unsupported and never reaches the native client", async () => {
+  const { handler, calls } = fixture({ account: { authProvider: "composio", accountMetadata: {} } });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 409);
+  assertEquals((await response.json()).error, "provider_unsupported");
+  assertEquals([calls.tokens, calls.channel], [0, 0]);
+});
+
+Deno.test("an account flagged for reauth is reconnect_required before any provider call", async () => {
+  const { handler, calls } = fixture({ account: { needsReauth: true } });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 409);
+  assertEquals((await response.json()).error, "reconnect_required");
+  assertEquals([calls.tokens, calls.channel], [0, 0]);
+});
+
+Deno.test("recorded scopes without readonly are missing_scope before any provider call", async () => {
+  const { handler, calls } = fixture({
+    account: { accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.upload] } },
+  });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 403);
+  assertEquals((await response.json()).error, "missing_scope");
+  assertEquals([calls.tokens, calls.channel], [0, 0]);
+});
+
+Deno.test("an account whose scopes were never recorded is allowed to try", async () => {
+  const { handler, calls } = fixture({ account: { accountMetadata: {} } });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 200);
+  assertEquals(calls.channel, 1);
+});
+
+Deno.test("the per-user limit answers rate_limited with a retry hint and spends no quota", async () => {
+  const { handler, calls } = fixture({ rateLimit: { allowed: false, retryAfterSeconds: 120 } });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 429);
+  assertEquals(await response.json(), {
+    error: "rate_limited",
+    request_id: REQUEST_ID,
+    retry_after_seconds: 120,
+  });
+  assertEquals([calls.tokens, calls.channel], [0, 0]);
+});
+
+Deno.test("a 401 on a stored token forces one refresh and one repeat", async () => {
+  const { handler, calls, forceFlags } = fixture({
+    channelResults: [{ ok: false, code: "reconnect_required", unauthorized: true }],
+  });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 200);
+  assertEquals(forceFlags, [false, true]);
+  assertEquals(calls.channel, 2);
+});
+
+Deno.test("a second 401 is reconnect_required and is not repeated again", async () => {
+  const denied = { ok: false as const, code: "reconnect_required" as const, unauthorized: true };
+  const { handler, calls } = fixture({ channelResults: [denied, denied] });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 409);
+  assertEquals((await response.json()).error, "reconnect_required");
+  assertEquals(calls.channel, 2);
+});
+
+Deno.test("a 401 on a token this request just minted is not repeated", async () => {
+  const fresh = crypto.randomUUID();
+  const { handler, calls } = fixture({
+    tokenResults: [{ ok: true, accessToken: fresh, minted: true }],
+    channelResults: [{ ok: false, code: "reconnect_required", unauthorized: true }],
+  });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 409);
+  assertEquals(calls.channel, 1);
+});
+
+Deno.test("a token that cannot be obtained maps to its stable code", async () => {
+  const { handler, calls } = fixture({ tokenResults: [{ ok: false, code: "upstream_unavailable" }] });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 502);
+  assertEquals((await response.json()).error, "upstream_unavailable");
+  assertEquals(calls.channel, 0);
+});
+
+Deno.test("a provider quota refusal is quota_exceeded", async () => {
+  const { handler } = fixture({
+    channelResults: [{ ok: false, code: "quota_exceeded", unauthorized: false }],
+  });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 429);
+  assertEquals((await response.json()).error, "quota_exceeded");
+});
+
+Deno.test("videos defaults to 25 per page for the stored channel", async () => {
+  const { handler, uploadInputs } = fixture();
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.data.items.length, 25);
+  assertEquals(body.data.next_page_token, "CAUQAA");
+  assertEquals(uploadInputs, [{ channelId: CHANNEL_ID, pageSize: 25 }]);
+});
+
+Deno.test("sixty uploads are reachable in three pages", async () => {
+  const { handler, uploadInputs } = fixture({
+    uploadResults: [
+      { ok: true, value: pageOf(25, "PAGE2", 60) },
+      { ok: true, value: pageOf(25, "PAGE3", 60) },
+      { ok: true, value: pageOf(10, null, 60) },
+    ],
+  });
+  let token: string | null = null;
+  let total = 0;
+  for (let page = 0; page < 3; page++) {
+    const response = await handler(request({
+      operation: "videos",
+      account_id: ACCOUNT_ID,
+      ...(token ? { page_token: token } : {}),
+    }));
+    const body = await response.json();
+    total += body.data.items.length;
+    token = body.data.next_page_token;
+  }
+  assertEquals(total, 60);
+  assertEquals(token, null);
+  assertEquals(uploadInputs.map((input) => input.pageToken), [undefined, "PAGE2", "PAGE3"]);
+});
+
+Deno.test("a page size above fifty and a malformed token are refused before any provider call", async () => {
+  const { handler, calls } = fixture();
+  const tooLarge = await handler(request({ operation: "videos", account_id: ACCOUNT_ID, page_size: 51 }));
+  const badToken = await handler(request({
+    operation: "videos",
+    account_id: ACCOUNT_ID,
+    // Google cursors are opaque; only the 256-character cap is enforced, so a
+    // malformed cursor here is one that is too long.
+    page_token: "a".repeat(257),
+  }));
+  assertEquals([tooLarge.status, badToken.status], [400, 400]);
+  assertEquals([calls.load, calls.uploads], [0, 0]);
+});
+
+Deno.test("a cursor Google rejects is invalid_cursor", async () => {
+  const { handler } = fixture({
+    uploadResults: [{ ok: false, code: "invalid_cursor", unauthorized: false }],
+  });
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID, page_token: "STALE" }));
+  assertEquals(response.status, 400);
+  assertEquals((await response.json()).error, "invalid_cursor");
+});
+
+Deno.test("a failed listing is an error, never an empty page", async () => {
+  const { handler } = fixture({
+    uploadResults: [{ ok: false, code: "upstream_unavailable", unauthorized: false }],
+  });
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 502);
+  assertEquals("data" in (await response.json()), false);
+});
+
+Deno.test("a channel with zero uploads answers 200 with the empty page", async () => {
+  // The read client maps Google's 404 playlistNotFound to this empty page; the
+  // handler relays it as success and must not turn it into an error.
+  const { handler } = fixture({
+    uploadResults: [{ ok: true, value: { items: [], next_page_token: null, total_results: 0 } }],
+  });
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.data, { items: [], next_page_token: null, total_results: 0 });
+  assertEquals(body.freshness.source, "provider");
+});
+
+const VIDEO_REQUEST = { operation: "video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" };
+
+Deno.test("video reads the details against the stored channel", async () => {
+  const { handler, videoInputs } = fixture();
+  const response = await handler(request(VIDEO_REQUEST));
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).data, VIDEO);
+  assertEquals(videoInputs, [{ channelId: CHANNEL_ID, videoId: "videoAAAAAAA" }]);
+});
+
+Deno.test("a video the provider layer rejects as foreign is the same 404 as an unknown account", async () => {
+  const { handler } = fixture({
+    videoResults: [{ ok: false, code: "not_found", unauthorized: false }],
+  });
+  const foreignVideo = await handler(request(VIDEO_REQUEST));
+  const foreignAccount = await handler(request({ ...VIDEO_REQUEST, account_id: FOREIGN_ACCOUNT_ID }));
+  assertEquals(foreignVideo.status, 404);
+  // The status and the body are the same; only the request id differs between two requests.
+  const { request_id: videoId, ...videoRest } = await foreignVideo.json();
+  const { request_id: accountId, ...accountRest } = await foreignAccount.json();
+  assertEquals(videoId !== accountId, true);
+  assertEquals(videoRest, accountRest);
+  assertEquals(videoRest, { error: "not_found" });
+});
+
+Deno.test("a malformed video id is refused before any account read", async () => {
+  const { handler, calls } = fixture();
+  const response = await handler(request({ ...VIDEO_REQUEST, video_id: "../channels?mine=true" }));
+  assertEquals(response.status, 400);
+  assertEquals([calls.load, calls.video], [0, 0]);
+});
+
+for (const [name, body] of Object.entries(YOUTUBE_RESOURCE_REQUEST_EXAMPLES)) {
+  Deno.test(`the handler accepts the shared ${name} request example`, async () => {
+    const { handler } = fixture();
+    const response = await handler(request(body));
+    assertEquals(response.status, 200);
+  });
+}
+
+Deno.test("a throwing token store is an internal error and leaks nothing", async () => {
+  const { handler, calls } = fixture({ tokenError: true });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 500);
+  const text = await response.text();
+  assertEquals(text.includes("token store unavailable"), false);
+  assertEquals(JSON.parse(text), { error: "internal_error", request_id: REQUEST_ID });
+  assertEquals(calls.channel, 0);
+});
+
+Deno.test("a throwing rate limiter is an internal error", async () => {
+  const { handler } = fixture({ rateLimitError: true });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 500);
+  const text = await response.text();
+  assertEquals(text.includes("rate limit read failed"), false);
+  assertEquals(JSON.parse(text).error, "internal_error");
+});
+
+Deno.test("a row without a stored channel is reconnect_required before any token read", async () => {
+  const { handler, calls } = fixture({ account: { channelId: null } });
+  const response = await handler(request(CHANNEL_REQUEST));
+  assertEquals(response.status, 409);
+  assertEquals((await response.json()).error, "reconnect_required");
+  assertEquals([calls.tokens, calls.channel, calls.rateLimit], [0, 0, 0]);
+});
+
+Deno.test("the single forced-refresh repeat also covers the videos operation", async () => {
+  const { handler, calls, forceFlags } = fixture({
+    uploadResults: [{ ok: false, code: "reconnect_required", unauthorized: true }],
+  });
+  const response = await handler(request({ operation: "videos", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 200);
+  assertEquals(forceFlags, [false, true]);
+  assertEquals(calls.uploads, 2);
+});
+
+Deno.test("the single forced-refresh repeat also covers the video operation", async () => {
+  const { handler, calls, forceFlags } = fixture({
+    videoResults: [{ ok: false, code: "reconnect_required", unauthorized: true }],
+  });
+  const response = await handler(request(VIDEO_REQUEST));
+  assertEquals(response.status, 200);
+  assertEquals(forceFlags, [false, true]);
+  assertEquals(calls.video, 2);
 });

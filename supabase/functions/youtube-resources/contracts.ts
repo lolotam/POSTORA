@@ -77,3 +77,63 @@ export interface YouTubeResourceFailure {
   request_id: string;
   retry_after_seconds?: number;
 }
+
+export const YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE = 25;
+export const YOUTUBE_VIDEOS_MAX_PAGE_SIZE = 50;
+
+export interface YouTubeChannelDetails {
+  id: string;
+  title: string;
+  description: string;
+  custom_url: string | null;
+  thumbnail_url: string | null;
+  published_at: string | null;
+  country: string | null;
+  privacy_status: string | null;
+  statistics: {
+    view_count: number | null;
+    subscriber_count: number | null;
+    subscriber_count_hidden: boolean;
+    video_count: number | null;
+  };
+}
+
+export interface YouTubeVideoListItem {
+  id: string;
+  title: string;
+  thumbnail_url: string | null;
+  published_at: string | null;
+  privacy_status: string | null;
+  url: string;
+}
+
+// An empty page may still carry Google's next_page_token (a page of placeholder
+// entries, or a 404 on a not-yet-created uploads playlist): key pagination on
+// next_page_token, never on items.length.
+export interface YouTubeVideosPage {
+  items: YouTubeVideoListItem[];
+  next_page_token: string | null;
+  total_results: number | null;
+}
+
+export interface YouTubeVideoDetails {
+  id: string;
+  channel_id: string;
+  title: string;
+  description: string;
+  thumbnail_url: string | null;
+  published_at: string | null;
+  tags: string[];
+  category_id: string | null;
+  default_language: string | null;
+  duration_iso8601: string | null;
+  privacy_status: string | null;
+  upload_status: string | null;
+  made_for_kids: boolean | null;
+  statistics: {
+    view_count: number | null;
+    like_count: number | null;
+    comment_count: number | null;
+  };
+  url: string;
+}
