@@ -8,6 +8,7 @@ import {
   type YouTubeOAuthPorts,
 } from "./handler.ts";
 import { revokeGoogleToken } from "./revoke.ts";
+import { buildRefusalLogRow } from "./refusalLog.ts";
 
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID") ?? "";
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "";
@@ -224,14 +225,21 @@ const ports: YouTubeOAuthPorts = {
   clock: { now: () => new Date() },
   log: {
     refusal: async ({ action, reason, userId }) => {
-      await admin.from("system_logs").insert({
-        level: "warn",
-        category: "oauth",
-        source: "youtube-oauth",
-        message: "YouTube OAuth request refused",
-        user_id: userId,
-        metadata: { action, reason },
-      });
+      const { error } = await admin
+        .from("system_logs")
+        .insert(buildRefusalLogRow({ action, reason, userId }));
+      // The throw lets refuse()'s catch run, but that catch only logs the
+      // refusal's action/reason, not why the insert failed — so the database
+      // error itself is logged here (code/message are not secrets; no row
+      // content).
+      if (error) {
+        console.warn({
+          event: "youtube_oauth_refusal_insert_failed",
+          code: error.code,
+          message: error.message,
+        });
+        throw rpcFailure(error);
+      }
     },
   },
 };
