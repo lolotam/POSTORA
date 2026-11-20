@@ -461,6 +461,13 @@ jobs:
           deno check --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-oauth/index.ts
           deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-oauth/
 
+      - name: Typecheck and test youtube-resources
+        run: |
+          set -euo pipefail
+          map=".github/deno/process-post-import-map.json"
+          deno check --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-resources/index.ts
+          deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-resources/
+
       - name: Typecheck process-scheduled-posts
         run: deno check --node-modules-dir=none supabase/functions/process-scheduled-posts/index.ts
 
