@@ -22,15 +22,26 @@ function request(body: unknown, method = "POST"): Request {
   });
 }
 
+function rawRequest(body: string): Request {
+  return new Request(ENDPOINT, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+}
+
 function fixture(overrides: {
   authenticated?: boolean;
+  authUserId?: unknown;
   account?: Partial<YouTubeResourceAccount>;
   loadError?: boolean;
+  slowLog?: boolean;
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
   const refreshToken = crypto.randomUUID() + crypto.randomUUID();
   const calls = { auth: 0, load: 0 };
   const logs: YouTubeResourceRefusal[] = [];
+  let minted = 0;
   const account: YouTubeResourceAccount = {
     id: ACCOUNT_ID,
     userId: USER_ID,
@@ -50,9 +61,11 @@ function fixture(overrides: {
     auth: {
       authenticate: () => {
         calls.auth++;
-        return overrides.authenticated === false
-          ? Promise.reject(new Error("unauthorized"))
-          : Promise.resolve({ userId: USER_ID });
+        if (overrides.authenticated === false) return Promise.reject(new Error("unauthorized"));
+        if ("authUserId" in overrides) {
+          return Promise.resolve({ userId: overrides.authUserId as string });
+        }
+        return Promise.resolve({ userId: USER_ID });
       },
     },
     accounts: {
@@ -63,9 +76,22 @@ function fixture(overrides: {
       },
     },
     clock: { now: () => new Date("2026-11-20T10:00:00.000Z") },
-    ids: { requestId: () => REQUEST_ID },
+    ids: {
+      requestId: () => {
+        minted++;
+        return minted === 1 ? REQUEST_ID : `${REQUEST_ID}-${minted}`;
+      },
+    },
     log: {
       refusal: (entry) => {
+        if (overrides.slowLog) {
+          return new Promise<void>((resolve) =>
+            setTimeout(() => {
+              logs.push(entry);
+              resolve();
+            }, 0)
+          );
+        }
         logs.push(entry);
         return Promise.resolve();
       },
@@ -75,11 +101,30 @@ function fixture(overrides: {
 }
 
 Deno.test("a request without a valid user is refused before any account read", async () => {
-  const { handler, calls } = fixture({ authenticated: false });
+  const { handler, calls, logs } = fixture({ authenticated: false });
   const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));
   assertEquals(response.status, 401);
   assertEquals(await response.json(), { error: "unauthorized", request_id: REQUEST_ID });
   assertEquals(calls.load, 0);
+  assertEquals(logs, []);
+});
+
+Deno.test("an authenticate result without a user id is refused as unauthorized before any account read", async () => {
+  const { handler, calls, logs } = fixture({ authUserId: undefined as unknown as string });
+  const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 401);
+  assertEquals(await response.json(), { error: "unauthorized", request_id: REQUEST_ID });
+  assertEquals(calls.load, 0);
+  assertEquals(logs, []);
+});
+
+Deno.test("an authenticate result with a non-UUID user id is refused as unauthorized before any account read", async () => {
+  const { handler, calls, logs } = fixture({ authUserId: "not-a-uuid" });
+  const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 401);
+  assertEquals(await response.json(), { error: "unauthorized", request_id: REQUEST_ID });
+  assertEquals(calls.load, 0);
+  assertEquals(logs, []);
 });
 
 Deno.test("a body that names a user is refused by the strict schema", async () => {
@@ -100,7 +145,11 @@ Deno.test("another owner's account and an unknown account get the same answer", 
   );
   assertEquals(foreign.status, 404);
   assertEquals(unknown.status, 404);
-  assertEquals(await foreign.text(), await unknown.text());
+  const { request_id: foreignId, ...foreignRest } = await foreign.json();
+  const { request_id: unknownId, ...unknownRest } = await unknown.json();
+  assertEquals(foreignId !== unknownId, true);
+  assertEquals(foreignRest, unknownRest);
+  assertEquals(foreignRest, { error: "not_found" });
 });
 
 Deno.test("capabilities answers from the database and never returns a credential", async () => {
@@ -131,4 +180,69 @@ Deno.test("only POST is served", async () => {
   const response = await handler(request(null, "GET"));
   assertEquals(response.status, 405);
   assertEquals(calls.auth, 0);
+});
+
+Deno.test("a method refusal writes no log row", async () => {
+  const { handler, logs } = fixture();
+  const response = await handler(request(null, "GET"));
+  assertEquals(response.status, 405);
+  assertEquals(logs, []);
+});
+
+Deno.test("a refusal row lands before the response promise resolves", async () => {
+  const { handler, logs } = fixture({ slowLog: true });
+  const response = await handler(request({ operation: "capabilities", account_id: FOREIGN_ACCOUNT_ID }));
+  assertEquals(response.status, 404);
+  // The log port resolves on a later macrotask; seeing the row here proves the
+  // handler awaited the write instead of firing and forgetting.
+  assertEquals(logs.map((entry) => entry.code), ["not_found"]);
+});
+
+Deno.test("a not_found refusal writes exactly one row with the code and the request id", async () => {
+  const { handler, logs } = fixture();
+  const response = await handler(request({ operation: "capabilities", account_id: FOREIGN_ACCOUNT_ID }));
+  assertEquals(response.status, 404);
+  assertEquals(logs, [{
+    operation: "capabilities",
+    code: "not_found",
+    userId: USER_ID,
+    accountId: FOREIGN_ACCOUNT_ID,
+    requestId: REQUEST_ID,
+  }]);
+});
+
+Deno.test("malformed JSON is an invalid_request and is logged", async () => {
+  const { handler, logs } = fixture();
+  const response = await handler(rawRequest("{not json"));
+  assertEquals(response.status, 400);
+  assertEquals((await response.json()).error, "invalid_request");
+  assertEquals(logs.map((entry) => entry.code), ["invalid_request"]);
+});
+
+Deno.test("a preflight is answered with 204 and the restricted CORS headers", async () => {
+  const { handler, calls } = fixture();
+  const response = await handler(new Request(ENDPOINT, { method: "OPTIONS" }));
+  assertEquals(response.status, 204);
+  assertEquals(response.headers.get("access-control-allow-origin"), "https://postora.cloud");
+  assertEquals(response.headers.get("vary"), "Origin");
+  assertEquals(calls.auth, 0);
+  assertEquals(calls.load, 0);
+});
+
+Deno.test("a composio row answers with browse unsupported and upload unknown", async () => {
+  const { handler } = fixture({
+    account: {
+      authProvider: "composio",
+      accessToken: null,
+      refreshToken: null,
+      accountMetadata: {},
+    },
+  });
+  const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.data.provider, "composio");
+  assertEquals(body.data.connection, "ok");
+  assertEquals(body.data.capabilities.browse, { state: "unavailable", reason: "provider_unsupported" });
+  assertEquals(body.data.capabilities.upload, { state: "unknown" });
 });
