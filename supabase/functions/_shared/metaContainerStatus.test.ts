@@ -257,15 +257,16 @@ function recordReauthObservation(
   writes: MetaPublishReauthWriteRequest[],
   cutoffs: (number | undefined)[],
 ) {
+  const credential = crypto.randomUUID();
   const observe = createMetaPublishReauthObserver({
     snapshot: {
       accountId: "account-instagram",
       postOwnerId: "owner-a",
       platform: "instagram",
       updatedAt: "2026-11-21T10:00:00.123456+00:00",
-      accessToken: "fixture-a",
+      accessToken: credential,
     },
-    requestToken: "fixture-a",
+    requestToken: credential,
     write: (request) => {
       writes.push(request);
       return Promise.resolve({ matched: 1, error: null });

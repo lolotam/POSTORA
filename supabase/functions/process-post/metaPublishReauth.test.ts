@@ -128,16 +128,20 @@ function observerFor(
 }
 
 /** Everything the run said, so a diagnostic that carries the marker is found. */
-function captureDiagnostics(): { lines: string[]; restore: () => void } {
+function captureDiagnostics(): { lines: string[]; warnings: unknown[][]; restore: () => void } {
   const lines: string[] = [];
+  const warnings: unknown[][] = [];
   const previousLog = console.log;
   const previousWarn = console.warn;
   const previousError = console.error;
   const record = (...message: unknown[]) => { lines.push(message.map((part) => String(part)).join(" ")); };
   console.log = record;
-  console.warn = record;
+  console.warn = (...message: unknown[]) => {
+    warnings.push(message);
+    record(...message);
+  };
   console.error = record;
-  return { lines, restore: () => { console.log = previousLog; console.warn = previousWarn; console.error = previousError; } };
+  return { lines, warnings, restore: () => { console.log = previousLog; console.warn = previousWarn; console.error = previousError; } };
 }
 
 /** Fails a hung implementation instead of hanging the suite with it. */
@@ -547,7 +551,7 @@ Deno.test("a write that ignores the abort does not hold the observation", async 
   const observe = observerFor(write);
   const diagnostics = captureDiagnostics();
   const guard = watchdog(2_000);
-  const warnings = () => diagnostics.lines.filter((line) => line.includes("meta_publish_reauth_write_failed"));
+  const expectedWarnings = [["meta_publish_reauth_write_failed", { account_id: INSTAGRAM_ACCOUNT, platform: "instagram" }]];
 
   try {
     await Promise.race([Promise.resolve(observe(400, revokedEnvelope())), guard.expired]);
@@ -555,17 +559,16 @@ Deno.test("a write that ignores the abort does not hold the observation", async 
 
     assertEquals(requests.length, 1, "The account is written once");
     assertEquals(requests[0].signal.aborted, true, "The expiry aborts the write");
-    assertEquals(warnings().length, 1, "The expiry warns once");
-    assertEquals(warnings().join("\n").includes(CREDENTIAL_MARKER), false, "The warning carries no credential");
+    assertEquals(diagnostics.warnings, expectedWarnings, "The expiry warns once with account and platform only");
 
     // The writer fails after the observation settled: it must warn about nothing, and Deno
     // must not find an unhandled rejection.
-    held.reject(new Error("the storage call failed after the expiry"));
+    held.reject(new Error(`the storage call failed after the expiry: ${CREDENTIAL_MARKER}`));
     await drainEventLoop();
-    assertEquals(warnings().length, 1, "A writer that fails late warns about nothing");
+    assertEquals(diagnostics.warnings, expectedWarnings, "A writer that fails late warns about nothing");
   } finally {
     guard.cancel();
-    held.reject(new Error("the fixture ends the held write"));
+    held.resolve();
     diagnostics.restore();
   }
 });

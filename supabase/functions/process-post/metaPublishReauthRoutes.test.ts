@@ -64,6 +64,8 @@ interface FanoutControl {
   healthySettled: Deferred;
   /** The test alone lets the held write finish. */
   release: Deferred;
+  writeHeld: boolean;
+  healthySettledWhileWriteHeld: boolean;
 }
 
 function deferred(): Deferred {
@@ -359,12 +361,18 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
         }
         if (failurePoint === "fanout" && fanout) {
           // The fanout fixture holds this write: the test alone decides when it ends.
-          fanout.writeStarted.settle();
+          const control = fanout;
+          control.writeHeld = true;
+          control.writeStarted.settle();
           request.signal.addEventListener("abort", () => {
             writeTimedOut = true;
-            fanout?.release.fail(new Error("Fixture write timed out"));
+            control.release.fail(new Error("Fixture write timed out"));
           }, { once: true });
-          await fanout.release.promise;
+          try {
+            await control.release.promise;
+          } finally {
+            control.writeHeld = false;
+          }
         }
         return Response.json(matched.map((row) => ({ id: row.id })));
       }
@@ -374,6 +382,7 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
       const body = await request.json() as Record<string, unknown>;
       settlements.push(body);
       if (fanout && body.p_social_account_id === OTHER_ACCOUNT && body.p_status === "success") {
+        fanout.healthySettledWhileWriteHeld = fanout.writeHeld;
         fanout.healthySettled.settle();
       }
       return Response.json({ platform_post_id: "settled-row", recorded: true });
@@ -544,7 +553,13 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
     await test.step("the healthy destination settles while the first reconnect write is pending, and the response waits for the write", async () => {
       reset({ platform: "instagram", postType: "feed", mediaKind: "image", failingAccount: ACCOUNT, failurePoint: "fanout" });
       post.metadata.selected_account_ids = [ACCOUNT, OTHER_ACCOUNT];
-      const control: FanoutControl = { writeStarted: deferred(), healthySettled: deferred(), release: deferred() };
+      const control: FanoutControl = {
+        writeStarted: deferred(),
+        healthySettled: deferred(),
+        release: deferred(),
+        writeHeld: false,
+        healthySettledWhileWriteHeld: false,
+      };
       fanout = control;
       let answered = false;
       const answer = Promise.resolve(handler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
@@ -555,6 +570,12 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
         answered = true;
         return response;
       });
+      // Observe a possible rejection immediately, even while waiting for the milestones.
+      const outcome = answer.then<PromiseSettledResult<Response>, PromiseSettledResult<Response>>(
+        (value) => ({ status: "fulfilled", value }),
+        (reason) => ({ status: "rejected", reason }),
+      );
+      let result: PromiseSettledResult<Response>;
 
       try {
         await within(10_000, control.writeStarted.promise, "the reconnect write");
@@ -565,14 +586,18 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
         const healthy = settlements.find((entry) => entry.p_social_account_id === OTHER_ACCOUNT);
         assert(healthy, "The healthy destination is settled");
         assertEquals(healthy.p_status, "success");
+        assertEquals(control.healthySettledWhileWriteHeld, true, "The healthy destination settles while the write is held");
         assertOneScopedWrite();
         assertEquals(answered, false, "The response waits for the reconnect write");
       } finally {
-        fanout = undefined;
         control.release.settle();
+        result = await within(10_000, outcome, "the handler's response")
+          .catch((reason: unknown) => ({ status: "rejected", reason }));
+        fanout = undefined;
       }
 
-      const response = await within(10_000, answer, "the handler's response");
+      if (result.status === "rejected") throw result.reason;
+      const response = result.value;
       const body = await response.json() as { platform_results: { platform: string; status: string; error_message?: string }[] };
       const results = body.platform_results;
       assertEquals(results.length, 2, "Both destinations report a result");
