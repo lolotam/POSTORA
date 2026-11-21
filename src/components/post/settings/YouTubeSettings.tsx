@@ -184,7 +184,7 @@ export function YouTubeSettings({
 }: YouTubeSettingsProps) {
   const { flags } = useFeatureFlags();
   const { t, i18n } = useTranslation("postsettings");
-  const locale: "en" | "ar" = i18n.resolvedLanguage?.startsWith("ar") ? "ar" : "en";
+  const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
   const [thumbnailDialogOpen, setThumbnailDialogOpen] = useState(false);
   const [aiThumbnailPrompt, setAiThumbnailPrompt] = useState("");
   const { tiers: resolvedTiers } = useResolvedImageModels();

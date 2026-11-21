@@ -71,7 +71,38 @@ const VideoRequest = z.object({
   account_id: AccountId,
   video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
 }).strict();
-const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, ChannelRequest, VideosRequest, VideoRequest]);
+// Edit requests are accepted only so the contract can be exercised and refused
+// with a stable code. A strict shape keeps a future enabled path from ever
+// accepting an untyped provider part or an arbitrary metadata field.
+const EditableChanges = z.object({
+  title: z.string().min(1).max(100).optional(),
+  description: z.string().max(5000).optional(),
+  tags: z.array(z.string()).max(500).optional(),
+  category_id: z.string().regex(/^\d{1,4}$/).optional(),
+  privacy_status: z.enum(["private", "unlisted", "public"]).optional(),
+}).strict();
+const EditSnapshotRequest = z.object({
+  operation: z.literal("edit_snapshot"),
+  account_id: AccountId,
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
+}).strict();
+const UpdateVideoRequest = z.object({
+  operation: z.literal("update_video"),
+  account_id: AccountId,
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
+  base_revision: z.string().min(1).max(512),
+  changes: EditableChanges.refine((changes) => Object.keys(changes).length > 0, {
+    message: "at least one change is required",
+  }),
+}).strict();
+const RequestSchema = z.discriminatedUnion("operation", [
+  CapabilitiesRequest,
+  ChannelRequest,
+  VideosRequest,
+  VideoRequest,
+  EditSnapshotRequest,
+  UpdateVideoRequest,
+]);
 
 // The audit label for a refusal: the requested operation when the body names one of
 // the known literals, "unknown" otherwise. An arbitrary body string is never echoed
@@ -79,7 +110,8 @@ const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, Ch
 function requestedOperationOf(body: unknown): string {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "unknown";
   const requested = (body as Record<string, unknown>).operation;
-  return requested === "capabilities" || requested === "channel" || requested === "videos" || requested === "video"
+  return requested === "capabilities" || requested === "channel" || requested === "videos" ||
+      requested === "video" || requested === "edit_snapshot" || requested === "update_video"
     ? requested
     : "unknown";
 }
@@ -249,6 +281,18 @@ export function createYouTubeResourcesHandler(
       return await refuse(req, {
         operation: requestedOperation,
         code: "not_found",
+        userId,
+        accountId,
+        requestId,
+      });
+    }
+    // D1: refuse every edit before admission or any provider call. The schema
+    // above still validates the request so a later enabled path inherits the
+    // same field limits and unknown-key rejection, and the refusal is logged.
+    if (parsed.data.operation === "edit_snapshot" || parsed.data.operation === "update_video") {
+      return await refuse(req, {
+        operation: parsed.data.operation,
+        code: "write_not_enabled",
         userId,
         accountId,
         requestId,

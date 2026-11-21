@@ -707,14 +707,21 @@
       "title": "الفيديوهات المرفوعة"
     },
     "detail": {
+      "category": "الفئة",
+      "categoryUnavailable": "غير متاح حالياً",
       "comments": "التعليقات",
       "duration": "المدة",
+      "edit": "تعديل تفاصيل الفيديو",
+      "editUnavailable": "التعديل مش مفعّل لحد ما نتأكد من فرض الكتابة المشروطة.",
       "likes": "الإعجابات",
       "notAvailable": "مش متاح",
       "openOnYouTube": "افتح على YouTube",
       "privacy": "الخصوصية",
+      "sameVideo": "دي تعديلات على نفس الفيديو.",
+      "save": "حفظ",
       "select": "اختار فيديو عشان تشوف تفاصيله.",
       "tags": "الوسوم",
+      "title": "العنوان",
       "views": "المشاهدات"
     },
     "stats": {

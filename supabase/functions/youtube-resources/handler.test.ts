@@ -274,6 +274,65 @@ Deno.test("capabilities answers from the database and never returns a credential
   assertEquals(body.data.capabilities.browse, { state: "available" });
 });
 
+Deno.test("edit capability stays disabled until conditional-write enforcement is proven", async () => {
+  const { handler } = fixture();
+  const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));
+  const body = await response.json();
+
+  assertEquals(body.data.capabilities.edit_metadata, {
+    state: "unavailable",
+    reason: "provider_unsupported",
+  });
+  assertEquals(body.data.capabilities.browse, { state: "available" });
+});
+
+Deno.test("edit operations are refused before any provider or token call", async () => {
+  for (const operation of ["edit_snapshot", "update_video"] as const) {
+    const { handler, calls, logs } = fixture();
+    const body = operation === "edit_snapshot"
+      ? { operation, account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" }
+      : {
+        operation,
+        account_id: ACCOUNT_ID,
+        video_id: "videoAAAAAAA",
+        base_revision: "base",
+        changes: { title: "A new title" },
+      };
+    const response = await handler(request(body));
+
+    assertEquals(response.status, 403);
+    assertEquals((await response.json()).error, "write_not_enabled");
+    assertEquals(calls.tokens, 0);
+    assertEquals(calls.channel, 0);
+    assertEquals(calls.uploads, 0);
+    assertEquals(calls.video, 0);
+    assertEquals(calls.rateLimit, 0);
+    assertEquals(logs.map((entry) => [entry.operation, entry.code]), [
+      [operation, "write_not_enabled"],
+    ]);
+  }
+});
+
+Deno.test("edit requests with unknown keys or empty changes are invalid", async () => {
+  const { handler } = fixture();
+  const unknownKey = await handler(request({
+    operation: "edit_snapshot",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    raw_google_part: "snippet",
+  }));
+  assertEquals(unknownKey.status, 400);
+
+  const emptyChanges = await handler(request({
+    operation: "update_video",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    base_revision: "base",
+    changes: {},
+  }));
+  assertEquals(emptyChanges.status, 400);
+});
+
 Deno.test("a failed account read is an internal error, not a not_found", async () => {
   const { handler, logs } = fixture({ loadError: true });
   const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));

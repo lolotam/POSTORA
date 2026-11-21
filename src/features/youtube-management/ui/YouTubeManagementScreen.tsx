@@ -15,7 +15,7 @@ import { YouTubeResourceNotice } from "./YouTubeResourceNotice";
 import { YouTubeAccountPicker } from "./YouTubeAccountPicker";
 import { YouTubeChannelSummary } from "./YouTubeChannelSummary";
 import { YouTubeVideoLibrary } from "./YouTubeVideoLibrary";
-import { YouTubeVideoDetail } from "./YouTubeVideoDetail";
+import { YouTubeVideoEditCard } from "./YouTubeVideoEditCard";
 
 export interface YouTubeManagementScreenProps {
   accounts: readonly YouTubeAccountOption[];
@@ -207,7 +207,15 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                   onRetry={() => void video.refetch()}
                 />
               ) : video.data ? (
-                <YouTubeVideoDetail video={video.data.data} fetchedAt={video.data.freshness.fetched_at} />
+                <YouTubeVideoEditCard
+                  video={video.data.data}
+                  fetchedAt={video.data.freshness.fetched_at}
+                  canEdit={capabilities.data?.data.capabilities.edit_metadata?.state === "available"}
+                  disabledReason={t(
+                    "youtubeManagement.detail.editUnavailable",
+                    "Editing is not enabled until conditional write enforcement is verified.",
+                  )}
+                />
               ) : selectedVideoId === null ? (
                 <p className="text-sm text-muted-foreground">
                   {t("youtubeManagement.detail.select", "Select a video to see its details.")}
