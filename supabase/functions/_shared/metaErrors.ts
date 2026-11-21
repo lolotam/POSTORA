@@ -41,7 +41,7 @@ export function isPermanentMetaError(error: MetaProviderError): boolean {
 const META_RATE_LIMIT_CODES = new Set([4, 17, 32, 613]);
 
 /** HTTP statuses that mean "ask again later", not "this grant is dead". */
-const RETRYABLE_STATUSES = new Set([408, 425, 429]);
+export const META_RETRYABLE_STATUSES = new Set([408, 425, 429]);
 
 /**
  * Reduce a Meta response to the sanitized fields worth logging, and decide whether the
@@ -72,7 +72,7 @@ export function parseMetaError(status: number, body: unknown): MetaProviderError
 
   const transient = structurallyPermanent
     ? false
-    : structurallyRetryable || RETRYABLE_STATUSES.has(status) || status >= 500;
+    : structurallyRetryable || META_RETRYABLE_STATUSES.has(status) || status >= 500;
 
   return {
     type,
