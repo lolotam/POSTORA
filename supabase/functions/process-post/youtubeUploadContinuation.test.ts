@@ -55,6 +55,8 @@ const NOW_MS = 1_700_000_000_000;
 interface World {
   ports: YoutubeContinuationPorts;
   mediaReads: number;
+  /** The owner filters the continuation asked the media query to apply. */
+  mediaOwnerFilters: string[];
   uploads: number;
   /** The terminal outcomes the worker tried to record. */
   settled: Array<{
@@ -173,6 +175,7 @@ function world(options: WorldOptions = {}): World {
 
   const world: World = {
     mediaReads: 0,
+    mediaOwnerFilters: [],
     uploads: 0,
     settled: [],
     projected: [],
@@ -190,7 +193,8 @@ function world(options: WorldOptions = {}): World {
       loadAccount() {
         return Promise.resolve(account);
       },
-      loadMedia() {
+      loadMedia(_mediaFileId, expectedOwnerId) {
+        world.mediaOwnerFilters.push(expectedOwnerId);
         return Promise.resolve(media);
       },
       claimSession() {
@@ -513,6 +517,7 @@ Deno.test("a media row without a size is judged by the object that is opened", a
   assertEquals(w.uploads, 1);
   // The object was opened, and it is the size the upload started with.
   assertEquals(w.mediaReads, 1);
+  assertEquals(w.mediaOwnerFilters, [USER_ID]);
 });
 
 Deno.test("an opened object of another size is refused before the first byte", async () => {

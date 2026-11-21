@@ -18,6 +18,7 @@
 
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  assertMediaRowAdmissible,
   MediaDeliveryRefusedError,
   resolveMediaUrl,
   type MediaFile,
@@ -285,4 +286,26 @@ Deno.test("the provider delivery URL wins over the file path, and it is held to 
   );
   assertEquals(url, "https://cdn.example.test/openinary/video.mp4");
   assert(url !== "https://cdn.example.test/video.mp4");
+});
+
+Deno.test("pre-sign admission refuses a foreign owner, an unapproved bucket and a foreign prefix", () => {
+  const options = { ownerUserId: OWNER, allowedWorkspaceIds: new Set<string>() };
+  // A valid row passes.
+  assertMediaRowAdmissible(mediaFile(), options);
+
+  const rejections: Array<[string, MediaFile]> = [
+    ["bucket_not_allowed", mediaFile({ storage_bucket: "private-bucket" })],
+    ["not_owned", mediaFile({ user_id: "another-owner" })],
+    ["not_owned", mediaFile({ file_path: "another-owner/video.mp4" })],
+    ["not_owned", mediaFile({ file_path: `${OWNER}/../another-owner/video.mp4` })],
+  ];
+  for (const [reason, file] of rejections) {
+    try {
+      assertMediaRowAdmissible(file, options);
+      throw new Error(`expected ${reason} to be refused`);
+    } catch (error) {
+      assert(error instanceof MediaDeliveryRefusedError);
+      assertEquals(error.reason, reason);
+    }
+  }
 });

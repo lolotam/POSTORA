@@ -243,6 +243,7 @@ import {
   writeLogRow,
 } from "./postSettlement.ts";
 import {
+  assertMediaRowAdmissible,
   cdnReadPreferenceOrder,
   loadMediaProviderRows,
   resolveMediaUrl,
@@ -2986,7 +2987,10 @@ Deno.serve(async (req) => {
       const { data: files, error: mediaReadError } = await supabase
         .from("media_files")
         .select("*")
-        .in("id", post.media_file_ids);
+        .in("id", post.media_file_ids)
+        // Owner is part of the lookup, not a later filter: a foreign media id
+        // must be indistinguishable from a missing one.
+        .eq("user_id", post.user_id);
       if (mediaReadError) {
         console.error("Could not read post media:", mediaReadError.message);
         return await failMediaPreparation("Could not read post media. Retry the publish.");
@@ -3358,6 +3362,14 @@ Deno.serve(async (req) => {
                 admin: supabase,
                 client: composioClientFromEnv(),
                 signedUrlFor: async (file) => {
+                  // The service role can sign ANY bucket. Validate the row's
+                  // owner, bucket and object prefix before minting a URL;
+                  // partner-media needs a workspace this worker has admitted,
+                  // which this path never does.
+                  assertMediaRowAdmissible(file as MediaFileRow, {
+                    ownerUserId: post.user_id,
+                    allowedWorkspaceIds: new Set<string>(),
+                  });
                   const { data, error } = await supabase.storage
                     .from(file.storage_bucket)
                     .createSignedUrl(file.file_path, 3600);
@@ -10120,11 +10132,12 @@ function buildYoutubeContinuationPorts(
       };
     },
 
-    async loadMedia(mediaFileId) {
+    async loadMedia(mediaFileId, expectedOwnerId) {
       const { data, error } = await supabase
         .from("media_files")
         .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type, scan_state, file_size, workspace_id")
         .eq("id", mediaFileId)
+        .eq("user_id", expectedOwnerId)
         .maybeSingle();
       if (error) throw new Error("YouTube media lookup failed");
       if (!data) return null;

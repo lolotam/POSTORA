@@ -131,7 +131,8 @@ export interface ContinuationMedia {
 export interface YoutubeContinuationPorts {
   loadPost(postId: string): Promise<ContinuationPost | null>;
   loadAccount(accountId: string): Promise<ContinuationAccount | null>;
-  loadMedia(mediaFileId: string): Promise<ContinuationMedia | null>;
+  /** The owner filter is part of the query, not only a check on its result. */
+  loadMedia(mediaFileId: string, expectedOwnerId: string): Promise<ContinuationMedia | null>;
   /**
    * Takes the session for this worker.
    *
@@ -790,7 +791,7 @@ async function loadMatchingMedia(
   }
   let media: ContinuationMedia | null;
   try {
-    media = await ports.loadMedia(session.mediaFileId);
+    media = await ports.loadMedia(session.mediaFileId, post.userId);
   } catch {
     console.warn("[youtube] media lookup could not be confirmed");
     return { media: null, reason: YOUTUBE_UPLOAD_REASON.resumable };
