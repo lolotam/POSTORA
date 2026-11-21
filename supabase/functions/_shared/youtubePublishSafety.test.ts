@@ -59,17 +59,13 @@ Deno.test("native dispatch refuses missing declarations and accepts explicit No"
 });
 
 Deno.test("managed dispatch is refused for every post, including explicit No/No", () => {
-  for (const metadata of [
-    {},
-    { youtube_made_for_kids: true, youtube_contains_synthetic_media: false },
-    { youtube_made_for_kids: false, youtube_contains_synthetic_media: false },
-  ]) {
-    const refusal = assertThrows(
-      () => assertComposioYoutubeDeclarations(metadata),
-      YoutubeComposioDispatchUnavailableError,
-    );
-    assertEquals(refusal.code, "youtube_composio_dispatch_unavailable");
-  }
+  // The decision does not read the declaration values: a queued legacy post
+  // and a fully declared post are refused by the same unconditional fence.
+  const refusal = assertThrows(
+    () => assertComposioYoutubeDeclarations(),
+    YoutubeComposioDispatchUnavailableError,
+  );
+  assertEquals(refusal.code, "youtube_composio_dispatch_unavailable");
   assert(
     new YoutubeDeclarationRequiredError(["youtube_made_for_kids"]).code ===
       "youtube_declaration_required",

@@ -89,8 +89,6 @@ export function assertNativeYoutubeDeclarations(
  * receipt is not proven. Every managed post -- including a queued post that
  * already carries explicit No/No -- is refused before any provider work.
  */
-export function assertComposioYoutubeDeclarations(
-  _metadata: object | null | undefined,
-): void {
+export function assertComposioYoutubeDeclarations(): void {
   throw new YoutubeComposioDispatchUnavailableError();
 }

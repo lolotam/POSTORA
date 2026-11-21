@@ -161,7 +161,7 @@ export async function publishYouTubeViaComposio(
   // existed still reaches this path; it must not be published on the strength
   // of a missing value or an implicit default. Nothing has been signed or sent
   // when this refuses, so there is no uncertain outcome to reconcile.
-  assertComposioYoutubeDeclarations(post.metadata);
+  assertComposioYoutubeDeclarations();
 
   const timeoutMs = deps.timeoutMs ?? YOUTUBE_COMPOSIO_TIMEOUT_MS;
   const fetchImpl = deps.fetch ?? fetch;
