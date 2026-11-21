@@ -12,6 +12,7 @@ Deno.test("each error code keeps its documented HTTP status", () => {
     invalid_cursor: 400,
     unauthorized: 401,
     missing_scope: 403,
+    write_not_enabled: 403,
     not_found: 404,
     method_not_allowed: 405,
     provider_unsupported: 409,
