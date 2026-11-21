@@ -163,7 +163,6 @@ import {
 import { createCarouselChildren, threadsChildWait, waitForCarouselChildren } from "./carouselChildren.ts";
 import {
   createMetaPublishReauthObserver,
-  isRevokedGrantEvidence,
   META_PUBLISH_REAUTH_REASON,
   type MetaPublishReauthWriter,
   type ObserveMetaReply,
@@ -950,7 +949,12 @@ function nativeReauthWriter(supabase: SupabaseClient): MetaPublishReauthWriter {
  * account row this attempt read. The observed Facebook and Instagram requests
  * take their credential from that same account without substituting it.
  */
-function nativeReauthObserver(account: SocialAccount, postOwnerId: string, supabase: SupabaseClient) {
+function nativeReauthObserver(
+  account: SocialAccount,
+  postOwnerId: string,
+  supabase: SupabaseClient,
+  writes: Set<Promise<void>>,
+): ObserveMetaReply {
   const observe = createMetaPublishReauthObserver({
     snapshot: {
       accountId: account.id,
@@ -963,12 +967,10 @@ function nativeReauthObserver(account: SocialAccount, postOwnerId: string, supab
     write: nativeReauthWriter(supabase),
     deadlineMs: workerPublishDeadline(WORKER_STARTED_AT_MS),
   });
-  let pending: Promise<void> | undefined;
-  const observeReply: ObserveMetaReply = async (status, reply, deadlineMs) => {
-    if (pending || !isRevokedGrantEvidence(status, reply)) return;
-    pending = observe(status, reply, deadlineMs);
+  return (status, reply, deadlineMs) => {
+    const write = observe(status, reply, deadlineMs);
+    if (write) writes.add(write);
   };
-  return { observeReply, flush: () => pending };
 }
 
 /**
@@ -2197,6 +2199,7 @@ Deno.serve(async (req) => {
 
   // Pollers that can defer a container stop waiting a fixed time after this.
   const requestStartedAt = Date.now();
+  const metaReauthWrites = new Set<Promise<void>>();
 
   try {
     // Parse request body first (can only be consumed once)
@@ -3169,8 +3172,8 @@ Deno.serve(async (req) => {
       let imageExecution: ResumeContext | null = resume?.deferral.media_type === "IMAGE" ? resume : null;
       let imageResponseData: Record<string, unknown> | null = imageExecution ? resumeResponseData : null;
       let imageOutcomeAcknowledged = false;
-      const reauth = account.platform === "facebook" || account.platform === "instagram"
-        ? nativeReauthObserver(account, post.user_id, supabase)
+      const observeMetaReply = account.platform === "facebook" || account.platform === "instagram"
+        ? nativeReauthObserver(account, post.user_id, supabase, metaReauthWrites)
         : undefined;
 
       try {
@@ -3183,7 +3186,7 @@ Deno.serve(async (req) => {
             result = await postToBluesky(account, post, mediaUrls, supabase);
             break;
           case "facebook":
-            result = await postToFacebook(account, post, mediaUrls, mediaFiles, reauth?.observeReply);
+            result = await postToFacebook(account, post, mediaUrls, mediaFiles, observeMetaReply);
             break;
           case "instagram": {
             const primaryIsVideo = mediaFiles.length > 0
@@ -3206,12 +3209,11 @@ Deno.serve(async (req) => {
                 recordedMediaIds: (ids) => recordedMediaIdsFor(supabase, post_id, account.id, ids),
               }
               : NOT_A_RETRY;
-            const observeReply = reauth?.observeReply;
             if (igAuthType === 'business_login') {
               result = await postToInstagramBusinessLogin(account, primaryPost, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry, (id) => {
                 if (id) exactPlatformPostIds.push(id);
                 else fanoutWriteFailed = true;
-              }, observeReply);
+              }, observeMetaReply);
             } else {
               result = await postToInstagram(account, primaryPost, mediaUrls, mediaFiles, timingForAccount, (story) =>
                 recordLiveStory(supabase, { postId: post_id, account, story, onRecorded: (id) => exactPlatformPostIds.push(id) }, stories), retry, async (error) => {
@@ -3227,7 +3229,7 @@ Deno.serve(async (req) => {
                 if (settled.id) exactPlatformPostIds.push(settled.id);
                 if (settled.error || !settled.id) fanoutWriteFailed = true;
                 return settled.error;
-              }, observeReply);
+              }, observeMetaReply);
             }
             break;
           }
@@ -3714,8 +3716,6 @@ Deno.serve(async (req) => {
           platformResults.push(...recordedStoryResults(stories.live));
           hasSuccess = true;
         }
-        // Join the bounded write after settlement so it cannot consume provider retry time.
-        await reauth?.flush();
       }
     }
 
@@ -3977,6 +3977,9 @@ Deno.serve(async (req) => {
     console.error("Process post error:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return createErrorResponse(message);
+  } finally {
+    // Join after all destinations finish, without reducing any provider's time budget.
+    await Promise.allSettled(metaReauthWrites);
   }
 });
 

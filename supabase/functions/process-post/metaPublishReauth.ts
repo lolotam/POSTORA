@@ -45,7 +45,7 @@ export interface MetaPublishReauthSnapshot {
 }
 
 /** Watches one decoded provider reply. It never throws and never changes an outcome. */
-export type ObserveMetaReply = (status: number, reply: unknown, deadlineMs?: number) => Promise<void>;
+export type ObserveMetaReply = (status: number, reply: unknown, deadlineMs?: number) => void | Promise<void>;
 
 /** The one conditional write the observer may ask for. */
 export interface MetaPublishReauthWriteRequest {
@@ -105,19 +105,18 @@ export function isRevokedGrantEvidence(status: number, reply: unknown): boolean 
  */
 export function createMetaPublishReauthObserver(options: MetaPublishReauthObserverOptions): ObserveMetaReply {
   const { snapshot, requestToken, write, timeoutMs = WRITE_TIMEOUT_MS } = options;
-  if (!isObservable(snapshot, requestToken)) return async () => {};
+  if (!isObservable(snapshot, requestToken)) return () => {};
   const observed = snapshot;
 
   // The children of one attempt observe the same account: they share the write.
   let pending: Promise<void> | null = null;
 
-  return async (status, reply, deadlineMs): Promise<void> => {
+  return (status, reply, deadlineMs) => {
     try {
       if (!isRevokedGrantEvidence(status, reply)) return;
       const remainingMs = Math.min(deadlineMs ?? Infinity, options.deadlineMs ?? Infinity) - Date.now();
       if (remainingMs <= 0) return;
-      pending ??= flagRevokedGrant(observed, write, Math.min(timeoutMs, remainingMs));
-      await pending;
+      return pending ??= flagRevokedGrant(observed, write, Math.min(timeoutMs, remainingMs));
     } catch {
       // The observation is a side effect of the publish: it never changes the outcome.
       warnWriteFailed(observed);

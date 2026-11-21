@@ -83,7 +83,7 @@ export interface PollContainerOptions {
    * Watches the decoded reply of the status request. The observer decides what a reply means;
    * this poll still judges the container exactly as it did before.
    */
-  observeReply?: (status: number, reply: unknown, deadlineMs?: number) => Promise<void>;
+  observeReply?: (status: number, reply: unknown, deadlineMs?: number) => void | Promise<void>;
   formatProviderMessage?: (message: unknown) => string | null;
 }
 

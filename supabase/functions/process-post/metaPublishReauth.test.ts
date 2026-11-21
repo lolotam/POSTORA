@@ -437,14 +437,16 @@ Deno.test("a substituted credential is never observed", async () => {
   assertEquals(writes.length, 0, "A request that used another credential says nothing about this row");
 });
 
-Deno.test("an observation after the provider deadline does not start a write", async () => {
-  let wrote = false;
+Deno.test("a late observation leaves a later timely reply eligible for the account write", async () => {
+  let writes = 0;
   const observe = observerFor(async () => {
-    wrote = true;
+    writes++;
     return { matched: 1, error: null };
   });
-  await observe(400, { error: { type: "OAuthException", code: 190, error_subcode: 458 } }, Date.now() - 1);
-  assertEquals(wrote, false);
+  assertEquals(observe(400, revokedEnvelope(), Date.now() - 1), undefined);
+  assertEquals(writes, 0);
+  await observe(400, revokedEnvelope());
+  assertEquals(writes, 1);
 });
 
 Deno.test("an unsupported platform is never observed", async () => {

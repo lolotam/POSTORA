@@ -43,6 +43,7 @@ type FailurePoint =
   | "child"
   | "poll"
   | "poll-5xx"
+  | "fanout"
   | "publish"
   | "content"
   | "permalink"
@@ -114,6 +115,7 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
   let statusCalls = 0;
   let onRetry: (() => void) | undefined;
   let retriedWhileWritePending = false;
+  let writeTimedOut = false;
   let logs: string[] = [];
   let post = makePost();
   const unexpected: string[] = [];
@@ -158,6 +160,7 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
     statusCalls = 0;
     onRetry = undefined;
     retriedWhileWritePending = false;
+    writeTimedOut = false;
     logs = [];
     post = makePost();
   }
@@ -180,11 +183,11 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
         last_refresh_error: null,
       },
     ];
-    if (failingAccount === OTHER_ACCOUNT) {
+    if (failingAccount === OTHER_ACCOUNT || failurePoint === "fanout") {
       rows.push({
         ...rows[0],
         id: OTHER_ACCOUNT,
-        access_token: CREDENTIAL_MARKER,
+        access_token: failingAccount === OTHER_ACCOUNT ? CREDENTIAL_MARKER : HEALTHY_TOKEN,
         platform_username: "fixture-other",
       });
     }
@@ -244,7 +247,7 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
         }
         // The Story is published before the reel it mirrors, so it is not the refusal's target.
         if (body.media_type !== "STORIES" && failurePoint === "primary" && token === CREDENTIAL_MARKER) return revokedResponse();
-        if (failurePoint === "create" && token === CREDENTIAL_MARKER) return revokedResponse();
+        if ((failurePoint === "create" || failurePoint === "fanout") && token === CREDENTIAL_MARKER) return revokedResponse();
         if (failurePoint === "content" && token === CREDENTIAL_MARKER) return contentResponse();
         return Response.json({ id: body.media_type === "STORIES" ? "story-container" : "container-1" });
       }
@@ -254,7 +257,7 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
           statusCalls++;
           return revokedResponse(500);
         }
-        if (onRetry) {
+        if (failurePoint === "poll-5xx" && onRetry) {
           retriedWhileWritePending = true;
           onRetry();
         }
@@ -267,6 +270,10 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
       }
       if (url.pathname.endsWith("/media_publish")) {
         if (failurePoint === "publish" && token === CREDENTIAL_MARKER) return revokedResponse();
+        if (failurePoint === "fanout" && token === HEALTHY_TOKEN && onRetry) {
+          retriedWhileWritePending = true;
+          onRetry();
+        }
         return Response.json({ id: "published-1" });
       }
       if (request.method === "GET" && url.searchParams.get("fields")?.includes("permalink")) {
@@ -307,12 +314,18 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
         const body = await request.json() as Record<string, unknown>;
         const matched = accountRows().filter((row) => matchesEveryPredicate(url.searchParams, row));
         reconnectWrites.push({ query: url.searchParams.toString(), body });
-        if (failurePoint === "poll-5xx") {
+        if (failurePoint === "poll-5xx" || failurePoint === "fanout") {
           const retry = Promise.withResolvers<void>();
           onRetry = retry.resolve;
-          request.signal.addEventListener("abort", () => retry.reject(new Error("Fixture write timed out")), { once: true });
-          await retry.promise;
-          onRetry = undefined;
+          request.signal.addEventListener("abort", () => {
+            writeTimedOut = true;
+            retry.reject(new Error("Fixture write timed out"));
+          }, { once: true });
+          try {
+            await retry.promise;
+          } finally {
+            onRetry = undefined;
+          }
         }
         return Response.json(matched.map((row) => ({ id: row.id })));
       }
@@ -480,8 +493,19 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
 
       assertOneScopedWrite();
       assertEquals(retriedWhileWritePending, true);
+      assertEquals(writeTimedOut, false);
       assertEquals(statusCalls, 2);
       assertEquals(providerCalls.some((call) => call.includes("media_publish")), true);
+    });
+
+    await test.step("a later destination can publish while the first reconnect write is pending", async () => {
+      reset({ platform: "instagram", postType: "feed", mediaKind: "image", failingAccount: ACCOUNT, failurePoint: "fanout" });
+      post.metadata.selected_account_ids = [ACCOUNT, OTHER_ACCOUNT];
+      await publish();
+
+      assertOneScopedWrite();
+      assertEquals(retriedWhileWritePending, true);
+      assertEquals(writeTimedOut, false);
     });
 
     await test.step("a published Story survives the failure of the publish it mirrored", async () => {
