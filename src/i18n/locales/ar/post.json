@@ -240,5 +240,9 @@
     "tiktokValidationFailed": "فشل التحقق من TikTok",
     "youtubeOptionsUnavailable": "خيارات YouTube غير متاحة",
     "youtubeOptionsUnavailableDesc": "القناة المدارة عبر Composio لا يمكنها استخدام: {{unsupported}}"
+  },
+  "youtube": {
+    "declarationRequiredDesc": "اختار نعم أو لا لكل من إعلان الجمهور وإعلان المحتوى الاصطناعي قبل النشر.",
+    "declarationRequiredTitle": "إعلانات YouTube ناقصة"
   }
 }

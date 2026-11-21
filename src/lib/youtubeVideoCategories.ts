@@ -73,7 +73,7 @@ const BIDI_ISOLATE_END = "\u2069";
  * RTL layout still renders `22 (People & Blogs)` rather than moving the number
  * to the other side of the name.
  */
-export function formatYouTubeCategoryLabel(id: string, name: string): string {
+function formatYouTubeCategoryLabel(id: string, name: string): string {
   return `${BIDI_ISOLATE_START}${id}${BIDI_ISOLATE_END} (${name})`;
 }
 
