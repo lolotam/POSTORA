@@ -37,6 +37,8 @@ export interface PublishPorts {
   publish(timeoutMs: number): Promise<GraphResponse>;
   /** The container's state, asked once with this timeout; a failed query is `waiting`. */
   containerState(timeoutMs: number): Promise<ContainerState>;
+  /** Formats public diagnostics without changing how the provider response is classified. */
+  formatProviderError?(error: GraphError): string;
   now?(): number;
   sleep?(ms: number): Promise<void>;
 }
@@ -124,7 +126,7 @@ export async function publishContainer(ports: PublishPorts, options: PublishOpti
 
     if (typeof reply.id === "string" && reply.id) return { id: reply.id };
     if (reply.error) {
-      lastError = new Error(reply.error.message ?? "Instagram publish failed");
+      lastError = new Error(ports.formatProviderError?.(reply.error) ?? reply.error.message ?? "Instagram publish failed");
       const delayMs = initialDelayMs * Math.pow(2, attempt);
       const canRetry = isRetryablePublishError(reply.error) && attempt < maxRetries - 1 &&
         remaining() - delayMs - CHECK_TIMEOUT_MS >= MIN_REQUEST_MS;
@@ -134,7 +136,7 @@ export async function publishContainer(ports: PublishPorts, options: PublishOpti
         if (isRetryablePublishError(reply.error) && options.deferKind) throw defer();
         throw lastError;
       }
-      console.log(`[instagram] publish error (retryable), attempt ${attempt + 1}, retrying in ${delayMs}ms: ${reply.error.message}`);
+      console.log(`[instagram] publish error (retryable), attempt ${attempt + 1}, retrying in ${delayMs}ms: ${lastError.message}`);
       await sleep(delayMs);
     }
   }

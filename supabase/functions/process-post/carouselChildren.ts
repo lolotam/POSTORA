@@ -39,6 +39,9 @@ export interface ChildWait {
   intervalMs: number;
   /** Threads can retain the original child IDs and finish them on a later worker. */
   deferThreads?: boolean;
+  /** Watches the decoded reply of every child's status request. */
+  observeReply?: PollContainerOptions["observeReply"];
+  formatProviderMessage?: PollContainerOptions["formatProviderMessage"];
 }
 
 export interface ChildWaitOutcome {
@@ -79,6 +82,8 @@ export async function waitForCarouselChildren(
       intervalMs: wait.intervalMs,
       checkFirst: true,
       deadlineMs: wait.deadlineMs,
+      observeReply: wait.observeReply,
+      formatProviderMessage: wait.formatProviderMessage,
     });
     if (container.state === "failed") {
       outcome.dropped.push({ id, reason: container.reason });

@@ -161,6 +161,12 @@ import {
   unfinishedError,
 } from "./deferredPublish.ts";
 import { createCarouselChildren, threadsChildWait, waitForCarouselChildren } from "./carouselChildren.ts";
+import {
+  createMetaPublishReauthObserver,
+  META_PUBLISH_REAUTH_REASON,
+  type MetaPublishReauthWriter,
+  type ObserveMetaReply,
+} from "./metaPublishReauth.ts";
 import { claimFinalNotification, claimThreadsImageNotification, confirmThreadsImageNotification } from "./finalNotification.ts";
 import {
   runResumableVideoUpload,
@@ -618,6 +624,8 @@ interface SocialAccount {
   auth_provider?: "native" | "composio";
   connection_id?: string | null;
   workspace_id?: string | null;
+  /** The row version as Postgres returned it. It fences the reconnect write. */
+  updated_at?: string | null;
 }
 
 function threadsImageExecutionCallbacks(
@@ -854,6 +862,105 @@ function redactMetaError(
     type: typeof e.type === "string" ? e.type : null,
     message: safeMetaErrorMessage(e.message),
   };
+}
+
+/**
+ * The fields of a Meta failure that may be shown: the provider's text can echo
+ * the credential that was revoked, so only the structured fields are kept.
+ */
+function metaFailureFields(error: unknown): string {
+  const fields = redactMetaError(error);
+  if (!fields) return "unknown";
+  return [
+    fields.type === "OAuthException" ? fields.type : null,
+    fields.code !== null ? `code ${fields.code}` : null,
+    fields.subcode !== null ? `subcode ${fields.subcode}` : null,
+  ].filter((part): part is string => Boolean(part)).join(", ") || "unknown";
+}
+
+/**
+ * Keep actionable provider messages after removing the request credential,
+ * authorization headers and URLs that can carry signed query strings.
+ */
+function safeNativeMetaMessage(message: unknown, accessToken: string): string | null {
+  if (typeof message !== "string" || !message.trim()) return null;
+  const withoutToken = accessToken
+    ? message.replaceAll(accessToken, "[redacted]").replaceAll(encodeURIComponent(accessToken), "[redacted]")
+    : message;
+  return safeMetaErrorMessage(withoutToken
+    .replace(/\b(?:Bearer|OAuth)\s+[^\s"',;]+/gi, "[redacted]")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "[redacted URL]"));
+}
+
+function metaFailureSummary(error: unknown, accessToken: string): string {
+  const message = (error as { message?: unknown } | null)?.message;
+  return safeNativeMetaMessage(message, accessToken) ?? `Meta rejected the request (${metaFailureFields(error)})`;
+}
+
+/** What a Meta reply may say in a log: its structured fields, or that it was fine. */
+function metaReplyDiagnostic(reply: unknown): string {
+  const data = reply as { error?: unknown; id?: unknown; video_id?: unknown } | null;
+  if (data?.error) return metaFailureFields(data.error);
+  const id = data?.id ?? data?.video_id;
+  return typeof id === "string" && /^\d{1,30}$/.test(id) ? `id ${id}` : "ok";
+}
+
+/**
+ * A carousel child error can be thrown verbatim by the shared helper.
+ * Redact the message before handing it over and keep the error fields.
+ */
+function safeMetaReply(reply: Record<string, unknown>, accessToken: string): Record<string, unknown> {
+  const error = reply.error;
+  if (!error || typeof error !== "object") return reply;
+  const failure = error as { message?: unknown };
+  if (typeof failure.message !== "string") return reply;
+  return { ...reply, error: { ...failure, message: metaFailureSummary(failure, accessToken) } };
+}
+
+/**
+ * The one conditional write that records a revoked publishing grant.
+ *
+ * The row is written only when it still is the row the publish attempt read:
+ * same account, same owner, same platform, still active, same row version and
+ * no reconnect flag yet. A row that was refreshed, reconnected or written by
+ * anybody else in the meantime is left to the writer that owns it. The
+ * credential is never part of the request.
+ */
+function nativeReauthWriter(supabase: SupabaseClient): MetaPublishReauthWriter {
+  return async ({ accountId, postOwnerId, platform, updatedAt, signal }) => {
+    const { data, error } = await supabase
+      .from("social_accounts")
+      .update({ needs_reauth: true, last_refresh_error: META_PUBLISH_REAUTH_REASON })
+      .eq("id", accountId)
+      .eq("user_id", postOwnerId)
+      .eq("platform", platform)
+      .eq("is_active", true)
+      .eq("updated_at", updatedAt)
+      .or("needs_reauth.is.null,needs_reauth.eq.false")
+      .abortSignal(signal)
+      .select("id");
+    return { matched: data?.length ?? 0, error: error?.message ?? null };
+  };
+}
+
+/**
+ * The observer for one account's native publish attempt. It is bound to the
+ * account row this attempt read. The observed Facebook and Instagram requests
+ * take their credential from that same account without substituting it.
+ */
+function nativeReauthObserver(account: SocialAccount, postOwnerId: string, supabase: SupabaseClient): ObserveMetaReply {
+  return createMetaPublishReauthObserver({
+    snapshot: {
+      accountId: account.id,
+      postOwnerId,
+      platform: account.platform,
+      updatedAt: account.updated_at ?? "",
+      accessToken: account.access_token ?? "",
+    },
+    requestToken: account.access_token ?? "",
+    write: nativeReauthWriter(supabase),
+    deadlineMs: workerPublishDeadline(WORKER_STARTED_AT_MS),
+  });
 }
 
 /**
@@ -3065,7 +3172,7 @@ Deno.serve(async (req) => {
             result = await postToBluesky(account, post, mediaUrls, supabase);
             break;
           case "facebook":
-            result = await postToFacebook(account, post, mediaUrls, mediaFiles);
+            result = await postToFacebook(account, post, mediaUrls, mediaFiles, nativeReauthObserver(account, post.user_id, supabase));
             break;
           case "instagram": {
             const primaryIsVideo = mediaFiles.length > 0
@@ -3088,11 +3195,12 @@ Deno.serve(async (req) => {
                 recordedMediaIds: (ids) => recordedMediaIdsFor(supabase, post_id, account.id, ids),
               }
               : NOT_A_RETRY;
+            const observeReply = nativeReauthObserver(account, post.user_id, supabase);
             if (igAuthType === 'business_login') {
               result = await postToInstagramBusinessLogin(account, primaryPost, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry, (id) => {
                 if (id) exactPlatformPostIds.push(id);
                 else fanoutWriteFailed = true;
-              });
+              }, observeReply);
             } else {
               result = await postToInstagram(account, primaryPost, mediaUrls, mediaFiles, timingForAccount, (story) =>
                 recordLiveStory(supabase, { postId: post_id, account, story, onRecorded: (id) => exactPlatformPostIds.push(id) }, stories), retry, async (error) => {
@@ -3108,7 +3216,7 @@ Deno.serve(async (req) => {
                 if (settled.id) exactPlatformPostIds.push(settled.id);
                 if (settled.error || !settled.id) fanoutWriteFailed = true;
                 return settled.error;
-              });
+              }, observeReply);
             }
             break;
           }
@@ -4454,6 +4562,10 @@ function extractFacebookPostId(compoundId: string): string {
 
 /**
  * Post a Facebook Reel (video)
+ *
+ * `observeReply` watches the three native phases for a revoked publishing grant.
+ * It is appended to the signature instead of being grouped into a new argument
+ * bag: the legacy callers of this publisher must not be reordered.
  */
 async function postFacebookReel(
   pageId: string,
@@ -4462,7 +4574,8 @@ async function postFacebookReel(
   caption: string,
   videoUrl: string,
   reelDescription?: string | null,
-  post?: PostData | null
+  post?: PostData | null,
+  observeReply?: ObserveMetaReply,
 ): Promise<PlatformPostResult> {
   console.log("Posting Facebook Reel...");
 
@@ -4480,10 +4593,11 @@ async function postFacebookReel(
   );
 
   const initData = await initResponse.json();
-  console.log("Facebook Reel init response:", JSON.stringify(initData).slice(0, 200));
+  await observeReply?.(initResponse.status, initData);
+  console.log("Facebook Reel init response:", metaReplyDiagnostic(initData));
 
   if (initData.error) {
-    throw new Error(`Facebook Reel init error: ${initData.error.message}`);
+    throw new Error(`Facebook Reel init error: ${metaFailureSummary(initData.error, accessToken)}`);
   }
 
   const videoId = initData.video_id;
@@ -4510,10 +4624,11 @@ async function postFacebookReel(
   });
 
   const uploadData = await uploadResponse.json();
-  console.log("Facebook Reel upload response:", JSON.stringify(uploadData).slice(0, 200));
+  await observeReply?.(uploadResponse.status, uploadData);
+  console.log("Facebook Reel upload response:", metaReplyDiagnostic(uploadData));
 
   if (uploadData.error) {
-    throw new Error(`Facebook Reel upload error: ${uploadData.error.message}`);
+    throw new Error(`Facebook Reel upload error: ${metaFailureSummary(uploadData.error, accessToken)}`);
   }
 
   // Step 3: Finish the Reel upload and publish
@@ -4534,10 +4649,11 @@ async function postFacebookReel(
   );
 
   const finishData = await finishResponse.json();
-  console.log("Facebook Reel finish response:", JSON.stringify(finishData).slice(0, 200));
+  await observeReply?.(finishResponse.status, finishData);
+  console.log("Facebook Reel finish response:", metaReplyDiagnostic(finishData));
 
   if (finishData.error) {
-    throw new Error(`Facebook Reel publish error: ${finishData.error.message}`);
+    throw new Error(`Facebook Reel publish error: ${metaFailureSummary(finishData.error, accessToken)}`);
   }
 
   // Construct Reel URL
@@ -4585,12 +4701,17 @@ async function postFacebookReel(
 
 /**
  * Post to Facebook (feed posts, photos, multi-photo albums, Reels)
+ *
+ * `observeReply` watches the Reel publisher only: the Reel phases are the
+ * native publishing requests of the Page login, and the other formats keep
+ * their own failure contracts.
  */
 async function postToFacebook(
   account: SocialAccount,
   post: PostData,
   mediaUrls: string[],
-  mediaFiles: MediaFile[] = []
+  mediaFiles: MediaFile[] = [],
+  observeReply?: ObserveMetaReply,
 ): Promise<PlatformPostResult> {
   const pageId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -4623,7 +4744,8 @@ async function postToFacebook(
         post.caption || "",
         mediaUrls[0],
         metadata?.facebook_reel_description,
-        post
+        post,
+        observeReply
       );
       allResults.push(reelResult);
       continue;
@@ -5246,12 +5368,16 @@ async function waitForInstagramContainer(
   maxAttempts: number,
   delayMs: number,
   wait: ContainerWait,
+  accessToken: string,
+  observeReply?: ObserveMetaReply,
 ): Promise<string> {
   const container = await pollContainer("instagram", statusUrl, {
     maxAttempts,
     intervalMs: delayMs,
     checkFirst: true,
     deadlineMs: wait.deadlineMs,
+    observeReply,
+    formatProviderMessage: (message) => safeNativeMetaMessage(message, accessToken),
   });
   switch (container.state) {
     case "published":
@@ -5281,6 +5407,7 @@ function pollContainerStatus(
   wait: ContainerWait,
   maxAttempts = 60, // Increased from 30 to 60 (2 min total for large video reels)
   delayMs = 2000,
+  observeReply?: ObserveMetaReply,
 ): Promise<string> {
   return waitForInstagramContainer(
     `https://graph.facebook.com/v18.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
@@ -5288,6 +5415,8 @@ function pollContainerStatus(
     maxAttempts,
     delayMs,
     wait,
+    accessToken,
+    observeReply,
   );
 }
 
@@ -5295,12 +5424,25 @@ function pollContainerStatus(
  * An Instagram container's state, asked once. Only the container's own ERROR or EXPIRED is a
  * failure: a status request that fails (an expired token, a 5xx, a timeout) says nothing about
  * the publish, so it comes back as `waiting`, i.e. unknown.
+ *
+ * The decoded reply is handed to `observeReply` before it is judged: a status request that
+ * reports a revoked grant is still only a status request, so the answer stays `waiting`.
  */
-async function checkContainerOnce(statusUrl: string, timeoutMs: number): Promise<ContainerState> {
+async function checkContainerOnce(statusUrl: string, timeoutMs: number, accessToken: string, observeReply?: ObserveMetaReply): Promise<ContainerState> {
+  const deadlineMs = Date.now() + timeoutMs;
   try {
     const response = await fetchWithTimeout(statusUrl, {}, timeoutMs);
+    let data: Record<string, unknown> | null = null;
+    try {
+      data = await response.json();
+    } catch {
+      // An unreadable body says nothing about the container.
+    }
+    await observeReply?.(response.status, data, deadlineMs);
     if (!response.ok) return { state: "waiting" };
-    return classifyContainerStatus("instagram", await response.json());
+    const container = classifyContainerStatus("instagram", data);
+    if (container.state !== "failed") return container;
+    return { state: "failed", reason: safeNativeMetaMessage(container.reason, accessToken) ?? "Media processing failed" };
   } catch {
     return { state: "waiting" };
   }
@@ -5409,6 +5551,7 @@ function publishInstagramMedia(
   creationId: string,
   accessToken: string,
   deferKind?: DeferredKind,
+  observeReply?: ObserveMetaReply,
 ): Promise<{ id: string }> {
   return publishContainer({
     publish: async (timeoutMs) => {
@@ -5422,20 +5565,32 @@ function publishInstagramMedia(
         timeoutMs,
       );
       const reply = await response.json() as GraphResponse;
-      console.log("Instagram publish response:", JSON.stringify(reply).slice(0, 300));
+      await observeReply?.(response.status, reply);
+      console.log("Instagram publish response:", metaReplyDiagnostic(reply));
       return reply;
     },
+    formatProviderError: (error) => metaFailureSummary(error, accessToken),
     containerState: (timeoutMs) => checkContainerOnce(
       `https://graph.facebook.com/v18.0/${creationId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
       timeoutMs,
+      accessToken,
+      observeReply,
     ),
   }, { creationId, deferKind, requestTimeoutMs: 20000, deadlineMs: workerPublishDeadline(WORKER_STARTED_AT_MS) });
 }
 
 /**
  * Post to Instagram (feed posts, Reels, carousels)
+ *
+ * `observeReply` watches the native publishing requests of this host: the
+ * container creations, the carousel children, the readiness polls and the final
+ * media publish.
+ *
+ * Exported for the publisher's own suite: the route cannot reach a resumed
+ * container without the reconciler's state, and the suite has to drive the
+ * publisher with it.
  */
-async function postToInstagram(
+export async function postToInstagram(
   account: SocialAccount,
   post: PostData,
   mediaUrls: string[],
@@ -5448,6 +5603,7 @@ async function postToInstagram(
   // Writes a failed story row for a retry whose feed post or reel is already done (answering an
   // error, or null).
   recordStoryFailure?: (error: string) => Promise<string | null>,
+  observeReply?: ObserveMetaReply,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -5617,7 +5773,9 @@ async function postToInstagram(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(b),
       }, 20000);
-      return await r.json();
+      const reply = await r.json();
+      await observeReply?.(r.status, reply);
+      return reply;
     };
     let data = await doFetch(body);
     if (locationDebug.meta_media_create_success === null) {
@@ -5865,16 +6023,17 @@ async function postToInstagram(
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(storyBody) }
     );
     const createData = await createResponse.json();
-    console.log("Instagram Story container:", JSON.stringify(createData).slice(0, 300));
+    await observeReply?.(createResponse.status, createData);
+    console.log("Instagram Story container:", metaReplyDiagnostic(createData));
 
     if (createData.error) {
-      warnings.push(`Instagram Story failed: ${createData.error.message}`);
+      warnings.push(`Instagram Story failed: ${metaFailureSummary(createData.error, accessToken)}`);
     } else {
       // Poll for container readiness (especially for video stories)
-      await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
+      await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs }, 60, 2000, observeReply);
 
       // Publish the story
-      const publishData = await publishInstagramMedia(igUserId, createData.id, accessToken);
+      const publishData = await publishInstagramMedia(igUserId, createData.id, accessToken, undefined, observeReply);
 
       const mediaResponse = await fetch(
         `https://graph.facebook.com/v18.0/${publishData.id}?fields=permalink&access_token=${accessToken}`
@@ -6029,7 +6188,8 @@ async function postToInstagram(
         }
       }
     } else {
-      console.log("Instagram REELS request:", JSON.stringify(reelsBody).slice(0, 500));
+      // The credential is in the body: it is never logged.
+      console.log("Instagram REELS request:", JSON.stringify({ ...reelsBody, access_token: "[redacted]" }).slice(0, 500));
 
       let createData = await igMediaCreateWithLocationRetry(
         `https://graph.facebook.com/v18.0/${igUserId}/media`,
@@ -6039,7 +6199,7 @@ async function postToInstagram(
       if (createData && !("error" in (createData as object)) && reelsBody.location_id && !("location_id" in reelsBody)) {
         // no-op — kept for clarity; helper already pushed the warning.
       }
-      console.log("Instagram REELS creation response:", JSON.stringify(createData).slice(0, 300));
+      console.log("Instagram REELS creation response:", metaReplyDiagnostic(createData));
 
       // Retry without collaborator if "User not visible" error
       if (createData.error && reelsBody.collaborators && (createData.error.code === 210 || createData.error.message?.includes("not visible"))) {
@@ -6051,10 +6211,10 @@ async function postToInstagram(
           `https://graph.facebook.com/v18.0/${igUserId}/media`,
           reelsBody,
         );
-        console.log("Instagram REELS retry response:", JSON.stringify(createData).slice(0, 300));
+        console.log("Instagram REELS retry response:", metaReplyDiagnostic(createData));
       }
 
-      if (createData.error) throw new Error(createData.error.message);
+      if (createData.error) throw new Error(metaFailureSummary(createData.error, accessToken));
       reelContainerId = String(createData.id);
     }
 
@@ -6064,7 +6224,7 @@ async function postToInstagram(
       reelStatus = await pollContainerStatus(reelContainerId, accessToken, {
         deferKind: "ig_reel",
         deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
-      }, 60, 2000);
+      }, 60, 2000, observeReply);
     } catch (waitError) {
       // The pending row carries a story that could not be recorded, or it would be lost here.
       if (waitError instanceof ContainerStillProcessing && unrecordedStory) waitError.unrecordedStory = unrecordedStory;
@@ -6097,7 +6257,7 @@ async function postToInstagram(
       // A publish Instagram did not confirm is left for the reconciler, carrying the unrecorded
       // story like the wait above.
       try {
-        publishData = await publishInstagramMedia(igUserId, reelContainerId, accessToken, "ig_reel");
+        publishData = await publishInstagramMedia(igUserId, reelContainerId, accessToken, "ig_reel", observeReply);
       } catch (publishError) {
         if (publishError instanceof ContainerStillProcessing && unrecordedStory) publishError.unrecordedStory = unrecordedStory;
         throw publishError;
@@ -6176,7 +6336,7 @@ async function postToInstagram(
       `https://graph.facebook.com/v18.0/${igUserId}/media`,
       imageBody,
     );
-    console.log("Instagram container creation response:", JSON.stringify(createData).slice(0, 300));
+    console.log("Instagram container creation response:", metaReplyDiagnostic(createData));
 
     // Retry without collaborator if "User not visible" error
     if (createData.error && imageBody.collaborators && (createData.error.code === 210 || createData.error.message?.includes("not visible"))) {
@@ -6188,17 +6348,17 @@ async function postToInstagram(
         `https://graph.facebook.com/v18.0/${igUserId}/media`,
         imageBody,
       );
-      console.log("Instagram image retry response:", JSON.stringify(createData).slice(0, 300));
+      console.log("Instagram image retry response:", metaReplyDiagnostic(createData));
     }
 
-    if (createData.error) throw new Error(createData.error.message);
+    if (createData.error) throw new Error(metaFailureSummary(createData.error, accessToken));
     const containerId = graphId(createData, "Instagram image container");
 
     // Poll for container status before publishing
-    await pollContainerStatus(containerId, accessToken, { deadlineMs: timing.deadlineMs });
+    await pollContainerStatus(containerId, accessToken, { deadlineMs: timing.deadlineMs }, 60, 2000, observeReply);
 
     // Publish the media with retry logic
-    const publishData = await publishInstagramMedia(igUserId, containerId, accessToken);
+    const publishData = await publishInstagramMedia(igUserId, containerId, accessToken, undefined, observeReply);
 
     // Post first comment
     await postInstagramFirstComment(publishData.id);
@@ -6261,7 +6421,11 @@ async function postToInstagram(
         async (childBody) => {
           // Bounded like every other Meta call: ten parallel creates cannot hang the worker.
           const response = await fetchWithTimeout(childEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) }, 20000);
-          return await response.json();
+          const reply = await response.json();
+          // The child is a native publish request of this account: its reply is watched too.
+          await observeReply?.(response.status, reply);
+          // The child fails with Meta's own text, which can echo the credential.
+          return safeMetaReply(reply, accessToken);
         },
       );
       // The children share the carousel's deferrable budget so the publish still fits the worker.
@@ -6269,7 +6433,7 @@ async function postToInstagram(
         "instagram",
         containerIds,
         (id) => `https://graph.facebook.com/v18.0/${id}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
-        { deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS), maxAttempts: 30, intervalMs: 2000 },
+        { deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS), maxAttempts: 30, intervalMs: 2000, observeReply, formatProviderMessage: (message) => safeNativeMetaMessage(message, accessToken) },
       );
       // Instagram refuses a carousel missing a child, so one failed child fails the carousel.
       if (children.dropped.length > 0) throw new Error(containerFailureMessage("instagram", children.dropped[0].reason));
@@ -6311,7 +6475,7 @@ async function postToInstagram(
         );
       }
 
-      if (carouselData.error) throw new Error(carouselData.error.message);
+      if (carouselData.error) throw new Error(metaFailureSummary(carouselData.error, accessToken));
       carouselId = graphId(carouselData, "Instagram carousel container");
     }
 
@@ -6321,7 +6485,7 @@ async function postToInstagram(
       carouselStatus = await pollContainerStatus(carouselId, accessToken, {
         deferKind: "ig_carousel",
         deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
-      });
+      }, 60, 2000, observeReply);
     } catch (waitError) {
       // The pending row carries a story that could not be recorded, or it would be lost here.
       if (waitError instanceof ContainerStillProcessing && unrecordedStory) waitError.unrecordedStory = unrecordedStory;
@@ -6350,7 +6514,7 @@ async function postToInstagram(
       // A publish Instagram did not confirm is left for the reconciler, carrying the unrecorded
       // story like the wait above.
       try {
-        publishData = await publishInstagramMedia(igUserId, carouselId, accessToken, "ig_carousel");
+        publishData = await publishInstagramMedia(igUserId, carouselId, accessToken, "ig_carousel", observeReply);
       } catch (publishError) {
         if (publishError instanceof ContainerStillProcessing && unrecordedStory) publishError.unrecordedStory = unrecordedStory;
         throw publishError;
@@ -6400,6 +6564,7 @@ function pollBusinessLoginContainerStatus(
   wait: ContainerWait,
   maxAttempts = 30,
   delayMs = 2000,
+  observeReply?: ObserveMetaReply,
 ): Promise<string> {
   return waitForInstagramContainer(
     `https://graph.instagram.com/v22.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
@@ -6407,6 +6572,8 @@ function pollBusinessLoginContainerStatus(
     maxAttempts,
     delayMs,
     wait,
+    accessToken,
+    observeReply,
   );
 }
 
@@ -6419,6 +6586,7 @@ function publishBusinessLoginMedia(
   creationId: string,
   accessToken: string,
   deferKind?: DeferredKind,
+  observeReply?: ObserveMetaReply,
 ): Promise<{ id: string }> {
   return publishContainer({
     publish: async (timeoutMs) => {
@@ -6432,12 +6600,16 @@ function publishBusinessLoginMedia(
         timeoutMs,
       );
       const reply = await response.json() as GraphResponse;
-      console.log("BL Instagram publish response:", JSON.stringify(reply).slice(0, 300));
+      await observeReply?.(response.status, reply);
+      console.log("BL Instagram publish response:", metaReplyDiagnostic(reply));
       return reply;
     },
+    formatProviderError: (error) => metaFailureSummary(error, accessToken),
     containerState: (timeoutMs) => checkContainerOnce(
       `https://graph.instagram.com/v22.0/${creationId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
       timeoutMs,
+      accessToken,
+      observeReply,
     ),
   }, { creationId, deferKind, requestTimeoutMs: 30000, deadlineMs: workerPublishDeadline(WORKER_STARTED_AT_MS) });
 }
@@ -6458,6 +6630,7 @@ async function postToInstagramBusinessLogin(
   timing: PublishTiming = NO_DEFERRAL,
   retry: RetryState = NOT_A_RETRY,
   recordResultId?: (id: string | null) => void,
+  observeReply?: ObserveMetaReply,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -6622,7 +6795,9 @@ async function postToInstagramBusinessLogin(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(b),
       });
-      return await r.json();
+      const reply = await r.json();
+      await observeReply?.(r.status, reply);
+      return reply;
     };
     let data = await doFetch(body);
     if (locationDebug.meta_media_create_success === null) {
@@ -6853,15 +7028,16 @@ async function postToInstagramBusinessLogin(
         { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(storyBody) }
       );
       const createData = await createResponse.json();
+      await observeReply?.(createResponse.status, createData);
       if (createData.error) {
         const msg = createData.error.code === 100
-          ? `Instagram Story rejected — account may be Personal (not Business/Creator). ${createData.error.message}`
-          : createData.error.message;
+          ? `Instagram Story rejected — account may be Personal (not Business/Creator). ${metaFailureSummary(createData.error, accessToken)}`
+          : metaFailureSummary(createData.error, accessToken);
         await insertIGRow("story", "failed", undefined, undefined, msg);
         subResults.push({ subtype: "story", status: "failed", error: msg });
       } else {
-        await pollBusinessLoginContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
-        const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
+        await pollBusinessLoginContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs }, 30, 2000, observeReply);
+        const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken, undefined, observeReply);
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const rowId = await insertIGRow("story", "success", publishData.id, fallbackUrl);
         subResults.push({ subtype: "story", status: "success", id: publishData.id, url: fallbackUrl });
@@ -6936,9 +7112,9 @@ async function postToInstagramBusinessLogin(
       }
 
       if (createData.error) {
-        let msg = createData.error.message;
+        let msg = metaFailureSummary(createData.error, accessToken);
         if (createData.error.code === 100) {
-          msg = `Instagram rejected the request — account may be Personal (not Business/Creator) or app lacks instagram_content_publish. ${createData.error.message}`;
+          msg = `Instagram rejected the request — account may be Personal (not Business/Creator) or app lacks instagram_content_publish. ${metaFailureSummary(createData.error, accessToken)}`;
         } else if (createData.error.message?.includes("does not have permission")) {
           msg = `Instagram permission denied — please disconnect and reconnect Instagram on the Profiles page.`;
         }
@@ -6950,7 +7126,7 @@ async function postToInstagramBusinessLogin(
         const reelStatus = await pollBusinessLoginContainerStatus(containerId, accessToken, {
           deferKind: "ig_business_reel",
           deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
-        }, 30, 2000);
+        }, 30, 2000, observeReply);
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const subtype = wantReel ? "reel" : "feed";
         if (reelStatus === "PUBLISHED") {
@@ -6976,7 +7152,7 @@ async function postToInstagramBusinessLogin(
             warnings.push(note);
           }
         } else {
-          const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken, "ig_business_reel");
+          const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken, "ig_business_reel", observeReply);
           const blDebug = await finalizeBLLocationDebug(publishData.id);
           const rowId = await insertIGRow(subtype, "success", publishData.id, fallbackUrl, undefined, {
             shared_to_feed: shareToFeed,
@@ -7029,13 +7205,13 @@ async function postToInstagramBusinessLogin(
         }
 
         if (createData.error) {
-          const msg = createData.error.message;
+          const msg = metaFailureSummary(createData.error, accessToken);
           await insertIGRow("feed", "failed", undefined, undefined, msg);
           subResults.push({ subtype: "feed", status: "failed", error: msg });
         } else {
           const containerId = graphId(createData, "Instagram feed container");
-          await pollBusinessLoginContainerStatus(containerId, accessToken, { deadlineMs: timing.deadlineMs });
-          const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken);
+          await pollBusinessLoginContainerStatus(containerId, accessToken, { deadlineMs: timing.deadlineMs }, 30, 2000, observeReply);
+          const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken, undefined, observeReply);
           const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
           const blDebug = await finalizeBLLocationDebug(publishData.id);
           const rowId = await insertIGRow("feed", "success", publishData.id, fallbackUrl, undefined, blDebug ? { location_debug: blDebug } : undefined);
@@ -7056,7 +7232,11 @@ async function postToInstagramBusinessLogin(
             async (childBody) => {
               // Bounded like every other Meta call: ten parallel creates cannot hang the worker.
               const response = await fetchWithTimeout(childEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) }, 20000);
-              return await response.json();
+              const reply = await response.json();
+              // The child is a native publish request of this account: its reply is watched too.
+              await observeReply?.(response.status, reply);
+              // The child fails with Meta's own text, which can echo the credential.
+              return safeMetaReply(reply, accessToken);
             },
           );
           // The children share the carousel's deferrable budget so the publish still fits the worker.
@@ -7064,7 +7244,7 @@ async function postToInstagramBusinessLogin(
             "instagram",
             containerIds,
             (id) => `https://graph.instagram.com/v22.0/${id}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
-            { deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS), maxAttempts: 30, intervalMs: 2000 },
+            { deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS), maxAttempts: 30, intervalMs: 2000, observeReply, formatProviderMessage: (message) => safeNativeMetaMessage(message, accessToken) },
           );
           // Instagram refuses a carousel missing a child, so one failed child fails the carousel.
           if (children.dropped.length > 0) throw new Error(containerFailureMessage("instagram", children.dropped[0].reason));
@@ -7096,7 +7276,7 @@ async function postToInstagramBusinessLogin(
             );
           }
 
-          if (carouselData.error) throw new Error(carouselData.error.message);
+          if (carouselData.error) throw new Error(metaFailureSummary(carouselData.error, accessToken));
           carouselId = graphId(carouselData, "Instagram carousel container");
         }
 
@@ -7104,7 +7284,7 @@ async function postToInstagramBusinessLogin(
         const carouselStatus = await pollBusinessLoginContainerStatus(carouselId, accessToken, {
           deferKind: "ig_carousel",
           deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
-        }, 30, 2000);
+        }, 30, 2000, observeReply);
         const fallbackUrl = `https://instagram.com`;
         if (carouselStatus === "PUBLISHED") {
           // Only a resumed run sees this: an earlier run's publish went unanswered, or its worker
@@ -7129,7 +7309,7 @@ async function postToInstagramBusinessLogin(
             warnings.push(note);
           }
         } else {
-          const publishData = await publishBusinessLoginMedia(igUserId, carouselId, accessToken, "ig_carousel");
+          const publishData = await publishBusinessLoginMedia(igUserId, carouselId, accessToken, "ig_carousel", observeReply);
           const blDebug = await finalizeBLLocationDebug(publishData.id);
           const rowId = await insertIGRow("feed", "success", publishData.id, fallbackUrl, undefined, blDebug ? { location_debug: blDebug } : undefined);
           subResults.push({ subtype: "feed", status: "success", id: publishData.id, url: fallbackUrl });

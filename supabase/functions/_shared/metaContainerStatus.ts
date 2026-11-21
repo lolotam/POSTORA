@@ -79,6 +79,12 @@ export interface PollContainerOptions {
   fetcher?: (url: string, timeoutMs: number) => Promise<Response>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * Watches the decoded reply of the status request. The observer decides what a reply means;
+   * this poll still judges the container exactly as it did before.
+   */
+  observeReply?: (status: number, reply: unknown, deadlineMs?: number) => Promise<void>;
+  formatProviderMessage?: (message: unknown) => string | null;
 }
 
 interface ApiFailure {
@@ -91,11 +97,11 @@ interface ApiFailure {
  * server error, a timeout answer, a rate limit or Meta's own transient flag is retried like
  * a network failure: only an answer that will not change (bad token, bad id) fails.
  */
-function apiFailure(response: Response, data: Record<string, unknown> | null): ApiFailure | null {
+function apiFailure(response: Response, data: Record<string, unknown> | null, formatMessage: (message: unknown) => string | null): ApiFailure | null {
   const error = data?.error && typeof data.error === "object" ? data.error as Record<string, unknown> : null;
   if (response.ok && !error) return null;
   const code = typeof error?.code === "number" ? error.code : null;
-  const message = text(error?.message);
+  const message = formatMessage(error?.message);
   const retryable = response.status >= 500 || response.status === 408 || response.status === 429 ||
     error?.is_transient === true || (code !== null && TRANSIENT_META_CODES.has(code));
   const label = code !== null ? `code ${code}` : `HTTP ${response.status}`;
@@ -139,8 +145,13 @@ export async function pollContainer(api: MetaContainerApi, statusUrl: string, op
     } catch {
       // An unreadable body is judged by its status below, or waited on if the status was fine.
     }
+    // The observer reads the reply before it loses its structure. It only records a revoked
+    // grant; the wait itself is unchanged.
+    if (options.observeReply) {
+      await options.observeReply(response.status, data, deadlineMs ?? undefined);
+    }
 
-    const failure = apiFailure(response, data);
+    const failure = apiFailure(response, data, options.formatProviderMessage ?? text);
     if (failure) {
       console.warn(`[${api}] container status check ${attempt}: ${failure.reason}${failure.retryable ? " (will retry)" : ""}`);
       if (failure.retryable) continue;
@@ -148,6 +159,9 @@ export async function pollContainer(api: MetaContainerApi, statusUrl: string, op
     }
     const container = classifyContainerStatus(api, data);
     console.log(`[${api}] container status check ${attempt}/${attempts}: ${container.state}`);
+    if (container.state === "failed" && options.formatProviderMessage) {
+      return { state: "failed", reason: options.formatProviderMessage(container.reason) ?? "Media processing failed" };
+    }
     if (container.state !== "waiting") return container;
   }
   return { state: "waiting" };
