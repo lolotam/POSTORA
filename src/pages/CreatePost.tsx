@@ -19,6 +19,7 @@ import { enqueuePostPublish } from "@/features/publishing/infrastructure/enqueue
 import { TikTokSettingsState } from "@/components/post/settings/TikTokSettings";
 import { YouTubeSettingsState } from "@/components/post/settings/YouTubeSettings";
 import { youtubeOptionsUnsupportedOnComposio } from "@/lib/youtubeComposioOptions";
+import { missingYoutubeDeclarations } from "@/lib/youtubePublishSafety";
 import { useSavedFieldSuggestions } from "@/hooks/useSavedFieldSuggestions";
 import { useQuotas } from "@/hooks/useQuotas";
 import { useTranslation } from "react-i18next";
@@ -421,6 +422,17 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     try {
       if (!validatePost(unsplashValidationError)) return;
       const clearSubmittedDraft = captureDraftCleanup();
+
+    if (selectedPlatforms.includes("youtube")) {
+      const missingDeclarations = missingYoutubeDeclarations(platformSettings.buildPostMetadata());
+      if (missingDeclarations.length > 0) {
+        showErrorToast(
+          t("youtube.declarationRequiredTitle", "Missing YouTube declarations"),
+          t("youtube.declarationRequiredDesc", "Choose Yes or No for both the audience and synthetic-media declarations before publishing."),
+        );
+        return;
+      }
+    }
 
     const hasComposioYouTubeTarget = connectedAccounts.some((account) =>
       selectedAccountIds.includes(account.id) && account.platform === "youtube" &&

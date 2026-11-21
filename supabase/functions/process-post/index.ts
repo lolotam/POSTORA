@@ -128,6 +128,7 @@ import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.
 import { fetchJsonWithDeadline, fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
+import { assertNativeYoutubeDeclarations } from "../_shared/youtubePublishSafety.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { CHECK_ONCE_DEADLINE, classifyContainerStatus, CONTAINER_STATUS_FIELDS, type ContainerState, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
@@ -10441,6 +10442,9 @@ async function postToYouTube(
 
   // Get YouTube settings from metadata
   const metadata = post.metadata;
+  // A queued post written before the explicit-declaration rule must not be
+  // published on an implicit `false`. Refuse before any session or byte read.
+  assertNativeYoutubeDeclarations(metadata);
   const isShort = metadata?.youtube_video_type === "short";
   let title = metadata?.youtube_title || post.caption?.substring(0, 100) || "New Video";
 

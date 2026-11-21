@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
-import { youtubeCategories } from "@/lib/platformConstants";
+import { YouTubeCategorySelect } from "./YouTubeCategorySelect";
 import { getPlatformProfileUrl } from "@/lib/platformProfileUrls";
 import {
   Select,
@@ -58,10 +58,11 @@ export interface YouTubeSettingsState {
   visibility: "public" | "unlisted" | "private";
   tags: string;
   category: string;
-  madeForKids: boolean;
+  /** null until the creator explicitly answers Yes or No. */
+  madeForKids: boolean | null;
   allowEmbedding: boolean;
   publicStatsViewable: boolean;
-  containsSyntheticMedia: boolean;
+  containsSyntheticMedia: boolean | null;
   hasPaidPromotion: boolean;
   notifySubscribers: boolean;
   commentsEnabled: boolean;
@@ -111,6 +112,62 @@ interface YouTubeSettingsProps {
 
 const MAX_THUMBNAIL_REFERENCES = 5;
 
+interface DeclarationChoiceProps {
+  id: string;
+  label: string;
+  help: string;
+  value: boolean | null;
+  /** The selected provider cannot express an affirmative declaration. */
+  mismatch: boolean;
+  onChange: (value: boolean) => void;
+  yesText: string;
+  noText: string;
+  unsupportedText: string;
+}
+
+/** A Yes/No answer must be given; an untouched control is not an answer. */
+function DeclarationChoice({
+  id,
+  label,
+  help,
+  value,
+  mismatch,
+  onChange,
+  yesText,
+  noText,
+  unsupportedText,
+}: DeclarationChoiceProps) {
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium flex items-center gap-1">
+        {label}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+          </TooltipTrigger>
+          <TooltipContent><p>{help}</p></TooltipContent>
+        </Tooltip>
+      </legend>
+      <RadioGroup
+        value={value === null ? undefined : value ? "yes" : "no"}
+        onValueChange={(answer) => onChange(answer === "yes")}
+        className="flex gap-4"
+        aria-label={label}
+      >
+        <label className="flex items-center gap-2 cursor-pointer" htmlFor={`${id}-yes`}>
+          <RadioGroupItem id={`${id}-yes`} value="yes" />
+          <span className="text-sm">{yesText}</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer" htmlFor={`${id}-no`}>
+          <RadioGroupItem id={`${id}-no`} value="no" />
+          <span className="text-sm">{noText}</span>
+        </label>
+      </RadioGroup>
+      {mismatch && <p className="text-xs text-destructive">{unsupportedText}</p>}
+    </fieldset>
+  );
+}
+
 export function YouTubeSettings({
   settings,
   onSettingsChange,
@@ -126,7 +183,8 @@ export function YouTubeSettings({
   selectedAccounts = [],
 }: YouTubeSettingsProps) {
   const { flags } = useFeatureFlags();
-  const { t } = useTranslation("postsettings");
+  const { t, i18n } = useTranslation("postsettings");
+  const locale: "en" | "ar" = i18n.resolvedLanguage?.startsWith("ar") ? "ar" : "en";
   const [thumbnailDialogOpen, setThumbnailDialogOpen] = useState(false);
   const [aiThumbnailPrompt, setAiThumbnailPrompt] = useState("");
   const { tiers: resolvedTiers } = useResolvedImageModels();
@@ -381,25 +439,15 @@ export function YouTubeSettings({
             onSelect={(val) => onSettingsChange({ tags: val })}
           />
         </div>
-        <div className="space-y-2">
-          <Label className="text-sm font-medium flex items-center gap-2">
-            {t("youtube.categoryId", "Category ID")}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{t("youtube.categoryIdTooltip", "YouTube category (e.g., 22=People & Blogs, 24=Entertainment)")}</p>
-              </TooltipContent>
-            </Tooltip>
-          </Label>
-          <Input
-            placeholder="22"
-            value={settings.category}
-            onChange={(e) => onSettingsChange({ category: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">{t("youtube.useNumericValuesCategory", "Use numeric values from YouTube categories.")}</p>
-        </div>
+        <YouTubeCategorySelect
+          value={settings.category}
+          onValueChange={(category) => onSettingsChange({ category })}
+          locale={locale}
+          label={t("youtube.category", "Category")}
+          unavailableText={t("youtube.categoryUnavailable", "Currently unavailable")}
+          retryText={t("youtube.categoryRetry", "Retry catalog")}
+          helpText={t("youtube.categoryHelp", "Non-assignable categories stay visible but disabled and are preserved when a video already uses them.")}
+        />
       </div>
 
       {/* Privacy and License */}
@@ -491,47 +539,31 @@ export function YouTubeSettings({
             </Tooltip>
           </label>
         </div>
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id="madeForKids"
-            checked={settings.madeForKids}
-            disabled={composioManaged}
-            onCheckedChange={(checked) => onSettingsChange({ madeForKids: checked as boolean })}
-          />
-          <label htmlFor="madeForKids" className="text-sm cursor-pointer flex items-center gap-1">
-            {t("youtube.madeForKids", "Self-declared made for kids")}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{t("youtube.madeForKidsTooltip", "COPPA compliance - disables comments and personalized ads")}</p>
-              </TooltipContent>
-            </Tooltip>
-          </label>
-        </div>
+        <DeclarationChoice
+          id="madeForKids"
+          label={t("youtube.audienceDeclaration", "Audience (made for kids)")}
+          help={t("youtube.audienceDeclarationHelp", "Choose Yes or No before publishing to YouTube.")}
+          value={settings.madeForKids}
+          mismatch={composioManaged && settings.madeForKids === true}
+          onChange={(madeForKids) => onSettingsChange({ madeForKids })}
+          yesText={t("common:yes", "Yes")}
+          noText={t("common:no", "No")}
+          unsupportedText={t("youtube.declarationManagedUnsupported", "This provider cannot send this declaration. Use a native channel.")}
+        />
       </div>
 
       <div className="flex flex-wrap gap-x-6 gap-y-3">
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id="syntheticMedia"
-            checked={settings.containsSyntheticMedia}
-            disabled={composioManaged}
-            onCheckedChange={(checked) => onSettingsChange({ containsSyntheticMedia: checked as boolean })}
-          />
-          <label htmlFor="syntheticMedia" className="text-sm cursor-pointer flex items-center gap-1">
-            {t("youtube.syntheticMedia", "Contains synthetic media")}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{t("youtube.syntheticMediaTooltip", "Video contains AI-generated or altered content")}</p>
-              </TooltipContent>
-            </Tooltip>
-          </label>
-        </div>
+        <DeclarationChoice
+          id="syntheticMedia"
+          label={t("youtube.syntheticDeclaration", "Synthetic media")}
+          help={t("youtube.syntheticDeclarationHelp", "Choose Yes or No before publishing to YouTube.")}
+          value={settings.containsSyntheticMedia}
+          mismatch={composioManaged && settings.containsSyntheticMedia === true}
+          onChange={(containsSyntheticMedia) => onSettingsChange({ containsSyntheticMedia })}
+          yesText={t("common:yes", "Yes")}
+          noText={t("common:no", "No")}
+          unsupportedText={t("youtube.declarationManagedUnsupported", "This provider cannot send this declaration. Use a native channel.")}
+        />
         <div className="flex items-center gap-2">
           <Checkbox
             id="paidPromotion"

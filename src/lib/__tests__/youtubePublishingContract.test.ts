@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { youtubeOptionsUnsupportedOnComposio as browserUnsupported } from "../youtubeComposioOptions";
 import { youtubeOptionsUnsupportedOnComposio as serverUnsupported } from "../../../supabase/functions/_shared/youtubeComposioOptions.ts";
+import { missingYoutubeDeclarations as browserDeclarations } from "../youtubePublishSafety";
+import { missingYoutubeDeclarations as serverDeclarations } from "../../../supabase/functions/_shared/youtubePublishSafety.ts";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -46,6 +48,15 @@ describe("YouTube publishing option contract", () => {
   }) => {
     expect(browserUnsupported(metadata)).toEqual(rejected);
     expect(serverUnsupported(metadata)).toEqual(rejected);
+  });
+
+  it.each([
+    {},
+    { youtube_made_for_kids: false },
+    { youtube_made_for_kids: false, youtube_contains_synthetic_media: false },
+    { youtube_made_for_kids: "false", youtube_contains_synthetic_media: true },
+  ])("refuses the same undecided declarations in the form and the worker", (metadata) => {
+    expect(browserDeclarations(metadata)).toEqual(serverDeclarations(metadata));
   });
 
   it("declares the canonical field names and their legacy aliases", () => {

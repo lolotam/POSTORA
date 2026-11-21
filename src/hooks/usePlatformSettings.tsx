@@ -145,13 +145,15 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
   const [youtubeVideoType, setYoutubeVideoType] = useState<"video" | "short">("video");
   const [youtubeTitle, setYoutubeTitle] = useState("");
   const [youtubeDescription, setYoutubeDescription] = useState("");
-  const [youtubeVisibility, setYoutubeVisibility] = useState<"public" | "unlisted" | "private">("public");
+  const [youtubeVisibility, setYoutubeVisibility] = useState<"public" | "unlisted" | "private">("private");
   const [youtubeTags, setYoutubeTags] = useState("");
   const [youtubeCategory, setYoutubeCategory] = useState("22");
-  const [youtubeMadeForKids, setYoutubeMadeForKids] = useState(false);
+  // null means the creator has not answered. An explicit false is a real
+  // declaration and must survive serialization; an untouched one must not.
+  const [youtubeMadeForKids, setYoutubeMadeForKids] = useState<boolean | null>(null);
   const [youtubeAllowEmbedding, setYoutubeAllowEmbedding] = useState(true);
   const [youtubePublicStatsViewable, setYoutubePublicStatsViewable] = useState(true);
-  const [youtubeContainsSyntheticMedia, setYoutubeContainsSyntheticMedia] = useState(false);
+  const [youtubeContainsSyntheticMedia, setYoutubeContainsSyntheticMedia] = useState<boolean | null>(null);
   const [youtubeHasPaidPromotion, setYoutubeHasPaidPromotion] = useState(false);
   const [youtubeNotifySubscribers, setYoutubeNotifySubscribers] = useState(true);
   const [youtubeCommentsEnabled, setYoutubeCommentsEnabled] = useState(true);
@@ -535,10 +537,10 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       youtube_visibility: selectedPlatforms.includes("youtube") ? youtubeVisibility : null,
       youtube_tags: youtubeTags ? youtubeTags.split(",").map(t => t.trim()).filter(Boolean) : null,
       youtube_category: youtubeCategory || null,
-      youtube_made_for_kids: selectedPlatforms.includes("youtube") ? youtubeMadeForKids : null,
+      youtube_made_for_kids: selectedPlatforms.includes("youtube") ? youtubeMadeForKids ?? null : null,
       youtube_allow_embedding: selectedPlatforms.includes("youtube") ? youtubeAllowEmbedding : null,
       youtube_public_stats_viewable: selectedPlatforms.includes("youtube") ? youtubePublicStatsViewable : null,
-      youtube_contains_synthetic_media: selectedPlatforms.includes("youtube") ? youtubeContainsSyntheticMedia : null,
+      youtube_contains_synthetic_media: selectedPlatforms.includes("youtube") ? youtubeContainsSyntheticMedia ?? null : null,
       youtube_has_paid_promotion: selectedPlatforms.includes("youtube") ? youtubeHasPaidPromotion : null,
       youtube_notify_subscribers: selectedPlatforms.includes("youtube") ? youtubeNotifySubscribers : null,
       youtube_video_language: youtubeVideoLanguage || null,

@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 import { ComposioError } from "../_shared/composioClient.ts";
+import { YoutubeDeclarationRequiredError } from "../_shared/youtubePublishSafety.ts";
 import type { ComposioFileUploadInput } from "../_shared/composioFiles.ts";
 import {
   publishYouTubeViaComposio,
@@ -83,10 +84,14 @@ const account = {
   connection_id: "connection-1",
   workspace_id: "workspace-1",
 };
+const declaredMetadata = {
+  youtube_made_for_kids: false,
+  youtube_contains_synthetic_media: false,
+};
 const post = {
   id: "post-1",
   caption: "Caption first line\nsecond line",
-  metadata: {},
+  metadata: { ...declaredMetadata },
 };
 const video = {
   id: "media-1",
@@ -192,6 +197,7 @@ Deno.test("Composio YouTube stages the bytes, uploads with the staged file, and 
     {
       ...post,
       metadata: {
+        ...declaredMetadata,
         youtube_title: "Title",
         youtube_description: "Description",
         youtube_category: "24",
@@ -236,7 +242,7 @@ Deno.test("Composio YouTube thumbnail failure is recorded but does not fail the 
   });
   const result = await publishYouTubeViaComposio(
     account,
-    { ...post, metadata: { youtube_thumbnail_url: "https://thumb.invalid/image.jpg" } },
+    { ...post, metadata: { ...declaredMetadata, youtube_thumbnail_url: "https://thumb.invalid/image.jpg" } },
     [video],
     { admin: state.admin, ...deps },
   );
@@ -270,6 +276,43 @@ Deno.test("Composio YouTube resolves a null account workspace to the owner's per
   assertEquals(executions.length, 1);
   assertEquals(state.ledger.length, 1);
   assertEquals(state.ledger[0].workspace_id, "personal-workspace-1");
+});
+
+Deno.test("Composio YouTube refuses a queued post without explicit declarations before any provider work", async () => {
+  const state = adminWithConnection();
+  const { deps, fetched, uploads, executions } = harness(async () => ({
+    successful: true,
+    data: { id: "never" },
+  }));
+
+  await assertRejects(
+    () =>
+      publishYouTubeViaComposio(
+        account,
+        { ...post, metadata: {} },
+        [video],
+        { admin: state.admin, ...deps },
+      ),
+    YoutubeDeclarationRequiredError,
+  );
+  assertEquals(fetched, []);
+  assertEquals(uploads, []);
+  assertEquals(executions, []);
+  assertEquals(state.ledger, []);
+});
+
+Deno.test("Composio YouTube requests private visibility when the post has none", async () => {
+  const state = adminWithConnection();
+  const { deps, executions } = harness(async () => ({
+    successful: true,
+    data: { id: "video-private" },
+  }));
+
+  await publishYouTubeViaComposio(account, post, [video], { admin: state.admin, ...deps });
+  const upload = executions.find(
+    (entry) => entry.slug === "YOUTUBE_MULTIPART_UPLOAD_VIDEO",
+  )!;
+  assertEquals((upload.arguments as Record<string, unknown>).privacyStatus, "private");
 });
 
 Deno.test("Composio YouTube records our abort and Composio's own timeout both as timeout", async () => {
