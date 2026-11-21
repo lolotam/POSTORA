@@ -561,11 +561,11 @@ Deno.test("a write that ignores the abort does not hold the observation", async 
     assertEquals(requests[0].signal.aborted, true, "The expiry aborts the write");
     assertEquals(diagnostics.warnings, expectedWarnings, "The expiry warns once with account and platform only");
 
-    // The writer fails after the observation settled: it must warn about nothing, and Deno
-    // must not find an unhandled rejection.
+    // A late failure must emit no diagnostics and leave no unhandled rejection.
+    const diagnosticsAtExpiry = diagnostics.lines.length;
     held.reject(new Error(`the storage call failed after the expiry: ${CREDENTIAL_MARKER}`));
     await drainEventLoop();
-    assertEquals(diagnostics.warnings, expectedWarnings, "A writer that fails late warns about nothing");
+    assertEquals(diagnostics.lines.length, diagnosticsAtExpiry, "A late rejection emits no diagnostics");
   } finally {
     guard.cancel();
     held.resolve();
