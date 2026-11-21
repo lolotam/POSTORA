@@ -8,10 +8,9 @@ import {
   assertComposioYoutubeDeclarations,
   assertNativeYoutubeDeclarations,
   missingYoutubeDeclarations,
-  unexpressibleYoutubeDeclarations,
   youtubeUploadPrivacy,
+  YoutubeComposioDispatchUnavailableError,
   YoutubeDeclarationRequiredError,
-  YoutubeProviderDeclarationUnsupportedError,
 } from "./youtubePublishSafety.ts";
 
 Deno.test("an untouched declaration is not a declaration", () => {
@@ -34,17 +33,6 @@ Deno.test("an explicit No survives as a declaration", () => {
     youtube_contains_synthetic_media: false,
   };
   assertEquals(missingYoutubeDeclarations(metadata), []);
-  assertEquals(unexpressibleYoutubeDeclarations(metadata), []);
-});
-
-Deno.test("an explicit Yes is a declaration a managed provider cannot express", () => {
-  assertEquals(
-    unexpressibleYoutubeDeclarations({
-      youtube_made_for_kids: true,
-      youtube_contains_synthetic_media: false,
-    }),
-    ["youtube_made_for_kids"],
-  );
 });
 
 Deno.test("uploads without visibility are private on both providers", () => {
@@ -70,23 +58,18 @@ Deno.test("native dispatch refuses missing declarations and accepts explicit No"
   });
 });
 
-Deno.test("managed dispatch also refuses an affirmative declaration", () => {
-  assertThrows(
-    () => assertComposioYoutubeDeclarations({}),
-    YoutubeDeclarationRequiredError,
-  );
-  assertThrows(
-    () =>
-      assertComposioYoutubeDeclarations({
-        youtube_made_for_kids: true,
-        youtube_contains_synthetic_media: false,
-      }),
-    YoutubeProviderDeclarationUnsupportedError,
-  );
-  assertComposioYoutubeDeclarations({
-    youtube_made_for_kids: false,
-    youtube_contains_synthetic_media: false,
-  });
+Deno.test("managed dispatch is refused for every post, including explicit No/No", () => {
+  for (const metadata of [
+    {},
+    { youtube_made_for_kids: true, youtube_contains_synthetic_media: false },
+    { youtube_made_for_kids: false, youtube_contains_synthetic_media: false },
+  ]) {
+    const refusal = assertThrows(
+      () => assertComposioYoutubeDeclarations(metadata),
+      YoutubeComposioDispatchUnavailableError,
+    );
+    assertEquals(refusal.code, "youtube_composio_dispatch_unavailable");
+  }
   assert(
     new YoutubeDeclarationRequiredError(["youtube_made_for_kids"]).code ===
       "youtube_declaration_required",

@@ -27,7 +27,7 @@ import {
   listLinkedInDestinations,
   normalizeLinkedInDestinationSelections,
 } from "../_shared/linkedinDestinations.ts";
-import { youtubeOptionsUnsupportedOnComposio } from "../_shared/youtubeComposioOptions.ts";
+import { missingYoutubeDeclarations } from "../_shared/youtubePublishSafety.ts";
 import {
   resolveYoutubePublishOptions,
   youtubePrivacyOrDefault,
@@ -960,10 +960,16 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     metadata.youtube_tags = Array.isArray(youtube_tags) ? youtube_tags :
       (typeof youtube_tags === 'string' ? youtube_tags.split(',').map((t: string) => t.trim()).filter(Boolean) : []);
     metadata.youtube_category = youtubeOptions.youtube_category || YOUTUBE_DEFAULT_CATEGORY_ID;
-    metadata.youtube_made_for_kids = youtube_made_for_kids ?? false;
+    // D3 provenance: only an explicit boolean is a declaration. A missing
+    // input must stay absent so the worker cannot treat an old default as one.
+    if (typeof youtube_made_for_kids === 'boolean') {
+      metadata.youtube_made_for_kids = youtube_made_for_kids;
+    }
     metadata.youtube_allow_embedding = youtubeOptions.youtube_allow_embedding ?? true;
     metadata.youtube_public_stats_viewable = youtube_public_stats_viewable ?? true;
-    metadata.youtube_contains_synthetic_media = youtube_contains_synthetic_media ?? false;
+    if (typeof youtube_contains_synthetic_media === 'boolean') {
+      metadata.youtube_contains_synthetic_media = youtube_contains_synthetic_media;
+    }
     // Left unset when the caller did not state it, so Postora never declares a
     // video free of paid product placement on the caller's behalf.
     if (typeof youtube_has_paid_product_placement === 'boolean') {
@@ -983,6 +989,15 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // YouTube Shorts support - video_type can be 'video' or 'short'
     metadata.youtube_video_type = body.youtube_video_type || 'video';
 
+    const missingDeclarations = missingYoutubeDeclarations(metadata);
+    if (missingDeclarations.length > 0) {
+      return new Response(JSON.stringify({
+        error: 'youtube_declaration_required',
+        code: 'youtube_declaration_required',
+        missing_declarations: missingDeclarations,
+      }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     let youtubeTargets = selectedAccounts.filter((account: any) => account.platform === 'youtube');
     if (youtubeTargets.length === 0) {
       const { data, error } = await supabase.from('social_accounts')
@@ -999,44 +1014,40 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       youtubeTargets = data || [];
     }
     if (youtubeTargets.some((account: any) => account.auth_provider === 'composio')) {
-      const unsupportedKeys = youtubeOptionsUnsupportedOnComposio(metadata);
-      if (unsupportedKeys.length > 0) {
-        // social_accounts.workspace_id is nullable but the ledger's is a NOT
-        // NULL uuid: resolve a missing one to the owner's personal workspace
-        // (spec §4.3). Resolved once and guarded: telemetry must never break
-        // the call it records, so an unresolvable owner logs the skipped row
-        // instead of failing the validation response with an invalid id.
-        let fallbackWorkspaceId: string | null = null;
-        try {
-          fallbackWorkspaceId = await resolveWorkspaceForCall(supabase, { userId });
-        } catch (error) {
-          console.error(
-            `[n8n-api] youtube_options refusal unledgered for user ${userId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-        await Promise.all(youtubeTargets
-          .filter((account: any) => account.auth_provider === 'composio')
-          .map(async (account: any) => {
-            const workspaceId = account.workspace_id ?? fallbackWorkspaceId;
-            if (!workspaceId) return;
-            await recordConnectorCall(supabase, {
-              workspaceId,
-              connectionId: account.connection_id,
-              socialAccountId: account.id,
-              connectorType: 'youtube',
-              authStrategy: 'composio_oauth',
-              actionName: 'validate_options',
-              source: 'publish',
-            }, { status: 'refused', errorCode: 'youtube_option_unsupported_on_composio' });
-          }));
-        return new Response(JSON.stringify({
-          error: 'youtube_option_unsupported_on_composio',
-          code: 'youtube_option_unsupported_on_composio',
-          unsupported_keys: unsupportedKeys,
-        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      // social_accounts.workspace_id is nullable but the ledger's is a NOT
+      // NULL uuid: resolve a missing one to the owner's personal workspace
+      // (spec §4.3). Resolved once and guarded: telemetry must never break
+      // the call it records, so an unresolvable owner logs the skipped row
+      // instead of failing the validation response with an invalid id.
+      let fallbackWorkspaceId: string | null = null;
+      try {
+        fallbackWorkspaceId = await resolveWorkspaceForCall(supabase, { userId });
+      } catch (error) {
+        console.error(
+          `[n8n-api] youtube managed refusal unledgered for user ${userId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
+      await Promise.all(youtubeTargets
+        .filter((account: any) => account.auth_provider === 'composio')
+        .map(async (account: any) => {
+          const workspaceId = account.workspace_id ?? fallbackWorkspaceId;
+          if (!workspaceId) return;
+          await recordConnectorCall(supabase, {
+            workspaceId,
+            connectionId: account.connection_id,
+            socialAccountId: account.id,
+            connectorType: 'youtube',
+            authStrategy: 'composio_oauth',
+            actionName: 'validate_options',
+            source: 'publish',
+          }, { status: 'refused', errorCode: 'youtube_composio_dispatch_unavailable' });
+        }));
+      return new Response(JSON.stringify({
+        error: 'youtube_composio_dispatch_unavailable',
+        code: 'youtube_composio_dispatch_unavailable',
+      }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
   }
 

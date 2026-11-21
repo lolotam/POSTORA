@@ -242,6 +242,8 @@
     "youtubeOptionsUnavailableDesc": "القناة المدارة عبر Composio لا يمكنها استخدام: {{unsupported}}"
   },
   "youtube": {
+    "composioDispatchUnavailableDesc": "قناة YouTube المدارة عبر Composio مش قادرة تنشر دلوقتي. استخدم قناة أصلية.",
+    "composioDispatchUnavailableTitle": "نشر YouTube المدار غير متاح",
     "declarationRequiredDesc": "اختار نعم أو لا لكل من إعلان الجمهور وإعلان المحتوى الاصطناعي قبل النشر.",
     "declarationRequiredTitle": "إعلانات YouTube ناقصة"
   }

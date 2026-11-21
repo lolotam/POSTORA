@@ -18,7 +18,6 @@ import { TIKTOK_PHOTO_WARNING } from "@/lib/platformConstants";
 import { enqueuePostPublish } from "@/features/publishing/infrastructure/enqueuePostPublish";
 import { TikTokSettingsState } from "@/components/post/settings/TikTokSettings";
 import { YouTubeSettingsState } from "@/components/post/settings/YouTubeSettings";
-import { youtubeOptionsUnsupportedOnComposio } from "@/lib/youtubeComposioOptions";
 import { missingYoutubeDeclarations } from "@/lib/youtubePublishSafety";
 import { useSavedFieldSuggestions } from "@/hooks/useSavedFieldSuggestions";
 import { useQuotas } from "@/hooks/useQuotas";
@@ -439,14 +438,14 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       (account as typeof account & { auth_provider?: string }).auth_provider === "composio"
     );
     if (hasComposioYouTubeTarget) {
-      const unsupported = youtubeOptionsUnsupportedOnComposio(platformSettings.buildPostMetadata());
-      if (unsupported.length > 0) {
-        showErrorToast(
-          t("toast.youtubeOptionsUnavailable", "YouTube options unavailable"),
-          t("toast.youtubeOptionsUnavailableDesc", "This Composio-managed channel cannot use: {{unsupported}}", { unsupported: unsupported.join(", ") }),
-        );
-        return;
-      }
+      // Managed YouTube dispatch is disabled unconditionally: the provider
+      // cannot send the mandatory declarations (yes or no) and the exactly-once
+      // pre-execute receipt is not proven. Refuse before writing any post.
+      showErrorToast(
+        t("youtube.composioDispatchUnavailableTitle", "Managed YouTube publishing unavailable"),
+        t("youtube.composioDispatchUnavailableDesc", "A Composio-managed YouTube channel cannot publish yet. Use a native channel."),
+      );
+      return;
     }
 
     // Enforce daily/monthly post quotas on new posts (edits reuse existing row)

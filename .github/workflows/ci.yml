@@ -478,6 +478,8 @@ jobs:
           deno check --node-modules-dir=none --import-map="${map}" \
             supabase/functions/_shared/youtubeTokenRefresh.ts \
             supabase/functions/_shared/youtubeTokenRefresh.test.ts \
+            supabase/functions/_shared/youtubePublishSafety.ts \
+            supabase/functions/_shared/youtubePublishSafety.test.ts \
             supabase/functions/_shared/youtubeComments.ts \
             supabase/functions/_shared/youtubeComments.test.ts \
             supabase/functions/process-scheduled-posts/youtubePostDeferral.ts \
@@ -486,6 +488,7 @@ jobs:
             supabase/functions/refresh-tokens/youtubeProviderRefresh.test.ts
           deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}" \
             supabase/functions/_shared/youtubeTokenRefresh.test.ts \
+            supabase/functions/_shared/youtubePublishSafety.test.ts \
             supabase/functions/_shared/youtubeComments.test.ts \
             supabase/functions/process-scheduled-posts/youtubePostDeferral.test.ts \
             supabase/functions/refresh-tokens/youtubeProviderRefresh.test.ts

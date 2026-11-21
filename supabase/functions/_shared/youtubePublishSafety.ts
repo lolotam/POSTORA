@@ -21,24 +21,18 @@ export const YOUTUBE_REQUIRED_DECLARATIONS = [
 export type YoutubeDeclarationKey = (typeof YOUTUBE_REQUIRED_DECLARATIONS)[number];
 
 export function missingYoutubeDeclarations(
-  metadata: Record<string, unknown> | null | undefined,
+  metadata: object | null | undefined,
 ): YoutubeDeclarationKey[] {
+  const values = (metadata ?? {}) as Record<string, unknown>;
   return YOUTUBE_REQUIRED_DECLARATIONS.filter(
-    (key) => typeof metadata?.[key] !== "boolean",
+    (key) => typeof values[key] !== "boolean",
   );
 }
 
-/** Explicitly requested declarations a managed provider cannot express. */
-export function unexpressibleYoutubeDeclarations(
-  metadata: Record<string, unknown> | null | undefined,
-): YoutubeDeclarationKey[] {
-  return YOUTUBE_REQUIRED_DECLARATIONS.filter((key) => metadata?.[key] === true);
-}
-
 export function youtubeUploadPrivacy(
-  metadata: Record<string, unknown> | null | undefined,
+  metadata: object | null | undefined,
 ): YoutubePrivacyStatus {
-  const value = metadata?.youtube_visibility;
+  const value = (metadata as Record<string, unknown> | null | undefined)?.youtube_visibility;
   return YOUTUBE_PRIVACY_VALUES.includes(value as YoutubePrivacyStatus)
     ? (value as YoutubePrivacyStatus)
     : YOUTUBE_DEFAULT_PRIVACY;
@@ -64,26 +58,39 @@ export class YoutubeProviderDeclarationUnsupportedError extends Error {
   }
 }
 
+/**
+ * A managed provider may not dispatch a YouTube upload at all until BOTH the
+ * declaration contract and the pre-execute durability contract are proven.
+ * An explicit "No / No" is still a declaration: the provider cannot send it,
+ * so it is not a reason to allow the dispatch.
+ */
+export class YoutubeComposioDispatchUnavailableError extends Error {
+  readonly code = "youtube_composio_dispatch_unavailable";
+
+  constructor() {
+    super(
+      "Managed YouTube publishing is disabled until the provider can send the required declarations and a durable, exactly-once pre-execute receipt is proven.",
+    );
+    this.name = "YoutubeComposioDispatchUnavailableError";
+  }
+}
+
 /** Native dispatch fence: an implicit default is never a declaration. */
 export function assertNativeYoutubeDeclarations(
-  metadata: Record<string, unknown> | null | undefined,
+  metadata: object | null | undefined,
 ): void {
   const missing = missingYoutubeDeclarations(metadata);
   if (missing.length > 0) throw new YoutubeDeclarationRequiredError(missing);
 }
 
 /**
- * Managed dispatch fence. Missing declarations are refused, and a provider
- * that cannot express an affirmative declaration is incompatible before any
- * bytes or tool calls reach it.
+ * Managed dispatch fence. This is unconditional: the provider cannot send
+ * either mandatory declaration (yes or no), and the exactly-once pre-execute
+ * receipt is not proven. Every managed post -- including a queued post that
+ * already carries explicit No/No -- is refused before any provider work.
  */
 export function assertComposioYoutubeDeclarations(
-  metadata: Record<string, unknown> | null | undefined,
+  _metadata: object | null | undefined,
 ): void {
-  const missing = missingYoutubeDeclarations(metadata);
-  if (missing.length > 0) throw new YoutubeDeclarationRequiredError(missing);
-  const unexpressible = unexpressibleYoutubeDeclarations(metadata);
-  if (unexpressible.length > 0) {
-    throw new YoutubeProviderDeclarationUnsupportedError(unexpressible);
-  }
+  throw new YoutubeComposioDispatchUnavailableError();
 }

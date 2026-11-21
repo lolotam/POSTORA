@@ -41,7 +41,9 @@ export function youtubeOptionsUnsupportedOnComposio(
     switch (key) {
       case "youtube_made_for_kids":
       case "youtube_contains_synthetic_media":
-        return value === true;
+        // An explicit No is still a declaration. The provider cannot send
+        // either value, so neither may be presented as applied.
+        return typeof value === "boolean";
       case "youtube_has_paid_promotion":
         return value === true && typeof metadata.youtube_has_paid_product_placement !== "boolean";
       case "youtube_has_paid_product_placement":
