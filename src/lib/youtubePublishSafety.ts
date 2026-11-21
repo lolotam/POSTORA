@@ -20,4 +20,3 @@ export function missingYoutubeDeclarations(
     (key) => typeof metadata?.[key] !== "boolean",
   );
 }
-
