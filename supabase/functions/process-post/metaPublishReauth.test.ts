@@ -140,6 +140,20 @@ function captureDiagnostics(): { lines: string[]; restore: () => void } {
   return { lines, restore: () => { console.log = previousLog; console.warn = previousWarn; console.error = previousError; } };
 }
 
+/** Fails a hung implementation instead of hanging the suite with it. */
+function watchdog(ms: number): { expired: Promise<never>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`the observation did not settle within ${ms} ms`)), ms);
+  });
+  return { expired, cancel: () => clearTimeout(timer) };
+}
+
+/** Lets the queued rejections run, so one that nothing handles is reported. */
+async function drainEventLoop(turns = 3): Promise<void> {
+  for (let turn = 0; turn < turns; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 Deno.test("a revoked grant on a rejected request marks the account once", async () => {
   const rows = fixtureRows();
   const { write, writes } = recordingWriter(rows);
@@ -519,4 +533,39 @@ Deno.test("a write that never answers is abandoned without changing the outcome"
   assertEquals(rows.filter((row) => row.needs_reauth === true).length, 0);
   assertEquals(diagnostics.lines.some((line) => line.includes("meta_publish_reauth_write_failed")), true);
   assertEquals(diagnostics.lines.join("\n").includes(CREDENTIAL_MARKER), false);
+});
+
+Deno.test("a write that ignores the abort does not hold the observation", async () => {
+  const held = Promise.withResolvers<void>();
+  const requests: MetaPublishReauthWriteRequest[] = [];
+  const write: MetaPublishReauthWriter = async (request) => {
+    requests.push(request);
+    // The abort is ignored on purpose: the storage call is the one that must not hold the publish.
+    await held.promise;
+    return { matched: 1, error: null };
+  };
+  const observe = observerFor(write);
+  const diagnostics = captureDiagnostics();
+  const guard = watchdog(2_000);
+  const warnings = () => diagnostics.lines.filter((line) => line.includes("meta_publish_reauth_write_failed"));
+
+  try {
+    await Promise.race([Promise.resolve(observe(400, revokedEnvelope())), guard.expired]);
+    guard.cancel();
+
+    assertEquals(requests.length, 1, "The account is written once");
+    assertEquals(requests[0].signal.aborted, true, "The expiry aborts the write");
+    assertEquals(warnings().length, 1, "The expiry warns once");
+    assertEquals(warnings().join("\n").includes(CREDENTIAL_MARKER), false, "The warning carries no credential");
+
+    // The writer fails after the observation settled: it must warn about nothing, and Deno
+    // must not find an unhandled rejection.
+    held.reject(new Error("the storage call failed after the expiry"));
+    await drainEventLoop();
+    assertEquals(warnings().length, 1, "A writer that fails late warns about nothing");
+  } finally {
+    guard.cancel();
+    held.reject(new Error("the fixture ends the held write"));
+    diagnostics.restore();
+  }
 });

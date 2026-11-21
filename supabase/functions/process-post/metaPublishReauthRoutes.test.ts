@@ -49,6 +49,37 @@ type FailurePoint =
   | "permalink"
   | "transient";
 
+/** A promise the test settles by hand. */
+interface Deferred {
+  promise: Promise<void>;
+  settle: () => void;
+  fail: (reason?: unknown) => void;
+}
+
+/** The milestones the fanout fixture reports back to the test. */
+interface FanoutControl {
+  /** The first account's reconnect write reached the persistence boundary. */
+  writeStarted: Deferred;
+  /** The healthy destination's settlement was recorded. */
+  healthySettled: Deferred;
+  /** The test alone lets the held write finish. */
+  release: Deferred;
+}
+
+function deferred(): Deferred {
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  return { promise, settle: () => resolve(undefined), fail: reject };
+}
+
+/** Fails a hung handler instead of hanging the suite with it. */
+function within<T>(ms: number, promise: Promise<T>, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not happen within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
+}
+
 interface AccountRow {
   id: string;
   user_id: string;
@@ -114,6 +145,7 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
   let storyReceipts: Record<string, unknown>[] = [];
   let statusCalls = 0;
   let onRetry: (() => void) | undefined;
+  let fanout: FanoutControl | undefined;
   let retriedWhileWritePending = false;
   let writeTimedOut = false;
   let logs: string[] = [];
@@ -159,6 +191,7 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
     storyReceipts = [];
     statusCalls = 0;
     onRetry = undefined;
+    fanout = undefined;
     retriedWhileWritePending = false;
     writeTimedOut = false;
     logs = [];
@@ -270,10 +303,6 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
       }
       if (url.pathname.endsWith("/media_publish")) {
         if (failurePoint === "publish" && token === CREDENTIAL_MARKER) return revokedResponse();
-        if (failurePoint === "fanout" && token === HEALTHY_TOKEN && onRetry) {
-          retriedWhileWritePending = true;
-          onRetry();
-        }
         return Response.json({ id: "published-1" });
       }
       if (request.method === "GET" && url.searchParams.get("fields")?.includes("permalink")) {
@@ -314,7 +343,8 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
         const body = await request.json() as Record<string, unknown>;
         const matched = accountRows().filter((row) => matchesEveryPredicate(url.searchParams, row));
         reconnectWrites.push({ query: url.searchParams.toString(), body });
-        if (failurePoint === "poll-5xx" || failurePoint === "fanout") {
+        if (failurePoint === "poll-5xx") {
+          // The retry of the status request releases this write.
           const retry = Promise.withResolvers<void>();
           onRetry = retry.resolve;
           request.signal.addEventListener("abort", () => {
@@ -327,12 +357,25 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
             onRetry = undefined;
           }
         }
+        if (failurePoint === "fanout" && fanout) {
+          // The fanout fixture holds this write: the test alone decides when it ends.
+          fanout.writeStarted.settle();
+          request.signal.addEventListener("abort", () => {
+            writeTimedOut = true;
+            fanout?.release.fail(new Error("Fixture write timed out"));
+          }, { once: true });
+          await fanout.release.promise;
+        }
         return Response.json(matched.map((row) => ({ id: row.id })));
       }
       return Response.json(accountRows());
     }
     if (table === "rpc/partner_settle_platform_post") {
-      settlements.push(await request.json());
+      const body = await request.json() as Record<string, unknown>;
+      settlements.push(body);
+      if (fanout && body.p_social_account_id === OTHER_ACCOUNT && body.p_status === "success") {
+        fanout.healthySettled.settle();
+      }
       return Response.json({ platform_post_id: "settled-row", recorded: true });
     }
     if (table === "rpc/record_published_story") {
@@ -498,14 +541,46 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
       assertEquals(providerCalls.some((call) => call.includes("media_publish")), true);
     });
 
-    await test.step("a later destination can publish while the first reconnect write is pending", async () => {
+    await test.step("the healthy destination settles while the first reconnect write is pending, and the response waits for the write", async () => {
       reset({ platform: "instagram", postType: "feed", mediaKind: "image", failingAccount: ACCOUNT, failurePoint: "fanout" });
       post.metadata.selected_account_ids = [ACCOUNT, OTHER_ACCOUNT];
-      await publish();
+      const control: FanoutControl = { writeStarted: deferred(), healthySettled: deferred(), release: deferred() };
+      fanout = control;
+      let answered = false;
+      const answer = Promise.resolve(handler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
+        body: JSON.stringify({ post_id: POST }),
+      }))).then((response) => {
+        answered = true;
+        return response;
+      });
 
-      assertOneScopedWrite();
-      assertEquals(retriedWhileWritePending, true);
-      assertEquals(writeTimedOut, false);
+      try {
+        await within(10_000, control.writeStarted.promise, "the reconnect write");
+        await within(10_000, control.healthySettled.promise, "the healthy settlement");
+        // One turn, so the handler can finish the mocked work that follows the settlement.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        const healthy = settlements.find((entry) => entry.p_social_account_id === OTHER_ACCOUNT);
+        assert(healthy, "The healthy destination is settled");
+        assertEquals(healthy.p_status, "success");
+        assertOneScopedWrite();
+        assertEquals(answered, false, "The response waits for the reconnect write");
+      } finally {
+        fanout = undefined;
+        control.release.settle();
+      }
+
+      const response = await within(10_000, answer, "the handler's response");
+      const body = await response.json() as { platform_results: { platform: string; status: string; error_message?: string }[] };
+      const results = body.platform_results;
+      assertEquals(results.length, 2, "Both destinations report a result");
+      assertEquals(results.some((entry) => entry.status === "success"), true, "The healthy destination published");
+      const failure = results.find((entry) => entry.status === "failed");
+      assert(failure, "The refused destination failed");
+      assertEquals(String(failure.error_message).toLowerCase().includes("timeout"), false, "No destination timed out");
+      assertEquals(writeTimedOut, false, "The reconnect write was not abandoned");
     });
 
     await test.step("a published Story survives the failure of the publish it mirrored", async () => {
