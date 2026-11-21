@@ -229,6 +229,20 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
   // UI state
   const [currentStep, setCurrentStep] = useState<PostStep>(1);
   const submittingRef = useRef(false);
+
+  // A deliberate submission owns one stable id. A lost acknowledgement or a
+  // reload reuses it, so the posts primary key rejects the second insert
+  // instead of putting a second video on the channel.
+  const submitStorageKey = `youtube-stage3-submit:${user?.id ?? "anonymous"}:${editPostId ?? "new"}`;
+  const getOrCreateSubmitId = () => {
+    let id = sessionStorage.getItem(submitStorageKey);
+    if (!id) {
+      id = crypto.randomUUID();
+      sessionStorage.setItem(submitStorageKey, id);
+    }
+    return id;
+  };
+  const clearSubmitId = () => sessionStorage.removeItem(submitStorageKey);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [urlMediaType, setUrlMediaType] = useState<"images" | "video">("images");
   const [imageUrls, setImageUrls] = useState("");
@@ -501,7 +515,9 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         )
       ) as Platform[];
 
+      const submitId = getOrCreateSubmitId();
       const postPayload = {
+        ...(editPostId ? {} : { id: submitId }),
         user_id: user?.id,
         caption: caption.trim() || null,
         platforms: platformsForInsert,
@@ -513,6 +529,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         status: scheduleEnabled && scheduledAt ? "scheduled" : "pending",
         metadata: {
           ...platformSettings.buildPostMetadata(),
+          submit_id: submitId,
           schedule_timezone: scheduleTimezone || null,
         },
       };
@@ -545,9 +562,27 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             );
             return;
           }
-          throw error;
+          if (error.code === "23505") {
+            // The acknowledgement of this same submission was lost. Read back
+            // OUR row and never insert another one; a foreign row is refused.
+            const { data: existing, error: readError } = await supabase
+              .from("posts")
+              .select("id, user_id, metadata")
+              .eq("id", submitId)
+              .maybeSingle();
+            if (readError) throw readError;
+            if (existing && existing.user_id === user?.id &&
+                (existing.metadata as Record<string, unknown> | null)?.submit_id === submitId) {
+              post = existing;
+            } else {
+              throw error;
+            }
+          } else {
+            throw error;
+          }
+        } else {
+          post = data;
         }
-        post = data;
       }
 
       // Save field suggestions for future reuse (fire and forget)
@@ -615,6 +650,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       }
 
       clearSubmittedDraft();
+      clearSubmitId();
       onSaved({ postId: post.id, status: completionStatus });
 
     } catch (error) {
