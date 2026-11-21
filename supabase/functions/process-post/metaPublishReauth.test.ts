@@ -27,8 +27,7 @@ const FACEBOOK_ACCOUNT = "account-facebook";
 const OTHER_OWNER_ACCOUNT = "account-other-owner";
 const ROW_VERSION = "2026-11-21T10:00:00.123456+00:00";
 const LATER_ROW_VERSION = "2026-11-21T10:05:00.987654+00:00";
-const CREDENTIAL_MARKER = "FIXTURE-CREDENTIAL-MARKER";
-const ACCESS_TOKEN = `access_token=${CREDENTIAL_MARKER}`;
+const CREDENTIAL_MARKER = "fixture-a";
 const FUTURE_EXPIRY = "2999-01-01T00:00:00+00:00";
 
 interface AccountRow {
@@ -117,7 +116,7 @@ function observerFor(
     postOwnerId: OWNER,
     platform: "instagram",
     updatedAt: ROW_VERSION,
-    accessToken: ACCESS_TOKEN,
+    accessToken: CREDENTIAL_MARKER,
     ...options.snapshot,
   };
   return createMetaPublishReauthObserver({
@@ -431,7 +430,7 @@ Deno.test("an unrelated update to the row leaves the observation unmatched", asy
 Deno.test("a substituted credential is never observed", async () => {
   const rows = fixtureRows();
   const { write, writes } = recordingWriter(rows);
-  const observe = observerFor(write, { requestToken: "access_token=another-credential" });
+  const observe = observerFor(write, { requestToken: "fixture-b" });
 
   await observe(400, revokedEnvelope());
 

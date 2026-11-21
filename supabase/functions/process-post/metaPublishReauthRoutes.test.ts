@@ -26,9 +26,9 @@ const ACCOUNT = "e2000000-0000-4000-8000-000000000021";
 const OTHER_ACCOUNT = "e2000000-0000-4000-8000-000000000022";
 const POST = "e3000000-0000-4000-8000-000000000021";
 const SERVICE = "fixture-service";
-const CREDENTIAL_MARKER = "FIXTURE-CREDENTIAL-MARKER";
+const CREDENTIAL_MARKER = "fixture-a";
 const SIGNED_URL_MARKER = "FIXTURE-SIGNED-URL-MARKER";
-const HEALTHY_TOKEN = "access_token=healthy-fixture-token";
+const HEALTHY_TOKEN = "fixture-b";
 const ROW_VERSION = "2026-11-21T10:00:00.123456+00:00";
 const FUTURE_EXPIRY = "2999-01-01T00:00:00+00:00";
 
@@ -42,6 +42,7 @@ type FailurePoint =
   | "primary"
   | "child"
   | "poll"
+  | "poll-5xx"
   | "publish"
   | "content"
   | "permalink"
@@ -64,7 +65,7 @@ interface AccountRow {
 }
 
 /** Meta's structured refusal, with the credential in its message. */
-function revokedResponse(): Response {
+function revokedResponse(status = 400): Response {
   return new Response(
     JSON.stringify({
       error: {
@@ -74,7 +75,7 @@ function revokedResponse(): Response {
         message: `Error validating access token: ${CREDENTIAL_MARKER} (OAuth ${CREDENTIAL_MARKER}) https://media-fixture.invalid/upload?signature=${SIGNED_URL_MARKER}`,
       },
     }),
-    { status: 400, headers: { "Content-Type": "application/json" } },
+    { status, headers: { "Content-Type": "application/json" } },
   );
 }
 
@@ -111,6 +112,8 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
   let settlements: Record<string, unknown>[] = [];
   let storyReceipts: Record<string, unknown>[] = [];
   let statusCalls = 0;
+  let onRetry: (() => void) | undefined;
+  let retriedWhileWritePending = false;
   let logs: string[] = [];
   let post = makePost();
   const unexpected: string[] = [];
@@ -153,6 +156,8 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
     settlements = [];
     storyReceipts = [];
     statusCalls = 0;
+    onRetry = undefined;
+    retriedWhileWritePending = false;
     logs = [];
     post = makePost();
   }
@@ -245,6 +250,14 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
       }
       if (request.method === "GET" && url.searchParams.get("fields")?.includes("status_code")) {
         if (failurePoint === "poll" && token === CREDENTIAL_MARKER) return revokedResponse();
+        if (failurePoint === "poll-5xx" && statusCalls === 0) {
+          statusCalls++;
+          return revokedResponse(500);
+        }
+        if (onRetry) {
+          retriedWhileWritePending = true;
+          onRetry();
+        }
         if (failurePoint === "transient" && token === CREDENTIAL_MARKER && statusCalls === 0) {
           statusCalls++;
           return new Response(JSON.stringify({ error: { code: 2, message: "An unexpected error has occurred" } }), { status: 400 });
@@ -294,6 +307,13 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
         const body = await request.json() as Record<string, unknown>;
         const matched = accountRows().filter((row) => matchesEveryPredicate(url.searchParams, row));
         reconnectWrites.push({ query: url.searchParams.toString(), body });
+        if (failurePoint === "poll-5xx") {
+          const retry = Promise.withResolvers<void>();
+          onRetry = retry.resolve;
+          request.signal.addEventListener("abort", () => retry.reject(new Error("Fixture write timed out")), { once: true });
+          await retry.promise;
+          onRetry = undefined;
+        }
         return Response.json(matched.map((row) => ({ id: row.id })));
       }
       return Response.json(accountRows());
@@ -454,6 +474,16 @@ Deno.test("a revoked Meta grant is recorded once against the account the native 
       assertEquals(body.includes(CREDENTIAL_MARKER), false);
     });
 
+    await test.step("a status retry can proceed while the reconnect write is pending", async () => {
+      reset({ platform: "instagram", postType: "feed", mediaKind: "image", failurePoint: "poll-5xx" });
+      await publish();
+
+      assertOneScopedWrite();
+      assertEquals(retriedWhileWritePending, true);
+      assertEquals(statusCalls, 2);
+      assertEquals(providerCalls.some((call) => call.includes("media_publish")), true);
+    });
+
     await test.step("a published Story survives the failure of the publish it mirrored", async () => {
       reset({ platform: "instagram", postType: "story", mediaKind: "image", failurePoint: "primary" });
       post.metadata.instagram_post_type = ["story", "reel"];
@@ -522,8 +552,9 @@ Deno.test("a resumed container is finished with fresh credentials and an unanswe
   let providerCalls: string[] = [];
   let writes: MetaPublishReauthWriteRequest[] = [];
   let publishAnswer: "refused" | "unanswered" = "refused";
-  let statusAnswer: "finished" | "refused" = "finished";
+  let statusAnswer: "finished" | "refused" | "stalled" = "finished";
   let statusCalls = 0;
+  let bodyAborted = false;
 
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
@@ -534,7 +565,18 @@ Deno.test("a resumed container is finished with fresh credentials and an unanswe
       statusCalls++;
       // The readiness poll asks first; the one-shot check after an unanswered publish asks
       // again, and that answer is the one that reports the revoked grant.
-      return statusAnswer === "refused" && statusCalls > 1 ? revokedResponse() : Response.json({ status_code: "FINISHED" });
+      if (statusCalls > 1 && statusAnswer === "refused") return revokedResponse();
+      if (statusCalls > 1 && statusAnswer === "stalled") {
+        return new Response(new ReadableStream({
+          start(controller) {
+            request.signal.addEventListener("abort", () => {
+              bodyAborted = true;
+              controller.error(new DOMException("Aborted", "AbortError"));
+            }, { once: true });
+          },
+        }), { status: 502 });
+      }
+      return Response.json({ status_code: "FINISHED" });
     }
     if (url.pathname.endsWith("/media_publish")) {
       if (publishAnswer === "unanswered") throw new TypeError("fixture network failure");
@@ -644,6 +686,24 @@ Deno.test("a resumed container is finished with fresh credentials and an unanswe
       assertEquals(providerCalls.filter((call) => call.endsWith("/media")).length, 1, "No second container is created");
       assertEquals(writes.length, 1, "The revoked grant is recorded once");
       assertEquals(logs.join("\n").includes(CREDENTIAL_MARKER), false, "The diagnostics must not carry the credential");
+    });
+
+    await test.step("a hanging error body cannot stall ambiguous publish recovery", async () => {
+      providerCalls = [];
+      writes = [];
+      statusCalls = 0;
+      publishAnswer = "unanswered";
+      statusAnswer = "stalled";
+      const timing: PublishTiming = { resume: null, deadlineMs: Number.POSITIVE_INFINITY, startedAtMs: Date.now() };
+
+      const failure = await postToInstagram(account, post, mediaUrls, mediaFiles, timing, undefined, undefined, undefined, observeFor())
+        .then(() => null, (error: unknown) => error);
+
+      assert(failure instanceof ContainerStillProcessing);
+      assertEquals(failure.containerId, "container-1");
+      assertEquals(bodyAborted, true);
+      assertEquals(writes.length, 0);
+      assertEquals(providerCalls.filter((call) => call.endsWith("/media_publish")).length, 1);
     });
   } finally {
     globalThis.fetch = previousFetch;

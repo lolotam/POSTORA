@@ -125,7 +125,7 @@ import { activeRetryRequest } from "../_shared/publishRequest.ts";
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { prepareIndependentStory } from "./independentStory.ts";
 import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.ts";
-import { fetchWithTimeout } from "../_shared/request-timeout.ts";
+import { fetchJsonWithDeadline, fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
@@ -163,6 +163,7 @@ import {
 import { createCarouselChildren, threadsChildWait, waitForCarouselChildren } from "./carouselChildren.ts";
 import {
   createMetaPublishReauthObserver,
+  isRevokedGrantEvidence,
   META_PUBLISH_REAUTH_REASON,
   type MetaPublishReauthWriter,
   type ObserveMetaReply,
@@ -853,14 +854,15 @@ function isIgLocationError(metaError: { message?: string; code?: number; error_s
  */
 function redactMetaError(
   err: unknown,
+  accessToken?: string,
 ): { code: number | null; subcode: number | null; type: string | null; message: string | null } | null {
   if (!err || typeof err !== "object") return null;
   const e = err as { code?: number; error_subcode?: number; type?: string; message?: string };
   return {
     code: typeof e.code === "number" ? e.code : null,
     subcode: typeof e.error_subcode === "number" ? e.error_subcode : null,
-    type: typeof e.type === "string" ? e.type : null,
-    message: safeMetaErrorMessage(e.message),
+    type: accessToken ? (e.type === "OAuthException" ? e.type : null) : typeof e.type === "string" ? e.type : null,
+    message: accessToken ? safeNativeMetaMessage(e.message, accessToken) : safeMetaErrorMessage(e.message),
   };
 }
 
@@ -948,8 +950,8 @@ function nativeReauthWriter(supabase: SupabaseClient): MetaPublishReauthWriter {
  * account row this attempt read. The observed Facebook and Instagram requests
  * take their credential from that same account without substituting it.
  */
-function nativeReauthObserver(account: SocialAccount, postOwnerId: string, supabase: SupabaseClient): ObserveMetaReply {
-  return createMetaPublishReauthObserver({
+function nativeReauthObserver(account: SocialAccount, postOwnerId: string, supabase: SupabaseClient) {
+  const observe = createMetaPublishReauthObserver({
     snapshot: {
       accountId: account.id,
       postOwnerId,
@@ -961,6 +963,12 @@ function nativeReauthObserver(account: SocialAccount, postOwnerId: string, supab
     write: nativeReauthWriter(supabase),
     deadlineMs: workerPublishDeadline(WORKER_STARTED_AT_MS),
   });
+  let pending: Promise<void> | undefined;
+  const observeReply: ObserveMetaReply = async (status, reply, deadlineMs) => {
+    if (pending || !isRevokedGrantEvidence(status, reply)) return;
+    pending = observe(status, reply, deadlineMs);
+  };
+  return { observeReply, flush: () => pending };
 }
 
 /**
@@ -3161,6 +3169,9 @@ Deno.serve(async (req) => {
       let imageExecution: ResumeContext | null = resume?.deferral.media_type === "IMAGE" ? resume : null;
       let imageResponseData: Record<string, unknown> | null = imageExecution ? resumeResponseData : null;
       let imageOutcomeAcknowledged = false;
+      const reauth = account.platform === "facebook" || account.platform === "instagram"
+        ? nativeReauthObserver(account, post.user_id, supabase)
+        : undefined;
 
       try {
         let result: PlatformPostResult;
@@ -3172,7 +3183,7 @@ Deno.serve(async (req) => {
             result = await postToBluesky(account, post, mediaUrls, supabase);
             break;
           case "facebook":
-            result = await postToFacebook(account, post, mediaUrls, mediaFiles, nativeReauthObserver(account, post.user_id, supabase));
+            result = await postToFacebook(account, post, mediaUrls, mediaFiles, reauth?.observeReply);
             break;
           case "instagram": {
             const primaryIsVideo = mediaFiles.length > 0
@@ -3195,7 +3206,7 @@ Deno.serve(async (req) => {
                 recordedMediaIds: (ids) => recordedMediaIdsFor(supabase, post_id, account.id, ids),
               }
               : NOT_A_RETRY;
-            const observeReply = nativeReauthObserver(account, post.user_id, supabase);
+            const observeReply = reauth?.observeReply;
             if (igAuthType === 'business_login') {
               result = await postToInstagramBusinessLogin(account, primaryPost, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry, (id) => {
                 if (id) exactPlatformPostIds.push(id);
@@ -3703,6 +3714,8 @@ Deno.serve(async (req) => {
           platformResults.push(...recordedStoryResults(stories.live));
           hasSuccess = true;
         }
+        // Join the bounded write after settlement so it cannot consume provider retry time.
+        await reauth?.flush();
       }
     }
 
@@ -5431,16 +5444,10 @@ function pollContainerStatus(
 async function checkContainerOnce(statusUrl: string, timeoutMs: number, accessToken: string, observeReply?: ObserveMetaReply): Promise<ContainerState> {
   const deadlineMs = Date.now() + timeoutMs;
   try {
-    const response = await fetchWithTimeout(statusUrl, {}, timeoutMs);
-    let data: Record<string, unknown> | null = null;
-    try {
-      data = await response.json();
-    } catch {
-      // An unreadable body says nothing about the container.
-    }
+    const { response, data } = await fetchJsonWithDeadline(statusUrl, timeoutMs);
     await observeReply?.(response.status, data, deadlineMs);
     if (!response.ok) return { state: "waiting" };
-    const container = classifyContainerStatus("instagram", data);
+    const container = classifyContainerStatus("instagram", data as Record<string, unknown> | null);
     if (container.state !== "failed") return container;
     return { state: "failed", reason: safeNativeMetaMessage(container.reason, accessToken) ?? "Media processing failed" };
   } catch {
@@ -5780,7 +5787,7 @@ export async function postToInstagram(
     let data = await doFetch(body);
     if (locationDebug.meta_media_create_success === null) {
       locationDebug.meta_media_create_success = !data?.error;
-      if (data?.error) locationDebug.meta_media_create_error = redactMetaError(data.error);
+      if (data?.error) locationDebug.meta_media_create_error = redactMetaError(data.error, accessToken);
     }
     if (
       locationAttempted &&
@@ -5809,7 +5816,7 @@ export async function postToInstagram(
             location_id: igLocationId,
             meta_endpoint: "/v18.0/{ig_user_id}/media",
             meta_error_code: (data.error as { code?: number }).code ?? null,
-            meta_error_message: safeMetaErrorMessage((data.error as { message?: string }).message),
+            meta_error_message: safeNativeMetaMessage((data.error as { message?: string }).message, accessToken),
           },
         });
       }
@@ -6189,7 +6196,7 @@ export async function postToInstagram(
       }
     } else {
       // The credential is in the body: it is never logged.
-      console.log("Instagram REELS request:", JSON.stringify({ ...reelsBody, access_token: "[redacted]" }).slice(0, 500));
+      console.log("Instagram REELS request:", { media_type: reelsBody.media_type, share_to_feed: reelsBody.share_to_feed });
 
       let createData = await igMediaCreateWithLocationRetry(
         `https://graph.facebook.com/v18.0/${igUserId}/media`,
@@ -6204,7 +6211,7 @@ export async function postToInstagram(
       // Retry without collaborator if "User not visible" error
       if (createData.error && reelsBody.collaborators && (createData.error.code === 210 || createData.error.message?.includes("not visible"))) {
         const skippedCollaborator = (reelsBody.collaborators as string[])[0];
-        console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", createData.error.message);
+        console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", metaFailureSummary(createData.error, accessToken));
         delete reelsBody.collaborators;
         warnings.push(`Collaborator @${skippedCollaborator} was skipped — their account must be a Business or Creator account to accept API collaboration invites`);
         createData = await igMediaCreateWithLocationRetry(
@@ -6341,7 +6348,7 @@ export async function postToInstagram(
     // Retry without collaborator if "User not visible" error
     if (createData.error && imageBody.collaborators && (createData.error.code === 210 || createData.error.message?.includes("not visible"))) {
       const skippedCollaborator = (imageBody.collaborators as string[])[0];
-      console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", createData.error.message);
+      console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", metaFailureSummary(createData.error, accessToken));
       delete imageBody.collaborators;
       warnings.push(`Collaborator @${skippedCollaborator} was skipped — their account must be a Business or Creator account to accept API collaboration invites`);
       createData = await igMediaCreateWithLocationRetry(
@@ -6466,7 +6473,7 @@ export async function postToInstagram(
       // Retry without collaborator if "User not visible" error
       if (carouselData.error && carouselBody.collaborators && (carouselData.error.code === 210 || carouselData.error.message?.includes("not visible"))) {
         const skippedCollaborator = (carouselBody.collaborators as string[])[0];
-        console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", carouselData.error.message);
+        console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", metaFailureSummary(carouselData.error, accessToken));
         delete carouselBody.collaborators;
         warnings.push(`Collaborator @${skippedCollaborator} was skipped — their account must be a Business or Creator account to accept API collaboration invites`);
         carouselData = await igMediaCreateWithLocationRetry(
@@ -6802,7 +6809,7 @@ async function postToInstagramBusinessLogin(
     let data = await doFetch(body);
     if (locationDebug.meta_media_create_success === null) {
       locationDebug.meta_media_create_success = !data?.error;
-      if (data?.error) locationDebug.meta_media_create_error = redactMetaError(data.error);
+      if (data?.error) locationDebug.meta_media_create_error = redactMetaError(data.error, accessToken);
     }
     if (
       locationAttempted &&
@@ -6831,7 +6838,7 @@ async function postToInstagramBusinessLogin(
             location_id: instagramLocationId,
             meta_endpoint: "/v22.0/{ig_user_id}/media",
             meta_error_code: (data.error as { code?: number }).code ?? null,
-            meta_error_message: safeMetaErrorMessage((data.error as { message?: string }).message),
+            meta_error_message: safeNativeMetaMessage((data.error as { message?: string }).message, accessToken),
           },
         });
       }
