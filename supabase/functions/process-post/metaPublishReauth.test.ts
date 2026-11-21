@@ -128,16 +128,34 @@ function observerFor(
 }
 
 /** Everything the run said, so a diagnostic that carries the marker is found. */
-function captureDiagnostics(): { lines: string[]; restore: () => void } {
+function captureDiagnostics(): { lines: string[]; warnings: unknown[][]; restore: () => void } {
   const lines: string[] = [];
+  const warnings: unknown[][] = [];
   const previousLog = console.log;
   const previousWarn = console.warn;
   const previousError = console.error;
   const record = (...message: unknown[]) => { lines.push(message.map((part) => String(part)).join(" ")); };
   console.log = record;
-  console.warn = record;
+  console.warn = (...message: unknown[]) => {
+    warnings.push(message);
+    record(...message);
+  };
   console.error = record;
-  return { lines, restore: () => { console.log = previousLog; console.warn = previousWarn; console.error = previousError; } };
+  return { lines, warnings, restore: () => { console.log = previousLog; console.warn = previousWarn; console.error = previousError; } };
+}
+
+/** Fails a hung implementation instead of hanging the suite with it. */
+function watchdog(ms: number): { expired: Promise<never>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`the observation did not settle within ${ms} ms`)), ms);
+  });
+  return { expired, cancel: () => clearTimeout(timer) };
+}
+
+/** Lets the queued rejections run, so one that nothing handles is reported. */
+async function drainEventLoop(turns = 3): Promise<void> {
+  for (let turn = 0; turn < turns; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 Deno.test("a revoked grant on a rejected request marks the account once", async () => {
@@ -519,4 +537,38 @@ Deno.test("a write that never answers is abandoned without changing the outcome"
   assertEquals(rows.filter((row) => row.needs_reauth === true).length, 0);
   assertEquals(diagnostics.lines.some((line) => line.includes("meta_publish_reauth_write_failed")), true);
   assertEquals(diagnostics.lines.join("\n").includes(CREDENTIAL_MARKER), false);
+});
+
+Deno.test("a write that ignores the abort does not hold the observation", async () => {
+  const held = Promise.withResolvers<void>();
+  const requests: MetaPublishReauthWriteRequest[] = [];
+  const write: MetaPublishReauthWriter = async (request) => {
+    requests.push(request);
+    // The abort is ignored on purpose: the storage call is the one that must not hold the publish.
+    await held.promise;
+    return { matched: 1, error: null };
+  };
+  const observe = observerFor(write);
+  const diagnostics = captureDiagnostics();
+  const guard = watchdog(2_000);
+  const expectedWarnings = [["meta_publish_reauth_write_failed", { account_id: INSTAGRAM_ACCOUNT, platform: "instagram" }]];
+
+  try {
+    await Promise.race([Promise.resolve(observe(400, revokedEnvelope())), guard.expired]);
+    guard.cancel();
+
+    assertEquals(requests.length, 1, "The account is written once");
+    assertEquals(requests[0].signal.aborted, true, "The expiry aborts the write");
+    assertEquals(diagnostics.warnings, expectedWarnings, "The expiry warns once with account and platform only");
+
+    // A late failure must emit no diagnostics and leave no unhandled rejection.
+    const diagnosticsAtExpiry = diagnostics.lines.length;
+    held.reject(new Error(`the storage call failed after the expiry: ${CREDENTIAL_MARKER}`));
+    await drainEventLoop();
+    assertEquals(diagnostics.lines.length, diagnosticsAtExpiry, "A late rejection emits no diagnostics");
+  } finally {
+    guard.cancel();
+    held.resolve();
+    diagnostics.restore();
+  }
 });

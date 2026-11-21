@@ -142,27 +142,54 @@ function replyAsksForRetry(reply: unknown): boolean {
   return error?.is_transient === true;
 }
 
-/** Records the reconnect flag once, within the request budget. */
+/**
+ * The budget's own expiry. It settles the race first and aborts the signal in the same
+ * callback, so a writer that listens for the abort cannot turn the expiry into its own
+ * outcome, and it can be cancelled when the write answered in time.
+ */
+function writeExpiry(controller: AbortController, timeoutMs: number): { expiry: Promise<never>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error("The reconnect write timed out"));
+      controller.abort();
+    }, timeoutMs);
+  });
+  return { expiry, cancel: () => clearTimeout(timer) };
+}
+
+/**
+ * Records the reconnect flag once, within the request budget.
+ *
+ * The write is raced against the budget's own expiry: an uncooperative storage call cannot
+ * hold the publish, so the observation ends with the budget and not with the writer. The
+ * race keeps a rejection handler on the losing promise, so a writer that fails after the
+ * expiry warns about nothing and is never an unhandled rejection. The expiry authorizes no
+ * further write: the attempt's single write stays shared.
+ */
 async function flagRevokedGrant(
   snapshot: MetaPublishReauthSnapshot,
   write: MetaPublishReauthWriter,
   timeoutMs: number,
 ): Promise<void> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const budget = writeExpiry(controller, timeoutMs);
   try {
-    const result = await write({
-      accountId: snapshot.accountId,
-      postOwnerId: snapshot.postOwnerId,
-      platform: snapshot.platform,
-      updatedAt: snapshot.updatedAt,
-      signal: controller.signal,
-    });
+    const result = await Promise.race([
+      write({
+        accountId: snapshot.accountId,
+        postOwnerId: snapshot.postOwnerId,
+        platform: snapshot.platform,
+        updatedAt: snapshot.updatedAt,
+        signal: controller.signal,
+      }),
+      budget.expiry,
+    ]);
     if (result.error) warnWriteFailed(snapshot);
   } catch {
     warnWriteFailed(snapshot);
   } finally {
-    clearTimeout(timer);
+    budget.cancel();
   }
 }
 

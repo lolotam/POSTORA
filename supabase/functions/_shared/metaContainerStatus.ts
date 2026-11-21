@@ -81,7 +81,9 @@ export interface PollContainerOptions {
   now?: () => number;
   /**
    * Watches the decoded reply of the status request. The observer decides what a reply means;
-   * this poll still judges the container exactly as it did before.
+   * this poll still judges the container exactly as it did before. The deadline it receives is
+   * the absolute cutoff of that request's own budget, so a reply that arrives after it is out
+   * of time.
    */
   observeReply?: (status: number, reply: unknown, deadlineMs?: number) => void | Promise<void>;
   formatProviderMessage?: (message: unknown) => string | null;
@@ -128,7 +130,11 @@ export async function pollContainer(api: MetaContainerApi, statusUrl: string, op
     // The sleep and a worthwhile request must both fit before the deadline.
     if (deadlineMs !== null && now() + waitMs + MIN_CHECK_MS > deadlineMs) return { state: "waiting" };
     if (waitMs > 0) await sleep(waitMs);
-    const timeoutMs = deadlineMs === null ? fetchTimeoutMs : Math.min(fetchTimeoutMs, deadlineMs - now());
+    // The request is cut to the budget that is left from the moment it starts, and the
+    // observer is given that same moment: a body decoded at or after the cutoff is out
+    // of time and cannot claim the write, however long the poll itself may still run.
+    const startedAt = now();
+    const timeoutMs = deadlineMs === null ? fetchTimeoutMs : Math.min(fetchTimeoutMs, deadlineMs - startedAt);
     if (timeoutMs < MIN_CHECK_MS) return { state: "waiting" };
 
     let response: Response;
@@ -146,9 +152,10 @@ export async function pollContainer(api: MetaContainerApi, statusUrl: string, op
       // An unreadable body is judged by its status below, or waited on if the status was fine.
     }
     // The observer reads the reply before it loses its structure. It only records a revoked
-    // grant; the wait itself is unchanged.
+    // grant; the wait itself is unchanged. The deadline it receives is this request's own
+    // cutoff, not the poll's, so a late reply cannot claim what a timely one may claim.
     if (options.observeReply) {
-      await options.observeReply(response.status, data, deadlineMs ?? undefined);
+      await options.observeReply(response.status, data, startedAt + timeoutMs);
     }
 
     const failure = apiFailure(response, data, options.formatProviderMessage ?? text);

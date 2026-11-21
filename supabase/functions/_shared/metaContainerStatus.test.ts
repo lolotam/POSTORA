@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { CHECK_ONCE_DEADLINE, classifyContainerStatus, containerFailureMessage, pollContainer } from "./metaContainerStatus.ts";
+import { createMetaPublishReauthObserver, type MetaPublishReauthWriteRequest } from "../process-post/metaPublishReauth.ts";
 
 Deno.test("Instagram states come from status_code, the reason from status", () => {
   assertEquals(classifyContainerStatus("instagram", { status_code: "FINISHED", status: "Finished: Media has been uploaded" }), { state: "finished" });
@@ -235,4 +236,125 @@ Deno.test("server errors, rate limits and Meta's transient errors are retried", 
 Deno.test("an unreadable 200 answer keeps waiting rather than failing", async () => {
   const result = await pollContainer("instagram", "https://x", { maxAttempts: 2, intervalMs: 0, sleep: noSleep, fetcher: respond(200, "not json") });
   assertEquals(result, { state: "waiting" });
+});
+
+// ---- A reply is judged against its own request's budget ---------------------------------------
+
+/** Simulate a retryable HTTP response carrying Meta's structured revocation evidence. */
+function revokedGrantResponse(beforeDecode?: () => void): Response {
+  const response = Response.json({ error: { type: "OAuthException", code: 190, error_subcode: 458 } }, { status: 500 });
+  if (beforeDecode) {
+    const decode = response.json.bind(response);
+    response.json = () => {
+      beforeDecode();
+      return decode();
+    };
+  }
+  return response;
+}
+
+function recordReauthObservation(
+  writes: MetaPublishReauthWriteRequest[],
+  cutoffs: (number | undefined)[],
+) {
+  const credential = crypto.randomUUID();
+  const observe = createMetaPublishReauthObserver({
+    snapshot: {
+      accountId: "account-instagram",
+      postOwnerId: "owner-a",
+      platform: "instagram",
+      updatedAt: "2026-11-21T10:00:00.123456+00:00",
+      accessToken: credential,
+    },
+    requestToken: credential,
+    write: (request) => {
+      writes.push(request);
+      return Promise.resolve({ matched: 1, error: null });
+    },
+    timeoutMs: 25,
+  });
+  return (status: number, reply: unknown, cutoff?: number) => {
+    cutoffs.push(cutoff);
+    return observe(status, reply, cutoff);
+  };
+}
+
+Deno.test("a reply decoded at its request's cutoff claims nothing, and a later timely one can", async () => {
+  const clock = fakeClock();
+  const writes: MetaPublishReauthWriteRequest[] = [];
+  const timeouts: number[] = [];
+  const cutoffs: (number | undefined)[] = [];
+  const observeReply = recordReauthObservation(writes, cutoffs);
+  const writesAtRetry: number[] = [];
+  const previousNow = Date.now;
+  const fetcher = (_url: string, timeoutMs: number) => {
+    timeouts.push(timeoutMs);
+    if (timeouts.length === 1) {
+      return Promise.resolve(revokedGrantResponse(() => clock.advance(timeoutMs)));
+    }
+    writesAtRetry.push(writes.length);
+    return Promise.resolve(revokedGrantResponse());
+  };
+
+  try {
+    Date.now = clock.now;
+    const result = await pollContainer("instagram", "https://x", {
+      maxAttempts: 2,
+      intervalMs: 2_000,
+      deadlineMs: clock.now() + 20_000,
+      checkFirst: true,
+      fetcher,
+      sleep: clock.sleep,
+      now: clock.now,
+      observeReply,
+    });
+
+    assertEquals(result, { state: "waiting" });
+    assertEquals(writesAtRetry, [0], "The reply decoded at its cutoff claimed nothing");
+    assertEquals(writes.length, 1, "The timely reply claims the write once");
+    assertEquals(timeouts, [15_000, 3_000], "The second request is cut to the budget that is left");
+    assertEquals(cutoffs, [1_015_000, 1_020_000], "Each reply is judged against its own request's cutoff");
+  } finally {
+    Date.now = previousNow;
+  }
+});
+
+Deno.test("every poll shape gives the observer the request's own cutoff", async () => {
+  const shapes = [
+    { name: "a check-once poll", deadlineMs: CHECK_ONCE_DEADLINE },
+    { name: "a poll without a deadline", deadlineMs: undefined },
+    { name: "a poll with an infinite deadline", deadlineMs: Number.POSITIVE_INFINITY },
+  ];
+
+  for (const shape of shapes) {
+    const clock = fakeClock();
+    const writes: MetaPublishReauthWriteRequest[] = [];
+    const timeouts: number[] = [];
+    const cutoffs: (number | undefined)[] = [];
+    const observeReply = recordReauthObservation(writes, cutoffs);
+    const previousNow = Date.now;
+
+    try {
+      Date.now = clock.now;
+      await pollContainer("instagram", "https://x", {
+        maxAttempts: 1,
+        intervalMs: 0,
+        deadlineMs: shape.deadlineMs,
+        checkFirst: true,
+        fetcher: (_url: string, timeoutMs: number) => {
+          timeouts.push(timeoutMs);
+          return Promise.resolve(revokedGrantResponse(() => clock.advance(timeoutMs)));
+        },
+        sleep: clock.sleep,
+        now: clock.now,
+        observeReply,
+      });
+
+      assertEquals(writes.length, 0, `${shape.name}: a reply decoded at its cutoff claims nothing`);
+      assertEquals(cutoffs, [1_015_000], `${shape.name}: the observer is given the request's cutoff`);
+      assertEquals(timeouts, [15_000], `${shape.name}: the request keeps the full timeout`);
+    } finally {
+      Date.now = previousNow;
+    }
+  }
 });
