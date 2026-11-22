@@ -549,9 +549,10 @@ export async function continueYoutubeUpload(
   // booleans came from implicit defaults is not an answer: no further byte may
   // reach the provider on this attempt.
   const uploadStatus = (session.uploadBody as { status?: Record<string, unknown> }).status ?? {};
-  const savedDeclarationsProven = typeof uploadStatus.selfDeclaredMadeForKids === "boolean" &&
-    typeof uploadStatus.containsSyntheticMedia === "boolean" &&
-    youtubeDeclarationProofOf(post.metadata) !== null;
+  const declarationProof = youtubeDeclarationProofOf(post.metadata);
+  const savedDeclarationsProven = declarationProof !== null &&
+    uploadStatus.selfDeclaredMadeForKids === declarationProof.made_for_kids &&
+    uploadStatus.containsSyntheticMedia === declarationProof.contains_synthetic_media;
   if (!session.videoId && !savedDeclarationsProven) {
     const mayHoldVideo = session.bytesSent > 0 || session.videoMayExist;
     if (mayHoldVideo && ports.probeReceipt) {

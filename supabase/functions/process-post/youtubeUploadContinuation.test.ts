@@ -647,19 +647,21 @@ Deno.test("a failed fenced receipt write neither projects nor reports completion
   assertEquals(w.settled.length, 0);
 });
 
-Deno.test("saved provider declarations are required even when the post now has proof", async () => {
-  const w = world({
-    session: {
-      uploadBody: {
-        snippet: { title: "A video" },
-        status: { selfDeclaredMadeForKids: false },
-      },
-    },
-  });
-  const result = await continueYoutubeUpload(w.ports, request);
-  assertEquals(result.status, "failed");
-  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.declaration_required);
-  assertEquals(w.uploads, 0);
+Deno.test("saved provider declarations must match the post proof", async () => {
+  const mismatchedStatuses = [
+    { selfDeclaredMadeForKids: false },
+    { selfDeclaredMadeForKids: true, containsSyntheticMedia: false },
+    { selfDeclaredMadeForKids: false, containsSyntheticMedia: true },
+  ];
+  for (const status of mismatchedStatuses) {
+    const w = world({
+      session: { uploadBody: { snippet: { title: "A video" }, status } },
+    });
+    const result = await continueYoutubeUpload(w.ports, request);
+    assertEquals(result.status, "failed");
+    assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.declaration_required);
+    assertEquals(w.uploads, 0);
+  }
 });
 
 Deno.test("a proven declaration lets the same inert session continue", async () => {
