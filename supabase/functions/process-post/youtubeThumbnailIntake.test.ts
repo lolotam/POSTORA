@@ -154,3 +154,35 @@ Deno.test("a non-image is refused before any signature or media read", async () 
   assertEquals(calls.signs, 0);
   assertEquals(calls.reads, 0);
 });
+
+Deno.test("a mismatched image type and MIME is refused with zero side effects", async () => {
+  const { client, calls } = signingSupabase();
+  const result = await resolveYoutubeThumbnail({
+    supabase: client,
+    loadOwnedMedia: () => Promise.resolve({
+      ok: true as const,
+      row: { ...ownedRow, file_type: "image", mime_type: "video/mp4" },
+    }),
+    allowedWorkspaceIds: new Set<string>(),
+    mediaHosts: HOSTS,
+  }, OWNER, { youtube_thumbnail_media_id: "media-1" });
+  assertEquals(result, { ok: false, reason: "not_image" });
+  assertEquals(calls.signs, 0);
+  assertEquals(calls.reads, 0);
+});
+
+Deno.test("an SVG thumbnail is refused with zero side effects", async () => {
+  const { client, calls } = signingSupabase();
+  const result = await resolveYoutubeThumbnail({
+    supabase: client,
+    loadOwnedMedia: () => Promise.resolve({
+      ok: true as const,
+      row: { ...ownedRow, file_type: "image", mime_type: "image/svg+xml" },
+    }),
+    allowedWorkspaceIds: new Set<string>(),
+    mediaHosts: HOSTS,
+  }, OWNER, { youtube_thumbnail_media_id: "media-1" });
+  assertEquals(result, { ok: false, reason: "not_image" });
+  assertEquals(calls.signs, 0);
+  assertEquals(calls.reads, 0);
+});

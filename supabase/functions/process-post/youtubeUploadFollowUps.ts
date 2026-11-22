@@ -65,22 +65,37 @@ export interface YoutubeFollowUpDeps {
 const THUMBNAIL_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set";
 const COMMENT_ENDPOINT = "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet";
 
+export interface YoutubeFollowUpOutcome {
+  state: "not_requested" | "applied" | "skipped" | "failed" | "unknown";
+  reason: string | null;
+}
+
+export interface YoutubeFollowUpResults {
+  thumbnail: YoutubeFollowUpOutcome;
+  first_comment: YoutubeFollowUpOutcome;
+}
+
+const NOT_REQUESTED: YoutubeFollowUpOutcome = { state: "not_requested", reason: null };
+
 /**
  * The follow-ups of one video.
  *
  * Each follow-up asks for the time that is left for itself, so the second one
  * is skipped rather than started when the worker has already run out of time.
+ * The observed outcome is returned so the settlement can record what actually
+ * happened instead of guessing from the request.
  */
 export async function runYoutubeFollowUps(
   request: YoutubeFollowUpRequest,
   deps: YoutubeFollowUpDeps,
-): Promise<void> {
-  if (request.thumbnailUrl) {
-    await setYoutubeThumbnail(request.videoId, request.accessToken, request.thumbnailUrl, deps);
-  }
-  if (request.firstComment) {
-    await postYoutubeFirstComment(request.videoId, request.channelId, request.accessToken, request.firstComment, deps);
-  }
+): Promise<YoutubeFollowUpResults> {
+  const thumbnail = request.thumbnailUrl
+    ? await setYoutubeThumbnail(request.videoId, request.accessToken, request.thumbnailUrl, deps)
+    : NOT_REQUESTED;
+  const first_comment = request.firstComment
+    ? await postYoutubeFirstComment(request.videoId, request.channelId, request.accessToken, request.firstComment, deps)
+    : NOT_REQUESTED;
+  return { thumbnail, first_comment };
 }
 
 async function setYoutubeThumbnail(
@@ -88,17 +103,17 @@ async function setYoutubeThumbnail(
   accessToken: string,
   thumbnailUrl: string,
   deps: YoutubeFollowUpDeps,
-): Promise<void> {
+): Promise<YoutubeFollowUpOutcome> {
   const budgetMs = deps.budgetMs();
   if (budgetMs <= 0) {
     console.warn("YouTube thumbnail skipped: the worker has no time left for it");
-    return;
+    return { state: "skipped", reason: "no_time" };
   }
   try {
     const { blob, mimeType } = await deps.downloadThumbnail(thumbnailUrl, budgetMs);
-    if (!await deps.canWrite()) return;
+    if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
     const uploadBudgetMs = deps.budgetMs();
-    if (uploadBudgetMs <= 0) return;
+    if (uploadBudgetMs <= 0) return { state: "skipped", reason: "no_time" };
     const response = await deps.fetchImpl(`${THUMBNAIL_ENDPOINT}?videoId=${videoId}`, {
       method: "POST",
       headers: {
@@ -110,11 +125,13 @@ async function setYoutubeThumbnail(
     });
     if (response.ok) {
       console.log("YouTube thumbnail set successfully");
-    } else {
-      console.warn("Failed to set YouTube thumbnail:", redactProviderText(await response.text()));
+      return { state: "applied", reason: null };
     }
+    console.warn("Failed to set YouTube thumbnail:", redactProviderText(await response.text()));
+    return { state: "failed", reason: "refused" };
   } catch (error) {
     console.warn("Error setting YouTube thumbnail:", redactProviderText(error));
+    return { state: "unknown", reason: "answer_lost" };
   }
 }
 
@@ -124,11 +141,11 @@ async function postYoutubeFirstComment(
   accessToken: string,
   firstComment: string,
   deps: YoutubeFollowUpDeps,
-): Promise<void> {
+): Promise<YoutubeFollowUpOutcome> {
   try {
-    if (!await deps.canWrite()) return;
+    if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
     const budgetMs = deps.budgetMs();
-    if (budgetMs <= 0) return;
+    if (budgetMs <= 0) return { state: "skipped", reason: "no_time" };
     console.log("Posting first comment to YouTube video...");
     const response = await deps.fetchImpl(COMMENT_ENDPOINT, {
       method: "POST",
@@ -153,13 +170,15 @@ async function postYoutubeFirstComment(
     });
     if (response.ok) {
       console.log("First comment posted successfully");
-    } else {
-      console.warn("Failed to post first comment:", redactProviderText(await response.text()));
+      return { state: "applied", reason: null };
     }
+    console.warn("Failed to post first comment:", redactProviderText(await response.text()));
+    return { state: "failed", reason: "refused" };
   } catch (error) {
     // The comment is posted ONCE, and it is never retried: a first
     // comment posted twice is a duplicate on the customer's channel, and a
     // timeout says nothing about whether the first one arrived.
     console.warn("Error posting first comment:", redactProviderText(error));
+    return { state: "unknown", reason: "answer_lost" };
   }
 }

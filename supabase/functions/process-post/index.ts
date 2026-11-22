@@ -172,7 +172,11 @@ import {
 } from "./metaPublishReauth.ts";
 import { claimFinalNotification, claimThreadsImageNotification, confirmThreadsImageNotification } from "./finalNotification.ts";
 import {
+  classifyProviderStatus,
+  isAllowedProviderUploadUri,
   runResumableVideoUpload,
+  YOUTUBE_PROVIDER_UPLOAD_HOSTS,
+  YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS,
   type ResumableUploadOutcome,
 } from "./youtubeResumableUpload.ts";
 import {
@@ -10289,23 +10293,58 @@ function buildYoutubeContinuationPorts(
       return settled;
     },
 
+    async probeReceipt(args) {
+      // A GET with a zero byte range is read-only: it asks the provider what
+      // it holds and never sends video bytes. It is the only provider call a
+      // legacy unproven session is allowed to make.
+      const uri = args.record.sessionUri;
+      if (!uri || !isAllowedProviderUploadUri(uri, YOUTUBE_PROVIDER_UPLOAD_HOSTS)) {
+        return { videoId: null };
+      }
+      try {
+        const response = await fetch(uri, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${args.accessToken}`,
+            "Content-Range": "bytes */*",
+          },
+          signal: AbortSignal.timeout(Math.min(args.deadlineMs, YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS)),
+        });
+        const bodyText = await response.text();
+        const status = classifyProviderStatus({
+          status: response.status,
+          rangeHeader: response.headers.get("range"),
+          bodyText,
+          totalBytes: args.record.totalBytes,
+          previousConfirmedBytes: args.record.bytesSent,
+          retryAfterHeader: response.headers.get("retry-after"),
+        });
+        if (status.kind === "accepted" && /^[A-Za-z0-9_-]{6,64}$/.test(status.videoId)) {
+          return { videoId: status.videoId };
+        }
+        return { videoId: null };
+      } catch {
+        // A probe that could not be read is not a receipt. No byte is sent.
+        return { videoId: null };
+      }
+    },
+
     async projectReceipt(args) {
       // The receipt is projected onto the public row without a lease and
       // without the provider: the video already exists, so there is nothing
       // to send and nothing to fetch.
       const projected = await store.projectReceipt({ sessionId: args.sessionId });
-      if (projected.settled && args.evidence) {
-        // Additive, owner-scoped update. The project RPC carries the receipt
-        // but not sanitized evidence; a failed update only leaves follow-ups
-        // unknown, it never claims success or replays a comment. The existing
-        // keys (including the provider id) are preserved.
-        let rowQuery = supabase.from("platform_posts")
-          .select("id, response_data")
+      if (projected.settled && args.evidence && args.platformPostId && args.attemptStartedAt) {
+        // Bind to the exact durable result row of the current attempt. A
+        // disconnected account carries no row id here, so nothing is updated:
+        // a broad post-level update could overwrite another destination's
+        // evidence. The provider id and every earlier key are preserved.
+        const { data: row } = await supabase.from("platform_posts")
+          .select("id, post_id, response_data")
+          .eq("id", args.platformPostId)
           .eq("post_id", postId)
-          .eq("platform", "youtube");
-        if (args.accountId) rowQuery = rowQuery.eq("social_account_id", args.accountId);
-        const { data: rows } = await rowQuery;
-        for (const row of rows ?? []) {
+          .maybeSingle();
+        if (row) {
           const existing = (row.response_data ?? {}) as Record<string, unknown>;
           const { error } = await supabase.from("platform_posts")
             .update({ response_data: { ...existing, youtube_publish_evidence: args.evidence } })
@@ -10320,7 +10359,7 @@ function buildYoutubeContinuationPorts(
       // The run that created the video does the follow-ups. A run that
       // inherited the receipt never reaches here, so a first comment is never
       // posted twice.
-      await runYoutubeFollowUps(
+      return await runYoutubeFollowUps(
         {
           videoId: args.videoId,
           channelId: args.channelId,

@@ -324,6 +324,16 @@ export function createYouTubeResourcesHandler(
           accountId: parsed.data.account_id, requestId,
         });
       }
+      // The catalog is a provider read and must spend the same read rate
+      // budget as every other browse operation. Check it BEFORE any token
+      // or provider call so a 429 costs neither a refresh nor a Google unit.
+      const catalogRate = await ports.rateLimit.check(userId);
+      if (!catalogRate.allowed) {
+        return await refuse(req, {
+          operation: "categories", code: "rate_limited", userId,
+          accountId: parsed.data.account_id, requestId,
+        }, { retry_after_seconds: catalogRate.retryAfterSeconds });
+      }
       const catalogToken = await ports.tokens.get(catalogAccount, { force: false });
       if (!catalogToken.ok) {
         return await refuse(req, {

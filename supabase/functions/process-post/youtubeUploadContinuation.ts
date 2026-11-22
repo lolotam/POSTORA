@@ -43,6 +43,7 @@ import { YOUTUBE_UPLOAD_REASON, type YoutubeUploadReason } from "./youtubeUpload
 import { isUncertainUploadOutcome } from "./youtubeUploadOutcome.ts";
 import { youtubeDeclarationProofOf } from "../_shared/youtubePublishSafety.ts";
 import { youtubeEvidenceFromMetadata, type YoutubePublishEvidence } from "./youtubePublishEvidence.ts";
+import type { YoutubeFollowUpResults } from "./youtubeUploadFollowUps.ts";
 
 /** What the continuation is asked to do. */
 export interface YoutubeContinuationRequest {
@@ -204,11 +205,24 @@ export interface YoutubeContinuationPorts {
    *
    * No provider is contacted and no media is read: the video already exists.
    */
+  /**
+   * Read-only provider reconciliation. This may discover a receipt that a
+   * worker died before recording; it never writes a byte to the provider.
+   */
+  probeReceipt?(args: {
+    record: YoutubeUploadSessionRecord;
+    accessToken: string;
+    deadlineMs: number;
+    mimeType: string | null;
+  }): Promise<{ videoId: string | null }>;
   projectReceipt(args: {
     sessionId: string;
     /** Evidence carried onto the resumed public row, never inferred as success. */
     evidence?: YoutubePublishEvidence;
-    accountId?: string | null;
+    /** The durable result row this session owns; never a broad post lookup. */
+    platformPostId?: string | null;
+    /** The attempt the claimed session is fenced to. */
+    attemptStartedAt?: string | null;
   }): Promise<{
     settled: boolean;
     refused: YoutubeUploadRefusal | null;
@@ -233,7 +247,7 @@ export interface YoutubeContinuationPorts {
     videoId: string;
     channelId: string;
     accessToken: string;
-  }): Promise<void>;
+  }): Promise<YoutubeFollowUpResults | void>;
   /**
    * Whether this worker may write to the provider NOW.
    *
@@ -462,7 +476,8 @@ export async function continueYoutubeUpload(
       // The inheriting worker did not perform the follow-ups. Their outcomes
       // are unknown, never applied or failed by inference.
       evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
-      accountId: session.socialAccountId,
+      platformPostId: session.platformPostId,
+      attemptStartedAt: session.attemptStartedAt,
     });
     if (!projected.settled) {
       return refused(refusalToReason(projected.refused ?? "session_not_found"));
@@ -510,25 +525,6 @@ export async function continueYoutubeUpload(
     }
   }
 
-  // A session that has not written a byte is still a NEW upload, even when a
-  // provider session URI already exists. D3 applies to it: a legacy row whose
-  // booleans came from implicit defaults is not an answer, and resuming it
-  // would publish a video the creator never explicitly declared.
-  //
-  // This check is deliberately AFTER the receipt projection and the ambiguous
-  // send handling above. A receipt is a fact about a video that already exists,
-  // and an ambiguous send must still be resolved rather than refused, or a
-  // possible video would be left with no reconciliation path.
-  if (!session.videoId && session.bytesSent === 0 && !session.videoMayExist &&
-      !youtubeDeclarationProofOf(post.metadata)) {
-    return await refusePermanently({
-      ports,
-      session,
-      leaseToken: request.leaseToken,
-      reason: YOUTUBE_UPLOAD_REASON.declaration_required,
-    });
-  }
-
   // The account must still be a target of the post.
   //
   // The claim already refuses a session whose account the post no longer
@@ -548,6 +544,47 @@ export async function continueYoutubeUpload(
   // writes to, and nothing else is ever carried on by this worker.
   if (session.resolvedPlatform !== null && session.resolvedPlatform !== "youtube") {
     return refused(YOUTUBE_UPLOAD_REASON.session_not_open);
+  }
+
+  // D3 applies to EVERY continuation that has no stored receipt, including a
+  // session that already wrote bytes. A legacy row whose booleans came from
+  // implicit defaults is not an answer: no further byte may reach the provider.
+  //
+  // A read-only probe is still allowed, because a video the provider already
+  // holds is a fact rather than a declaration-dependent upload. If the probe
+  // finds one, the receipt is projected exactly like a stored receipt. If it
+  // does not, the attempt is refused without another byte being sent.
+  if (!session.videoId && !youtubeDeclarationProofOf(post.metadata)) {
+    if ((session.bytesSent > 0 || session.videoMayExist) && ports.probeReceipt) {
+      const probed = await ports.probeReceipt({
+        record: session,
+        accessToken: account.accessToken,
+        deadlineMs: leaseDeadlineMs(ports.now(), session.leaseExpiresAt),
+        mimeType: session.uploadSettings.mimeType ?? null,
+      });
+      if (probed.videoId) {
+        const recovery = await recoverFanout(ports, session.id, request.leaseToken);
+        if (recovery.scopeState === "incomplete") {
+          return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
+        }
+        const projected = await ports.projectReceipt({
+          sessionId: session.id,
+          evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
+          platformPostId: session.platformPostId,
+          attemptStartedAt: session.attemptStartedAt,
+        });
+        if (!projected.settled) {
+          return refused(refusalToReason(projected.refused ?? "session_not_found"));
+        }
+        return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: probed.videoId };
+      }
+    }
+    return await refusePermanently({
+      ports,
+      session,
+      leaseToken: request.leaseToken,
+      reason: YOUTUBE_UPLOAD_REASON.declaration_required,
+    });
   }
 
   const media = await loadMatchingMedia(ports, session, post);
@@ -919,10 +956,12 @@ async function interpretOutcome(args: {
     //
     // The receipt does not depend on that answer. The video exists, so it is
     // settled either way.
+    let followUpResults: YoutubeFollowUpResults | undefined;
     try {
       const followUpAuthority = await ports.effectAuthority({ sessionId: session.id, leaseToken });
       if (followUpAuthority.authorized) {
-        await ports.followUps({ post, videoId: outcome.videoId, channelId, accessToken, sessionId: session.id, leaseToken });
+        const observed = await ports.followUps({ post, videoId: outcome.videoId, channelId, accessToken, sessionId: session.id, leaseToken });
+        if (observed) followUpResults = observed;
       }
     } catch {
       console.warn("[youtube] optional follow-ups could not be confirmed");
@@ -956,7 +995,13 @@ async function interpretOutcome(args: {
         // states are not claimed here: they are settled separately by the
         // follow-up port, so a worker that inherited this video cannot replay
         // a first comment.
-        youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
+        youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, {
+          effectivePrivacy: "unknown",
+          thumbnailState: followUpResults?.thumbnail.state,
+          thumbnailReason: followUpResults?.thumbnail.reason,
+          commentState: followUpResults?.first_comment.state,
+          commentReason: followUpResults?.first_comment.reason,
+        }),
       },
     });
     if (!settled.settled) {

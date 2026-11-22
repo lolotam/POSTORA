@@ -39,6 +39,7 @@ import type {
   YoutubeUploadSessionRecord,
 } from "./youtubeResumableUpload.ts";
 import { YOUTUBE_UPLOAD_REASON } from "./youtubeUploadPolicy.ts";
+import type { YoutubeFollowUpResults } from "./youtubeUploadFollowUps.ts";
 
 const POST_ID = "post-1";
 const ACCOUNT_ID = "account-1";
@@ -81,6 +82,8 @@ interface World {
   timeline: string[];
   /** How often the live state was asked about. */
   authorityChecks: number;
+  /** Read-only provider reconciliations of an unproven session. */
+  probes: number;
 }
 
 interface WorldOptions {
@@ -94,6 +97,10 @@ interface WorldOptions {
   settleRefused?: YoutubeUploadRefusal | null;
   /** The refusal the store answers a projection with. */
   projectRefused?: YoutubeUploadRefusal | null;
+  /** The video a read-only reconciliation probe discovers, if any. */
+  probeVideoId?: string | null;
+  /** Observed follow-up outcomes from the run that created the video. */
+  followUpResults?: YoutubeFollowUpResults;
   /** The verdict the store answers the write-authority question with. */
   authority?:
     | { authorized: boolean; reason: string | null }
@@ -192,6 +199,7 @@ function world(options: WorldOptions = {}): World {
     uploadDeadlines: [],
     timeline: [],
     authorityChecks: 0,
+    probes: 0,
     ports: {
       loadPost() {
         return Promise.resolve(post);
@@ -239,6 +247,10 @@ function world(options: WorldOptions = {}): World {
         });
         return Promise.resolve({ settled: true, refused: null });
       },
+      probeReceipt() {
+        world.probes += 1;
+        return Promise.resolve({ videoId: options.probeVideoId ?? null });
+      },
       projectReceipt(args) {
         if (options.projectRefused) {
           return Promise.resolve({ settled: false, refused: options.projectRefused, videoId: null });
@@ -249,7 +261,7 @@ function world(options: WorldOptions = {}): World {
       },
       followUps(args) {
         world.followUps.push(args.videoId);
-        return Promise.resolve();
+        return Promise.resolve(options.followUpResults);
       },
       effectAuthority() {
         world.authorityChecks += 1;
@@ -556,22 +568,48 @@ Deno.test("an opened object of another size is refused before the first byte", a
   assertEquals(reads, 0);
 });
 
+const unproven = {
+  youtube_made_for_kids: false,
+  youtube_contains_synthetic_media: false,
+};
+
 Deno.test("a legacy inert session without proven declarations is not uploaded", async () => {
-  // The session has not sent a byte, so it is a new upload and D3 applies.
-  // Booleans that were manufactured from an implicit default carry no proof.
-  const w = world({
-    post: {
-      metadata: {
-        youtube_made_for_kids: false,
-        youtube_contains_synthetic_media: false,
-      },
-    },
-  });
+  const w = world({ post: { metadata: unproven } });
   const result = await continueYoutubeUpload(w.ports, request);
   assertEquals(result.status, "failed");
   assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.declaration_required);
   assertEquals(w.uploads, 0);
   assertEquals(w.mediaReads, 0);
+  assertEquals(w.probes, 0);
+});
+
+Deno.test("a partially uploaded legacy session sends no further byte without proof", async () => {
+  const w = world({
+    post: { metadata: unproven },
+    session: { bytesSent: 40, confirmedBytes: 40 },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "failed");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.declaration_required);
+  // A read-only reconciliation is allowed; another chunk is not.
+  assertEquals(w.probes, 1);
+  assertEquals(w.uploads, 0);
+  assertEquals(w.mediaReads, 0);
+});
+
+Deno.test("a read-only probe that finds a video projects the receipt without proof", async () => {
+  const w = world({
+    post: { metadata: unproven },
+    session: { bytesSent: 40, videoMayExist: true },
+    probeVideoId: "AbcD1234eFg",
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(result.videoId, "AbcD1234eFg");
+  assertEquals(w.probes, 1);
+  assertEquals(w.uploads, 0);
+  assertEquals(w.mediaReads, 0);
+  assertEquals(w.projected.length, 1);
 });
 
 Deno.test("a proven declaration lets the same inert session continue", async () => {
@@ -584,14 +622,13 @@ Deno.test("a proven declaration lets the same inert session continue", async () 
 Deno.test("a stored receipt is projected even when declarations were never proven", async () => {
   // The video already exists. Projecting its receipt is a fact about a video,
   // not a declaration-dependent upload, so it must not be blocked.
-  const w = world({
-    post: { metadata: { youtube_made_for_kids: false, youtube_contains_synthetic_media: false } },
-    session: { videoId: "AbcD1234eFg" },
-  });
+  const w = world({ post: { metadata: unproven }, session: { videoId: "AbcD1234eFg" } });
   const result = await continueYoutubeUpload(w.ports, request);
   assertEquals(result.status, "completed");
   assertEquals(w.uploads, 0);
   assertEquals(w.mediaReads, 0);
+  assertEquals(w.probes, 0);
+  assertEquals(w.projected.length, 1);
 });
 
 // An account that cannot publish is refused in every shape it can be in.
@@ -722,6 +759,46 @@ Deno.test("a finished upload settles the public row", async () => {
   assertEquals(w.settled.length, 1);
   assertEquals(w.settled[0].status, "success");
   assertEquals(w.settled[0].videoId, VIDEO_ID);
+  // The receipt and the evidence travel together on the settled row.
+  assertEquals(w.settled[0].responseData.youtube_video_id, VIDEO_ID);
+  const evidence = w.settled[0].responseData.youtube_publish_evidence as {
+    requested_privacy: string;
+    effective_privacy: string;
+    thumbnail: { state: string };
+    first_comment: { state: string };
+  };
+  assertEquals(evidence.requested_privacy, "private");
+  assertEquals(evidence.effective_privacy, "unknown");
+  assertEquals(evidence.thumbnail.state, "not_requested");
+  assertEquals(evidence.first_comment.state, "not_requested");
+});
+
+Deno.test("observed follow-up outcomes are recorded on the native settlement", async () => {
+  const w = world({
+    post: { metadata: {
+      youtube_visibility: "private",
+      youtube_thumbnail_url: "https://api.example.test/thumb.jpg",
+      youtube_first_comment: "Hello",
+      youtube_made_for_kids: false,
+      youtube_contains_synthetic_media: false,
+      youtube_declaration_proof: { version: 3, made_for_kids: false, contains_synthetic_media: false, source: "form" },
+    } },
+    outcome: { kind: "completed", videoId: VIDEO_ID },
+    followUpResults: {
+      thumbnail: { state: "applied", reason: null },
+      first_comment: { state: "skipped", reason: "no_time" },
+    },
+  });
+  await continueYoutubeUpload(w.ports, request);
+  const evidence = w.settled[0].responseData.youtube_publish_evidence as {
+    thumbnail: { state: string };
+    first_comment: { state: string; reason: string };
+  };
+  assertEquals(evidence.thumbnail.state, "applied");
+  assertEquals(evidence.first_comment, { state: "skipped", reason: "no_time" });
+  // One video, one comment attempt at most: inheriting this receipt never
+  // runs the follow-ups again.
+  assertEquals(w.followUps, [VIDEO_ID]);
 });
 
 Deno.test("an upload that continues leaves the row pending and writes nothing", async () => {

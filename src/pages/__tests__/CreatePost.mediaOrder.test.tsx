@@ -117,6 +117,8 @@ vi.mock("@/integrations/supabase/client", () => ({
           }),
           update: (payload: Record<string, unknown>) => ({
             eq: (_column: string, id: string) => ({
+              // Conditional acceptance receipt write.
+              is: async () => ({ error: null }),
               select: () => ({
                 single: async () => {
                   if (fixture.failPersistence) return { data: null, error: { message: "database unavailable" } };

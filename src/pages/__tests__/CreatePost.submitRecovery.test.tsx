@@ -92,7 +92,7 @@ vi.mock("@/integrations/supabase/client", () => ({
             });
             return selection();
           },
-          update: () => ({ eq: async () => ({ error: null }) }),
+          update: () => ({ eq: () => ({ is: async () => ({ error: null }) }) }),
           insert: (payload: Record<string, unknown>) => ({
             select: () => ({
               single: async () => {

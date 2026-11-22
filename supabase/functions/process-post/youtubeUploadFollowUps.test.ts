@@ -220,6 +220,23 @@ Deno.test("a thumbnail download that consumes the deadline sends no provider wri
   assertEquals(w.calls.length, 0);
 });
 
+Deno.test("follow-up outcomes are returned as observed, never inferred from the request", async () => {
+  const w = world();
+  const results = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1",
+    thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello",
+  }, w.deps);
+  assertEquals(results.thumbnail.state, "applied");
+  assertEquals(results.first_comment.state, "applied");
+
+  const skipped = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1",
+    thumbnailUrl: THUMBNAIL_URL, firstComment: null,
+  }, world({ budgetMs: 0 }).deps);
+  assertEquals(skipped.thumbnail, { state: "skipped", reason: "no_time" });
+  assertEquals(skipped.first_comment, { state: "not_requested", reason: null });
+});
+
 Deno.test("authority lost during a thumbnail download prevents both provider writes", async () => {
   const w = world({});
   w.deps.canWrite = () => Promise.resolve(w.downloads.length === 0);

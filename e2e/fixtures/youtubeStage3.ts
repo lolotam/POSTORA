@@ -78,7 +78,7 @@ export async function startStage3Journey(page: Page, scenario: Stage3Scenario = 
   // Registered first so the specific routes below take precedence.
   await page.route(/.*/, (route) => {
     const requestUrl = route.request().url();
-    if (requestUrl.startsWith("http://localhost:8080") || requestUrl.startsWith("http://127.0.0.1:8080")) {
+    if (/^http:\/\/(?:localhost|127\.0\.0\.1):(?:8080|8091)(?:\/|$)/.test(requestUrl)) {
       return route.continue();
     }
     return route.abort("blockedbyclient");

@@ -38,6 +38,7 @@ import {
 } from "../_shared/youtubePublishOptions.ts";
 import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
 import { parseExplicitDeclaration, YOUTUBE_DECLARATION_FORM_KEYS } from "./formDeclarations.ts";
+import { youtubeEvidenceOf } from "./youtubeEvidenceView.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
@@ -2005,32 +2006,9 @@ function toPlatformResult(pp: any) {
     // rest of response_data (tokens, URLs with credentials, provider bodies)
     // stays internal. The allowlist below is the only path to those fields.
     warnings: Array.isArray(pp.response_data?.warnings) ? pp.response_data.warnings : [],
-    ...(pp.platform === "youtube" && pp.response_data?.youtube_publish_evidence
-      ? { youtube_publish_evidence: sanitizedYoutubeEvidence(pp.response_data.youtube_publish_evidence) }
+    ...(youtubeEvidenceOf(pp.response_data, pp.platform)
+      ? { youtube_publish_evidence: youtubeEvidenceOf(pp.response_data, pp.platform) }
       : {}),
-  };
-}
-
-/** Allowlist the evidence fields; never echo the raw stored object. */
-function sanitizedYoutubeEvidence(value: unknown) {
-  const record = (value ?? {}) as Record<string, unknown>;
-  const states = ["not_requested", "applied", "skipped", "failed", "unknown"];
-  const reasons = ["no_time", "authority_lost", "refused", "download_failed", "answer_lost"];
-  const followUp = (input: unknown) => {
-    const item = (input ?? {}) as Record<string, unknown>;
-    const state = typeof item.state === "string" && states.includes(item.state) ? item.state : "unknown";
-    const reason = typeof item.reason === "string" && reasons.includes(item.reason) ? item.reason : null;
-    return { state, reason };
-  };
-  const privacy = (key: string, fallback: string) =>
-    typeof record[key] === "string" && ["public", "unlisted", "private"].includes(record[key] as string)
-      ? (record[key] as string)
-      : fallback;
-  return {
-    requested_privacy: privacy("requested_privacy", "private"),
-    effective_privacy: privacy("effective_privacy", "unknown"),
-    thumbnail: followUp(record.thumbnail),
-    first_comment: followUp(record.first_comment),
   };
 }
 

@@ -713,6 +713,24 @@ Deno.test("the per-user limit answers rate_limited with a retry hint and spends 
   assertEquals([calls.tokens, calls.channel], [0, 0]);
 });
 
+Deno.test("the categories read is rate limited before any token or provider call", async () => {
+  let categoryCalls = 0;
+  const { handler, calls } = fixture({
+    rateLimit: { allowed: false, retryAfterSeconds: 60 },
+    categories: {
+      list: () => {
+        categoryCalls += 1;
+        return Promise.resolve({ ok: true as const, value: [], region: "US", locale: "en" as const });
+      },
+    },
+  });
+  const response = await handler(request({ operation: "categories", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 429);
+  assertEquals((await response.json()).error, "rate_limited");
+  assertEquals(categoryCalls, 0);
+  assertEquals(calls.tokens, 0);
+});
+
 Deno.test("a 401 on a stored token forces one refresh and one repeat", async () => {
   const { handler, calls, forceFlags } = fixture({
     channelResults: [{ ok: false, code: "reconnect_required", unauthorized: true }],

@@ -54,11 +54,20 @@ export function thumbnailSourceOf(metadata: object | null | undefined):
   return null;
 }
 
-/** Only a real image row may be signed and fetched for thumbnails.set. */
+/** The only raster types YouTube accepts for thumbnails.set. */
+export const THUMBNAIL_RASTER_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/**
+ * Only a row whose declared type AND MIME agree on a supported raster image
+ * may be signed and fetched. A mismatched row is a corrupted or crafted input,
+ * not an image: it is refused before any provider read or signature.
+ */
 export function isImageMedia(row: MediaFile): boolean {
-  if (row.file_type === "image") return true;
-  const mime = typeof row.mime_type === "string" ? row.mime_type.toLowerCase() : "";
-  return mime.startsWith("image/") && !mime.includes("svg");
+  if (row.file_type !== "image") return false;
+  const mime = typeof row.mime_type === "string"
+    ? row.mime_type.toLowerCase().split(";")[0].trim()
+    : "";
+  return THUMBNAIL_RASTER_MIMES.has(mime);
 }
 
 export async function resolveYoutubeThumbnail(

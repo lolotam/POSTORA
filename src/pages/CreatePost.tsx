@@ -54,6 +54,21 @@ interface CreatePostComposerProps {
   onStartNewPost: () => void;
 }
 
+/** Submit ids this tab has already seen accepted; no second enqueue per intent. */
+const acceptedSubmitIds = new Set<string>();
+
+/** Stable JSON for an immutable intent: object keys sorted, array order kept. */
+function canonicalIntentJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalIntentJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalIntentJson(item)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
 export default function CreatePost() {
   const location = useLocation();
   const editIdentity = new URLSearchParams(location.search).get("edit") || "";
@@ -470,14 +485,23 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       // and compare intent without re-running quota, declaration or media
       // upload work that belongs to a brand-new submission.
       const submitId = getOrCreateSubmitId();
-      const youtubeIntentMetadata = platformSettings.buildPostMetadata();
-      const submitFingerprint = JSON.stringify({
+      const youtubeIntentMetadata = platformSettings.buildPostMetadata() as Record<string, unknown>;
+      // Every stored publishing setting is part of the immutable intent. Only
+      // the transport markers are excluded; nothing else is hand-picked, so a
+      // new YouTube control cannot silently fall outside the fingerprint.
+      const youtubeSettings = Object.fromEntries(
+        Object.entries(youtubeIntentMetadata).filter(([key]) =>
+          key !== "submit_id" && key !== "submit_fingerprint" && key !== "publish_enqueue_accepted"
+        ),
+      );
+      const submitFingerprint = canonicalIntentJson({
         platforms: [...selectedPlatforms].sort(),
         accountIds: [...selectedAccountIds].sort(),
-        // Source media identity: already-uploaded local files plus the raw URL
-        // intake. Derived upload ids are deliberately absent so a recovery
-        // never has to upload the same URL again to match its own intent.
-        localMediaIds: files.map((file) => file.storagePath).sort(),
+        // Media order is publishing intent. The array is NOT sorted: reordering
+        // a carousel is a different submission, not the same one retried.
+        localMediaIds: files.map((file) => file.storagePath),
+        // The external source identity, not a derived upload id, so recovery
+        // never needs to upload the same URL again to match its own intent.
         intake: {
           uploadMethod,
           urlMediaType,
@@ -487,31 +511,19 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         caption: caption.trim(),
         scheduledAt: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
         scheduleTimezone: scheduleTimezone || null,
-        youtube: {
-          title: youtubeIntentMetadata.youtube_title ?? null,
-          description: youtubeIntentMetadata.youtube_description ?? null,
-          tags: Array.isArray(youtubeIntentMetadata.youtube_tags)
-            ? [...youtubeIntentMetadata.youtube_tags]
-            : [],
-          category: youtubeIntentMetadata.youtube_category ?? null,
-          visibility: youtubeIntentMetadata.youtube_visibility ?? null,
-          madeForKids: youtubeIntentMetadata.youtube_made_for_kids ?? null,
-          containsSyntheticMedia: youtubeIntentMetadata.youtube_contains_synthetic_media ?? null,
-          thumbnailMediaId: youtubeIntentMetadata.youtube_thumbnail_media_id ?? null,
-          thumbnailUrl: youtubeIntentMetadata.youtube_thumbnail_url ?? null,
-          firstComment: youtubeIntentMetadata.youtube_first_comment ?? null,
-          allowEmbedding: youtubeIntentMetadata.youtube_allow_embedding ?? null,
-          publicStatsViewable: youtubeIntentMetadata.youtube_public_stats_viewable ?? null,
-          videoType: youtubeIntentMetadata.youtube_video_type ?? null,
-        },
+        youtube: youtubeSettings,
       });
 
-      let recoveredPost: {
-        id: string;
-        status: string;
-        metadata: Record<string, unknown> | null;
-      } | null = null;
-      if (!editPostId) {
+      type RecoveredPost = { id: string; status: string; metadata: Record<string, unknown> | null };
+      type PendingLookup =
+        | { state: "none" }
+        | { state: "found"; post: RecoveredPost }
+        | { state: "conflict"; reason: "owner" | "intent" };
+
+      // One owner-scoped read, used by BOTH the pre-flight recovery and the
+      // duplicate-key readback. A foreign row and a changed immutable intent
+      // are distinct visible refusals, never a silent second submission.
+      const lookupPending = async (): Promise<PendingLookup> => {
         const { data: pending, error: pendingError } = await supabase
           .from("posts")
           .select("id, user_id, status, metadata")
@@ -519,27 +531,62 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           .eq("user_id", user?.id ?? "")
           .maybeSingle();
         if (pendingError) throw pendingError;
-        if (pending) {
-          const existingMetadata = pending.metadata as Record<string, unknown> | null;
-          if (existingMetadata?.submit_id !== submitId) {
-            showErrorToast(
-              t("toast.submitConflictTitle", "Submission conflict"),
-              t("toast.submitConflictDesc", "This submission belongs to another request. Review it before publishing again."),
-            );
-            return;
-          }
-          if (existingMetadata?.submit_fingerprint !== submitFingerprint) {
-            showErrorToast(
-              t("toast.submitIntentChangedTitle", "Submission changed"),
-              t("toast.submitIntentChangedDesc", "The draft changed after it was submitted. Review the saved post before publishing again."),
-            );
-            return;
-          }
-          recoveredPost = {
-            id: String(pending.id),
-            status: String(pending.status),
-            metadata: existingMetadata,
-          };
+        if (!pending) return { state: "none" };
+        const existingMetadata = pending.metadata as Record<string, unknown> | null;
+        if (existingMetadata?.submit_id !== submitId) return { state: "conflict", reason: "owner" };
+        if (existingMetadata?.submit_fingerprint !== submitFingerprint) {
+          return { state: "conflict", reason: "intent" };
+        }
+        return {
+          state: "found",
+          post: { id: String(pending.id), status: String(pending.status), metadata: existingMetadata },
+        };
+      };
+      const refusePending = (lookup: Extract<PendingLookup, { state: "conflict" }>) => {
+        if (lookup.reason === "owner") {
+          showErrorToast(
+            t("toast.submitConflictTitle", "Submission conflict"),
+            t("toast.submitConflictDesc", "This submission belongs to another request. Review it before publishing again."),
+          );
+        } else {
+          showErrorToast(
+            t("toast.submitIntentChangedTitle", "Submission changed"),
+            t("toast.submitIntentChangedDesc", "The draft changed after it was submitted. Review the saved post before publishing again."),
+          );
+        }
+      };
+
+      let recoveredPost: RecoveredPost | null = null;
+      if (!editPostId) {
+        const lookup = await lookupPending();
+        if (lookup.state === "conflict") {
+          refusePending(lookup);
+          return;
+        }
+        if (lookup.state === "found") {
+          recoveredPost = lookup.post;
+          // Rehydrate the full YouTube form from the immutable stored intent
+          // so a reload after a lost acknowledgement restores what the creator
+          // actually submitted, including the thumbnail source and declarations.
+          const stored = (lookup.post.metadata ?? {}) as Record<string, unknown>;
+          const text = (key: string) => typeof stored[key] === "string" ? stored[key] as string : undefined;
+          const bool = (key: string) => typeof stored[key] === "boolean" ? stored[key] as boolean : undefined;
+          const proof = youtubeDeclarationProofOf(stored);
+          handleYoutubeSettingsChange({
+            title: text("youtube_title"),
+            description: text("youtube_description"),
+            tags: text("youtube_tags"),
+            category: text("youtube_category"),
+            visibility: text("youtube_visibility") as "public" | "unlisted" | "private" | undefined,
+            madeForKids: proof?.made_for_kids,
+            containsSyntheticMedia: proof?.contains_synthetic_media,
+            thumbnailUrl: text("youtube_thumbnail_url") ?? "",
+            thumbnailMediaId: text("youtube_thumbnail_media_id") ?? null,
+            firstComment: text("youtube_first_comment") ?? "",
+            allowEmbedding: bool("youtube_allow_embedding"),
+            publicStatsViewable: bool("youtube_public_stats_viewable"),
+            videoType: text("youtube_video_type") as "video" | "short" | undefined,
+          });
         }
       }
 
@@ -681,23 +728,15 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             return;
           }
           if (error.code === "23505") {
-            // The acknowledgement of this same submission was lost. Read back
-            // OUR row and never insert another one; a foreign row is refused.
-            const { data: existing, error: readError } = await supabase
-              .from("posts")
-              .select("id, user_id, metadata")
-              .eq("id", submitId)
-              .eq("user_id", user?.id ?? "")
-              .maybeSingle();
-            if (readError) throw readError;
-            const existingMetadata = existing?.metadata as Record<string, unknown> | null;
-            if (existing && existing.user_id === user?.id &&
-                existingMetadata?.submit_id === submitId &&
-                existingMetadata?.submit_fingerprint === submitFingerprint) {
-              post = existing;
-            } else {
-              throw error;
-            }
+            // The insert committed but its acknowledgement was lost. The same
+            // owner-scoped read and intent check decide whether this row is
+            // ours; no second insert is attempted either way.
+            const lookup = await lookupPending();
+            if (lookup.state === "found") post = lookup.post;
+            else if (lookup.state === "conflict") {
+              refusePending(lookup);
+              return;
+            } else throw error;
           } else {
             throw error;
           }
@@ -744,7 +783,8 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         recoveredStatus === "processing" ||
         recoveredStatus === "completed" ||
         recoveredStatus === "failed" ||
-        recoveredPost.metadata?.publish_enqueue_accepted === true
+        recoveredPost.metadata?.publish_enqueue_accepted === true ||
+        acceptedSubmitIds.has(submitId)
       );
       if (!scheduleEnabled || !scheduledAt) {
         if (alreadyAccepted) {
@@ -774,11 +814,25 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             title: t("common:publishing.submitted", "Submitted, publishing"),
             description: t("toast.checkHistory", "Check the History page for real-time status updates."),
           });
-          // A future reload after a lost acknowledgement can skip the enqueue
-          // once it can see that this intent was already accepted.
-          void supabase.from("posts").update({
-            metadata: { ...(post.metadata ?? {}), publish_enqueue_accepted: true },
-          }).eq("id", post.id);
+          // The server's acceptance is the authority, not a client-side guess.
+          // Persist it with an awaited, conditional write: a concurrent replay
+          // cannot move this marker twice, and a failed receipt write can only
+          // cause a later idempotent enqueue, never a second accepted post.
+          const acceptedMetadata = {
+            ...(post.metadata ?? {}),
+            publish_enqueue_accepted: true,
+            publish_enqueue_accepted_at: new Date().toISOString(),
+          };
+          const { error: acceptanceError } = await supabase.from("posts")
+            .update({ metadata: acceptedMetadata })
+            .eq("id", post.id)
+            .is("metadata->publish_enqueue_accepted", null);
+          if (acceptanceError) {
+            console.warn("[CreatePost] acceptance receipt could not be persisted");
+          } else {
+            post.metadata = acceptedMetadata;
+          }
+          acceptedSubmitIds.add(submitId);
         }
         }
       } else {
