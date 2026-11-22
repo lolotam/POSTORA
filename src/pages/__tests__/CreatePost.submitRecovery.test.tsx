@@ -26,6 +26,7 @@ const fixture = vi.hoisted(() => ({
   quotaCalls: 0,
   captureInsert: null as null | ((payload: Record<string, unknown>) => void),
   forceDuplicate: false,
+  acknowledgeInsert: false,
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -111,6 +112,7 @@ vi.mock("@/integrations/supabase/client", () => ({
                     ...payload,
                     publish_requested_at: "2026-11-22T10:00:00.000Z",
                   };
+                  if (fixture.acknowledgeInsert) return { data: fixture.stored, error: null };
                   return { data: null, error: { message: "network lost" } };
                 }
                 // The reload retries the same deliberate submission and the
@@ -169,6 +171,7 @@ beforeEach(() => {
   fixture.quotaCalls = 0;
   fixture.captureInsert = null;
   fixture.forceDuplicate = false;
+  fixture.acknowledgeInsert = false;
 });
 
 describe("CreatePost lost acknowledgement recovery", () => {
@@ -258,6 +261,31 @@ describe("CreatePost lost acknowledgement recovery", () => {
     expect(fixture.enqueue).not.toHaveBeenCalled();
     expect(fixture.quotaCalls).toBe(1);
     second.unmount();
+  });
+
+  it("preserves a newer submission when an earlier acknowledgement arrives", async () => {
+    fixture.acknowledgeInsert = true;
+    let acknowledge = () => { throw new Error("No publish request to acknowledge"); };
+    fixture.enqueue.mockImplementationOnce(() => new Promise((resolve) => {
+      acknowledge = () => { resolve({ accepted: true }); };
+    }));
+
+    const first = render(<CreatePost />, { wrapper: wrapper() });
+    await submit(userEvent.setup(), "Original intent");
+    await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    const submitKey = "youtube-stage3-submit:owner:new";
+    const intentKey = "youtube-stage3-intent:owner:new";
+    const newSubmitId = crypto.randomUUID();
+    const newIntent = JSON.stringify({ fingerprint: "replacement intent" });
+    sessionStorage.setItem(submitKey, newSubmitId);
+    sessionStorage.setItem(intentKey, newIntent);
+
+    acknowledge();
+    await waitFor(() => expect(fixture.toasts.join(" ")).toMatch(/Submitted, publishing/i));
+    expect(sessionStorage.getItem(submitKey)).toBe(newSubmitId);
+    expect(sessionStorage.getItem(intentKey)).toBe(newIntent);
   });
 
   it("refuses to reuse the submission when the reloaded draft intent changed", async () => {

@@ -286,7 +286,8 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     }
     return id;
   };
-  const clearSubmitId = () => {
+  const clearSubmitId = (submitId: string) => {
+    if (sessionStorage.getItem(submitStorageKey) !== submitId) return;
     sessionStorage.removeItem(submitStorageKey);
     sessionStorage.removeItem(intentSnapshotKey);
   };
@@ -945,7 +946,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       }
 
       clearSubmittedDraft();
-      clearSubmitId();
+      clearSubmitId(submitId);
       onSaved({ postId: post.id, status: completionStatus });
 
     } catch (error) {
