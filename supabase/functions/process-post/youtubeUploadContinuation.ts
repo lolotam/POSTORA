@@ -41,6 +41,8 @@ import {
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { YOUTUBE_UPLOAD_REASON, type YoutubeUploadReason } from "./youtubeUploadPolicy.ts";
 import { isUncertainUploadOutcome } from "./youtubeUploadOutcome.ts";
+import { youtubeDeclarationProofOf } from "../_shared/youtubePublishSafety.ts";
+import { youtubeEvidenceFromMetadata, type YoutubePublishEvidence } from "./youtubePublishEvidence.ts";
 
 /** What the continuation is asked to do. */
 export interface YoutubeContinuationRequest {
@@ -73,6 +75,11 @@ export interface ContinuationPost {
   thumbnailUrl: string | null;
   /** The first comment the customer asked for, if any. */
   firstComment: string | null;
+  /**
+   * The post metadata, so a resumed upload can check D3 provenance. A legacy
+   * boolean without a versioned proof is not a declaration.
+   */
+  metadata: Record<string, unknown>;
 }
 
 /** The account, as far as the continuation needs it. */
@@ -197,7 +204,12 @@ export interface YoutubeContinuationPorts {
    *
    * No provider is contacted and no media is read: the video already exists.
    */
-  projectReceipt(args: { sessionId: string }): Promise<{
+  projectReceipt(args: {
+    sessionId: string;
+    /** Evidence carried onto the resumed public row, never inferred as success. */
+    evidence?: YoutubePublishEvidence;
+    accountId?: string | null;
+  }): Promise<{
     settled: boolean;
     refused: YoutubeUploadRefusal | null;
     videoId: string | null;
@@ -445,7 +457,13 @@ export async function continueYoutubeUpload(
     if (recovery.scopeState === "incomplete") {
       return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
     }
-    const projected = await ports.projectReceipt({ sessionId: session.id });
+    const projected = await ports.projectReceipt({
+      sessionId: session.id,
+      // The inheriting worker did not perform the follow-ups. Their outcomes
+      // are unknown, never applied or failed by inference.
+      evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
+      accountId: session.socialAccountId,
+    });
     if (!projected.settled) {
       return refused(refusalToReason(projected.refused ?? "session_not_found"));
     }
@@ -490,6 +508,25 @@ export async function continueYoutubeUpload(
         reason: YOUTUBE_UPLOAD_REASON.reconcile,
       });
     }
+  }
+
+  // A session that has not written a byte is still a NEW upload, even when a
+  // provider session URI already exists. D3 applies to it: a legacy row whose
+  // booleans came from implicit defaults is not an answer, and resuming it
+  // would publish a video the creator never explicitly declared.
+  //
+  // This check is deliberately AFTER the receipt projection and the ambiguous
+  // send handling above. A receipt is a fact about a video that already exists,
+  // and an ambiguous send must still be resolved rather than refused, or a
+  // possible video would be left with no reconciliation path.
+  if (!session.videoId && session.bytesSent === 0 && !session.videoMayExist &&
+      !youtubeDeclarationProofOf(post.metadata)) {
+    return await refusePermanently({
+      ports,
+      session,
+      leaseToken: request.leaseToken,
+      reason: YOUTUBE_UPLOAD_REASON.declaration_required,
+    });
   }
 
   // The account must still be a target of the post.
@@ -912,7 +949,15 @@ async function interpretOutcome(args: {
       status: "success",
       videoId: outcome.videoId,
       errorMessage: null,
-      responseData: { youtube_video_id: outcome.videoId, youtube_upload_source: "continuation" },
+      responseData: {
+        youtube_video_id: outcome.videoId,
+        youtube_upload_source: "continuation",
+        // The provider id and the upload success are preserved. Follow-up
+        // states are not claimed here: they are settled separately by the
+        // follow-up port, so a worker that inherited this video cannot replay
+        // a first comment.
+        youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
+      },
     });
     if (!settled.settled) {
       // The lease is gone. Nothing is settled: the worker that owns the
@@ -982,6 +1027,7 @@ async function interpretOutcome(args: {
     responseData: {
       youtube_upload_reason: reason,
       ...(uncertain ? { publish_outcome: "uncertain" } : {}),
+      youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
     },
   });
   if (!settled.settled) {

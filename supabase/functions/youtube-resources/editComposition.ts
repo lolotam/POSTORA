@@ -22,6 +22,23 @@ import type { YouTubeCategoryClient } from "./categoryClient.ts";
 
 export const PUBLISHED_EDIT_WRITE_ENABLED = false as const;
 
+/**
+ * The two fail-closed checks that stand between a validated plan and a
+ * provider write. Both are ports so the offline composition can prove they
+ * are consulted; production leaves the whole edit port disabled.
+ */
+export interface EditWriteGuard {
+  /** Fail-closed per-owner mutation rate/quota gate. */
+  authorizeWrite(input: { accountId: string; ownerId: string; channelId: string }): Promise<boolean>;
+  /** Re-read account, channel binding and token identity just before dispatch. */
+  stillBound(input: {
+    accountId: string;
+    ownerId: string;
+    channelId: string;
+    accessToken: string;
+  }): Promise<boolean>;
+}
+
 export interface EditCompositionInputs {
   /** Tests pass true with an approved synthetic provider; production passes the constant. */
   enabled: boolean;
@@ -47,10 +64,18 @@ export interface EditCompositionInputs {
     } | null>;
   };
   clock: { now(): Date };
+  writeGuard: EditWriteGuard;
 }
 
 function toEditFailureCode(error: unknown): EditFailureCode | null {
   return error instanceof EditFailure ? error.code : null;
+}
+
+/** The channel's catalog region when the account recorded one, else US. */
+function effectiveRegion(accountMetadata: unknown): string {
+  const metadata = (accountMetadata ?? {}) as Record<string, unknown>;
+  const value = metadata.country ?? metadata.region;
+  return typeof value === "string" && /^[A-Za-z]{2}$/.test(value) ? value.toUpperCase() : "US";
 }
 
 /**
@@ -59,7 +84,7 @@ function toEditFailureCode(error: unknown): EditFailureCode | null {
  */
 export function createConnectedEditPort(inputs: EditCompositionInputs): YouTubeEditPort | undefined {
   if (!inputs.enabled) return undefined;
-  const { provider, categories, tokens, accounts, clock } = inputs;
+  const { provider, categories, tokens, accounts, clock, writeGuard } = inputs;
 
   async function context(accountId: string, ownerId: string) {
     const account = await accounts.load({ accountId, userId: ownerId });
@@ -68,7 +93,11 @@ export function createConnectedEditPort(inputs: EditCompositionInputs): YouTubeE
     }
     const token = await tokens.get(account, { force: false });
     if (!token.ok) throw new EditFailure("reconnect_required", "The selected channel cannot be used.");
-    return { accessToken: token.accessToken, channelId: account.channelId };
+    return {
+      accessToken: token.accessToken,
+      channelId: account.channelId,
+      region: effectiveRegion(account.accountMetadata),
+    };
   }
 
   return {
@@ -86,7 +115,7 @@ export function createConnectedEditPort(inputs: EditCompositionInputs): YouTubeE
       });
     },
     async update({ accountId, videoId, ownerId, baseRevision, changes, privacyConfirmation }) {
-      const { accessToken, channelId } = await context(accountId, ownerId);
+      const { accessToken, channelId, region } = await context(accountId, ownerId);
       const before = await provider.getVideo(accessToken, { videoId, channelId });
       if (!before.ok) throw new EditFailure(before.code === "not_found" ? "invalid_request" : before.code, "Video read failed.");
       const snapshot: EditSnapshot = await createEditSnapshot({
@@ -97,7 +126,14 @@ export function createConnectedEditPort(inputs: EditCompositionInputs): YouTubeE
         fetchedAt: clock.now().toISOString(),
       });
       if (snapshot.revision !== baseRevision) throw new EditFailure("edit_conflict", "The video changed since it was opened.");
-      const catalog = await categories.list(accessToken, { region: "US", locale: "en" });
+
+      // The same quota gate that fences the provider write also fences the
+      // provider CATALOG read made for this write. Otherwise a rejected write
+      // could still spend a Google quota unit listing categories.
+      if (!await writeGuard.authorizeWrite({ accountId, ownerId, channelId })) {
+        throw new EditFailure("upstream_unavailable", "The write quota is exhausted. Try again later.");
+      }
+      const catalog = await categories.list(accessToken, { region, locale: "en" });
       const assignableCategoryIds = catalog.ok ? new Set(catalog.value.filter((option) => option.assignable).map((option) => option.id)) : undefined;
       const plan = await planEditUpdate({
         snapshot,
@@ -108,6 +144,14 @@ export function createConnectedEditPort(inputs: EditCompositionInputs): YouTubeE
         privacyConfirmation,
         assignableCategoryIds,
       });
+
+      // The binding is re-read again immediately before dispatch: a token
+      // refresh or a channel relink between the catalog read and the plan must
+      // not leave a stale write on the wire. A missing or failing gate refuses
+      // the write; no unconditional fallback exists.
+      if (!await writeGuard.stillBound({ accountId, ownerId, channelId, accessToken })) {
+        throw new EditFailure("reconnect_required", "The channel binding changed before the write.");
+      }
       const written = await provider.updateVideo(accessToken, { videoId, plan });
       if (!written.ok) throw new EditFailure(written.code, "The conditional write was refused.");
       const reread = await provider.getVideo(accessToken, { videoId, channelId });

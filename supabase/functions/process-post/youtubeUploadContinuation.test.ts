@@ -121,6 +121,11 @@ function world(options: WorldOptions = {}): World {
     mediaFileIds: [MEDIA_ID],
     thumbnailUrl: null,
     firstComment: null,
+    metadata: {
+      youtube_made_for_kids: false,
+      youtube_contains_synthetic_media: false,
+      youtube_declaration_proof: { version: 3, made_for_kids: false, contains_synthetic_media: false, source: "form" },
+    },
     ...options.post,
   };
   const account: ContinuationAccount = {
@@ -549,6 +554,44 @@ Deno.test("an opened object of another size is refused before the first byte", a
   assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.media_unavailable);
   // The object is refused when it is opened: not one byte was read.
   assertEquals(reads, 0);
+});
+
+Deno.test("a legacy inert session without proven declarations is not uploaded", async () => {
+  // The session has not sent a byte, so it is a new upload and D3 applies.
+  // Booleans that were manufactured from an implicit default carry no proof.
+  const w = world({
+    post: {
+      metadata: {
+        youtube_made_for_kids: false,
+        youtube_contains_synthetic_media: false,
+      },
+    },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "failed");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.declaration_required);
+  assertEquals(w.uploads, 0);
+  assertEquals(w.mediaReads, 0);
+});
+
+Deno.test("a proven declaration lets the same inert session continue", async () => {
+  const w = world();
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.uploads, 1);
+});
+
+Deno.test("a stored receipt is projected even when declarations were never proven", async () => {
+  // The video already exists. Projecting its receipt is a fact about a video,
+  // not a declaration-dependent upload, so it must not be blocked.
+  const w = world({
+    post: { metadata: { youtube_made_for_kids: false, youtube_contains_synthetic_media: false } },
+    session: { videoId: "AbcD1234eFg" },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.uploads, 0);
+  assertEquals(w.mediaReads, 0);
 });
 
 // An account that cannot publish is refused in every shape it can be in.

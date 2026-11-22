@@ -88,14 +88,22 @@ vi.mock("@/integrations/supabase/client", () => ({
       }
       if (table === "posts") {
         return {
-          select: () => ({
-            eq: () => ({
+          select: () => {
+            const chain = (filters: Record<string, string> = {}): Record<string, unknown> => ({
+              eq: (column: string, value: string) => chain({ ...filters, [column]: value }),
               single: async () => {
                 if (fixture.postRead) await fixture.postRead;
                 return { data: fixture.post, error: fixture.post ? null : { message: "not found" } };
               },
-            }),
-          }),
+              // Owner-scoped pre-flight lookup: match the stable id AND owner.
+              maybeSingle: async () => {
+                const row = fixture.post;
+                const matches = row && Object.entries(filters).every(([column, value]) => row[column] === value);
+                return { data: matches ? row : null, error: null };
+              },
+            });
+            return chain();
+          },
           insert: (payload: Record<string, unknown>) => ({
             select: () => ({
               single: async () => {

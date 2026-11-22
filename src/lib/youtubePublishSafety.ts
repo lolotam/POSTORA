@@ -36,17 +36,25 @@ export function buildYoutubeDeclarationProof(
   };
 }
 
+/** Reads a proof only when its version, source and values are all intact. */
+export function youtubeDeclarationProofOf(
+  metadata: Record<string, unknown> | null | undefined,
+): YoutubeDeclarationProof | null {
+  const proof = metadata?.youtube_declaration_proof;
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) return null;
+  const candidate = proof as Partial<YoutubeDeclarationProof>;
+  if (candidate.version !== YOUTUBE_DECLARATION_PROOF_VERSION) return null;
+  if (candidate.source !== "form" && candidate.source !== "rest" && candidate.source !== "mcp") return null;
+  if (typeof candidate.made_for_kids !== "boolean" || typeof candidate.contains_synthetic_media !== "boolean") return null;
+  if (metadata?.youtube_made_for_kids !== candidate.made_for_kids) return null;
+  if (metadata?.youtube_contains_synthetic_media !== candidate.contains_synthetic_media) return null;
+  return candidate as YoutubeDeclarationProof;
+}
+
 export function missingYoutubeDeclarations(
   metadata: Record<string, unknown> | null | undefined,
 ): YoutubeDeclarationKey[] {
-  const proof = metadata?.youtube_declaration_proof as YoutubeDeclarationProof | undefined;
-  const valid = proof?.version === YOUTUBE_DECLARATION_PROOF_VERSION &&
-    (proof.source === "form" || proof.source === "rest" || proof.source === "mcp") &&
-    typeof proof.made_for_kids === "boolean" &&
-    typeof proof.contains_synthetic_media === "boolean" &&
-    metadata?.youtube_made_for_kids === proof.made_for_kids &&
-    metadata?.youtube_contains_synthetic_media === proof.contains_synthetic_media;
-  if (!valid) return [...YOUTUBE_REQUIRED_DECLARATIONS];
+  if (!youtubeDeclarationProofOf(metadata)) return [...YOUTUBE_REQUIRED_DECLARATIONS];
   return YOUTUBE_REQUIRED_DECLARATIONS.filter(
     (key) => typeof metadata?.[key] !== "boolean",
   );

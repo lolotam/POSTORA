@@ -502,6 +502,10 @@ Deno.test("the approved synthetic composition drives a real connected snapshot a
       }),
     },
     clock: { now: () => new Date("2026-11-22T10:00:00.000Z") },
+    writeGuard: {
+      authorizeWrite: () => Promise.resolve(true),
+      stillBound: () => Promise.resolve(true),
+    },
   });
   const { handler } = fixture({ edit: connected });
 

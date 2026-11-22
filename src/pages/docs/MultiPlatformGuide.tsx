@@ -93,6 +93,7 @@ export default function MultiPlatformGuide() {
     "youtube_category": "22",
     "youtube_tags": ["tutorial", "howto", "guide"],
     "youtube_made_for_kids": false,
+    "youtube_contains_synthetic_media": false,
     
     "tiktok_privacy_level": "PUBLIC_TO_EVERYONE",
     "tiktok_disable_comment": false,

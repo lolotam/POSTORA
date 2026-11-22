@@ -214,6 +214,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                   fetchedAt={video.data.freshness.fetched_at}
                   canEdit={capabilities.data?.data.capabilities.edit_metadata?.state === "available"}
                   accountId={activeAccountId}
+                  region={channel.data?.data.country ?? undefined}
                   onSnapshot={async (videoId) => {
                     if (!activeAccountId) return null;
                     try {

@@ -236,7 +236,13 @@
     "postScheduled": "تمت جدولة المنشور!",
     "postUpdatedScheduled": "تم تحديث المنشور وجدولته!",
     "publishingIssueTitle": "مشكلة في النشر",
+    "publishedAlreadyDesc": "المنشور ده اتبعت بالفعل. راجع السجل عشان تشوف حالته.",
+    "publishedAlreadyTitle": "متبعت بالفعل",
     "scheduledDesc": "منشورك هيتنشر في {{date}} الساعة {{time}}.",
+    "submitConflictDesc": "المنشور ده بيخص طلب تاني. راجعه قبل ما تنشر تاني.",
+    "submitConflictTitle": "تعارض في الإرسال",
+    "submitIntentChangedDesc": "اتغير مسودة المنشور بعد ما اتبعت. راجع المنشور المحفوظ قبل ما تنشر تاني.",
+    "submitIntentChangedTitle": "اتغير الإرسال",
     "tiktokValidationFailed": "فشل التحقق من TikTok"
   },
   "youtube": {

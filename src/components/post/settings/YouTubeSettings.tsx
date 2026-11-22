@@ -1021,7 +1021,12 @@ export function YouTubeSettings({
                   }
                   setThumbnailDialogOpen(false);
                 }}
-                disabled={selectedAutoThumbnail === null && !settings.thumbnailUrl}
+                // A browser frame is a data URL and is not a durable owned
+                // source. Apply stays disabled until the frame is materialized
+                // into owned media (or an approved HTTPS URL is supplied).
+                disabled={selectedAutoThumbnail === null ||
+                  !/^https:\/\//i.test(autoThumbnails[selectedAutoThumbnail] ?? "")}
+                title={t("youtube.frameApplyRequiresOwned", "Save the frame to your media library before applying it as a thumbnail.")}
               >
                 {t("youtube.applySelection", "Apply Selection")}
               </Button>

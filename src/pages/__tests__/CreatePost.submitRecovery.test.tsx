@@ -22,6 +22,8 @@ const fixture = vi.hoisted(() => ({
   inserted: [] as Array<Record<string, unknown>>,
   stored: null as Record<string, unknown> | null,
   toasts: [] as string[],
+  quotaAllowed: true,
+  quotaCalls: 0,
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -36,7 +38,14 @@ vi.mock("@/hooks/useSocialAccounts", () => ({
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: (input: { title?: string; description?: string }) => fixture.toasts.push(`${input.title ?? ""} ${input.description ?? ""}`) }) }));
 vi.mock("@/hooks/useFeatureFlags", () => ({ useFeatureFlags: () => ({ flags: {}, isLoading: false }) }));
 vi.mock("@/hooks/useUserRole", () => ({ useUserRole: () => ({ isAdmin: false }) }));
-vi.mock("@/hooks/useQuotas", () => ({ useQuotas: () => ({ canCreatePost: async () => ({ allowed: true }) }) }));
+vi.mock("@/hooks/useQuotas", () => ({
+  useQuotas: () => ({
+    canCreatePost: async () => {
+      fixture.quotaCalls += 1;
+      return { allowed: fixture.quotaAllowed };
+    },
+  }),
+}));
 vi.mock("@/contexts/PublishingContext", () => ({
   usePublishing: () => ({ trackPublishingPost: vi.fn(), clearPublishingPost: vi.fn() }),
 }));
@@ -67,14 +76,23 @@ vi.mock("@/integrations/supabase/client", () => ({
     from: (table: string) => {
       if (table === "posts") {
         return {
-          select: () => ({
-            eq: (_column: string, id: string) => ({
-              maybeSingle: async () => ({
-                data: fixture.stored && fixture.stored.id === id ? fixture.stored : null,
-                error: null,
-              }),
-            }),
-          }),
+          // The pre-flight owner-scoped lookup and the duplicate-key readback
+          // both use this chain; the owner filter is part of the query.
+          select: () => {
+            const selection = (filters: Record<string, string> = {}): {
+              eq: (column: string, value: string) => ReturnType<typeof selection>;
+              maybeSingle: () => Promise<{ data: Record<string, unknown> | null; error: null }>;
+            } => ({
+              eq: (column: string, value: string) => selection({ ...filters, [column]: value }),
+              maybeSingle: async () => {
+                const row = fixture.stored;
+                const matches = row && Object.entries(filters).every(([column, value]) => row[column] === value);
+                return { data: matches ? row : null, error: null };
+              },
+            });
+            return selection();
+          },
+          update: () => ({ eq: async () => ({ error: null }) }),
           insert: (payload: Record<string, unknown>) => ({
             select: () => ({
               single: async () => {
@@ -136,6 +154,8 @@ beforeEach(() => {
   fixture.inserted = [];
   fixture.stored = null;
   fixture.toasts = [];
+  fixture.quotaAllowed = true;
+  fixture.quotaCalls = 0;
 });
 
 describe("CreatePost lost acknowledgement recovery", () => {
@@ -158,6 +178,26 @@ describe("CreatePost lost acknowledgement recovery", () => {
     expect(fixture.inserted.every((payload) => payload.id === id)).toBe(true);
     expect(fixture.stored?.id).toBe(id);
     expect(fixture.enqueue.mock.calls[0][0]).toMatchObject({ postId: id });
+    second.unmount();
+  });
+
+  it("recovers a completed post with quota consumed and no second enqueue", async () => {
+    const user = userEvent.setup();
+    const first = render(<CreatePost />, { wrapper: wrapper() });
+    await submit(user, "Original intent");
+    await waitFor(() => expect(fixture.inserted).toHaveLength(1));
+    first.unmount();
+    sessionStorage.removeItem("postora_post_draft");
+
+    // The first attempt consumed the quota and its upload already completed.
+    fixture.quotaAllowed = false;
+    fixture.stored = { ...fixture.stored!, status: "completed" };
+    const second = render(<CreatePost />, { wrapper: wrapper() });
+    await submit(user, "Original intent");
+    await waitFor(() => expect(fixture.toasts.join(" ")).toMatch(/Already submitted/i));
+    // Quota and enqueue are new-intent work; neither runs for a completed post.
+    expect(fixture.quotaCalls).toBe(1);
+    expect(fixture.enqueue).not.toHaveBeenCalled();
     second.unmount();
   });
 

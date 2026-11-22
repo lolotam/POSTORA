@@ -18,7 +18,7 @@ import { TIKTOK_PHOTO_WARNING } from "@/lib/platformConstants";
 import { enqueuePostPublish } from "@/features/publishing/infrastructure/enqueuePostPublish";
 import { TikTokSettingsState } from "@/components/post/settings/TikTokSettings";
 import { YouTubeSettingsState } from "@/components/post/settings/YouTubeSettings";
-import { missingYoutubeDeclarations } from "@/lib/youtubePublishSafety";
+import { missingYoutubeDeclarations, youtubeDeclarationProofOf } from "@/lib/youtubePublishSafety";
 import { useSavedFieldSuggestions } from "@/hooks/useSavedFieldSuggestions";
 import { useQuotas } from "@/hooks/useQuotas";
 import { useTranslation } from "react-i18next";
@@ -237,11 +237,13 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     if (savedPrivacy === "public" || savedPrivacy === "unlisted" || savedPrivacy === "private") {
       platformSettings.setYoutubeVisibility(savedPrivacy);
     }
-    if (typeof editMetadata.youtube_made_for_kids === "boolean") {
-      platformSettings.setYoutubeMadeForKids(editMetadata.youtube_made_for_kids);
-    }
-    if (typeof editMetadata.youtube_contains_synthetic_media === "boolean") {
-      platformSettings.setYoutubeContainsSyntheticMedia(editMetadata.youtube_contains_synthetic_media);
+    // A stored boolean is a legacy default unless it is backed by the proof
+    // written at ingress. Restoring an unproven `false` would let a scheduled
+    // post inherit a declaration the creator never gave.
+    const declarationProof = youtubeDeclarationProofOf(editMetadata);
+    if (declarationProof) {
+      platformSettings.setYoutubeMadeForKids(declarationProof.made_for_kids);
+      platformSettings.setYoutubeContainsSyntheticMedia(declarationProof.contains_synthetic_media);
     }
   }, [editMetadata, platformSettings]);
 
@@ -411,6 +413,15 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
   };
 
   const handleYoutubeSettingsChange = (changes: Partial<YouTubeSettingsState>) => {
+    // A thumbnail has exactly one source. Switching between the URL field and
+    // the owned media picker clears the other so the worker never sees two
+    // competing instructions for the same thumbnails.set call.
+    if (changes.thumbnailUrl !== undefined && changes.thumbnailUrl.length > 0) {
+      platformSettings.setYoutubeThumbnailMediaId(null);
+    }
+    if (changes.thumbnailMediaId !== undefined && changes.thumbnailMediaId !== null) {
+      platformSettings.setYoutubeThumbnailUrl("");
+    }
     if (changes.videoType !== undefined) platformSettings.setYoutubeVideoType(changes.videoType);
     if (changes.title !== undefined) platformSettings.setYoutubeTitle(changes.title);
     if (changes.description !== undefined) platformSettings.setYoutubeDescription(changes.description);
@@ -454,10 +465,88 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     setIsPosting(true);
 
     try {
-      if (!validatePost(unsplashValidationError)) return;
+      // The stable id and the SOURCE intent are computed before any gate. A
+      // reload after a lost acknowledgement must be able to find its own row
+      // and compare intent without re-running quota, declaration or media
+      // upload work that belongs to a brand-new submission.
+      const submitId = getOrCreateSubmitId();
+      const youtubeIntentMetadata = platformSettings.buildPostMetadata();
+      const submitFingerprint = JSON.stringify({
+        platforms: [...selectedPlatforms].sort(),
+        accountIds: [...selectedAccountIds].sort(),
+        // Source media identity: already-uploaded local files plus the raw URL
+        // intake. Derived upload ids are deliberately absent so a recovery
+        // never has to upload the same URL again to match its own intent.
+        localMediaIds: files.map((file) => file.storagePath).sort(),
+        intake: {
+          uploadMethod,
+          urlMediaType,
+          imageUrls: imageUrls.trim(),
+          videoUrl: videoUrl.trim(),
+        },
+        caption: caption.trim(),
+        scheduledAt: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
+        scheduleTimezone: scheduleTimezone || null,
+        youtube: {
+          title: youtubeIntentMetadata.youtube_title ?? null,
+          description: youtubeIntentMetadata.youtube_description ?? null,
+          tags: Array.isArray(youtubeIntentMetadata.youtube_tags)
+            ? [...youtubeIntentMetadata.youtube_tags]
+            : [],
+          category: youtubeIntentMetadata.youtube_category ?? null,
+          visibility: youtubeIntentMetadata.youtube_visibility ?? null,
+          madeForKids: youtubeIntentMetadata.youtube_made_for_kids ?? null,
+          containsSyntheticMedia: youtubeIntentMetadata.youtube_contains_synthetic_media ?? null,
+          thumbnailMediaId: youtubeIntentMetadata.youtube_thumbnail_media_id ?? null,
+          thumbnailUrl: youtubeIntentMetadata.youtube_thumbnail_url ?? null,
+          firstComment: youtubeIntentMetadata.youtube_first_comment ?? null,
+          allowEmbedding: youtubeIntentMetadata.youtube_allow_embedding ?? null,
+          publicStatsViewable: youtubeIntentMetadata.youtube_public_stats_viewable ?? null,
+          videoType: youtubeIntentMetadata.youtube_video_type ?? null,
+        },
+      });
+
+      let recoveredPost: {
+        id: string;
+        status: string;
+        metadata: Record<string, unknown> | null;
+      } | null = null;
+      if (!editPostId) {
+        const { data: pending, error: pendingError } = await supabase
+          .from("posts")
+          .select("id, user_id, status, metadata")
+          .eq("id", submitId)
+          .eq("user_id", user?.id ?? "")
+          .maybeSingle();
+        if (pendingError) throw pendingError;
+        if (pending) {
+          const existingMetadata = pending.metadata as Record<string, unknown> | null;
+          if (existingMetadata?.submit_id !== submitId) {
+            showErrorToast(
+              t("toast.submitConflictTitle", "Submission conflict"),
+              t("toast.submitConflictDesc", "This submission belongs to another request. Review it before publishing again."),
+            );
+            return;
+          }
+          if (existingMetadata?.submit_fingerprint !== submitFingerprint) {
+            showErrorToast(
+              t("toast.submitIntentChangedTitle", "Submission changed"),
+              t("toast.submitIntentChangedDesc", "The draft changed after it was submitted. Review the saved post before publishing again."),
+            );
+            return;
+          }
+          recoveredPost = {
+            id: String(pending.id),
+            status: String(pending.status),
+            metadata: existingMetadata,
+          };
+        }
+      }
+
+      if (!recoveredPost && !validatePost(unsplashValidationError)) return;
       const clearSubmittedDraft = captureDraftCleanup();
 
-    if (selectedPlatforms.includes("youtube")) {
+      if (!recoveredPost && selectedPlatforms.includes("youtube")) {
       const missingDeclarations = missingYoutubeDeclarations(platformSettings.buildPostMetadata());
       if (missingDeclarations.length > 0) {
         showErrorToast(
@@ -468,62 +557,66 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       }
     }
 
-    const hasComposioYouTubeTarget = connectedAccounts.some((account) =>
-      selectedAccountIds.includes(account.id) && account.platform === "youtube" &&
-      (account as typeof account & { auth_provider?: string }).auth_provider === "composio"
-    );
-    if (hasComposioYouTubeTarget) {
-      // Managed YouTube dispatch is disabled unconditionally: the provider
-      // cannot send the mandatory declarations (yes or no) and the exactly-once
-      // pre-execute receipt is not proven. Refuse before writing any post.
-      showErrorToast(
-        t("youtube.composioDispatchUnavailableTitle", "Managed YouTube publishing unavailable"),
-        t("youtube.composioDispatchUnavailableDesc", "A Composio-managed YouTube channel cannot publish yet. Use a native channel."),
-      );
-      return;
-    }
-
-    // Enforce daily/monthly post quotas on new posts (edits reuse existing row)
-    if (!editPostId) {
-      const quotaCheck = await canCreatePost();
-      if (!quotaCheck.allowed) {
-        showErrorToast(
-          t("toast.postLimitReached", "Post limit reached"),
-          quotaCheck.message || t("toast.postQuotaReached", "You've reached your post quota.")
+      let mediaFileIds: string[] = [];
+      if (!recoveredPost) {
+        const hasComposioYouTubeTarget = connectedAccounts.some((account) =>
+          selectedAccountIds.includes(account.id) && account.platform === "youtube" &&
+          (account as typeof account & { auth_provider?: string }).auth_provider === "composio"
         );
-        return;
-      }
-    }
+        if (hasComposioYouTubeTarget) {
+          // Managed YouTube dispatch is disabled unconditionally: the provider
+          // cannot send the mandatory declarations (yes or no) and the
+          // exactly-once pre-execute receipt is not proven.
+          showErrorToast(
+            t("youtube.composioDispatchUnavailableTitle", "Managed YouTube publishing unavailable"),
+            t("youtube.composioDispatchUnavailableDesc", "A Composio-managed YouTube channel cannot publish yet. Use a native channel."),
+          );
+          return;
+        }
 
-    if (selectedPlatforms.includes("tiktok")) {
-      const tiktokError = platformSettings.validateTiktokSettings(hasVideo);
-      if (tiktokError) {
-        showErrorToast(t("toast.tiktokValidationFailed", "TikTok validation failed"), tiktokError);
-        return;
-      }
-    }
+        // Enforce quotas on new posts only. A recovered submission has already
+        // consumed its quota at insert time.
+        if (!editPostId) {
+          const quotaCheck = await canCreatePost();
+          if (!quotaCheck.allowed) {
+            showErrorToast(
+              t("toast.postLimitReached", "Post limit reached"),
+              quotaCheck.message || t("toast.postQuotaReached", "You've reached your post quota.")
+            );
+            return;
+          }
+        }
 
-    if (selectedPlatforms.includes("pinterest")) {
-      const pinterestError = platformSettings.validatePinterestSettings();
-      if (pinterestError) {
-        showErrorToast(t("toast.pinterestValidationFailed", "Pinterest validation failed"), pinterestError);
-        return;
-      }
-    }
+        if (selectedPlatforms.includes("tiktok")) {
+          const tiktokError = platformSettings.validateTiktokSettings(hasVideo);
+          if (tiktokError) {
+            showErrorToast(t("toast.tiktokValidationFailed", "TikTok validation failed"), tiktokError);
+            return;
+          }
+        }
 
-      if (files.some((file) => !file.uploaded || !file.storagePath)) {
-        throw new Error("Every selected media item must finish uploading and have a media ID. The post was not saved.");
-      }
-      let mediaFileIds = files.map((file) => file.storagePath!);
+        if (selectedPlatforms.includes("pinterest")) {
+          const pinterestError = platformSettings.validatePinterestSettings();
+          if (pinterestError) {
+            showErrorToast(t("toast.pinterestValidationFailed", "Pinterest validation failed"), pinterestError);
+            return;
+          }
+        }
 
-      if (uploadMethod === "url") {
-        if (urlMediaType === "images" && imageUrls.trim()) {
-          const urls = imageUrls.split("\n").map((url) => url.trim()).filter(Boolean);
-          const uploaded = await Promise.all(urls.map((url) => uploadUrlToStorage(url, "image")));
-          mediaFileIds = [...mediaFileIds, ...uploaded.map((upload) => upload.id)];
-        } else if (urlMediaType === "video" && videoUrl.trim()) {
-          const uploaded = await uploadUrlToStorage(videoUrl.trim(), "video");
-          mediaFileIds = [...mediaFileIds, uploaded.id];
+        if (files.some((file) => !file.uploaded || !file.storagePath)) {
+          throw new Error("Every selected media item must finish uploading and have a media ID. The post was not saved.");
+        }
+        mediaFileIds = files.map((file) => file.storagePath!);
+
+        if (uploadMethod === "url") {
+          if (urlMediaType === "images" && imageUrls.trim()) {
+            const urls = imageUrls.split("\n").map((url) => url.trim()).filter(Boolean);
+            const uploaded = await Promise.all(urls.map((url) => uploadUrlToStorage(url, "image")));
+            mediaFileIds = [...mediaFileIds, ...uploaded.map((upload) => upload.id)];
+          } else if (urlMediaType === "video" && videoUrl.trim()) {
+            const uploaded = await uploadUrlToStorage(videoUrl.trim(), "video");
+            mediaFileIds = [...mediaFileIds, uploaded.id];
+          }
         }
       }
 
@@ -536,17 +629,6 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         )
       ) as Platform[];
 
-      const submitId = getOrCreateSubmitId();
-      // Immutable intent of THIS deliberate submission. A duplicate insert is
-      // only the same submission when the payload and targets agree; a changed
-      // payload needs explicit review instead of silent reuse.
-      const submitFingerprint = JSON.stringify({
-        platforms: [...selectedPlatforms].sort(),
-        accountIds: [...selectedAccountIds].sort(),
-        mediaFileIds,
-        caption: caption.trim(),
-        scheduledAt: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
-      });
       const postPayload = {
         ...(editPostId ? {} : { id: submitId }),
         user_id: user?.id,
@@ -578,6 +660,10 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           .single();
         if (error) throw error;
         post = data;
+      } else if (recoveredPost) {
+        // The row is already ours with the same source intent. No second
+        // insert, no new quota charge, no re-upload of the same media.
+        post = { id: recoveredPost.id, metadata: recoveredPost.metadata, status: recoveredPost.status };
       } else {
         // Create new post (DB trigger also enforces quota server-side)
         const { data, error } = await supabase
@@ -601,6 +687,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
               .from("posts")
               .select("id, user_id, metadata")
               .eq("id", submitId)
+              .eq("user_id", user?.id ?? "")
               .maybeSingle();
             if (readError) throw readError;
             const existingMetadata = existing?.metadata as Record<string, unknown> | null;
@@ -651,7 +738,25 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       saveFieldSuggestions();
 
       let completionStatus: SavedPostCompletion["status"] = scheduleEnabled && scheduledAt ? "scheduled" : "submitted";
+      const recoveredStatus = recoveredPost?.status;
+      const alreadyAccepted = recoveredPost !== null && (
+        recoveredStatus === "scheduled" ||
+        recoveredStatus === "processing" ||
+        recoveredStatus === "completed" ||
+        recoveredStatus === "failed" ||
+        recoveredPost.metadata?.publish_enqueue_accepted === true
+      );
       if (!scheduleEnabled || !scheduledAt) {
+        if (alreadyAccepted) {
+          // The first submission already reached the worker (or the scheduler
+          // owns it). A second enqueue would be a duplicate request for the
+          // same intent, so only the receipt is reported again.
+          trackPublishingPost(post.id, []);
+          toast({
+            title: t("toast.publishedAlreadyTitle", "Already submitted"),
+            description: t("toast.publishedAlreadyDesc", "This post was already submitted. Check History for its status."),
+          });
+        } else {
         // Track this post for realtime updates
         trackPublishingPost(post.id, platformsForInsert);
 
@@ -669,6 +774,12 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             title: t("common:publishing.submitted", "Submitted, publishing"),
             description: t("toast.checkHistory", "Check the History page for real-time status updates."),
           });
+          // A future reload after a lost acknowledgement can skip the enqueue
+          // once it can see that this intent was already accepted.
+          void supabase.from("posts").update({
+            metadata: { ...(post.metadata ?? {}), publish_enqueue_accepted: true },
+          }).eq("id", post.id);
+        }
         }
       } else {
         const actionLabel = editPostId

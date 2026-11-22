@@ -28,7 +28,16 @@ export interface YouTubeEditProvider {
 
 function parseVideo(body: unknown): ProviderVideo | null {
   if (!body || typeof body !== "object") return null;
-  const item = body as Record<string, unknown>;
+  // videos.list answers with a collection envelope, never a bare resource. A
+  // parser that only accepts the item silently turns every live read into
+  // "not found", so the envelope is unwrapped here and validated as a whole.
+  const envelope = body as Record<string, unknown>;
+  const item = Array.isArray(envelope.items)
+    ? envelope.items.length === 1 && envelope.items[0] && typeof envelope.items[0] === "object"
+      ? envelope.items[0] as Record<string, unknown>
+      : null
+    : envelope;
+  if (!item) return null;
   if (typeof item.id !== "string" || typeof item.etag !== "string") return null;
   const snippet = item.snippet as Record<string, unknown> | undefined;
   const status = item.status as Record<string, unknown> | undefined;

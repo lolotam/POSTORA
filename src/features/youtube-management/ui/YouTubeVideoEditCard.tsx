@@ -19,6 +19,8 @@ export interface YouTubeVideoEditCardProps {
   disabledReason: string;
   /** Owner-bound account whose token reads the regional catalog. */
   accountId?: string | null;
+  /** Effective channel region for the category catalog. */
+  region?: string;
   /** Injected real snapshot/save seam; production capability is off. */
   onSnapshot?: (videoId: string) => Promise<string | null>;
   onSave?: (draft: { title: string; categoryId: string; baseRevision: string }) => Promise<EditSaveOutcome>;
@@ -38,6 +40,7 @@ export function YouTubeVideoEditCard({
   canEdit,
   disabledReason,
   accountId,
+  region,
   onSnapshot,
   onSave,
 }: YouTubeVideoEditCardProps): JSX.Element {
@@ -50,7 +53,7 @@ export function YouTubeVideoEditCard({
   const [revision, setRevision] = useState<string | null>(null);
   const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
-  const categoryCatalog = useYouTubeCategories(locale, accountId);
+  const categoryCatalog = useYouTubeCategories(locale, accountId, region);
 
   useEffect(() => {
     setEditing(false);

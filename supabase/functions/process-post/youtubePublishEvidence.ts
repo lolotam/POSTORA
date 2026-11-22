@@ -59,3 +59,25 @@ export function withYoutubePublishEvidence(
 ): Record<string, unknown> {
   return { ...responseData, youtube_publish_evidence: evidence };
 }
+
+/**
+ * Builds evidence from the post's own metadata for the NATIVE settlement and
+ * the resumed receipt, not only for the generic result writer. A state that
+ * the settling worker did not actually observe stays unknown: a receipt
+ * projection never infers that a thumbnail or comment succeeded.
+ */
+export function youtubeEvidenceFromMetadata(
+  metadata: object | null | undefined,
+  overrides: Partial<YoutubeEvidenceInput> = {},
+): YoutubePublishEvidence {
+  const values = (metadata ?? {}) as Record<string, unknown>;
+  const thumbnailRequested = typeof values.youtube_thumbnail_media_id === "string" ||
+    (typeof values.youtube_thumbnail_url === "string" && values.youtube_thumbnail_url.length > 0);
+  const commentRequested = typeof values.youtube_first_comment === "string" && values.youtube_first_comment.length > 0;
+  return youtubePublishEvidence({
+    requestedPrivacy: typeof values.youtube_visibility === "string" ? values.youtube_visibility : "private",
+    thumbnailRequested,
+    commentRequested,
+    ...overrides,
+  });
+}

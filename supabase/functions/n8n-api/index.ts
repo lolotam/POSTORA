@@ -37,6 +37,7 @@ import {
   YOUTUBE_DEFAULT_CATEGORY_ID,
 } from "../_shared/youtubePublishOptions.ts";
 import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
+import { parseExplicitDeclaration, YOUTUBE_DECLARATION_FORM_KEYS } from "./formDeclarations.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
@@ -2000,8 +2001,36 @@ function toPlatformResult(pp: any) {
       story_state: ["queued", "creating", "processing", "publishing", "published", "failed", "uncertain"].includes(pp.response_data.story_state) ? pp.response_data.story_state : "unknown",
       story_retryable: pp.response_data.story_retryable === true,
     } : {}),
-    // Only the warnings are exposed — response_data itself stays internal.
+    // Only the warnings and the sanitized YouTube evidence are exposed — the
+    // rest of response_data (tokens, URLs with credentials, provider bodies)
+    // stays internal. The allowlist below is the only path to those fields.
     warnings: Array.isArray(pp.response_data?.warnings) ? pp.response_data.warnings : [],
+    ...(pp.platform === "youtube" && pp.response_data?.youtube_publish_evidence
+      ? { youtube_publish_evidence: sanitizedYoutubeEvidence(pp.response_data.youtube_publish_evidence) }
+      : {}),
+  };
+}
+
+/** Allowlist the evidence fields; never echo the raw stored object. */
+function sanitizedYoutubeEvidence(value: unknown) {
+  const record = (value ?? {}) as Record<string, unknown>;
+  const states = ["not_requested", "applied", "skipped", "failed", "unknown"];
+  const reasons = ["no_time", "authority_lost", "refused", "download_failed", "answer_lost"];
+  const followUp = (input: unknown) => {
+    const item = (input ?? {}) as Record<string, unknown>;
+    const state = typeof item.state === "string" && states.includes(item.state) ? item.state : "unknown";
+    const reason = typeof item.reason === "string" && reasons.includes(item.reason) ? item.reason : null;
+    return { state, reason };
+  };
+  const privacy = (key: string, fallback: string) =>
+    typeof record[key] === "string" && ["public", "unlisted", "private"].includes(record[key] as string)
+      ? (record[key] as string)
+      : fallback;
+  return {
+    requested_privacy: privacy("requested_privacy", "private"),
+    effective_privacy: privacy("effective_privacy", "unknown"),
+    thumbnail: followUp(record.thumbnail),
+    first_comment: followUp(record.first_comment),
   };
 }
 
@@ -2517,11 +2546,13 @@ export async function handleRequest(req: Request): Promise<Response> {
             } catch {
               body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
             }
+          } else if (YOUTUBE_DECLARATION_FORM_KEYS.has(key)) {
+            body[key] = parseExplicitDeclaration(value);
           } else if (key === 'instagram_share_to_story') {
             body[key] = parseFormBoolean(value);
-          } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
+          } else if (key === 'youtube_allow_embedding' ||
             key === 'youtube_embeddable' ||
-            key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
+            key === 'youtube_public_stats_viewable' ||
             key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
             key === 'tiktok_allow_comments' ||
             key === 'tiktok_allow_duet' || key === 'tiktok_allow_stitch' ||
@@ -2541,7 +2572,9 @@ export async function handleRequest(req: Request): Promise<Response> {
         const body: Record<string, any> = {};
 
         for (const [key, value] of formData.entries()) {
-          if (key === 'instagram_share_to_story') {
+          if (YOUTUBE_DECLARATION_FORM_KEYS.has(key)) {
+            body[key] = typeof value === 'string' ? parseExplicitDeclaration(value) : value;
+          } else if (key === 'instagram_share_to_story') {
             body[key] = typeof value === 'string' ? parseFormBoolean(value) : value;
           } else if (typeof value === 'string') {
             // Handle array fields
@@ -2555,9 +2588,9 @@ export async function handleRequest(req: Request): Promise<Response> {
               } catch {
                 body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
               }
-            } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
+            } else if (key === 'youtube_allow_embedding' ||
               key === 'youtube_embeddable' ||
-              key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
+              key === 'youtube_public_stats_viewable' ||
               key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
               key === 'tiktok_allow_comments' ||
               key === 'tiktok_allow_duet' || key === 'tiktok_allow_stitch' ||
@@ -2593,6 +2626,8 @@ export async function handleRequest(req: Request): Promise<Response> {
             } catch {
               body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
             }
+          } else if (YOUTUBE_DECLARATION_FORM_KEYS.has(key)) {
+            body[key] = parseExplicitDeclaration(value);
           } else if (key === 'instagram_share_to_story') {
             body[key] = parseFormBoolean(value);
           } else {

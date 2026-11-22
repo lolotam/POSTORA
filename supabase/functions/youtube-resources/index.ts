@@ -162,6 +162,13 @@ ports.edit = createConnectedEditPort({
   tokens: ports.tokens,
   accounts: ports.accounts,
   clock: ports.clock,
+  // Fail-closed by construction. The edit port itself is off, and even if a
+  // future activation changed that, no write would pass without a proven
+  // quota and rebinding gate.
+  writeGuard: {
+    authorizeWrite: () => Promise.resolve(false),
+    stillBound: () => Promise.resolve(false),
+  },
 });
 
 Deno.serve(createYouTubeResourcesHandler(ports));

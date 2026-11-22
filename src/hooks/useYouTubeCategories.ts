@@ -43,6 +43,15 @@ export function useYouTubeCategories(
       return () => { active = false; };
     }
     setLoading(true);
+    // A list loaded under another account, region or locale is not the list
+    // for this editor. Clear it before the new read so no stale label or
+    // disabled state can be applied to a different identity.
+    setCategories(bundledOptions(null, locale).map((option) => ({
+      id: option.id,
+      name: option.name,
+      label: option.label,
+      assignable: option.assignable,
+    })));
     gateway.getCategories({ accountId, region, locale })
       .then((result) => {
         if (!active) return;

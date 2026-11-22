@@ -10097,7 +10097,9 @@ function buildYoutubeContinuationPorts(
             .eq("id", mediaId)
             .eq("user_id", ownerId)
             .maybeSingle();
-          return error ? null : file as MediaFileRow | null;
+          return error
+            ? { ok: false as const, reason: "read_error" as const }
+            : { ok: true as const, row: file as MediaFileRow | null };
         },
         allowedWorkspaceIds: await loadPostTargetWorkspaceIds(supabase, id),
         mediaHosts,
@@ -10113,6 +10115,7 @@ function buildYoutubeContinuationPorts(
           : [],
         thumbnailUrl: thumbnail.ok ? thumbnail.url : null,
         firstComment: typeof metadata.youtube_first_comment === "string" ? metadata.youtube_first_comment : null,
+        metadata,
       };
     },
 
@@ -10290,7 +10293,27 @@ function buildYoutubeContinuationPorts(
       // The receipt is projected onto the public row without a lease and
       // without the provider: the video already exists, so there is nothing
       // to send and nothing to fetch.
-      return await store.projectReceipt({ sessionId: args.sessionId });
+      const projected = await store.projectReceipt({ sessionId: args.sessionId });
+      if (projected.settled && args.evidence) {
+        // Additive, owner-scoped update. The project RPC carries the receipt
+        // but not sanitized evidence; a failed update only leaves follow-ups
+        // unknown, it never claims success or replays a comment. The existing
+        // keys (including the provider id) are preserved.
+        let rowQuery = supabase.from("platform_posts")
+          .select("id, response_data")
+          .eq("post_id", postId)
+          .eq("platform", "youtube");
+        if (args.accountId) rowQuery = rowQuery.eq("social_account_id", args.accountId);
+        const { data: rows } = await rowQuery;
+        for (const row of rows ?? []) {
+          const existing = (row.response_data ?? {}) as Record<string, unknown>;
+          const { error } = await supabase.from("platform_posts")
+            .update({ response_data: { ...existing, youtube_publish_evidence: args.evidence } })
+            .eq("id", row.id);
+          if (error) console.warn("[youtube] resumed receipt evidence could not be attached");
+        }
+      }
+      return projected;
     },
 
     async followUps(args) {
@@ -10526,7 +10549,9 @@ async function postToYouTube(
         .eq("id", id)
         .eq("user_id", ownerId)
         .maybeSingle();
-      return error ? null : data as MediaFileRow | null;
+      return error
+        ? { ok: false as const, reason: "read_error" as const }
+        : { ok: true as const, row: data as MediaFileRow | null };
     },
     allowedWorkspaceIds: await loadPostTargetWorkspaceIds(supabase, post.id),
     mediaHosts,

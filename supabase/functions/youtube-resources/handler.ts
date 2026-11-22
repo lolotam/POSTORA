@@ -420,13 +420,24 @@ export function createYouTubeResourcesHandler(
           });
           return editEnvelope(req, requestId, snapshot);
         }
+        // The public wire shape is snake_case; the domain uses camelCase. Map
+        // at this boundary so a new wire key can never silently reach the
+        // domain as an unknown property.
+        const wireChanges = parsed.data.changes;
+        const domainChanges: EditChanges = {
+          ...(wireChanges.title !== undefined ? { title: wireChanges.title } : {}),
+          ...(wireChanges.description !== undefined ? { description: wireChanges.description } : {}),
+          ...(wireChanges.tags !== undefined ? { tags: wireChanges.tags } : {}),
+          ...(wireChanges.category_id !== undefined ? { categoryId: wireChanges.category_id } : {}),
+          ...(wireChanges.privacy_status !== undefined ? { privacyStatus: wireChanges.privacy_status } : {}),
+        };
         const result = await editPort.update({
           accountId,
           videoId: parsed.data.video_id,
           ownerId: userId,
           channelId,
           baseRevision: parsed.data.base_revision,
-          changes: parsed.data.changes,
+          changes: domainChanges,
           privacyConfirmation: parsed.data.privacy_confirmation ?? null,
         });
         if (!result.verified) {
