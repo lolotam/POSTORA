@@ -95,6 +95,8 @@ A receipt is only meaningful for the connection it was created under. Three thin
 | **Disconnect** | The browser updates `is_active = false` on its own row under RLS (`src/hooks/useSocialAccounts.tsx:73-77`); the server's own path does the same and clears credentials (`youtube-oauth/index.ts:196-210`). A profile or user deletion hard-deletes the row by cascade. | **Binding ends.** |
 | **Reconnect** | Native: a PostgREST upsert on `(user_id, platform, platform_user_id)` into the **same row**, writing a new `connected_at` and `is_active = true` (`youtube-oauth/index.ts:131-149`). Composio: an upsert that rewrites `connection_id` on the same row (`composio-connect/activation.ts:217-229`). After a hard delete, a new row with a new ID. | **New binding.** Old receipts must not be exposed and no old claim may dispatch. |
 
+A search of `supabase/functions`, `src` and the YouTube migrations at the baseline found no other writer of `connected_at`, `is_active`, `auth_provider` or `connection_id` on a YouTube row: the Composio activation's `connected_at` (`activation.ts:281`) is on the connection record, not the account; `_shared/socialAccountReconnect.ts` is used only by Threads; the token refresh and health paths do not write these columns. So no periodic job would advance the generation. Plan step 1 repeats this inventory on the implementation head, because a routine writer would make receipts disappear.
+
 YouTube has no connection generation today; only Meta has `connection_version`. None of the writers above goes through one shared RPC, and two of them are already-deployed code paths the migration cannot change.
 
 ### 6.2 Decision: a trigger-maintained generation column
@@ -157,7 +159,7 @@ claim ──► claimed ──(mark_dispatched, CAS)──► dispatched ──�
 
 - `claimed` means **definitely not sent**. A stale `claimed` row (older than the handler deadline) may be closed as `refused / abandoned_before_dispatch` by a later claim, by compare-and-set on `state = 'claimed'`. Nothing else is ever reclaimed.
 - `dispatched` is written **before** the HTTP request. From that instant the operation is never sent again, by anyone, under any key.
-- `indeterminate` is **permanent** for `create_thread`, `reply` and any `moderate` to `rejected`. It is never downgraded to `refused`, never retried, never swept, never cleared by a flag change or a rollback. The original attempt's token holder may still upgrade it to `confirmed` or `refused` if its real provider response arrives late.
+- `indeterminate` is **permanent** for `create_thread`, `reply` and any `moderate` to `rejected`. It is never retried, never swept, never cleared by a flag change, a rollback, a timeout, a later read or any other caller. **Exactly one thing can resolve it:** the original attempt, holding the attempt token, settling with its own late and definite provider response (`confirmed` on complete evidence, `refused` on a Google error envelope).
 - No background job touches this table.
 
 ### 7.3 Service-only functions
@@ -202,6 +204,8 @@ Common rules: user JWT only; one Zod schema per action with **strict keys** (unk
 2. **Gate.** `feature_youtube_comments` must be true and the evaluator must admit the account for the capability (§13). Rechecked inside `claim` and `mark_dispatched`.
 3. **Video.** With the bound credential, `videos.list?part=snippet&id=<video>` must return exactly that ID with `snippet.channelId` equal to the account's channel. Picker membership, public visibility and a commenter's identity prove nothing.
 4. **Target.** By handle (§8.2), then a fresh `comments.list?part=snippet&id=<comment>` immediately before dispatch: the comment must still exist, its `id` must match, its `snippet.parentId` must equal the handle's parent (absent for a top-level comment). Edit additionally requires a non-empty `authorChannelId.value` equal to the account's channel. Moderation accepts a foreign author. If the response happens to carry an undocumented video field that disagrees with the handle, the request is refused.
+
+The target read depends on `comments.list` with the `id` filter, for which Google lists an `operationNotSupported` error (§3). The baseline already depends on the same call for reply and own-delete (`getYouTubeComment`, `_shared/youtubeComments.ts:570`). If that read is refused or returns nothing, the target is unverified and **no write is sent**.
 
 A competing change on YouTube between the last check and the send remains possible and is stated in the UI copy for edits.
 
@@ -356,6 +360,7 @@ One SQL evaluator, `youtube_comments_stage4_admits`, answers for the handler, fo
 
 - New controls, cache keys, drafts, cursors, handles and operation state are scoped to user, account, video and thread, and are discarded on account switch and sign-out; a response for a previous selection is dropped.
 - The top-level composer is separate from per-row reply controls. A refused submit keeps the draft. A lost response shows a status check, never optimistic success.
+- After a disconnect or reconnect — including the reconnect that scope loss asks for (§11) — a pending or indeterminate operation from the previous binding answers `not_found`. The client then shows "This action was started before the channel was reconnected, so its result can no longer be checked here. Check the video on YouTube." It offers no resend, and an identical create or reply is still refused as `possible_duplicate` (§7.4).
 - Provider and commenter text is rendered as plain text.
 - English and Arabic copy for every state in §§9–11; RTL layout; keyboard reachable; focus returns to the triggering control after a dialog; status changes are announced.
 - Code lives under `src/features/youtube-comments/` (`domain`, `application`, `infrastructure`, `ui`) per ARCHITECTURE §3, mounted from the existing panel only when capabilities allow.
