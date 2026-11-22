@@ -12,6 +12,7 @@ import {
   type YouTubeCategoryApiEntry,
   type YouTubeCategoryLocale,
 } from "@/lib/youtubeVideoCategories";
+import type { YouTubeCategoryOption } from "@/features/youtube-management/domain/types";
 
 interface YouTubeCategorySelectProps {
   /** The category ID already stored on the post or video. */
@@ -20,6 +21,8 @@ interface YouTubeCategorySelectProps {
   locale: YouTubeCategoryLocale;
   /** Google's catalog for the creator's region; bundled list when absent. */
   catalog?: readonly YouTubeCategoryApiEntry[] | null;
+  /** Catalog loaded from the authorized read-only endpoint. */
+  options?: readonly YouTubeCategoryOption[];
   /** Show a retry state instead of silently changing the selection. */
   catalogUnavailable?: boolean;
   onRetry?: () => void;
@@ -40,6 +43,7 @@ export function YouTubeCategorySelect({
   onValueChange,
   locale,
   catalog,
+  options,
   catalogUnavailable = false,
   onRetry,
   disabled = false,
@@ -49,8 +53,16 @@ export function YouTubeCategorySelect({
   retryText = "Retry",
   helpText,
 }: YouTubeCategorySelectProps) {
-  const options = preserveYouTubeCategory(
-    youtubeCategoryOptions(catalog, locale),
+  const resolvedOptions = preserveYouTubeCategory(
+    options
+      ? options.map((option) => ({
+        id: option.id,
+        name: option.name,
+        label: option.label,
+        assignable: option.assignable,
+        unavailable: false,
+      }))
+      : youtubeCategoryOptions(catalog, locale),
     value,
     locale,
     unavailableText ?? (locale === "ar" ? "غير متاح حالياً" : "Currently unavailable"),
@@ -68,7 +80,7 @@ export function YouTubeCategorySelect({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {options.map((option) => (
+          {resolvedOptions.map((option) => (
             <SelectItem
               key={option.id}
               value={option.id}

@@ -49,6 +49,7 @@ import { UploadedFile } from "@/hooks/usePostForm";
 import { Image as ImageIcon } from "lucide-react";
 import { ResolvedModelCards } from "@/components/ai/ResolvedModelCards";
 import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
+import { useYouTubeCategories } from "@/hooks/useYouTubeCategories";
 
 export interface YouTubeSettingsState {
   // Video type
@@ -185,6 +186,7 @@ export function YouTubeSettings({
   const { flags } = useFeatureFlags();
   const { t, i18n } = useTranslation("postsettings");
   const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
+  const categoryCatalog = useYouTubeCategories(locale);
   const [thumbnailDialogOpen, setThumbnailDialogOpen] = useState(false);
   const [aiThumbnailPrompt, setAiThumbnailPrompt] = useState("");
   const { tiers: resolvedTiers } = useResolvedImageModels();
@@ -443,6 +445,9 @@ export function YouTubeSettings({
           value={settings.category}
           onValueChange={(category) => onSettingsChange({ category })}
           locale={locale}
+          options={categoryCatalog.categories}
+          catalogUnavailable={categoryCatalog.unavailable}
+          onRetry={categoryCatalog.retry}
           label={t("youtube.category", "Category")}
           unavailableText={t("youtube.categoryUnavailable", "Currently unavailable")}
           retryText={t("youtube.categoryRetry", "Retry catalog")}

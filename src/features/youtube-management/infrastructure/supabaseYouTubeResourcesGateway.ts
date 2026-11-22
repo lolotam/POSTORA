@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toYouTubeResourceError, YouTubeResourceError } from "../domain/errors";
 import type {
   YouTubeAccountCapabilities,
+  YouTubeCategoryOption,
   YouTubeChannelDetails,
   YouTubeResourceSuccess,
   YouTubeVideoDetails,
@@ -105,6 +106,18 @@ async function call<T>(
 }
 
 export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway {
+  getCategories(params: { region?: string; locale?: string }): Promise<YouTubeResourceSuccess<{
+    region: string;
+    locale: string;
+    categories: YouTubeCategoryOption[];
+  }>> {
+    return call(
+      { operation: "categories", ...(params.region ? { region: params.region } : {}), ...(params.locale ? { locale: params.locale } : {}) },
+      (data): data is { region: string; locale: string; categories: YouTubeCategoryOption[] } =>
+        typeof data === "object" && data !== null && Array.isArray((data as { categories?: unknown }).categories),
+    );
+  }
+
   getCapabilities(accountId: string): Promise<YouTubeResourceSuccess<YouTubeAccountCapabilities>> {
     return call({ operation: "capabilities", account_id: accountId }, isCapabilitiesData);
   }

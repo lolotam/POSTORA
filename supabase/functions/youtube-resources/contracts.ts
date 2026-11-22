@@ -15,6 +15,8 @@ export const YOUTUBE_RESOURCE_ERROR_STATUS = {
   method_not_allowed: 405,
   provider_unsupported: 409,
   write_not_enabled: 403,
+  edit_conflict: 409,
+  outcome_unknown: 502,
   reconnect_required: 409,
   rate_limited: 429,
   quota_exceeded: 429,

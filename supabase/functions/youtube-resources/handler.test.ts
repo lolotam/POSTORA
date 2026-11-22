@@ -3,6 +3,7 @@ import {
   createYouTubeResourcesHandler,
   type YouTubeResourceAccount,
   type YouTubeResourceRefusal,
+  type YouTubeEditPort,
   type YouTubeResourcesPorts,
   type YouTubeTokenResult,
 } from "./handler.ts";
@@ -13,6 +14,7 @@ import {
   type YouTubeVideosPage,
 } from "./contracts.ts";
 import type { YouTubeReadResult } from "./youtubeReadClient.ts";
+import { EditFailure, type EditSnapshot } from "./editLifecycle.ts";
 import { YOUTUBE_RESOURCE_REQUEST_EXAMPLES } from "./requestExamples.fixture.ts";
 
 const ENDPOINT = "https://api.postora.cloud/functions/v1/youtube-resources";
@@ -96,6 +98,7 @@ function fixture(overrides: {
   rateLimit?: { allowed: boolean; retryAfterSeconds: number };
   tokenError?: boolean;
   rateLimitError?: boolean;
+  edit?: YouTubeEditPort;
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
   const refreshToken = crypto.randomUUID() + crypto.randomUUID();
@@ -168,6 +171,7 @@ function fixture(overrides: {
         return Promise.resolve(queued ?? { ok: true, accessToken, minted: false });
       },
     },
+    edit: overrides.edit,
     youtube: {
       getChannel: () => {
         const queued = overrides.channelResults?.[calls.channel];
@@ -274,6 +278,27 @@ Deno.test("capabilities answers from the database and never returns a credential
   assertEquals(body.data.capabilities.browse, { state: "available" });
 });
 
+Deno.test("categories is authenticated, region/locale aware and never calls an account or provider", async () => {
+  const { handler, calls } = fixture();
+  const response = await handler(request({
+    operation: "categories", region: "sa", locale: "ar-EG",
+  }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.data.region, "SA");
+  assertEquals(body.data.locale, "ar");
+  assertEquals(body.data.categories.length, 18);
+  assertEquals(body.data.categories[0].id, "1");
+  assertEquals(body.data.categories.find((c: { id: string }) => c.id === "30").assignable, false);
+  assertEquals(body.data.categories.find((c: { id: string }) => c.id === "22").label, "\u206822\u2069 (الأشخاص والمدونات)");
+  assertEquals(calls.load, 0);
+  assertEquals(calls.tokens, 0);
+  assertEquals(calls.video, 0);
+
+  const anonymous = fixture({ authenticated: false });
+  assertEquals((await anonymous.handler(request({ operation: "categories" }))).status, 401);
+});
+
 Deno.test("edit capability stays disabled until conditional-write enforcement is proven", async () => {
   const { handler } = fixture();
   const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));
@@ -311,6 +336,83 @@ Deno.test("edit operations are refused before any provider or token call", async
       [operation, "write_not_enabled"],
     ]);
   }
+});
+
+Deno.test("an injected edit port drives the real handler snapshot response", async () => {
+  const snapshot: EditSnapshot = {
+    revision: "rev-1",
+    fetchedAt: "2026-11-22T10:00:00.000Z",
+    videoId: "videoAAAAAAA",
+    channelId: CHANNEL_ID,
+    values: {
+      title: "Old", description: "", tags: [], categoryId: "22", privacyStatus: "private",
+      embeddable: false, license: "youtube", publicStatsViewable: false,
+      selfDeclaredMadeForKids: false, containsSyntheticMedia: false,
+      defaultLanguage: null, publishAt: null,
+    },
+    restrictions: { scheduleProtected: false, unknownFieldsBlocked: false },
+  };
+  const { handler } = fixture({
+    edit: {
+      snapshot: () => Promise.resolve(snapshot),
+      update: () => Promise.resolve({ snapshot, verified: true }),
+    },
+  });
+  const result = await handler(request({ operation: "edit_snapshot", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" }));
+  assertEquals(result.status, 200);
+  const body = await result.json();
+  assertEquals(body.data.revision, "rev-1");
+  assertEquals(body.data.values.selfDeclaredMadeForKids, false);
+  // An update goes through the same seam and reports verification truthfully.
+  const saved = await handler(request({
+    operation: "update_video",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    base_revision: "rev-1",
+    changes: { title: "New" },
+  }));
+  assertEquals(saved.status, 200);
+  assertEquals((await saved.json()).data.revision, "rev-1");
+});
+
+Deno.test("handler maps edit conflicts and unknown verification results", async () => {
+  const conflict = fixture({
+    edit: {
+      snapshot: () => Promise.reject(new EditFailure("edit_conflict", "stale")),
+      update: () => Promise.reject(new EditFailure("edit_conflict", "stale")),
+      failureCode: (error) => error instanceof EditFailure ? error.code : null,
+    },
+  });
+  const conflictResponse = await conflict.handler(request({
+    operation: "update_video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA",
+    base_revision: "stale", changes: { title: "New" },
+  }));
+  assertEquals(conflictResponse.status, 409);
+  assertEquals((await conflictResponse.json()).error, "edit_conflict");
+
+  const snapshot: EditSnapshot = {
+    revision: "rev-1", fetchedAt: "2026-11-22T10:00:00.000Z", videoId: "videoAAAAAAA",
+    channelId: CHANNEL_ID,
+    values: {
+      title: "Old", description: "", tags: [], categoryId: "22", privacyStatus: "private",
+      embeddable: false, license: "youtube", publicStatsViewable: false,
+      selfDeclaredMadeForKids: false, containsSyntheticMedia: false,
+      defaultLanguage: null, publishAt: null,
+    },
+    restrictions: { scheduleProtected: false, unknownFieldsBlocked: false },
+  };
+  const unknown = fixture({
+    edit: {
+      snapshot: () => Promise.resolve(snapshot),
+      update: () => Promise.resolve({ snapshot, verified: false }),
+    },
+  });
+  const unknownResponse = await unknown.handler(request({
+    operation: "update_video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA",
+    base_revision: "rev-1", changes: { title: "New" },
+  }));
+  assertEquals(unknownResponse.status, 502);
+  assertEquals((await unknownResponse.json()).error, "outcome_unknown");
 });
 
 Deno.test("edit requests with unknown keys or empty changes are invalid", async () => {

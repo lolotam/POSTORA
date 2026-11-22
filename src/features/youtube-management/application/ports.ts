@@ -1,5 +1,6 @@
 import type {
   YouTubeAccountCapabilities,
+  YouTubeCategoryOption,
   YouTubeChannelDetails,
   YouTubeResourceSuccess,
   YouTubeVideoDetails,
@@ -10,6 +11,11 @@ import type {
 // imports infrastructure; the adapter arrives as this interface).
 export interface YouTubeResourcesGateway {
   getCapabilities(accountId: string): Promise<YouTubeResourceSuccess<YouTubeAccountCapabilities>>;
+  getCategories?(params: { region?: string; locale?: string }): Promise<YouTubeResourceSuccess<{
+    region: string;
+    locale: string;
+    categories: YouTubeCategoryOption[];
+  }>>;
   getChannel(accountId: string): Promise<YouTubeResourceSuccess<YouTubeChannelDetails>>;
   listVideos(params: { accountId: string; pageToken?: string | null }): Promise<YouTubeResourceSuccess<YouTubeVideosPage>>;
   getVideo(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<YouTubeVideoDetails>>;

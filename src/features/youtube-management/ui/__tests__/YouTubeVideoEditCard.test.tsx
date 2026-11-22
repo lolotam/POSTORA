@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
-import { beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
@@ -30,6 +30,41 @@ async function renderUi(ui: ReactElement, language = "en") {
   await i18n.init({ lng: language, resources: { [language]: { accounts: {} } }, defaultNS: "accounts" });
   return render(<MemoryRouter><I18nextProvider i18n={i18n}>{ui}</I18nextProvider></MemoryRouter>);
 }
+
+// The catalog hook is a network boundary; tests answer it with the committed
+// catalog shape and never call YouTube.
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    functions: {
+      invoke: vi.fn(async (name: string, options?: { body?: unknown }) => {
+        if (name !== "youtube-resources") return { data: null, error: new Error("unexpected function") };
+        const body = (options?.body ?? {}) as { locale?: string };
+        const arabic = body.locale?.startsWith("ar");
+        return {
+          data: {
+            schema_version: 1,
+            request_id: "req",
+            freshness: { fetched_at: "2026-11-22T10:00:00Z", source: "database" },
+            data: {
+              region: "US",
+              locale: arabic ? "ar" : "en",
+              categories: [
+                {
+                  id: "22",
+                  name: arabic ? "الأشخاص والمدونات" : "People & Blogs",
+                  label: arabic ? "⁨22⁩ (الأشخاص والمدونات)" : "⁨22⁩ (People & Blogs)",
+                  assignable: true,
+                },
+                { id: "30", name: "Movies", label: "⁨30⁩ (Movies)", assignable: false },
+              ],
+            },
+          },
+          error: null,
+        };
+      }),
+    },
+  },
+}));
 
 const visibleText = (element: HTMLElement) => element.textContent?.replace(/[\u2068\u2069]/g, "");
 
@@ -65,6 +100,37 @@ describe("YouTubeVideoEditCard", () => {
     const combobox = screen.getByRole("combobox");
     expect(visibleText(combobox)).toBe("998 (Currently unavailable)");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("reports saved, conflict and unknown results through the injected save seam", async () => {
+    const outcomes = ["saved", "edit_conflict", "outcome_unknown"] as const;
+    for (const expected of outcomes) {
+      cleanup();
+      const onSave = vi.fn().mockResolvedValue(expected);
+      await renderUi(
+        <YouTubeVideoEditCard
+          video={video}
+          fetchedAt="2026-11-20T10:00:00.000Z"
+          canEdit
+          disabledReason=""
+          onSave={onSave}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+      fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith({
+        title: "Renamed",
+        categoryId: "998",
+      }));
+      expect(await screen.findByRole("status")).toBeInTheDocument();
+      expect(screen.getByRole("status").textContent).toContain(
+        expected === "saved" ? "match your changes"
+          : expected === "edit_conflict" ? "Review the latest details"
+            : "may have saved",
+      );
+    }
   });
 
   it("shows Arabic number-first labels in the edit dropdown", async () => {
