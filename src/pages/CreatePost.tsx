@@ -535,6 +535,16 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       ) as Platform[];
 
       const submitId = getOrCreateSubmitId();
+      // Immutable intent of THIS deliberate submission. A duplicate insert is
+      // only the same submission when the payload and targets agree; a changed
+      // payload needs explicit review instead of silent reuse.
+      const submitFingerprint = JSON.stringify({
+        platforms: [...selectedPlatforms].sort(),
+        accountIds: [...selectedAccountIds].sort(),
+        mediaFileIds,
+        caption: caption.trim(),
+        scheduledAt: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
+      });
       const postPayload = {
         ...(editPostId ? {} : { id: submitId }),
         user_id: user?.id,
@@ -549,6 +559,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         metadata: {
           ...platformSettings.buildPostMetadata(),
           submit_id: submitId,
+          submit_fingerprint: submitFingerprint,
           schedule_timezone: scheduleTimezone || null,
         },
       };
@@ -590,8 +601,10 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
               .eq("id", submitId)
               .maybeSingle();
             if (readError) throw readError;
+            const existingMetadata = existing?.metadata as Record<string, unknown> | null;
             if (existing && existing.user_id === user?.id &&
-                (existing.metadata as Record<string, unknown> | null)?.submit_id === submitId) {
+                existingMetadata?.submit_id === submitId &&
+                existingMetadata?.submit_fingerprint === submitFingerprint) {
               post = existing;
             } else {
               throw error;
