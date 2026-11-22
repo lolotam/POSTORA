@@ -211,6 +211,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                   video={video.data.data}
                   fetchedAt={video.data.freshness.fetched_at}
                   canEdit={capabilities.data?.data.capabilities.edit_metadata?.state === "available"}
+                  accountId={activeAccountId}
                   disabledReason={t(
                     "youtubeManagement.detail.editUnavailable",
                     "Editing is not enabled until conditional write enforcement is verified.",

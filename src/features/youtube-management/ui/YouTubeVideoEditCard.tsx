@@ -17,6 +17,8 @@ export interface YouTubeVideoEditCardProps {
   /** Derived from the server capability; never from a client feature flag. */
   canEdit: boolean;
   disabledReason: string;
+  /** Owner-bound account whose token reads the regional catalog. */
+  accountId?: string | null;
   /** Injected real save seam. Production omits it while D1/D5 are unmet. */
   onSave?: (draft: { title: string; categoryId: string }) => Promise<EditSaveOutcome>;
 }
@@ -34,6 +36,7 @@ export function YouTubeVideoEditCard({
   fetchedAt,
   canEdit,
   disabledReason,
+  accountId,
   onSave,
 }: YouTubeVideoEditCardProps): JSX.Element {
   const { t, i18n } = useTranslation("accounts");
@@ -43,7 +46,7 @@ export function YouTubeVideoEditCard({
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<EditSaveOutcome | null>(null);
   const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
-  const categoryCatalog = useYouTubeCategories(locale);
+  const categoryCatalog = useYouTubeCategories(locale, accountId);
 
   useEffect(() => {
     setEditing(false);

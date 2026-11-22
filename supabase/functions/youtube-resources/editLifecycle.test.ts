@@ -151,6 +151,23 @@ Deno.test("a stale base, an unconfirmed privacy change and an unknown field are 
   );
 });
 
+Deno.test("a category change is refused unless the provider lists it as assignable", async () => {
+  const snapshot = await snapshotOf();
+  await assertRejects(
+    () => planEditUpdate({
+      snapshot,
+      changes: { categoryId: "30" },
+      freshVideo: video(),
+      ownerId: OWNER,
+      accountId: ACCOUNT,
+      privacyConfirmation: null,
+      assignableCategoryIds: new Set(["1", "22"]),
+    }),
+    EditFailure,
+    "not assignable",
+  );
+});
+
 Deno.test("a scheduled video cannot change privacy", async () => {
   const scheduled = video();
   scheduled.status.publishAt = "2026-12-01T10:00:00Z";

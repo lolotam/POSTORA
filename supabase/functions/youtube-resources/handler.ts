@@ -12,7 +12,7 @@ import {
 } from "./contracts.ts";
 import type { YouTubeReadClient, YouTubeReadResult } from "./youtubeReadClient.ts";
 import type { EditChanges, EditFailureCode, EditSnapshot } from "./editLifecycle.ts";
-import { youtubeCategoryOptions } from "./categories.ts";
+import type { CategoryListResult, YouTubeCategoryClient } from "./categoryClient.ts";
 
 /**
  * The edit seam. Production does not provide it (D1/D5): every edit request is
@@ -70,6 +70,7 @@ export interface YouTubeResourcesPorts {
     get(account: YouTubeResourceAccount, options: { force: boolean }): Promise<YouTubeTokenResult>;
   };
   youtube: YouTubeReadClient;
+  categories: YouTubeCategoryClient;
   edit?: YouTubeEditPort;
   rateLimit: { check(userId: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> };
 }
@@ -78,6 +79,7 @@ const AccountId = z.string().uuid();
 const CapabilitiesRequest = z.object({ operation: z.literal("capabilities"), account_id: AccountId }).strict();
 const CategoriesRequest = z.object({
   operation: z.literal("categories"),
+  account_id: AccountId,
   region: z.string().regex(/^[A-Za-z]{2}$/).optional(),
   locale: z.string().max(16).optional(),
 }).strict();
@@ -305,11 +307,54 @@ export function createYouTubeResourcesHandler(
       });
     }
     if (parsed.data.operation === "categories") {
-      const data = youtubeCategoryOptions({ region: parsed.data.region, locale: parsed.data.locale });
+      // The catalog is a provider read behind the same owner-bound account
+      // lookup and token lease as every other YouTube browse operation.
+      let catalogAccount: YouTubeResourceAccount | null;
+      try {
+        catalogAccount = await ports.accounts.load({ accountId: parsed.data.account_id, userId });
+      } catch {
+        return await refuse(req, {
+          operation: "categories", code: "internal_error", userId,
+          accountId: parsed.data.account_id, requestId,
+        });
+      }
+      if (!catalogAccount || catalogAccount.userId !== userId) {
+        return await refuse(req, {
+          operation: "categories", code: "not_found", userId,
+          accountId: parsed.data.account_id, requestId,
+        });
+      }
+      const catalogToken = await ports.tokens.get(catalogAccount, { force: false });
+      if (!catalogToken.ok) {
+        return await refuse(req, {
+          operation: "categories", code: catalogToken.code, userId,
+          accountId: parsed.data.account_id, requestId,
+        });
+      }
+      const listed: CategoryListResult = await ports.categories.list(catalogToken.accessToken, {
+        region: parsed.data.region,
+        locale: parsed.data.locale,
+      });
+      if (!listed.ok) {
+        return await refuse(req, {
+          operation: "categories", code: listed.code, userId,
+          accountId: parsed.data.account_id, requestId,
+        }, listed.retryAfterSeconds !== undefined
+          ? { retry_after_seconds: listed.retryAfterSeconds }
+          : undefined);
+      }
+      // The bundled table is explicitly a fallback, never proof of a
+      // complete regional catalog. The provider response is authoritative.
+      const data = {
+        region: listed.region,
+        locale: listed.locale,
+        categories: listed.value,
+        source: "provider" as const,
+      };
       const envelope: YouTubeResourceSuccess<typeof data> = {
         schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
         request_id: requestId,
-        freshness: { fetched_at: ports.clock.now().toISOString(), source: "database" },
+        freshness: { fetched_at: ports.clock.now().toISOString(), source: "provider" },
         data,
       };
       return new Response(JSON.stringify(envelope), {

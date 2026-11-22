@@ -129,6 +129,7 @@ import { fetchJsonWithDeadline, fetchWithTimeout } from "../_shared/request-time
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { assertNativeYoutubeDeclarations } from "../_shared/youtubePublishSafety.ts";
+import { withYoutubePublishEvidence, youtubePublishEvidence } from "./youtubePublishEvidence.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { CHECK_ONCE_DEADLINE, classifyContainerStatus, CONTAINER_STATUS_FIELDS, type ContainerState, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
@@ -3463,7 +3464,7 @@ Deno.serve(async (req) => {
           const logError = await writeLogRow(supabase, liveReelUnrecordedStoryLog(post.user_id, post_id, resume?.platformPostId ?? null, unrecordedStoryRef));
           if (logError) console.error("[process-post] could not log the unrecorded story either:", logError);
         }
-        const responseData = {
+        const baseResponseData: Record<string, unknown> = {
           ...(imageExecution?.deferral.media_type === "IMAGE" ? { ...imageResponseData, deferred: imageExecution.deferral } : {}),
           ...(independentStory && result.publicationSubtype === "reel" ? { ig_post_subtype: "reel" } : {}),
           tiktok_publish_id: result.id,
@@ -3474,6 +3475,15 @@ Deno.serve(async (req) => {
           ...(topicTagDebug ? { topic_tag_debug: topicTagDebug } : {}),
           ...(unrecordedStoryRef ? { [UNRECORDED_STORY_KEY]: unrecordedStoryRef } : {}),
         };
+        const responseData = account.platform === "youtube"
+          ? withYoutubePublishEvidence(baseResponseData, youtubePublishEvidence({
+            requestedPrivacy: post.metadata?.youtube_visibility ?? "private",
+            thumbnailRequested: typeof post.metadata?.youtube_thumbnail_url === "string" &&
+              post.metadata.youtube_thumbnail_url.length > 0,
+            commentRequested: typeof post.metadata?.youtube_first_comment === "string" &&
+              post.metadata.youtube_first_comment.length > 0,
+          }))
+          : baseResponseData;
 
         // The one writer of the five that can produce a NON-terminal row:
         // TikTok hands back an id before the video is published, and that row

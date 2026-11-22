@@ -106,14 +106,15 @@ async function call<T>(
 }
 
 export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway {
-  getCategories(params: { region?: string; locale?: string }): Promise<YouTubeResourceSuccess<{
+  getCategories(params: { accountId: string; region?: string; locale?: string }): Promise<YouTubeResourceSuccess<{
     region: string;
     locale: string;
     categories: YouTubeCategoryOption[];
+    source: string;
   }>> {
     return call(
-      { operation: "categories", ...(params.region ? { region: params.region } : {}), ...(params.locale ? { locale: params.locale } : {}) },
-      (data): data is { region: string; locale: string; categories: YouTubeCategoryOption[] } =>
+      { operation: "categories", account_id: params.accountId, ...(params.region ? { region: params.region } : {}), ...(params.locale ? { locale: params.locale } : {}) },
+      (data): data is { region: string; locale: string; categories: YouTubeCategoryOption[]; source: string } =>
         typeof data === "object" && data !== null && Array.isArray((data as { categories?: unknown }).categories),
     );
   }

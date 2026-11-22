@@ -74,7 +74,13 @@ export interface UpdatePlan {
   expectedPrivacy: string;
 }
 
-export type EditFailureCode = "edit_conflict" | "invalid_request" | "provider_unsupported" | "outcome_unknown";
+export type EditFailureCode =
+  | "edit_conflict"
+  | "invalid_request"
+  | "provider_unsupported"
+  | "reconnect_required"
+  | "upstream_unavailable"
+  | "outcome_unknown";
 
 export class EditFailure extends Error {
   constructor(readonly code: EditFailureCode, message: string) {
@@ -182,8 +188,14 @@ export async function planEditUpdate(args: {
   ownerId: string;
   accountId: string;
   privacyConfirmation: { to: string } | null;
+  /** The provider's assignable category ids for the creator's region. */
+  assignableCategoryIds?: ReadonlySet<string>;
 }): Promise<UpdatePlan> {
   validateChanges(args.changes, args.snapshot);
+  if (args.changes.categoryId !== undefined && args.assignableCategoryIds &&
+      !args.assignableCategoryIds.has(args.changes.categoryId)) {
+    throw new EditFailure("invalid_request", "The selected category is not assignable in this region.");
+  }
   const fresh = await createEditSnapshot({
     video: args.freshVideo,
     ownerId: args.ownerId,

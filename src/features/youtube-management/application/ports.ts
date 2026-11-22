@@ -11,7 +11,7 @@ import type {
 // imports infrastructure; the adapter arrives as this interface).
 export interface YouTubeResourcesGateway {
   getCapabilities(accountId: string): Promise<YouTubeResourceSuccess<YouTubeAccountCapabilities>>;
-  getCategories?(params: { region?: string; locale?: string }): Promise<YouTubeResourceSuccess<{
+  getCategories?(params: { accountId: string; region?: string; locale?: string }): Promise<YouTubeResourceSuccess<{
     region: string;
     locale: string;
     categories: YouTubeCategoryOption[];

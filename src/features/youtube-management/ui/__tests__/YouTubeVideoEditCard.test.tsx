@@ -113,6 +113,7 @@ describe("YouTubeVideoEditCard", () => {
           fetchedAt="2026-11-20T10:00:00.000Z"
           canEdit
           disabledReason=""
+          accountId="acc-1"
           onSave={onSave}
         />,
       );

@@ -186,7 +186,7 @@ export function YouTubeSettings({
   const { flags } = useFeatureFlags();
   const { t, i18n } = useTranslation("postsettings");
   const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
-  const categoryCatalog = useYouTubeCategories(locale);
+  const categoryCatalog = useYouTubeCategories(locale, selectedAccounts[0]?.id ?? null);
   const [thumbnailDialogOpen, setThumbnailDialogOpen] = useState(false);
   const [aiThumbnailPrompt, setAiThumbnailPrompt] = useState("");
   const { tiers: resolvedTiers } = useResolvedImageModels();
@@ -253,9 +253,29 @@ export function YouTubeSettings({
     );
   };
 
+  const finalTitle = settings.title.trim() ||
+    (settings.videoType === "short" ? `${t("youtube.newShort", "New Video #Shorts")}` : t("youtube.newVideo", "New Video"));
+  const shortsTitle = settings.videoType === "short" && !finalTitle.toLowerCase().includes("#shorts")
+    ? `${finalTitle.length > 90 ? finalTitle.substring(0, 90) : finalTitle} #Shorts`
+    : finalTitle;
+
   return (
     <>
     <TooltipProvider>
+      <div className="rounded-lg border p-3 text-xs text-muted-foreground" data-testid="youtube-send-preview">
+        <p className="font-medium text-foreground">{t("youtube.preSendTitle", "Before you publish")}</p>
+        <p>
+          {t("youtube.previewTitle", "YouTube title: {{title}}", { title: shortsTitle })}
+        </p>
+        <p>
+          {t("youtube.previewPrivacy", "Requested privacy: {{privacy}}", { privacy: settings.visibility })}
+          {" · "}
+          {t("youtube.previewChannel", "Channel: {{channel}}", {
+            channel: selectedAccounts.map((account) => account.platform_username || "Unknown").join(", ") ||
+              t("youtube.noChannel", "none selected"),
+          })}
+        </p>
+      </div>
     <div className="space-y-4">
       {/* Posting to YouTube as: */}
       {selectedAccounts.length > 0 && (

@@ -18,7 +18,11 @@ const gateway = new SupabaseYouTubeResourcesGateway();
  * visible retry state with the bundled list kept as a fallback; the current
  * selection is never replaced by a different category.
  */
-export function useYouTubeCategories(locale: "en" | "ar", region = "US"): YouTubeCategoryCatalogState {
+export function useYouTubeCategories(
+  locale: "en" | "ar",
+  accountId?: string | null,
+  region = "US",
+): YouTubeCategoryCatalogState {
   const [categories, setCategories] = useState<YouTubeCategoryOption[]>(() =>
     bundledOptions(null, locale).map((option) => ({
       id: option.id,
@@ -33,8 +37,13 @@ export function useYouTubeCategories(locale: "en" | "ar", region = "US"): YouTub
 
   useEffect(() => {
     let active = true;
+    if (!accountId) {
+      setUnavailable(true);
+      setLoading(false);
+      return () => { active = false; };
+    }
     setLoading(true);
-    gateway.getCategories({ region, locale })
+    gateway.getCategories({ accountId, region, locale })
       .then((result) => {
         if (!active) return;
         setCategories(result.data.categories);
@@ -48,7 +57,7 @@ export function useYouTubeCategories(locale: "en" | "ar", region = "US"): YouTub
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [locale, region, attempt]);
+  }, [locale, region, accountId, attempt]);
 
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
   return { categories, loading, unavailable, region, retry };

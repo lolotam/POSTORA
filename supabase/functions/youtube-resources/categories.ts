@@ -50,7 +50,7 @@ export function youtubeCategoryLocale(input: unknown): YouTubeCategoryLocale {
 }
 
 /** Only the region codes Postora has a reviewed catalog for are accepted. */
-export function reviewedYouTubeRegion(input: unknown): string {
+export function approvedYouTubeRegion(input: unknown): string {
   const value = typeof input === "string" && /^[A-Za-z]{2}$/.test(input) ? input.toUpperCase() : "US";
   return ["US", "GB", "SA", "AE", "EG", "KW"].includes(value) ? value : "US";
 }
@@ -64,7 +64,7 @@ export function youtubeCategoryOptions(input: {
   region?: unknown;
   locale?: unknown;
 }): { region: string; locale: YouTubeCategoryLocale; categories: YouTubeCategoryOption[] } {
-  const region = reviewedYouTubeRegion(input.region);
+  const region = approvedYouTubeRegion(input.region);
   const locale = youtubeCategoryLocale(input.locale);
   const categories = YOUTUBE_CATEGORY_CATALOG.map((entry) => {
     const name = entry.names[locale] ?? entry.names.en;

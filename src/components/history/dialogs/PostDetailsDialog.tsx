@@ -26,6 +26,7 @@ import { useThreadsCapabilities } from "@/hooks/useThreadsCapabilities";
 import { getErrorExplanation, type ErrorExplanation } from "@/components/history/errorExplanations";
 import { LocationDebugView } from "@/components/history/LocationDebugView";
 import { TopicTagDebugView } from "@/components/history/TopicTagDebugView";
+import { YouTubePublishEvidence } from "@/components/history/YouTubePublishEvidence";
 import { instagramPublicationType, publicationSummary } from "../publicationSummary";
 import {
   Collapsible,
@@ -550,6 +551,11 @@ export function PostDetailsDialog({
                               </div>
                             );
                           })()}
+                          {result.platform === "youtube" && (
+                            <YouTubePublishEvidence
+                              evidence={result.response_data?.youtube_publish_evidence as never}
+                            />
+                          )}
                           {/* Warnings (e.g., collaborator skipped) */}
                           {result.response_data?.warnings && (result.response_data.warnings as string[]).length > 0 && (
                             <div className="space-y-1">
