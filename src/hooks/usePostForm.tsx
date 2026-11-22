@@ -315,6 +315,7 @@ export function usePostForm() {
   const editPostId = searchParams.get("edit");
   const [isLoadingEditPost, setIsLoadingEditPost] = useState(Boolean(editPostId));
   const [editStatus, setEditStatus] = useState<"idle" | "loading" | "ready" | "error">(editPostId ? "loading" : "idle");
+  const [editMetadata, setEditMetadata] = useState<Record<string, unknown> | null>(null);
   const [editLoadError, setEditLoadError] = useState<string | null>(null);
   const [editReloadNonce, setEditReloadNonce] = useState(0);
   const editRequestRef = useRef(0);
@@ -380,6 +381,7 @@ export function usePostForm() {
 
         if (!activeRef.current || editRequestRef.current !== requestId) return;
         const meta = post.metadata as { schedule_timezone?: string; timezone?: string; selected_account_ids?: string[] } | null;
+        setEditMetadata((post.metadata ?? {}) as Record<string, unknown>);
         const accountIds = Array.isArray(meta?.selected_account_ids) ? meta.selected_account_ids : [];
         setCaptionState(post.caption ?? "");
         setScheduledAt(post.scheduled_at ? new Date(post.scheduled_at) : null);
@@ -1037,6 +1039,7 @@ export function usePostForm() {
 
     // Edit mode
     editPostId,
+    editMetadata,
     isLoadingEditPost,
     editStatus,
     editLoadError,

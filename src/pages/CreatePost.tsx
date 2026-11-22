@@ -173,6 +173,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     showErrorToast,
     uploadUrlToStorage,
     editPostId,
+    editMetadata,
     isLoadingEditPost,
     editLoadError,
     retryEditPost,
@@ -225,6 +226,24 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       setCaption(location.state.caption);
     }
   }, [location.state]);
+
+  // Restoring a scheduled edit must not replace an explicit saved privacy
+  // with the form's private default. Apply the saved values once per load.
+  const hydratedEditMetadataRef = useRef<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    if (!editMetadata || hydratedEditMetadataRef.current === editMetadata) return;
+    hydratedEditMetadataRef.current = editMetadata;
+    const savedPrivacy = editMetadata.youtube_visibility;
+    if (savedPrivacy === "public" || savedPrivacy === "unlisted" || savedPrivacy === "private") {
+      platformSettings.setYoutubeVisibility(savedPrivacy);
+    }
+    if (typeof editMetadata.youtube_made_for_kids === "boolean") {
+      platformSettings.setYoutubeMadeForKids(editMetadata.youtube_made_for_kids);
+    }
+    if (typeof editMetadata.youtube_contains_synthetic_media === "boolean") {
+      platformSettings.setYoutubeContainsSyntheticMedia(editMetadata.youtube_contains_synthetic_media);
+    }
+  }, [editMetadata, platformSettings]);
 
   // UI state
   const [currentStep, setCurrentStep] = useState<PostStep>(1);

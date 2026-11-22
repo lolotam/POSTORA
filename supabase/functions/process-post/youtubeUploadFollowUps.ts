@@ -22,6 +22,8 @@ import { redactProviderText } from "./youtubeUploadPolicy.ts";
 /** What the follow-ups need to know about the video. */
 export interface YoutubeFollowUpRequest {
   videoId: string;
+  /** The bound channel that owns the video; required by commentThreads.insert. */
+  channelId: string;
   accessToken: string;
   /** The thumbnail the customer asked for, if any. */
   thumbnailUrl: string | null;
@@ -77,7 +79,7 @@ export async function runYoutubeFollowUps(
     await setYoutubeThumbnail(request.videoId, request.accessToken, request.thumbnailUrl, deps);
   }
   if (request.firstComment) {
-    await postYoutubeFirstComment(request.videoId, request.accessToken, request.firstComment, deps);
+    await postYoutubeFirstComment(request.videoId, request.channelId, request.accessToken, request.firstComment, deps);
   }
 }
 
@@ -118,6 +120,7 @@ async function setYoutubeThumbnail(
 
 async function postYoutubeFirstComment(
   videoId: string,
+  channelId: string,
   accessToken: string,
   firstComment: string,
   deps: YoutubeFollowUpDeps,
@@ -136,6 +139,9 @@ async function postYoutubeFirstComment(
       body: JSON.stringify({
         snippet: {
           videoId,
+          // Google requires the channel that owns the video; omitting it can
+          // post to the wrong channel when the account manages several.
+          channelId,
           topLevelComment: {
             snippet: {
               textOriginal: firstComment,

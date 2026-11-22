@@ -79,6 +79,7 @@ export interface ContinuationPost {
 export interface ContinuationAccount {
   id: string;
   userId: string;
+  channelId: string;
   platform: string;
   isActive: boolean;
   accessToken: string | null;
@@ -218,6 +219,7 @@ export interface YoutubeContinuationPorts {
     leaseToken: string;
     post: ContinuationPost;
     videoId: string;
+    channelId: string;
     accessToken: string;
   }): Promise<void>;
   /**
@@ -639,7 +641,7 @@ export async function continueYoutubeUpload(
   const stopped = await stopOnLostAuthority();
   if (stopped) return stopped;
 
-  return await interpretOutcome({ ports, request, session, outcome, post, accessToken });
+  return await interpretOutcome({ ports, request, session, outcome, post, accessToken, channelId: account.channelId });
 }
 
 /**
@@ -858,8 +860,9 @@ async function interpretOutcome(args: {
   outcome: ResumableUploadOutcome;
   post: ContinuationPost;
   accessToken: string;
+  channelId: string;
 }): Promise<ContinuationResult> {
-  const { ports, request, session, outcome, post, accessToken } = args;
+  const { ports, request, session, outcome, post, accessToken, channelId } = args;
   const { leaseToken } = request;
 
   if (outcome.kind === "completed") {
@@ -882,7 +885,7 @@ async function interpretOutcome(args: {
     try {
       const followUpAuthority = await ports.effectAuthority({ sessionId: session.id, leaseToken });
       if (followUpAuthority.authorized) {
-        await ports.followUps({ post, videoId: outcome.videoId, accessToken, sessionId: session.id, leaseToken });
+        await ports.followUps({ post, videoId: outcome.videoId, channelId, accessToken, sessionId: session.id, leaseToken });
       }
     } catch {
       console.warn("[youtube] optional follow-ups could not be confirmed");

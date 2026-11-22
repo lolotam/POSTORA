@@ -10094,7 +10094,7 @@ function buildYoutubeContinuationPorts(
     async loadAccount(accountId) {
       const { data } = await supabase
         .from("social_accounts")
-        .select("id, user_id, platform, is_active, access_token, refresh_token, token_expires_at, account_metadata, needs_reauth")
+        .select("id, user_id, platform, is_active, platform_user_id, access_token, refresh_token, token_expires_at, account_metadata, needs_reauth")
         .eq("id", accountId)
         .maybeSingle();
       if (!data) return null;
@@ -10124,6 +10124,7 @@ function buildYoutubeContinuationPorts(
       return {
         id: String(data.id),
         userId: String(data.user_id),
+        channelId: String(data.platform_user_id ?? ""),
         platform: String(data.platform),
         isActive: data.is_active !== false,
         accessToken: usableToken,
@@ -10274,6 +10275,7 @@ function buildYoutubeContinuationPorts(
       await runYoutubeFollowUps(
         {
           videoId: args.videoId,
+          channelId: args.channelId,
           accessToken: args.accessToken,
           thumbnailUrl: args.post.thumbnailUrl,
           firstComment: args.post.firstComment,
@@ -10719,6 +10721,7 @@ async function postToYouTube(
     await runYoutubeFollowUps(
       {
         videoId,
+        channelId: account.platform_user_id ?? "",
         accessToken,
         thumbnailUrl: thumbnailUrl ?? null,
         firstComment: firstComment ?? null,

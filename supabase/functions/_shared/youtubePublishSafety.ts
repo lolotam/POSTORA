@@ -20,13 +20,68 @@ export const YOUTUBE_REQUIRED_DECLARATIONS = [
 
 export type YoutubeDeclarationKey = (typeof YOUTUBE_REQUIRED_DECLARATIONS)[number];
 
+/**
+ * Only this version of the declaration proof is accepted. A stored boolean
+ * without a matching proof is a legacy default, not an answer: the caller
+ * cannot satisfy D3 by omitting the proof or by relying on an old `false`.
+ */
+export const YOUTUBE_DECLARATION_PROOF_VERSION = 3 as const;
+
+export interface YoutubeDeclarationProof {
+  version: number;
+  made_for_kids: boolean;
+  contains_synthetic_media: boolean;
+  source: "form" | "rest" | "mcp";
+}
+
+const PROOF_KEYS: Record<YoutubeDeclarationKey, keyof YoutubeDeclarationProof> = {
+  youtube_made_for_kids: "made_for_kids",
+  youtube_contains_synthetic_media: "contains_synthetic_media",
+};
+
+/** Reads a proof only when its version, values and source are all intact. */
+export function youtubeDeclarationProofOf(
+  metadata: object | null | undefined,
+): YoutubeDeclarationProof | null {
+  const values = (metadata ?? {}) as Record<string, unknown>;
+  const proof = values.youtube_declaration_proof;
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) return null;
+  const candidate = proof as Record<string, unknown>;
+  if (candidate.version !== YOUTUBE_DECLARATION_PROOF_VERSION) return null;
+  if (candidate.source !== "form" && candidate.source !== "rest" && candidate.source !== "mcp") {
+    return null;
+  }
+  for (const key of YOUTUBE_REQUIRED_DECLARATIONS) {
+    if (typeof candidate[PROOF_KEYS[key]] !== "boolean") return null;
+    if (values[key] !== candidate[PROOF_KEYS[key]]) return null;
+  }
+  return candidate as unknown as YoutubeDeclarationProof;
+}
+
 export function missingYoutubeDeclarations(
   metadata: object | null | undefined,
 ): YoutubeDeclarationKey[] {
+  const proof = youtubeDeclarationProofOf(metadata);
   const values = (metadata ?? {}) as Record<string, unknown>;
-  return YOUTUBE_REQUIRED_DECLARATIONS.filter(
-    (key) => typeof values[key] !== "boolean",
-  );
+  if (!proof) return [...YOUTUBE_REQUIRED_DECLARATIONS];
+  return YOUTUBE_REQUIRED_DECLARATIONS.filter((key) => typeof values[key] !== "boolean");
+}
+
+/** Builds the proof an ingress writes only when both answers are explicit. */
+export function buildYoutubeDeclarationProof(
+  metadata: object | null | undefined,
+  source: YoutubeDeclarationProof["source"],
+): YoutubeDeclarationProof | null {
+  const values = (metadata ?? {}) as Record<string, unknown>;
+  const madeForKids = values.youtube_made_for_kids;
+  const synthetic = values.youtube_contains_synthetic_media;
+  if (typeof madeForKids !== "boolean" || typeof synthetic !== "boolean") return null;
+  return {
+    version: YOUTUBE_DECLARATION_PROOF_VERSION,
+    made_for_kids: madeForKids,
+    contains_synthetic_media: synthetic,
+    source,
+  };
 }
 
 export function youtubeUploadPrivacy(

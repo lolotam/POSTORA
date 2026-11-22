@@ -126,6 +126,7 @@ function world(options: WorldOptions = {}): World {
   const account: ContinuationAccount = {
     id: ACCOUNT_ID,
     userId: USER_ID,
+    channelId: "UCfixturechannel000000001",
     platform: "youtube",
     isActive: true,
     accessToken: "token-1",

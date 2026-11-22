@@ -55,6 +55,16 @@ describe("YouTube publishing option contract", () => {
     { youtube_made_for_kids: false },
     { youtube_made_for_kids: false, youtube_contains_synthetic_media: false },
     { youtube_made_for_kids: "false", youtube_contains_synthetic_media: true },
+    {
+      youtube_made_for_kids: false,
+      youtube_contains_synthetic_media: false,
+      youtube_declaration_proof: {
+        version: 3,
+        made_for_kids: false,
+        contains_synthetic_media: false,
+        source: "form",
+      },
+    },
   ])("refuses the same undecided declarations in the form and the worker", (metadata) => {
     expect(browserDeclarations(metadata)).toEqual(serverDeclarations(metadata));
   });

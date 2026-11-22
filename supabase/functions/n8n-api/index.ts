@@ -27,7 +27,10 @@ import {
   listLinkedInDestinations,
   normalizeLinkedInDestinationSelections,
 } from "../_shared/linkedinDestinations.ts";
-import { missingYoutubeDeclarations } from "../_shared/youtubePublishSafety.ts";
+import {
+  buildYoutubeDeclarationProof,
+  missingYoutubeDeclarations,
+} from "../_shared/youtubePublishSafety.ts";
 import {
   resolveYoutubePublishOptions,
   youtubePrivacyOrDefault,
@@ -970,6 +973,10 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     if (typeof youtube_contains_synthetic_media === 'boolean') {
       metadata.youtube_contains_synthetic_media = youtube_contains_synthetic_media;
     }
+    // A caller cannot satisfy D3 by merely sending two booleans: the proof is
+    // written here from those explicit values and is checked again at dispatch.
+    const declarationProof = buildYoutubeDeclarationProof(metadata, 'rest');
+    if (declarationProof) metadata.youtube_declaration_proof = declarationProof;
     // Left unset when the caller did not state it, so Postora never declares a
     // video free of paid product placement on the caller's behalf.
     if (typeof youtube_has_paid_product_placement === 'boolean') {

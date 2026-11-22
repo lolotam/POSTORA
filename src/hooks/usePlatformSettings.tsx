@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Platform } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { buildYoutubeDeclarationProof } from "@/lib/youtubePublishSafety";
 
 export type LocationSource = "threads" | "facebook" | "nominatim" | "meta";
 
@@ -541,6 +542,21 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       youtube_allow_embedding: selectedPlatforms.includes("youtube") ? youtubeAllowEmbedding : null,
       youtube_public_stats_viewable: selectedPlatforms.includes("youtube") ? youtubePublicStatsViewable : null,
       youtube_contains_synthetic_media: selectedPlatforms.includes("youtube") ? youtubeContainsSyntheticMedia ?? null : null,
+      // Durable, versioned proof that both answers were explicitly selected
+      // in this form. A legacy stored `false` has no proof and is refused.
+      youtube_declaration_proof: (() => {
+        const proof = buildYoutubeDeclarationProof({
+          youtube_made_for_kids: youtubeMadeForKids,
+          youtube_contains_synthetic_media: youtubeContainsSyntheticMedia,
+        }, "form");
+        if (!selectedPlatforms.includes("youtube") || !proof) return null;
+        return {
+          version: proof.version,
+          made_for_kids: proof.made_for_kids,
+          contains_synthetic_media: proof.contains_synthetic_media,
+          source: proof.source,
+        };
+      })(),
       youtube_has_paid_promotion: selectedPlatforms.includes("youtube") ? youtubeHasPaidPromotion : null,
       youtube_notify_subscribers: selectedPlatforms.includes("youtube") ? youtubeNotifySubscribers : null,
       youtube_video_language: youtubeVideoLanguage || null,

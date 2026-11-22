@@ -7,18 +7,22 @@ import {
 import {
   assertComposioYoutubeDeclarations,
   assertNativeYoutubeDeclarations,
+  buildYoutubeDeclarationProof,
   missingYoutubeDeclarations,
+  YOUTUBE_DECLARATION_PROOF_VERSION,
   youtubeUploadPrivacy,
   YoutubeComposioDispatchUnavailableError,
   YoutubeDeclarationRequiredError,
 } from "./youtubePublishSafety.ts";
 
+const explicitNo = {
+  youtube_made_for_kids: false,
+  youtube_contains_synthetic_media: false,
+};
+
 Deno.test("an untouched declaration is not a declaration", () => {
   assertEquals(missingYoutubeDeclarations({}), [
     "youtube_made_for_kids",
-    "youtube_contains_synthetic_media",
-  ]);
-  assertEquals(missingYoutubeDeclarations({ youtube_made_for_kids: false }), [
     "youtube_contains_synthetic_media",
   ]);
   assertEquals(missingYoutubeDeclarations({ youtube_made_for_kids: "false" }), [
@@ -27,10 +31,26 @@ Deno.test("an untouched declaration is not a declaration", () => {
   ]);
 });
 
-Deno.test("an explicit No survives as a declaration", () => {
+Deno.test("a legacy stored false without a versioned proof is not a declaration", () => {
+  // This is the whole point of the proof: an old default cannot satisfy D3.
+  assertEquals(missingYoutubeDeclarations(explicitNo), [
+    "youtube_made_for_kids",
+    "youtube_contains_synthetic_media",
+  ]);
+  assertEquals(
+    missingYoutubeDeclarations({ ...explicitNo, youtube_declaration_proof: { ...buildYoutubeDeclarationProof(explicitNo, "form"), version: YOUTUBE_DECLARATION_PROOF_VERSION - 1 } }),
+    ["youtube_made_for_kids", "youtube_contains_synthetic_media"],
+  );
+  assertEquals(
+    missingYoutubeDeclarations({ ...explicitNo, youtube_declaration_proof: { ...buildYoutubeDeclarationProof(explicitNo, "form"), made_for_kids: true } }),
+    ["youtube_made_for_kids", "youtube_contains_synthetic_media"],
+  );
+});
+
+Deno.test("an explicit No with a matching versioned proof survives", () => {
   const metadata = {
-    youtube_made_for_kids: false,
-    youtube_contains_synthetic_media: false,
+    ...explicitNo,
+    youtube_declaration_proof: buildYoutubeDeclarationProof(explicitNo, "form"),
   };
   assertEquals(missingYoutubeDeclarations(metadata), []);
 });
@@ -43,18 +63,18 @@ Deno.test("uploads without visibility are private on both providers", () => {
   }
 });
 
-Deno.test("native dispatch refuses missing declarations and accepts explicit No", () => {
+Deno.test("native dispatch refuses legacy defaults and accepts proven explicit No", () => {
   assertThrows(
     () => assertNativeYoutubeDeclarations({}),
     YoutubeDeclarationRequiredError,
   );
   assertThrows(
-    () => assertNativeYoutubeDeclarations({ youtube_made_for_kids: false }),
+    () => assertNativeYoutubeDeclarations(explicitNo),
     YoutubeDeclarationRequiredError,
   );
   assertNativeYoutubeDeclarations({
-    youtube_made_for_kids: false,
-    youtube_contains_synthetic_media: false,
+    ...explicitNo,
+    youtube_declaration_proof: buildYoutubeDeclarationProof(explicitNo, "form"),
   });
 });
 
