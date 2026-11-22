@@ -40,6 +40,24 @@ export function createDependencies(): HttpDependencies {
       if (error) throw error;
       return data === true;
     },
+    readPublishRequest: async (postId, userId) => {
+      const { data, error } = await admin.from("posts")
+        .select("status, source, publish_requested_at, metadata")
+        .eq("id", postId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) throw error;
+      const stamp = data?.publish_requested_at;
+      if (typeof stamp !== "string" || !RequestStampSchema.safeParse(stamp).success) return null;
+      const metadata = (data?.metadata ?? {}) as Record<string, unknown>;
+      const retry = (metadata.retry_request ?? {}) as Record<string, unknown>;
+      return {
+        stamp,
+        status: String(data?.status ?? ""),
+        source: typeof data?.source === "string" ? data.source : null,
+        isRetry: retry.requested_at === stamp,
+      };
+    },
     requestImmediatePublish: async (postId, userId) => {
       const { data, error } = await admin.rpc("request_immediate_publish", { p_post_id: postId, p_user_id: userId });
       if (error) throw error;

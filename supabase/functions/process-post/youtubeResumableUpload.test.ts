@@ -22,6 +22,7 @@ import {
   createYoutubeResumableSession,
   parseRetryAfterMs,
   planChunkFrom,
+  probeResumableUploadStatus,
   runResumableVideoUpload,
   YOUTUBE_CHUNK_GRANULARITY_BYTES,
   YOUTUBE_CONTINUATION_MAX_DELAY_MS,
@@ -949,4 +950,67 @@ Deno.test("a session request that times out keeps its own kind of failure", asyn
       }),
     YoutubeProviderTimeout,
   );
+});
+
+Deno.test("the read-only status probe recovers a published receipt with zero video bytes", async () => {
+  const requests: Array<{ method: string; range: string | null; contentLength: string | null; redirect: RequestRedirect | null; bodyBytes: number }> = [];
+  const fetchImpl = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({
+      method: String(init?.method ?? "GET"),
+      range: (init?.headers as Record<string, string>)["Content-Range"] ?? null,
+      contentLength: (init?.headers as Record<string, string>)["Content-Length"] ?? null,
+      redirect: init?.redirect ?? null,
+      bodyBytes: init?.body instanceof ArrayBuffer ? init.body.byteLength : 0,
+    });
+    return Promise.resolve(new Response(
+      JSON.stringify({ id: VIDEO_ID }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+  }) as typeof fetch;
+  const status = await probeResumableUploadStatus({
+    fetchImpl,
+    sessionUri: SESSION_URI,
+    accessToken: "token-1",
+    totalBytes: TOTAL_BYTES,
+    deadlineMs: 60_000,
+    now: () => 0,
+    sleep: () => Promise.resolve(),
+  }, 0, 0);
+  assertEquals(status.kind, "accepted");
+  if (status.kind === "accepted") assertEquals(status.videoId, VIDEO_ID);
+  assertEquals(requests.length, 1);
+  assertEquals(requests[0].method, "PUT");
+  assertEquals(requests[0].range, `bytes */${TOTAL_BYTES}`);
+  assertEquals(requests[0].contentLength, "0");
+  assertEquals(requests[0].bodyBytes, 0);
+  assertEquals(requests[0].redirect, "manual");
+});
+
+Deno.test("the read-only status probe reports an incomplete upload without following redirects or writing bytes", async () => {
+  let followCount = 0;
+  const requests: Array<{ range: string | null; bodyBytes: number; redirect: RequestRedirect | null }> = [];
+  const fetchImpl = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({
+      range: (init?.headers as Record<string, string>)["Content-Range"] ?? null,
+      bodyBytes: init?.body instanceof ArrayBuffer ? init.body.byteLength : 0,
+      redirect: init?.redirect ?? null,
+    });
+    if ((init?.redirect ?? "follow") !== "manual") followCount += 1;
+    return Promise.resolve(new Response(null, { status: 308, headers: { Range: "bytes=0-1023" } }));
+  }) as typeof fetch;
+  const status = await probeResumableUploadStatus({
+    fetchImpl,
+    sessionUri: SESSION_URI,
+    accessToken: "token-1",
+    totalBytes: TOTAL_BYTES,
+    deadlineMs: 60_000,
+    now: () => 0,
+    sleep: () => Promise.resolve(),
+  }, 1024, 1024);
+  assertEquals(status.kind, "resumable");
+  assertEquals(followCount, 0);
+  assertEquals(requests.length, 1);
+  assertEquals(requests[0].range, `bytes */${TOTAL_BYTES}`);
+  assertEquals(requests[0].bodyBytes, 0);
+  assertEquals(requests[0].redirect, "manual");
 });

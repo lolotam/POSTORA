@@ -12,6 +12,9 @@ import { YOUTUBE_RESOURCE_QUOTA_POLICY } from "./contracts.ts";
 import { toRateLimitDecision } from "./rateLimit.ts";
 import { tokenResultFromOutcome } from "./tokens.ts";
 import { createYouTubeReadClient } from "./youtubeReadClient.ts";
+import { createYouTubeCategoryClient } from "./categoryClient.ts";
+import { createConnectedEditPort, PUBLISHED_EDIT_WRITE_ENABLED } from "./editComposition.ts";
+import { createYouTubeEditProvider } from "./editProvider.ts";
 
 // A stalled PostgREST request must not hold the whole function: the account read and the
 // awaited refusal-log insert both fail at this deadline and the handler answers
@@ -60,6 +63,8 @@ function toAccount(row: unknown): YouTubeResourceAccount | null {
   };
 }
 
+const categoriesClient = createYouTubeCategoryClient({ fetchImpl: fetch });
+
 const ports: YouTubeResourcesPorts = {
   // Tokens come only from the lease-based refresh helper: the handler never reaches
   // Google's token endpoint, and an on-demand read never records a transient failure
@@ -82,6 +87,7 @@ const ports: YouTubeResourcesPorts = {
       ),
   },
   youtube: createYouTubeReadClient({ fetchImpl: fetch, uploadsPlaylistIdFor: uploadsPlaylistId }),
+  categories: categoriesClient,
   rateLimit: {
     check: async (userId) => {
       const burst = toRateLimitDecision(
@@ -146,5 +152,23 @@ const ports: YouTubeResourcesPorts = {
     },
   },
 };
+
+// The production edit port is composed from the real domain logic but stays
+// OFF until approved D1/D5 evidence exists. There is no runtime flag to flip.
+ports.edit = createConnectedEditPort({
+  enabled: PUBLISHED_EDIT_WRITE_ENABLED,
+  provider: createYouTubeEditProvider({ fetchImpl: fetch }),
+  categories: categoriesClient,
+  tokens: ports.tokens,
+  accounts: ports.accounts,
+  clock: ports.clock,
+  // Fail-closed by construction. The edit port itself is off, and even if a
+  // future activation changed that, no write would pass without a proven
+  // quota and rebinding gate.
+  writeGuard: {
+    authorizeWrite: () => Promise.resolve(false),
+    stillBound: () => Promise.resolve(false),
+  },
+});
 
 Deno.serve(createYouTubeResourcesHandler(ports));

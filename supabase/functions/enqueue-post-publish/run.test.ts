@@ -56,6 +56,48 @@ Deno.test("publish_now accepts the owner RPC stamp verbatim and kicks once", asy
   assertEquals(f.logs, []);
 });
 
+Deno.test("an existing server stamp is reused verbatim, so a replay never restamps the post", async () => {
+  const f = fixture({
+    readPublishRequest: () => Promise.resolve({
+      stamp: STAMP, status: "pending", source: null, isRetry: false,
+    }),
+    requestImmediatePublish: () => {
+      throw new Error("a stamped post must not be restamped");
+    },
+  });
+  const body = { post_id: POST, mode: "publish_now" as const };
+  const first = await run(f.deps, { callerId: OWNER, body });
+  const second = await run(f.deps, { callerId: OWNER, body });
+  assertEquals(first.status, 202);
+  assertEquals(second.status, 202);
+  assertEquals(f.calls, []);
+  assertEquals(f.kicks, [
+    { post_id: POST, expected_publish_requested_at: STAMP },
+    { post_id: POST, expected_publish_requested_at: STAMP },
+  ]);
+});
+
+Deno.test("a stamp on a terminal, review, retry or scheduled row is not reused out of contract", async () => {
+  for (const row of [
+    { status: "completed", source: null, isRetry: false },
+    { status: "failed", source: null, isRetry: false },
+    { status: "pending", source: "tiktok_review", isRetry: false },
+    { status: "pending", source: null, isRetry: true },
+    { status: "scheduled", source: null, isRetry: false },
+  ]) {
+    const f = fixture({
+      readPublishRequest: () => Promise.resolve({ stamp: STAMP, ...row }),
+      requestImmediatePublish: () => Promise.resolve(null),
+      readPostStatus: () => Promise.resolve(row.status),
+    });
+    const response = await run(f.deps, { callerId: OWNER, body: { post_id: POST, mode: "publish_now" } });
+    assertEquals(f.kicks, [], `no kick for ${row.status}/${row.source ?? "native"}/retry=${row.isRetry}`);
+    // Terminal rows keep the explicit refusal; scheduled rows keep the RPC.
+    assertEquals(response.status === 202, false);
+    assertEquals(f.calls, []);
+  }
+});
+
 Deno.test("an already processing post is accepted without a second kick", async () => {
   const f = fixture({
     requestImmediatePublish: () => Promise.resolve(null),
@@ -250,6 +292,9 @@ Deno.test("background kicks return 202 before completion, drain responses, and l
         const req = new Request(input, init);
         const url = new URL(req.url);
         assertEquals(url.origin, "https://enqueue-fixture.invalid");
+        if (url.pathname === "/rest/v1/posts") return Response.json([{
+          status: "pending", source: null, publish_requested_at: null, metadata: {},
+        }]);
         if (url.pathname === "/rest/v1/rpc/request_immediate_publish") return Response.json(STAMP);
         if (url.pathname === "/rest/v1/system_logs") {
           logs.push(await req.json());

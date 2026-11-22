@@ -128,6 +128,14 @@ import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.
 import { fetchJsonWithDeadline, fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
+import { assertNativeYoutubeDeclarations } from "../_shared/youtubePublishSafety.ts";
+import {
+  withYoutubePublishEvidence,
+  youtubeEvidenceFromMetadata,
+  youtubePublishEvidence,
+} from "./youtubePublishEvidence.ts";
+import { resolveYouTubeVideoTitle } from "../_shared/youtubeVideoTitle.ts";
+import { resolveYoutubeThumbnail } from "./youtubeThumbnailIntake.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { CHECK_ONCE_DEADLINE, classifyContainerStatus, CONTAINER_STATUS_FIELDS, type ContainerState, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
@@ -169,6 +177,7 @@ import {
 } from "./metaPublishReauth.ts";
 import { claimFinalNotification, claimThreadsImageNotification, confirmThreadsImageNotification } from "./finalNotification.ts";
 import {
+  probeResumableUploadStatus,
   runResumableVideoUpload,
   type ResumableUploadOutcome,
 } from "./youtubeResumableUpload.ts";
@@ -212,6 +221,7 @@ import {
 import {
   runYoutubeFollowUps,
   type YoutubeFollowUpDeps,
+  type YoutubeFollowUpResults,
 } from "./youtubeUploadFollowUps.ts";
 import {
   refreshYoutubeAccessToken,
@@ -242,6 +252,7 @@ import {
   writeLogRow,
 } from "./postSettlement.ts";
 import {
+  assertMediaRowAdmissible,
   cdnReadPreferenceOrder,
   loadMediaProviderRows,
   resolveMediaUrl,
@@ -2981,17 +2992,43 @@ Deno.serve(async (req) => {
     // Step 3: Get media files and generate URLs
     // ─────────────────────────────────────────────────────────────────────
     let mediaFiles: MediaFile[] = [];
+    const allowedWorkspaceIds: string[] = Array.from(new Set(
+      (accounts ?? [])
+        .map((account: { workspace_id?: string | null }) => account.workspace_id ?? null)
+        .filter((workspaceId): workspaceId is string => typeof workspaceId === "string" && workspaceId.length > 0),
+    ));
     if (post.media_file_ids && post.media_file_ids.length > 0) {
-      const { data: files, error: mediaReadError } = await supabase
+      // Two structurally-scoped reads, never a post-wide fetch. Personal media
+      // must belong to the post owner. Partner media belongs to a WORKSPACE,
+      // not to that owner, and is admitted only through a workspace the post's
+      // target accounts actually selected. Both paths still go through the
+      // bucket/path assertions in resolveMediaUrl before any signing.
+      const ownedRead = await supabase
         .from("media_files")
         .select("*")
-        .in("id", post.media_file_ids);
-      if (mediaReadError) {
-        console.error("Could not read post media:", mediaReadError.message);
+        .in("id", post.media_file_ids)
+        .eq("user_id", post.user_id);
+      if (ownedRead.error) {
+        console.error("Could not read post media:", ownedRead.error.message);
         return await failMediaPreparation("Could not read post media. Retry the publish.");
       }
+      let files = ownedRead.data ?? [];
+      if (allowedWorkspaceIds.length > 0) {
+        const partnerRead = await supabase
+          .from("media_files")
+          .select("*")
+          .in("id", post.media_file_ids)
+          .eq("storage_bucket", "partner-media")
+          .in("workspace_id", allowedWorkspaceIds);
+        if (partnerRead.error) {
+          console.error("Could not read partner post media:", partnerRead.error.message);
+          return await failMediaPreparation("Could not read post media. Retry the publish.");
+        }
+        const seen = new Set(files.map((file) => file.id));
+        files = [...files, ...(partnerRead.data ?? []).filter((file) => !seen.has(file.id))];
+      }
 
-      mediaFiles = orderPostMediaFiles(post.media_file_ids, files ?? []);
+      mediaFiles = orderPostMediaFiles(post.media_file_ids, files);
       console.log("Media files:", mediaFiles.length);
 
       const missingMediaFileIds = getMissingMediaFileIds(post.media_file_ids, mediaFiles);
@@ -3027,11 +3064,7 @@ Deno.serve(async (req) => {
     // The workspaces this post publishes into. The partner API writes its media
     // under the workspace's own prefix, so the media of one of these
     // workspaces may be read and the media of another one may not.
-    const allowedWorkspaceIds = new Set(
-      (accounts ?? [])
-        .map((account: { workspace_id?: string | null }) => account.workspace_id ?? null)
-        .filter((workspaceId): workspaceId is string => typeof workspaceId === "string" && workspaceId.length > 0),
-    );
+    const allowedWorkspaceSet: ReadonlySet<string> = new Set<string>(allowedWorkspaceIds);
 
     // Provider state per media file (single query for the whole post). Rows are
     // matched against each file's current_object_version afterwards — renames bump
@@ -3044,7 +3077,7 @@ Deno.serve(async (req) => {
         resolvedUrl = await resolveMediaUrl(supabase, file, providerRowsByMedia, {
           preferenceOrder: providerPreferenceOrder,
           ownerUserId: post.user_id,
-          allowedWorkspaceIds,
+          allowedWorkspaceIds: allowedWorkspaceSet,
           approvedHosts: mediaHosts,
         });
       } catch (signingError) {
@@ -3357,6 +3390,14 @@ Deno.serve(async (req) => {
                 admin: supabase,
                 client: composioClientFromEnv(),
                 signedUrlFor: async (file) => {
+                  // The service role can sign ANY bucket. Validate the row's
+                  // owner, bucket and object prefix before minting a URL;
+                  // partner-media needs a workspace this worker has admitted,
+                  // which this path never does.
+                  assertMediaRowAdmissible(file as MediaFileRow, {
+                    ownerUserId: post.user_id,
+                    allowedWorkspaceIds: new Set<string>(),
+                  });
                   const { data, error } = await supabase.storage
                     .from(file.storage_bucket)
                     .createSignedUrl(file.file_path, 3600);
@@ -3450,7 +3491,7 @@ Deno.serve(async (req) => {
           const logError = await writeLogRow(supabase, liveReelUnrecordedStoryLog(post.user_id, post_id, resume?.platformPostId ?? null, unrecordedStoryRef));
           if (logError) console.error("[process-post] could not log the unrecorded story either:", logError);
         }
-        const responseData = {
+        const baseResponseData: Record<string, unknown> = {
           ...(imageExecution?.deferral.media_type === "IMAGE" ? { ...imageResponseData, deferred: imageExecution.deferral } : {}),
           ...(independentStory && result.publicationSubtype === "reel" ? { ig_post_subtype: "reel" } : {}),
           tiktok_publish_id: result.id,
@@ -3461,6 +3502,15 @@ Deno.serve(async (req) => {
           ...(topicTagDebug ? { topic_tag_debug: topicTagDebug } : {}),
           ...(unrecordedStoryRef ? { [UNRECORDED_STORY_KEY]: unrecordedStoryRef } : {}),
         };
+        const responseData = account.platform === "youtube"
+          ? withYoutubePublishEvidence(baseResponseData, youtubePublishEvidence({
+            requestedPrivacy: post.metadata?.youtube_visibility ?? "private",
+            thumbnailRequested: typeof post.metadata?.youtube_thumbnail_url === "string" &&
+              post.metadata.youtube_thumbnail_url.length > 0,
+            commentRequested: typeof post.metadata?.youtube_first_comment === "string" &&
+              post.metadata.youtube_first_comment.length > 0,
+          }))
+          : baseResponseData;
 
         // The one writer of the five that can produce a NON-terminal row:
         // TikTok hands back an id before the video is published, and that row
@@ -10064,6 +10114,22 @@ function buildYoutubeContinuationPorts(
       const selected = Array.isArray(metadata.selected_account_ids)
         ? metadata.selected_account_ids.filter((value): value is string => typeof value === "string")
         : [];
+      const thumbnail = await resolveYoutubeThumbnail({
+        supabase,
+        loadOwnedMedia: async (mediaId, ownerId) => {
+          const { data: file, error } = await supabase
+            .from("media_files")
+            .select("*")
+            .eq("id", mediaId)
+            .eq("user_id", ownerId)
+            .maybeSingle();
+          return error
+            ? { ok: false as const, reason: "read_error" as const }
+            : { ok: true as const, row: file as MediaFileRow | null };
+        },
+        allowedWorkspaceIds: await loadPostTargetWorkspaceIds(supabase, id),
+        mediaHosts,
+      }, String(data.user_id), metadata);
       return {
         id: String(data.id),
         userId: String(data.user_id),
@@ -10073,15 +10139,16 @@ function buildYoutubeContinuationPorts(
         mediaFileIds: Array.isArray(data.media_file_ids)
           ? data.media_file_ids.filter((value): value is string => typeof value === "string")
           : [],
-        thumbnailUrl: typeof metadata.youtube_thumbnail_url === "string" ? metadata.youtube_thumbnail_url : null,
+        thumbnailUrl: thumbnail.ok ? thumbnail.url : null,
         firstComment: typeof metadata.youtube_first_comment === "string" ? metadata.youtube_first_comment : null,
+        metadata,
       };
     },
 
     async loadAccount(accountId) {
       const { data } = await supabase
         .from("social_accounts")
-        .select("id, user_id, platform, is_active, access_token, refresh_token, token_expires_at, account_metadata, needs_reauth")
+        .select("id, user_id, platform, is_active, platform_user_id, access_token, refresh_token, token_expires_at, account_metadata, needs_reauth")
         .eq("id", accountId)
         .maybeSingle();
       if (!data) return null;
@@ -10111,6 +10178,7 @@ function buildYoutubeContinuationPorts(
       return {
         id: String(data.id),
         userId: String(data.user_id),
+        channelId: String(data.platform_user_id ?? ""),
         platform: String(data.platform),
         isActive: data.is_active !== false,
         accessToken: usableToken,
@@ -10119,11 +10187,12 @@ function buildYoutubeContinuationPorts(
       };
     },
 
-    async loadMedia(mediaFileId) {
+    async loadMedia(mediaFileId, expectedOwnerId) {
       const { data, error } = await supabase
         .from("media_files")
         .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type, scan_state, file_size, workspace_id")
         .eq("id", mediaFileId)
+        .eq("user_id", expectedOwnerId)
         .maybeSingle();
       if (error) throw new Error("YouTube media lookup failed");
       if (!data) return null;
@@ -10246,10 +10315,55 @@ function buildYoutubeContinuationPorts(
       return settled;
     },
 
+    async completeReceipt(args) {
+      // Fenced by the session lease in complete_youtube_upload_session. A
+      // stale worker cannot persist a receipt and therefore cannot project it.
+      try {
+        return await store.complete({
+          sessionId: args.sessionId,
+          leaseToken: args.leaseToken,
+          videoId: args.videoId,
+        });
+      } catch (error) {
+        console.warn("[youtube] a probed receipt could not be persisted:", redactProviderText(error));
+        return false;
+      }
+    },
+
+    async probeReceipt(args) {
+      // The protocol's status-only step: a zero-byte PUT with the exact total
+      // in Content-Range, manual redirects, host allowlist and bounded body and
+      // deadline. It can only find a receipt that already exists; it can never
+      // re-enter the upload, so an unproven session sends no video byte.
+      const uri = args.record.sessionUri;
+      if (!uri) return { videoId: null };
+      try {
+        const status = await probeResumableUploadStatus({
+          fetchImpl: fetch,
+          sessionUri: uri,
+          accessToken: args.accessToken,
+          totalBytes: args.record.totalBytes,
+          deadlineMs: args.deadlineMs,
+          now: () => Date.now(),
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        }, args.record.bytesSent, args.record.bytesSent);
+        return status.kind === "accepted" && /^[A-Za-z0-9_-]{6,64}$/.test(status.videoId)
+          ? { videoId: status.videoId }
+          : { videoId: null };
+      } catch {
+        // An unreadable probe is not a receipt. No byte was sent.
+        return { videoId: null };
+      }
+    },
+
     async projectReceipt(args) {
-      // The receipt is projected onto the public row without a lease and
-      // without the provider: the video already exists, so there is nothing
-      // to send and nothing to fetch.
+      // The SQL RPC owns this transition atomically: it reads the durable
+      // video id and settles the result row in one fenced operation. There is
+      // no second read/replace of platform_posts here: a separate update keyed
+      // only by row id could overwrite a newer attempt's response data. For a
+      // resumed receipt no follow-up outcome was observed by this worker, so
+      // absent evidence renders as honest unknown rather than a fabricated
+      // success or a stale overwrite.
       return await store.projectReceipt({ sessionId: args.sessionId });
     },
 
@@ -10257,9 +10371,10 @@ function buildYoutubeContinuationPorts(
       // The run that created the video does the follow-ups. A run that
       // inherited the receipt never reaches here, so a first comment is never
       // posted twice.
-      await runYoutubeFollowUps(
+      return await runYoutubeFollowUps(
         {
           videoId: args.videoId,
+          channelId: args.channelId,
           accessToken: args.accessToken,
           thumbnailUrl: args.post.thumbnailUrl,
           firstComment: args.post.firstComment,
@@ -10441,13 +10556,15 @@ async function postToYouTube(
 
   // Get YouTube settings from metadata
   const metadata = post.metadata;
+  // A queued post written before the explicit-declaration rule must not be
+  // published on an implicit `false`. Refuse before any session or byte read.
+  assertNativeYoutubeDeclarations(metadata);
   const isShort = metadata?.youtube_video_type === "short";
-  let title = metadata?.youtube_title || post.caption?.substring(0, 100) || "New Video";
-
-  // Auto-add #Shorts hashtag for Shorts if not present
-  if (isShort && !title.toLowerCase().includes("#shorts")) {
-    title = title.length > 90 ? title.substring(0, 90) + " #Shorts" : title + " #Shorts";
-  }
+  const title = resolveYouTubeVideoTitle({
+    title: metadata?.youtube_title,
+    caption: post.caption,
+    videoType: isShort ? "short" : "video",
+  });
 
   const description = metadata?.youtube_description || post.caption || "";
   const tags = metadata?.youtube_tags || [];
@@ -10459,7 +10576,6 @@ async function postToYouTube(
   console.log(`[YouTube Debug] Tags type: ${typeof tags}, Is Array: ${Array.isArray(tags)}, Length: ${tags.length}`);
 
   const firstComment = metadata?.youtube_first_comment;
-  const thumbnailUrl = metadata?.youtube_thumbnail_url;
 
   console.log(`YouTube upload - type: ${isShort ? "Short" : "Video"}, title: ${title}, privacy: ${privacyStatus}`);
 
@@ -10472,6 +10588,25 @@ async function postToYouTube(
   // hop again.
   // ─────────────────────────────────────────────────────────────────────
   const mediaHosts = await approvedMediaHostSet(supabase);
+  // A media-id thumbnail is resolved through the owner-bound media contract;
+  // an external URL is accepted only from an approved HTTPS host.
+  const thumbnailIntake = await resolveYoutubeThumbnail({
+    supabase,
+    loadOwnedMedia: async (id, ownerId) => {
+      const { data, error } = await supabase
+        .from("media_files")
+        .select("*")
+        .eq("id", id)
+        .eq("user_id", ownerId)
+        .maybeSingle();
+      return error
+        ? { ok: false as const, reason: "read_error" as const }
+        : { ok: true as const, row: data as MediaFileRow | null };
+    },
+    allowedWorkspaceIds: await loadPostTargetWorkspaceIds(supabase, post.id),
+    mediaHosts,
+  }, post.user_id, metadata);
+  const thumbnailUrl = thumbnailIntake.ok ? thumbnailIntake.url : null;
   const readUrl = youtubeStorageReadUrl(videoUrl);
   if (!isApprovedMediaUrl(readUrl, mediaHosts)) {
     throw new Error(youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.media_origin_not_approved));
@@ -10690,6 +10825,7 @@ async function postToYouTube(
   // receipt does not repeat them: a first comment posted twice is a duplicate
   // on the customer's channel.
   // ─────────────────────────────────────────────────────────────────────
+  let followUpResults: YoutubeFollowUpResults | undefined;
   if (!inheritedReceipt) {
     // The follow-ups are provider WRITES, so the live state is asked about
     // first: the lease says this worker owns the upload, and it says nothing
@@ -10697,11 +10833,13 @@ async function postToYouTube(
     // that was edited or cancelled while the video was being written is not
     // given a thumbnail and a comment.
     //
-    // The receipt does not depend on that answer. The video exists, so it is
-    // settled either way.
-    await runYoutubeFollowUps(
+    // Their observed outcomes travel into the FENCED settlement below: the
+    // generic result writer is skipped for this path, so dropping them here
+    // would leave History and REST/MCP with no evidence at all.
+    followUpResults = await runYoutubeFollowUps(
       {
         videoId,
+        channelId: account.platform_user_id ?? "",
         accessToken,
         thumbnailUrl: thumbnailUrl ?? null,
         firstComment: firstComment ?? null,
@@ -10727,6 +10865,13 @@ async function postToYouTube(
     responseData: {
       youtube_video_id: videoId,
       youtube_upload_source: "publish",
+      youtube_publish_evidence: youtubeEvidenceFromMetadata(metadata, {
+        effectivePrivacy: "unknown",
+        thumbnailState: followUpResults?.thumbnail.state,
+        thumbnailReason: followUpResults?.thumbnail.reason,
+        commentState: followUpResults?.first_comment.state,
+        commentReason: followUpResults?.first_comment.reason,
+      }),
       ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
     },
   });

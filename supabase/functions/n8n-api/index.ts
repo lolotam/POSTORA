@@ -27,13 +27,18 @@ import {
   listLinkedInDestinations,
   normalizeLinkedInDestinationSelections,
 } from "../_shared/linkedinDestinations.ts";
-import { youtubeOptionsUnsupportedOnComposio } from "../_shared/youtubeComposioOptions.ts";
+import {
+  buildYoutubeDeclarationProof,
+  missingYoutubeDeclarations,
+} from "../_shared/youtubePublishSafety.ts";
 import {
   resolveYoutubePublishOptions,
   youtubePrivacyOrDefault,
   YOUTUBE_DEFAULT_CATEGORY_ID,
 } from "../_shared/youtubePublishOptions.ts";
 import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
+import { parseExplicitDeclaration, YOUTUBE_DECLARATION_FORM_KEYS } from "./formDeclarations.ts";
+import { youtubeEvidenceOf } from "./youtubeEvidenceView.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
@@ -960,10 +965,20 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     metadata.youtube_tags = Array.isArray(youtube_tags) ? youtube_tags :
       (typeof youtube_tags === 'string' ? youtube_tags.split(',').map((t: string) => t.trim()).filter(Boolean) : []);
     metadata.youtube_category = youtubeOptions.youtube_category || YOUTUBE_DEFAULT_CATEGORY_ID;
-    metadata.youtube_made_for_kids = youtube_made_for_kids ?? false;
+    // D3 provenance: only an explicit boolean is a declaration. A missing
+    // input must stay absent so the worker cannot treat an old default as one.
+    if (typeof youtube_made_for_kids === 'boolean') {
+      metadata.youtube_made_for_kids = youtube_made_for_kids;
+    }
     metadata.youtube_allow_embedding = youtubeOptions.youtube_allow_embedding ?? true;
     metadata.youtube_public_stats_viewable = youtube_public_stats_viewable ?? true;
-    metadata.youtube_contains_synthetic_media = youtube_contains_synthetic_media ?? false;
+    if (typeof youtube_contains_synthetic_media === 'boolean') {
+      metadata.youtube_contains_synthetic_media = youtube_contains_synthetic_media;
+    }
+    // A caller cannot satisfy D3 by merely sending two booleans: the proof is
+    // written here from those explicit values and is checked again at dispatch.
+    const declarationProof = buildYoutubeDeclarationProof(metadata, 'rest');
+    if (declarationProof) metadata.youtube_declaration_proof = declarationProof;
     // Left unset when the caller did not state it, so Postora never declares a
     // video free of paid product placement on the caller's behalf.
     if (typeof youtube_has_paid_product_placement === 'boolean') {
@@ -983,7 +998,21 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // YouTube Shorts support - video_type can be 'video' or 'short'
     metadata.youtube_video_type = body.youtube_video_type || 'video';
 
-    let youtubeTargets = selectedAccounts.filter((account: any) => account.platform === 'youtube');
+    const missingDeclarations = missingYoutubeDeclarations(metadata);
+    if (missingDeclarations.length > 0) {
+      return new Response(JSON.stringify({
+        error: 'youtube_declaration_required',
+        code: 'youtube_declaration_required',
+        missing_declarations: missingDeclarations,
+      }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    let youtubeTargets: {
+      id: string;
+      auth_provider: string | null;
+      connection_id?: string | null;
+      workspace_id?: string | null;
+    }[] = selectedAccounts.filter((account: { platform: string }) => account.platform === 'youtube');
     if (youtubeTargets.length === 0) {
       const { data, error } = await supabase.from('social_accounts')
         .select('id, auth_provider, connection_id, workspace_id')
@@ -998,45 +1027,41 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       }
       youtubeTargets = data || [];
     }
-    if (youtubeTargets.some((account: any) => account.auth_provider === 'composio')) {
-      const unsupportedKeys = youtubeOptionsUnsupportedOnComposio(metadata);
-      if (unsupportedKeys.length > 0) {
-        // social_accounts.workspace_id is nullable but the ledger's is a NOT
-        // NULL uuid: resolve a missing one to the owner's personal workspace
-        // (spec §4.3). Resolved once and guarded: telemetry must never break
-        // the call it records, so an unresolvable owner logs the skipped row
-        // instead of failing the validation response with an invalid id.
-        let fallbackWorkspaceId: string | null = null;
-        try {
-          fallbackWorkspaceId = await resolveWorkspaceForCall(supabase, { userId });
-        } catch (error) {
-          console.error(
-            `[n8n-api] youtube_options refusal unledgered for user ${userId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-        await Promise.all(youtubeTargets
-          .filter((account: any) => account.auth_provider === 'composio')
-          .map(async (account: any) => {
-            const workspaceId = account.workspace_id ?? fallbackWorkspaceId;
-            if (!workspaceId) return;
-            await recordConnectorCall(supabase, {
-              workspaceId,
-              connectionId: account.connection_id,
-              socialAccountId: account.id,
-              connectorType: 'youtube',
-              authStrategy: 'composio_oauth',
-              actionName: 'validate_options',
-              source: 'publish',
-            }, { status: 'refused', errorCode: 'youtube_option_unsupported_on_composio' });
-          }));
-        return new Response(JSON.stringify({
-          error: 'youtube_option_unsupported_on_composio',
-          code: 'youtube_option_unsupported_on_composio',
-          unsupported_keys: unsupportedKeys,
-        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (youtubeTargets.some((account) => account.auth_provider === 'composio')) {
+      // social_accounts.workspace_id is nullable but the ledger's is a NOT
+      // NULL uuid: resolve a missing one to the owner's personal workspace
+      // (spec §4.3). Resolved once and guarded: telemetry must never break
+      // the call it records, so an unresolvable owner logs the skipped row
+      // instead of failing the validation response with an invalid id.
+      let fallbackWorkspaceId: string | null = null;
+      try {
+        fallbackWorkspaceId = await resolveWorkspaceForCall(supabase, { userId });
+      } catch (error) {
+        console.error(
+          `[n8n-api] youtube managed refusal unledgered for user ${userId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
+      await Promise.all(youtubeTargets
+        .filter((account) => account.auth_provider === 'composio')
+        .map(async (account) => {
+          const workspaceId = account.workspace_id ?? fallbackWorkspaceId;
+          if (!workspaceId) return;
+          await recordConnectorCall(supabase, {
+            workspaceId,
+            connectionId: account.connection_id,
+            socialAccountId: account.id,
+            connectorType: 'youtube',
+            authStrategy: 'composio_oauth',
+            actionName: 'validate_options',
+            source: 'publish',
+          }, { status: 'refused', errorCode: 'youtube_composio_dispatch_unavailable' });
+        }));
+      return new Response(JSON.stringify({
+        error: 'youtube_composio_dispatch_unavailable',
+        code: 'youtube_composio_dispatch_unavailable',
+      }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
   }
 
@@ -1977,8 +2002,13 @@ function toPlatformResult(pp: any) {
       story_state: ["queued", "creating", "processing", "publishing", "published", "failed", "uncertain"].includes(pp.response_data.story_state) ? pp.response_data.story_state : "unknown",
       story_retryable: pp.response_data.story_retryable === true,
     } : {}),
-    // Only the warnings are exposed — response_data itself stays internal.
+    // Only the warnings and the sanitized YouTube evidence are exposed — the
+    // rest of response_data (tokens, URLs with credentials, provider bodies)
+    // stays internal. The allowlist below is the only path to those fields.
     warnings: Array.isArray(pp.response_data?.warnings) ? pp.response_data.warnings : [],
+    ...(youtubeEvidenceOf(pp.response_data, pp.platform)
+      ? { youtube_publish_evidence: youtubeEvidenceOf(pp.response_data, pp.platform) }
+      : {}),
   };
 }
 
@@ -2494,11 +2524,13 @@ export async function handleRequest(req: Request): Promise<Response> {
             } catch {
               body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
             }
+          } else if (YOUTUBE_DECLARATION_FORM_KEYS.has(key)) {
+            body[key] = parseExplicitDeclaration(value);
           } else if (key === 'instagram_share_to_story') {
             body[key] = parseFormBoolean(value);
-          } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
+          } else if (key === 'youtube_allow_embedding' ||
             key === 'youtube_embeddable' ||
-            key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
+            key === 'youtube_public_stats_viewable' ||
             key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
             key === 'tiktok_allow_comments' ||
             key === 'tiktok_allow_duet' || key === 'tiktok_allow_stitch' ||
@@ -2518,7 +2550,9 @@ export async function handleRequest(req: Request): Promise<Response> {
         const body: Record<string, any> = {};
 
         for (const [key, value] of formData.entries()) {
-          if (key === 'instagram_share_to_story') {
+          if (YOUTUBE_DECLARATION_FORM_KEYS.has(key)) {
+            body[key] = typeof value === 'string' ? parseExplicitDeclaration(value) : value;
+          } else if (key === 'instagram_share_to_story') {
             body[key] = typeof value === 'string' ? parseFormBoolean(value) : value;
           } else if (typeof value === 'string') {
             // Handle array fields
@@ -2532,9 +2566,9 @@ export async function handleRequest(req: Request): Promise<Response> {
               } catch {
                 body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
               }
-            } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
+            } else if (key === 'youtube_allow_embedding' ||
               key === 'youtube_embeddable' ||
-              key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
+              key === 'youtube_public_stats_viewable' ||
               key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
               key === 'tiktok_allow_comments' ||
               key === 'tiktok_allow_duet' || key === 'tiktok_allow_stitch' ||
@@ -2570,6 +2604,8 @@ export async function handleRequest(req: Request): Promise<Response> {
             } catch {
               body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
             }
+          } else if (YOUTUBE_DECLARATION_FORM_KEYS.has(key)) {
+            body[key] = parseExplicitDeclaration(value);
           } else if (key === 'instagram_share_to_story') {
             body[key] = parseFormBoolean(value);
           } else {

@@ -3,6 +3,7 @@ import {
   createYouTubeResourcesHandler,
   type YouTubeResourceAccount,
   type YouTubeResourceRefusal,
+  type YouTubeEditPort,
   type YouTubeResourcesPorts,
   type YouTubeTokenResult,
 } from "./handler.ts";
@@ -13,6 +14,10 @@ import {
   type YouTubeVideosPage,
 } from "./contracts.ts";
 import type { YouTubeReadResult } from "./youtubeReadClient.ts";
+import { EditFailure, type EditSnapshot } from "./editLifecycle.ts";
+import type { CategoryListResult, YouTubeCategoryClient } from "./categoryClient.ts";
+import { createConnectedEditPort } from "./editComposition.ts";
+import type { YouTubeEditProvider } from "./editProvider.ts";
 import { YOUTUBE_RESOURCE_REQUEST_EXAMPLES } from "./requestExamples.fixture.ts";
 
 const ENDPOINT = "https://api.postora.cloud/functions/v1/youtube-resources";
@@ -96,6 +101,8 @@ function fixture(overrides: {
   rateLimit?: { allowed: boolean; retryAfterSeconds: number };
   tokenError?: boolean;
   rateLimitError?: boolean;
+  edit?: YouTubeEditPort;
+  categories?: YouTubeCategoryClient;
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
   const refreshToken = crypto.randomUUID() + crypto.randomUUID();
@@ -166,6 +173,21 @@ function fixture(overrides: {
         const queued = overrides.tokenResults?.[calls.tokens];
         calls.tokens++;
         return Promise.resolve(queued ?? { ok: true, accessToken, minted: false });
+      },
+    },
+    edit: overrides.edit,
+    categories: overrides.categories ?? {
+      list: (_token, input): Promise<CategoryListResult> => {
+        const arabic = typeof input.locale === "string" && input.locale.startsWith("ar");
+        return Promise.resolve({
+          ok: true,
+          region: typeof input.region === "string" ? input.region.toUpperCase() : "US",
+          locale: arabic ? "ar" : "en",
+          value: [
+            { id: "22", name: arabic ? "الأشخاص والمدونات" : "People & Blogs", label: arabic ? "\u206822\u2069 (الأشخاص والمدونات)" : "\u206822\u2069 (People & Blogs)", assignable: true },
+            { id: "30", name: arabic ? "الأفلام" : "Movies", label: arabic ? "\u206830\u2069 (الأفلام)" : "\u206830\u2069 (Movies)", assignable: false },
+          ],
+        });
       },
     },
     youtube: {
@@ -272,6 +294,258 @@ Deno.test("capabilities answers from the database and never returns a credential
   assertEquals(body.freshness, { fetched_at: "2026-11-20T10:00:00.000Z", source: "database" });
   assertEquals(body.data.account_id, ACCOUNT_ID);
   assertEquals(body.data.capabilities.browse, { state: "available" });
+});
+
+Deno.test("categories is owner-bound and returns the provider's regional catalog", async () => {
+  const { handler, calls } = fixture();
+  const response = await handler(request({
+    operation: "categories", account_id: ACCOUNT_ID, region: "sa", locale: "ar-EG",
+  }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.data.region, "SA");
+  assertEquals(body.data.locale, "ar");
+  assertEquals(body.data.source, "provider");
+  assertEquals(body.data.categories.length, 2);
+  assertEquals(body.data.categories.find((c: { id: string }) => c.id === "30").assignable, false);
+  assertEquals(body.data.categories.find((c: { id: string }) => c.id === "22").label, "\u206822\u2069 (الأشخاص والمدونات)");
+  assertEquals(calls.load, 1);
+  assertEquals(calls.tokens, 1);
+  assertEquals(calls.video, 0);
+
+  const anonymous = fixture({ authenticated: false });
+  assertEquals((await anonymous.handler(request({ operation: "categories", account_id: ACCOUNT_ID }))).status, 401);
+});
+
+Deno.test("a failed provider catalog read is a typed refusal with a retry hint", async () => {
+  const failing = fixture({
+    categories: {
+      list: () => Promise.resolve({ ok: false, code: "quota_exceeded", retryAfterSeconds: 900 }),
+    },
+  });
+  const response = await failing.handler(request({
+    operation: "categories", account_id: ACCOUNT_ID, region: "US", locale: "en",
+  }));
+  assertEquals(response.status, 429);
+  const body = await response.json();
+  assertEquals(body.error, "quota_exceeded");
+  assertEquals(body.retry_after_seconds, 900);
+});
+
+Deno.test("edit capability stays disabled until conditional-write enforcement is proven", async () => {
+  const { handler } = fixture();
+  const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));
+  const body = await response.json();
+
+  assertEquals(body.data.capabilities.edit_metadata, {
+    state: "unavailable",
+    reason: "provider_unsupported",
+  });
+  assertEquals(body.data.capabilities.browse, { state: "available" });
+});
+
+Deno.test("edit operations are refused before any provider or token call", async () => {
+  for (const operation of ["edit_snapshot", "update_video"] as const) {
+    const { handler, calls, logs } = fixture();
+    const body = operation === "edit_snapshot"
+      ? { operation, account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" }
+      : {
+        operation,
+        account_id: ACCOUNT_ID,
+        video_id: "videoAAAAAAA",
+        base_revision: "base",
+        changes: { title: "A new title" },
+      };
+    const response = await handler(request(body));
+
+    assertEquals(response.status, 403);
+    assertEquals((await response.json()).error, "write_not_enabled");
+    assertEquals(calls.tokens, 0);
+    assertEquals(calls.channel, 0);
+    assertEquals(calls.uploads, 0);
+    assertEquals(calls.video, 0);
+    assertEquals(calls.rateLimit, 0);
+    assertEquals(logs.map((entry) => [entry.operation, entry.code]), [
+      [operation, "write_not_enabled"],
+    ]);
+  }
+});
+
+Deno.test("an injected edit port drives the real handler snapshot response", async () => {
+  const snapshot: EditSnapshot = {
+    revision: "rev-1",
+    fetchedAt: "2026-11-22T10:00:00.000Z",
+    videoId: "videoAAAAAAA",
+    channelId: CHANNEL_ID,
+    values: {
+      title: "Old", description: "", tags: [], categoryId: "22", privacyStatus: "private",
+      embeddable: false, license: "youtube", publicStatsViewable: false,
+      selfDeclaredMadeForKids: false, containsSyntheticMedia: false,
+      defaultLanguage: null, publishAt: null,
+    },
+    restrictions: { scheduleProtected: false, unknownFieldsBlocked: false },
+  };
+  const { handler } = fixture({
+    edit: {
+      snapshot: () => Promise.resolve(snapshot),
+      update: () => Promise.resolve({ snapshot, verified: true }),
+    },
+  });
+  const result = await handler(request({ operation: "edit_snapshot", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" }));
+  assertEquals(result.status, 200);
+  const body = await result.json();
+  assertEquals(body.data.revision, "rev-1");
+  assertEquals(body.data.values.selfDeclaredMadeForKids, false);
+  // An update goes through the same seam and reports verification truthfully.
+  const saved = await handler(request({
+    operation: "update_video",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    base_revision: "rev-1",
+    changes: { title: "New" },
+  }));
+  assertEquals(saved.status, 200);
+  assertEquals((await saved.json()).data.revision, "rev-1");
+});
+
+Deno.test("handler maps edit conflicts and unknown verification results", async () => {
+  const conflict = fixture({
+    edit: {
+      snapshot: () => Promise.reject(new EditFailure("edit_conflict", "stale")),
+      update: () => Promise.reject(new EditFailure("edit_conflict", "stale")),
+      failureCode: (error) => error instanceof EditFailure ? error.code : null,
+    },
+  });
+  const conflictResponse = await conflict.handler(request({
+    operation: "update_video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA",
+    base_revision: "stale", changes: { title: "New" },
+  }));
+  assertEquals(conflictResponse.status, 409);
+  assertEquals((await conflictResponse.json()).error, "edit_conflict");
+
+  const snapshot: EditSnapshot = {
+    revision: "rev-1", fetchedAt: "2026-11-22T10:00:00.000Z", videoId: "videoAAAAAAA",
+    channelId: CHANNEL_ID,
+    values: {
+      title: "Old", description: "", tags: [], categoryId: "22", privacyStatus: "private",
+      embeddable: false, license: "youtube", publicStatsViewable: false,
+      selfDeclaredMadeForKids: false, containsSyntheticMedia: false,
+      defaultLanguage: null, publishAt: null,
+    },
+    restrictions: { scheduleProtected: false, unknownFieldsBlocked: false },
+  };
+  const unknown = fixture({
+    edit: {
+      snapshot: () => Promise.resolve(snapshot),
+      update: () => Promise.resolve({ snapshot, verified: false }),
+    },
+  });
+  const unknownResponse = await unknown.handler(request({
+    operation: "update_video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA",
+    base_revision: "rev-1", changes: { title: "New" },
+  }));
+  assertEquals(unknownResponse.status, 502);
+  assertEquals((await unknownResponse.json()).error, "outcome_unknown");
+});
+
+Deno.test("the approved synthetic composition drives a real connected snapshot and save through the handler", async () => {
+  let providerVideo = {
+    id: "videoAAAAAAA",
+    etag: '"etag-1"',
+    snippet: {
+      channelId: CHANNEL_ID,
+      title: "Original",
+      description: "Body",
+      tags: [],
+      categoryId: "22",
+      defaultLanguage: "ar",
+    },
+    status: { privacyStatus: "private", embeddable: false, selfDeclaredMadeForKids: false },
+  };
+  const writes: Array<{ part: string; etag: string; body: Record<string, unknown> }> = [];
+  const provider: YouTubeEditProvider = {
+    getVideo: (_token, input) => Promise.resolve(
+      input.videoId === providerVideo.id && providerVideo.snippet.channelId === input.channelId
+        ? { ok: true as const, value: providerVideo }
+        : { ok: false as const, code: "not_found" as const },
+    ),
+    updateVideo: (_token, input) => {
+      writes.push({ part: input.plan.parts.join(","), etag: input.plan.ifMatch, body: input.plan.body });
+      // The fake provider applies the conditional write, so the same-ID reread
+      // can verify the intended field values.
+      providerVideo = {
+        ...providerVideo,
+        snippet: { ...providerVideo.snippet, ...(input.plan.body.snippet as typeof providerVideo.snippet) },
+      };
+      return Promise.resolve({ ok: true as const, id: input.videoId });
+    },
+  };
+  const connected = createConnectedEditPort({
+    enabled: true,
+    provider,
+    categories: {
+      list: () => Promise.resolve({
+        ok: true as const,
+        region: "US",
+        locale: "en" as const,
+        value: [{ id: "22", name: "People & Blogs", label: "\u206822\u2069 (People & Blogs)", assignable: true }],
+      }),
+    },
+    tokens: {
+      get: () => Promise.resolve({ ok: true as const, accessToken: "fixture-token", minted: false }),
+    },
+    accounts: {
+      load: ({ accountId, userId }) => Promise.resolve({
+        id: accountId, userId, channelId: CHANNEL_ID, authProvider: null,
+        needsReauth: false, accessToken: "fixture-token", refreshToken: null,
+        tokenExpiresAt: null, accountMetadata: null,
+      }),
+    },
+    clock: { now: () => new Date("2026-11-22T10:00:00.000Z") },
+    writeGuard: {
+      authorizeWrite: () => Promise.resolve(true),
+      stillBound: () => Promise.resolve(true),
+    },
+  });
+  const { handler } = fixture({ edit: connected });
+
+  const snapshotResponse = await handler(request({
+    operation: "edit_snapshot", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA",
+  }));
+  assertEquals(snapshotResponse.status, 200);
+  const snapshotBody = await snapshotResponse.json();
+  const revision = snapshotBody.data.revision as string;
+  assertEquals(typeof revision, "string");
+
+  const saved = await handler(request({
+    operation: "update_video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA",
+    base_revision: revision, changes: { title: "Renamed" },
+  }));
+  assertEquals(saved.status, 200);
+  assertEquals(writes.length, 1);
+  assertEquals(writes[0].etag, '"etag-1"');
+  assertEquals(writes[0].part, "snippet");
+  assertEquals((writes[0].body.snippet as Record<string, unknown>).title, "Renamed");
+});
+
+Deno.test("edit requests with unknown keys or empty changes are invalid", async () => {
+  const { handler } = fixture();
+  const unknownKey = await handler(request({
+    operation: "edit_snapshot",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    raw_google_part: "snippet",
+  }));
+  assertEquals(unknownKey.status, 400);
+
+  const emptyChanges = await handler(request({
+    operation: "update_video",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    base_revision: "base",
+    changes: {},
+  }));
+  assertEquals(emptyChanges.status, 400);
 });
 
 Deno.test("a failed account read is an internal error, not a not_found", async () => {
@@ -437,6 +711,24 @@ Deno.test("the per-user limit answers rate_limited with a retry hint and spends 
     retry_after_seconds: 120,
   });
   assertEquals([calls.tokens, calls.channel], [0, 0]);
+});
+
+Deno.test("the categories read is rate limited before any token or provider call", async () => {
+  let categoryCalls = 0;
+  const { handler, calls } = fixture({
+    rateLimit: { allowed: false, retryAfterSeconds: 60 },
+    categories: {
+      list: () => {
+        categoryCalls += 1;
+        return Promise.resolve({ ok: true as const, value: [], region: "US", locale: "en" as const });
+      },
+    },
+  });
+  const response = await handler(request({ operation: "categories", account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 429);
+  assertEquals((await response.json()).error, "rate_limited");
+  assertEquals(categoryCalls, 0);
+  assertEquals(calls.tokens, 0);
 });
 
 Deno.test("a 401 on a stored token forces one refresh and one repeat", async () => {

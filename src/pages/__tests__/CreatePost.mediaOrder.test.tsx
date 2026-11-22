@@ -88,14 +88,22 @@ vi.mock("@/integrations/supabase/client", () => ({
       }
       if (table === "posts") {
         return {
-          select: () => ({
-            eq: () => ({
+          select: () => {
+            const chain = (filters: Record<string, string> = {}): Record<string, unknown> => ({
+              eq: (column: string, value: string) => chain({ ...filters, [column]: value }),
               single: async () => {
                 if (fixture.postRead) await fixture.postRead;
                 return { data: fixture.post, error: fixture.post ? null : { message: "not found" } };
               },
-            }),
-          }),
+              // Owner-scoped pre-flight lookup: match the stable id AND owner.
+              maybeSingle: async () => {
+                const row = fixture.post;
+                const matches = row && Object.entries(filters).every(([column, value]) => row[column] === value);
+                return { data: matches ? row : null, error: null };
+              },
+            });
+            return chain();
+          },
           insert: (payload: Record<string, unknown>) => ({
             select: () => ({
               single: async () => {
@@ -109,6 +117,8 @@ vi.mock("@/integrations/supabase/client", () => ({
           }),
           update: (payload: Record<string, unknown>) => ({
             eq: (_column: string, id: string) => ({
+              // Conditional acceptance receipt write.
+              is: async () => ({ error: null }),
               select: () => ({
                 single: async () => {
                   if (fixture.failPersistence) return { data: null, error: { message: "database unavailable" } };
@@ -179,6 +189,27 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it("writes a stable client-generated post id and immutable intent fingerprint, then clears it on success", async () => {
+    const user = userEvent.setup();
+    const view = render(<CreatePost />, { wrapper: wrapper("/post") });
+    await user.type(screen.getByLabelText("Caption"), "Stable submission");
+    await chooseAccountAndReview(user);
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+
+    await waitFor(() => expect(fixture.inserts).toHaveLength(1));
+    const insert = fixture.inserts[0];
+    expect(typeof insert.id).toBe("string");
+    expect(String(insert.id)).toMatch(/^[0-9a-f-]{36}$/);
+    const metadata = insert.metadata as Record<string, unknown>;
+    expect(metadata.submit_id).toBe(insert.id);
+    expect(typeof metadata.submit_fingerprint).toBe("string");
+    expect(String(metadata.submit_fingerprint)).toContain("Stable submission");
+
+    await screen.findByTestId("saved-post-id");
+    expect(sessionStorage.getItem("youtube-stage3-submit:owner:new")).toBeNull();
+    view.unmount();
+  });
+
   it.each(["saving", "enqueueing"])("does not restore a submitted draft when profile timezone arrives during %s", async (phase) => {
     fixture.profile = null;
     let release!: () => void;

@@ -14,6 +14,9 @@ export const YOUTUBE_RESOURCE_ERROR_STATUS = {
   not_found: 404,
   method_not_allowed: 405,
   provider_unsupported: 409,
+  write_not_enabled: 403,
+  edit_conflict: 409,
+  outcome_unknown: 502,
   reconnect_required: 409,
   rate_limited: 429,
   quota_exceeded: 429,
@@ -61,6 +64,8 @@ export interface YouTubeAccountCapabilities {
     browse: YouTubeCapabilityState;
     upload: YouTubeCapabilityState;
     comments: YouTubeCapabilityState;
+    /** Additive: an old server may omit it and an old client may ignore it. */
+    edit_metadata?: YouTubeCapabilityState;
   };
   quota: typeof YOUTUBE_RESOURCE_QUOTA_POLICY;
 }

@@ -85,7 +85,8 @@ export default function YoutubeApi() {
     "media_urls": "https://res.cloudinary.com/demo/video/upload/short-video.mp4",
     "youtube_category": "22",
     "youtube_privacy": "public",
-    "youtube_made_for_kids": false
+    "youtube_made_for_kids": false,
+    "youtube_contains_synthetic_media": false
   }'`;
 
   const curlJsonPrivate = `curl -X POST "${API_BASE}/api/v1/post" \\
@@ -100,7 +101,9 @@ export default function YoutubeApi() {
     "media_urls": "https://res.cloudinary.com/demo/video/upload/private-video.mp4",
     "youtube_privacy": "private",
     "youtube_allow_embedding": false,
-    "youtube_public_stats_viewable": false
+    "youtube_public_stats_viewable": false,
+    "youtube_made_for_kids": false,
+    "youtube_contains_synthetic_media": false
   }'`;
 
   const curlJsonScheduled = `curl -X POST "${API_BASE}/api/v1/post" \\
@@ -115,6 +118,7 @@ export default function YoutubeApi() {
     "media_urls": "https://res.cloudinary.com/demo/video/upload/premiere.mp4",
     "youtube_privacy": "private",
     "youtube_made_for_kids": false,
+    "youtube_contains_synthetic_media": false,
     "scheduled_date": "2026-02-01T18:00:00Z",
     "timezone": "America/New_York"
   }'`;
@@ -132,7 +136,9 @@ export default function YoutubeApi() {
     "youtube_privacy": "public",
     "youtube_allowed_countries": ["US", "CA", "GB", "AU"],
     "youtube_blocked_countries": [],
-    "youtube_default_language": "en"
+    "youtube_default_language": "en",
+    "youtube_made_for_kids": false,
+    "youtube_contains_synthetic_media": false
   }'`;
 
   const curlJsonWithFirstComment = `curl -X POST "${API_BASE}/api/v1/post" \\
@@ -147,7 +153,8 @@ export default function YoutubeApi() {
     "media_urls": "https://res.cloudinary.com/demo/video/upload/tutorial.mp4",
     "youtube_privacy": "public",
     "youtube_first_comment": "Thanks for watching! 🎉 What topic should I cover next? Let me know in the replies!",
-    "youtube_made_for_kids": false
+    "youtube_made_for_kids": false,
+    "youtube_contains_synthetic_media": false
   }'`;
 
   // Form-Data Examples
@@ -158,7 +165,9 @@ export default function YoutubeApi() {
   -F "platforms=youtube" \\
   -F "title=My Amazing Video 🎬" \\
   -F "description=Check out this amazing video!" \\
-  -F "media_url=https://res.cloudinary.com/demo/video/upload/sample.mp4"`;
+  -F "media_url=https://res.cloudinary.com/demo/video/upload/sample.mp4" \\
+  -F "youtube_made_for_kids=false" \\
+  -F "youtube_contains_synthetic_media=false"`;
 
   const curlFormWithFile = `curl -X POST "${API_BASE}/api/v1/post" \\
   -H "x-api-key: YOUR_API_KEY" \\
@@ -169,7 +178,9 @@ export default function YoutubeApi() {
   -F "description=Uploaded directly from my computer!" \\
   -F "file=@/path/to/my-video.mp4" \\
   -F "youtube_category=22" \\
-  -F "youtube_privacy=public"`;
+  -F "youtube_privacy=public" \\
+  -F "youtube_made_for_kids=false" \\
+  -F "youtube_contains_synthetic_media=false"`;
 
   const curlFormWithThumbnail = `curl -X POST "${API_BASE}/api/v1/post" \\
   -H "x-api-key: YOUR_API_KEY" \\
@@ -181,7 +192,9 @@ export default function YoutubeApi() {
   -F "file=@/path/to/video.mp4" \\
   -F "youtube_thumbnail=https://example.com/custom-thumbnail.jpg" \\
   -F "youtube_category=22" \\
-  -F "youtube_tags=tutorial,guide,howto"`;
+  -F "youtube_tags=tutorial,guide,howto" \\
+  -F "youtube_made_for_kids=false" \\
+  -F "youtube_contains_synthetic_media=false"`;
 
   const curlFormAllFields = `curl -X POST "${API_BASE}/api/v1/post" \\
   -H "x-api-key: YOUR_API_KEY" \\
@@ -365,18 +378,16 @@ export default function YoutubeApi() {
     {
       name: "youtube_made_for_kids",
       type: "boolean",
-      required: false,
-      default: false,
-      description: "Indicates whether the video is made for children. Required by COPPA regulations.",
+      required: true,
+      description: "Explicit Yes (true) or No (false) for the audience declaration. An omitted value or a legacy implicit default is not a declaration and the upload is refused. Form fields must be the literal strings true or false.",
       n8nField: "YouTube Self Declared Made For Kids",
       icon: Users
     },
     {
       name: "youtube_contains_synthetic_media",
       type: "boolean",
-      required: false,
-      default: false,
-      description: "Whether the video contains AI-generated or synthetic media that appears realistic. Applied natively through the YouTube Data API (status.containsSyntheticMedia).",
+      required: true,
+      description: "Explicit Yes (true) or No (false) for the synthetic-media declaration. An omitted value or a legacy implicit default is not a declaration and the upload is refused. Form fields must be the literal strings true or false.",
       n8nField: "YouTube Contains Synthetic Media",
       icon: AlertCircle
     },

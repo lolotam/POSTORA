@@ -49,6 +49,23 @@ Deno.test("upload request falls back to private for an unknown privacy", () => {
   assertEquals(statusOf(request).privacyStatus, "private");
 });
 
+Deno.test("upload request never asserts a declaration the creator did not make", () => {
+  const request = buildYoutubeUploadRequest({ metadata: {}, ...baseInput });
+
+  assertEquals(statusOf(request).selfDeclaredMadeForKids, undefined);
+  assertEquals(statusOf(request).containsSyntheticMedia, undefined);
+
+  const explicitNo = buildYoutubeUploadRequest({
+    metadata: {
+      youtube_made_for_kids: false,
+      youtube_contains_synthetic_media: false,
+    },
+    ...baseInput,
+  });
+  assertEquals(statusOf(explicitNo).selfDeclaredMadeForKids, false);
+  assertEquals(statusOf(explicitNo).containsSyntheticMedia, false);
+});
+
 Deno.test("upload request forwards containsSyntheticMedia", () => {
   const request = buildYoutubeUploadRequest({
     metadata: { youtube_contains_synthetic_media: true },

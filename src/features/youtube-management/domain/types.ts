@@ -13,6 +13,9 @@ export {
   YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE,
 } from "../../../../supabase/functions/youtube-resources/contracts";
 export type {
+  YouTubeCategoryOption,
+} from "../../../../supabase/functions/youtube-resources/categories";
+export type {
   YouTubeAccountCapabilities,
   YouTubeCapabilityReason,
   YouTubeCapabilityState,

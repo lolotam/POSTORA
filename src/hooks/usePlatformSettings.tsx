@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Platform } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { buildYoutubeDeclarationProof } from "@/lib/youtubePublishSafety";
 
 export type LocationSource = "threads" | "facebook" | "nominatim" | "meta";
 
@@ -145,13 +146,15 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
   const [youtubeVideoType, setYoutubeVideoType] = useState<"video" | "short">("video");
   const [youtubeTitle, setYoutubeTitle] = useState("");
   const [youtubeDescription, setYoutubeDescription] = useState("");
-  const [youtubeVisibility, setYoutubeVisibility] = useState<"public" | "unlisted" | "private">("public");
+  const [youtubeVisibility, setYoutubeVisibility] = useState<"public" | "unlisted" | "private">("private");
   const [youtubeTags, setYoutubeTags] = useState("");
   const [youtubeCategory, setYoutubeCategory] = useState("22");
-  const [youtubeMadeForKids, setYoutubeMadeForKids] = useState(false);
+  // null means the creator has not answered. An explicit false is a real
+  // declaration and must survive serialization; an untouched one must not.
+  const [youtubeMadeForKids, setYoutubeMadeForKids] = useState<boolean | null>(null);
   const [youtubeAllowEmbedding, setYoutubeAllowEmbedding] = useState(true);
   const [youtubePublicStatsViewable, setYoutubePublicStatsViewable] = useState(true);
-  const [youtubeContainsSyntheticMedia, setYoutubeContainsSyntheticMedia] = useState(false);
+  const [youtubeContainsSyntheticMedia, setYoutubeContainsSyntheticMedia] = useState<boolean | null>(null);
   const [youtubeHasPaidPromotion, setYoutubeHasPaidPromotion] = useState(false);
   const [youtubeNotifySubscribers, setYoutubeNotifySubscribers] = useState(true);
   const [youtubeCommentsEnabled, setYoutubeCommentsEnabled] = useState(true);
@@ -169,6 +172,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
   const [youtubeTitleDescLanguage, setYoutubeTitleDescLanguage] = useState("");
   const [youtubeThumbnailMode, setYoutubeThumbnailMode] = useState<"upload" | "auto" | "test">("auto");
   const [youtubeThumbnailUrl, setYoutubeThumbnailUrl] = useState("");
+  const [youtubeThumbnailMediaId, setYoutubeThumbnailMediaId] = useState<string | null>(null);
   const [youtubeThumbnailFile, setYoutubeThumbnailFile] = useState<File | null>(null);
   const [youtubeThumbnailDialogOpen, setYoutubeThumbnailDialogOpen] = useState(false);
   const [youtubeAutoThumbnails, setYoutubeAutoThumbnails] = useState<string[]>([]);
@@ -535,10 +539,25 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       youtube_visibility: selectedPlatforms.includes("youtube") ? youtubeVisibility : null,
       youtube_tags: youtubeTags ? youtubeTags.split(",").map(t => t.trim()).filter(Boolean) : null,
       youtube_category: youtubeCategory || null,
-      youtube_made_for_kids: selectedPlatforms.includes("youtube") ? youtubeMadeForKids : null,
+      youtube_made_for_kids: selectedPlatforms.includes("youtube") ? youtubeMadeForKids ?? null : null,
       youtube_allow_embedding: selectedPlatforms.includes("youtube") ? youtubeAllowEmbedding : null,
       youtube_public_stats_viewable: selectedPlatforms.includes("youtube") ? youtubePublicStatsViewable : null,
-      youtube_contains_synthetic_media: selectedPlatforms.includes("youtube") ? youtubeContainsSyntheticMedia : null,
+      youtube_contains_synthetic_media: selectedPlatforms.includes("youtube") ? youtubeContainsSyntheticMedia ?? null : null,
+      // Durable, versioned proof that both answers were explicitly selected
+      // in this form. A legacy stored `false` has no proof and is refused.
+      youtube_declaration_proof: (() => {
+        const proof = buildYoutubeDeclarationProof({
+          youtube_made_for_kids: youtubeMadeForKids,
+          youtube_contains_synthetic_media: youtubeContainsSyntheticMedia,
+        }, "form");
+        if (!selectedPlatforms.includes("youtube") || !proof) return null;
+        return {
+          version: proof.version,
+          made_for_kids: proof.made_for_kids,
+          contains_synthetic_media: proof.contains_synthetic_media,
+          source: proof.source,
+        };
+      })(),
       youtube_has_paid_promotion: selectedPlatforms.includes("youtube") ? youtubeHasPaidPromotion : null,
       youtube_notify_subscribers: selectedPlatforms.includes("youtube") ? youtubeNotifySubscribers : null,
       youtube_video_language: youtubeVideoLanguage || null,
@@ -549,6 +568,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       youtube_blocked_countries: youtubeBlockedCountries ? youtubeBlockedCountries.split(",").map(c => c.trim()).filter(Boolean) : null,
       youtube_first_comment: youtubeEnableFirstComment && youtubeFirstComment ? youtubeFirstComment : null,
       youtube_thumbnail_url: youtubeThumbnailUrl || null,
+      youtube_thumbnail_media_id: youtubeThumbnailMediaId,
       // Facebook Reel description
       facebook_reel_description: facebookReelDescription || null,
       // Threads settings
@@ -771,6 +791,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     youtubeTitleDescLanguage, setYoutubeTitleDescLanguage,
     youtubeThumbnailMode, setYoutubeThumbnailMode,
     youtubeThumbnailUrl, setYoutubeThumbnailUrl,
+    youtubeThumbnailMediaId, setYoutubeThumbnailMediaId,
     youtubeThumbnailFile, setYoutubeThumbnailFile,
     youtubeThumbnailDialogOpen, setYoutubeThumbnailDialogOpen,
     youtubeAutoThumbnails, setYoutubeAutoThumbnails,

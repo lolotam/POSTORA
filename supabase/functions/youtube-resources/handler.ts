@@ -11,6 +11,27 @@ import {
   type YouTubeResourceSuccess,
 } from "./contracts.ts";
 import type { YouTubeReadClient, YouTubeReadResult } from "./youtubeReadClient.ts";
+import type { EditChanges, EditFailureCode, EditSnapshot } from "./editLifecycle.ts";
+import type { CategoryListResult, YouTubeCategoryClient } from "./categoryClient.ts";
+
+/**
+ * The edit seam. Production does not provide it (D1/D5): every edit request is
+ * refused before any provider call. Tests inject a fake provider-backed port
+ * to exercise the real snapshot/plan/verify lifecycle offline.
+ */
+export interface YouTubeEditPort {
+  snapshot(input: { accountId: string; videoId: string; ownerId: string; channelId: string }): Promise<EditSnapshot>;
+  update(input: {
+    accountId: string;
+    videoId: string;
+    ownerId: string;
+    channelId: string;
+    baseRevision: string;
+    changes: EditChanges;
+    privacyConfirmation: { to: string } | null;
+  }): Promise<{ snapshot: EditSnapshot; verified: boolean }>;
+  failureCode?(error: unknown): EditFailureCode | null;
+}
 
 export interface YouTubeResourceAccount {
   id: string;
@@ -49,11 +70,19 @@ export interface YouTubeResourcesPorts {
     get(account: YouTubeResourceAccount, options: { force: boolean }): Promise<YouTubeTokenResult>;
   };
   youtube: YouTubeReadClient;
+  categories: YouTubeCategoryClient;
+  edit?: YouTubeEditPort;
   rateLimit: { check(userId: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> };
 }
 
 const AccountId = z.string().uuid();
 const CapabilitiesRequest = z.object({ operation: z.literal("capabilities"), account_id: AccountId }).strict();
+const CategoriesRequest = z.object({
+  operation: z.literal("categories"),
+  account_id: AccountId,
+  region: z.string().regex(/^[A-Za-z]{2}$/).optional(),
+  locale: z.string().max(16).optional(),
+}).strict();
 const ChannelRequest = z.object({ operation: z.literal("channel"), account_id: AccountId }).strict();
 // The cursor is opaque and bound to the caller's own uploads playlist. Real Google
 // tokens observed on Data API list methods are longer base64 strings that carry the
@@ -71,7 +100,40 @@ const VideoRequest = z.object({
   account_id: AccountId,
   video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
 }).strict();
-const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, ChannelRequest, VideosRequest, VideoRequest]);
+// Edit requests are accepted only so the contract can be exercised and refused
+// with a stable code. A strict shape keeps a future enabled path from ever
+// accepting an untyped provider part or an arbitrary metadata field.
+const EditableChanges = z.object({
+  title: z.string().min(1).max(100).optional(),
+  description: z.string().max(5000).optional(),
+  tags: z.array(z.string()).max(500).optional(),
+  category_id: z.string().regex(/^\d{1,4}$/).optional(),
+  privacy_status: z.enum(["private", "unlisted", "public"]).optional(),
+}).strict();
+const EditSnapshotRequest = z.object({
+  operation: z.literal("edit_snapshot"),
+  account_id: AccountId,
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
+}).strict();
+const UpdateVideoRequest = z.object({
+  operation: z.literal("update_video"),
+  account_id: AccountId,
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
+  base_revision: z.string().min(1).max(512),
+  changes: EditableChanges.refine((changes) => Object.keys(changes).length > 0, {
+    message: "at least one change is required",
+  }),
+  privacy_confirmation: z.object({ to: z.enum(["private", "unlisted", "public"]) }).strict().optional(),
+}).strict();
+const RequestSchema = z.discriminatedUnion("operation", [
+  CapabilitiesRequest,
+  CategoriesRequest,
+  ChannelRequest,
+  VideosRequest,
+  VideoRequest,
+  EditSnapshotRequest,
+  UpdateVideoRequest,
+]);
 
 // The audit label for a refusal: the requested operation when the body names one of
 // the known literals, "unknown" otherwise. An arbitrary body string is never echoed
@@ -79,7 +141,9 @@ const RequestSchema = z.discriminatedUnion("operation", [CapabilitiesRequest, Ch
 function requestedOperationOf(body: unknown): string {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "unknown";
   const requested = (body as Record<string, unknown>).operation;
-  return requested === "capabilities" || requested === "channel" || requested === "videos" || requested === "video"
+  return requested === "capabilities" || requested === "categories" || requested === "channel" ||
+      requested === "videos" || requested === "video" || requested === "edit_snapshot" ||
+      requested === "update_video"
     ? requested
     : "unknown";
 }
@@ -119,6 +183,18 @@ export function createYouTubeResourcesHandler(
         headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
       },
     );
+  }
+
+  function editEnvelope(req: Request, requestId: string, data: EditSnapshot): Response {
+    return new Response(JSON.stringify({
+      schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
+      request_id: requestId,
+      freshness: { fetched_at: data.fetchedAt, source: "provider" },
+      data,
+    }), {
+      status: 200,
+      headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
+    });
   }
 
   // One admission path for every provider-backed operation, in spec order: Composio,
@@ -230,6 +306,72 @@ export function createYouTubeResourcesHandler(
         requestId,
       });
     }
+    if (parsed.data.operation === "categories") {
+      // The catalog is a provider read behind the same owner-bound account
+      // lookup and token lease as every other YouTube browse operation.
+      let catalogAccount: YouTubeResourceAccount | null;
+      try {
+        catalogAccount = await ports.accounts.load({ accountId: parsed.data.account_id, userId });
+      } catch {
+        return await refuse(req, {
+          operation: "categories", code: "internal_error", userId,
+          accountId: parsed.data.account_id, requestId,
+        });
+      }
+      if (!catalogAccount || catalogAccount.userId !== userId) {
+        return await refuse(req, {
+          operation: "categories", code: "not_found", userId,
+          accountId: parsed.data.account_id, requestId,
+        });
+      }
+      // The catalog is a provider read and must spend the same read rate
+      // budget as every other browse operation. Check it BEFORE any token
+      // or provider call so a 429 costs neither a refresh nor a Google unit.
+      const catalogRate = await ports.rateLimit.check(userId);
+      if (!catalogRate.allowed) {
+        return await refuse(req, {
+          operation: "categories", code: "rate_limited", userId,
+          accountId: parsed.data.account_id, requestId,
+        }, { retry_after_seconds: catalogRate.retryAfterSeconds });
+      }
+      const catalogToken = await ports.tokens.get(catalogAccount, { force: false });
+      if (!catalogToken.ok) {
+        return await refuse(req, {
+          operation: "categories", code: catalogToken.code, userId,
+          accountId: parsed.data.account_id, requestId,
+        });
+      }
+      const listed: CategoryListResult = await ports.categories.list(catalogToken.accessToken, {
+        region: parsed.data.region,
+        locale: parsed.data.locale,
+      });
+      if (!listed.ok) {
+        return await refuse(req, {
+          operation: "categories", code: listed.code, userId,
+          accountId: parsed.data.account_id, requestId,
+        }, listed.retryAfterSeconds !== undefined
+          ? { retry_after_seconds: listed.retryAfterSeconds }
+          : undefined);
+      }
+      // The bundled table is explicitly a fallback, never proof of a
+      // complete regional catalog. The provider response is authoritative.
+      const data = {
+        region: listed.region,
+        locale: listed.locale,
+        categories: listed.value,
+        source: "provider" as const,
+      };
+      const envelope: YouTubeResourceSuccess<typeof data> = {
+        schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
+        request_id: requestId,
+        freshness: { fetched_at: ports.clock.now().toISOString(), source: "provider" },
+        data,
+      };
+      return new Response(JSON.stringify(envelope), {
+        status: 200,
+        headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
+      });
+    }
     const accountId = parsed.data.account_id;
     let account: YouTubeResourceAccount | null;
     try {
@@ -253,6 +395,78 @@ export function createYouTubeResourcesHandler(
         accountId,
         requestId,
       });
+    }
+    // D1/D5: production never supplies the edit port, so every edit is
+    // refused before admission or any provider call. Tests inject a fake
+    // provider-backed port and exercise the same handler branch offline.
+    if (parsed.data.operation === "edit_snapshot" || parsed.data.operation === "update_video") {
+      if (!ports.edit) {
+        return await refuse(req, {
+          operation: parsed.data.operation,
+          code: "write_not_enabled",
+          userId,
+          accountId,
+          requestId,
+        });
+      }
+      const editPort = ports.edit;
+      const channelId = account.channelId;
+      if (channelId === null) {
+        return await refuse(req, {
+          operation: parsed.data.operation,
+          code: "reconnect_required",
+          userId,
+          accountId,
+          requestId,
+        });
+      }
+      try {
+        if (parsed.data.operation === "edit_snapshot") {
+          const snapshot = await editPort.snapshot({
+            accountId,
+            videoId: parsed.data.video_id,
+            ownerId: userId,
+            channelId,
+          });
+          return editEnvelope(req, requestId, snapshot);
+        }
+        // The public wire shape is snake_case; the domain uses camelCase. Map
+        // at this boundary so a new wire key can never silently reach the
+        // domain as an unknown property.
+        const wireChanges = parsed.data.changes;
+        const domainChanges: EditChanges = {
+          ...(wireChanges.title !== undefined ? { title: wireChanges.title } : {}),
+          ...(wireChanges.description !== undefined ? { description: wireChanges.description } : {}),
+          ...(wireChanges.tags !== undefined ? { tags: wireChanges.tags } : {}),
+          ...(wireChanges.category_id !== undefined ? { categoryId: wireChanges.category_id } : {}),
+          ...(wireChanges.privacy_status !== undefined ? { privacyStatus: wireChanges.privacy_status } : {}),
+        };
+        const result = await editPort.update({
+          accountId,
+          videoId: parsed.data.video_id,
+          ownerId: userId,
+          channelId,
+          baseRevision: parsed.data.base_revision,
+          changes: domainChanges,
+          privacyConfirmation: parsed.data.privacy_confirmation ?? null,
+        });
+        if (!result.verified) {
+          return await refuse(req, {
+            operation: "update_video",
+            code: "outcome_unknown",
+            userId,
+            accountId,
+            requestId,
+          });
+        }
+        return editEnvelope(req, requestId, result.snapshot);
+      } catch (error) {
+        const code = editPort.failureCode?.(error) ?? "internal_error";
+        if (code === "internal_error") {
+          console.error("[youtube-resources] edit failed:", error instanceof Error ? error.name : "unknown");
+        }
+        return await refuse(req, { operation: parsed.data.operation, code, userId, accountId, requestId });
+      }
     }
     if (parsed.data.operation === "capabilities") {
       const envelope: YouTubeResourceSuccess<YouTubeAccountCapabilities> = {

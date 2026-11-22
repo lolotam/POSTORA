@@ -236,9 +236,19 @@
     "postScheduled": "تمت جدولة المنشور!",
     "postUpdatedScheduled": "تم تحديث المنشور وجدولته!",
     "publishingIssueTitle": "مشكلة في النشر",
+    "publishedAlreadyDesc": "المنشور ده اتبعت بالفعل. راجع السجل عشان تشوف حالته.",
+    "publishedAlreadyTitle": "متبعت بالفعل",
     "scheduledDesc": "منشورك هيتنشر في {{date}} الساعة {{time}}.",
-    "tiktokValidationFailed": "فشل التحقق من TikTok",
-    "youtubeOptionsUnavailable": "خيارات YouTube غير متاحة",
-    "youtubeOptionsUnavailableDesc": "القناة المدارة عبر Composio لا يمكنها استخدام: {{unsupported}}"
+    "submitConflictDesc": "المنشور ده بيخص طلب تاني. راجعه قبل ما تنشر تاني.",
+    "submitConflictTitle": "تعارض في الإرسال",
+    "submitIntentChangedDesc": "اتغير مسودة المنشور بعد ما اتبعت. راجع المنشور المحفوظ قبل ما تنشر تاني.",
+    "submitIntentChangedTitle": "اتغير الإرسال",
+    "tiktokValidationFailed": "فشل التحقق من TikTok"
+  },
+  "youtube": {
+    "composioDispatchUnavailableDesc": "قناة YouTube المدارة عبر Composio مش قادرة تنشر دلوقتي. استخدم قناة أصلية.",
+    "composioDispatchUnavailableTitle": "نشر YouTube المدار غير متاح",
+    "declarationRequiredDesc": "اختار نعم أو لا لكل من إعلان الجمهور وإعلان المحتوى الاصطناعي قبل النشر.",
+    "declarationRequiredTitle": "إعلانات YouTube ناقصة"
   }
 }

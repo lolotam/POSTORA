@@ -27,6 +27,7 @@ interface Call {
   method: string;
   /** Whether the request carried a deadline. */
   bounded: boolean;
+  body?: Record<string, unknown>;
 }
 
 /** A fake outside world that records what it was asked to do. */
@@ -51,6 +52,7 @@ function world(
         url,
         method: init?.method ?? "GET",
         bounded: init?.signal instanceof AbortSignal,
+        ...(typeof init?.body === "string" ? { body: JSON.parse(init.body) as Record<string, unknown> } : {}),
       });
       return Promise.resolve(new Response("{}", { status: options.respond ? options.respond(url) : 200 }));
     }),
@@ -76,7 +78,7 @@ function world(
 Deno.test("the thumbnail is read and sent to the provider", async () => {
   const w = world();
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
     w.deps,
   );
 
@@ -90,7 +92,7 @@ Deno.test("the thumbnail is read and sent to the provider", async () => {
 Deno.test("the thumbnail read is bounded by the time the worker has left", async () => {
   const w = world({ budgetMs: 2_500 });
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
     w.deps,
   );
 
@@ -102,7 +104,7 @@ Deno.test("the thumbnail read is bounded by the time the worker has left", async
 Deno.test("the provider request carries a deadline of its own", async () => {
   const w = world();
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
     w.deps,
   );
 
@@ -114,7 +116,7 @@ Deno.test("a thumbnail that cannot be read does not stop the comment", async () 
     download: () => Promise.reject(new Error("the media host did not answer")),
   });
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
     w.deps,
   );
 
@@ -129,7 +131,7 @@ Deno.test("a provider that refuses the thumbnail does not stop the comment", asy
     respond: (url) => (url.includes("thumbnails") ? 500 : 200),
   });
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
     w.deps,
   );
 
@@ -141,15 +143,18 @@ Deno.test("a provider that refuses the thumbnail does not stop the comment", asy
 // The first comment
 // ───────────────────────────────────────────────────────────────────────────
 
-Deno.test("the first comment is posted once", async () => {
+Deno.test("the first comment is posted once with its bound channel", async () => {
   const w = world();
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: null, firstComment: "Hello" },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: null, firstComment: "Hello" },
     w.deps,
   );
 
   assertEquals(w.calls.length, 1);
   assertEquals(w.calls[0].url.includes("commentThreads"), true);
+  const snippet = (w.calls[0].body?.snippet ?? {}) as Record<string, unknown>;
+  assertEquals(snippet.videoId, VIDEO_ID);
+  assertEquals(snippet.channelId, "UCfixturechannel000000001");
 });
 
 Deno.test("a comment that times out is not posted again", async () => {
@@ -164,7 +169,7 @@ Deno.test("a comment that times out is not posted again", async () => {
   // The call must not throw: the video is already live and the row has to be
   // settled either way.
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: null, firstComment: "Hello" },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: null, firstComment: "Hello" },
     w.deps,
   );
 
@@ -181,7 +186,7 @@ Deno.test("a comment that times out is not posted again", async () => {
 Deno.test("a follow-up is skipped when the worker has no time left", async () => {
   const w = world({ budgetMs: 0 });
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
     w.deps,
   );
 
@@ -194,7 +199,7 @@ Deno.test("the second follow-up is skipped when the first one used the budget up
     budgetMs: () => (w.budgetCalls() <= 2 ? 1_000 : 0),
   });
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
     w.deps,
   );
 
@@ -208,18 +213,35 @@ Deno.test("a thumbnail download that consumes the deadline sends no provider wri
     budgetMs: () => (w.budgetCalls() === 1 ? 1_000 : 0),
   });
   await runYoutubeFollowUps(
-    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
+    { videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
     w.deps,
   );
   assertEquals(w.downloads.length, 1);
   assertEquals(w.calls.length, 0);
 });
 
+Deno.test("follow-up outcomes are returned as observed, never inferred from the request", async () => {
+  const w = world();
+  const results = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1",
+    thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello",
+  }, w.deps);
+  assertEquals(results.thumbnail.state, "applied");
+  assertEquals(results.first_comment.state, "applied");
+
+  const skipped = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1",
+    thumbnailUrl: THUMBNAIL_URL, firstComment: null,
+  }, world({ budgetMs: 0 }).deps);
+  assertEquals(skipped.thumbnail, { state: "skipped", reason: "no_time" });
+  assertEquals(skipped.first_comment, { state: "not_requested", reason: null });
+});
+
 Deno.test("authority lost during a thumbnail download prevents both provider writes", async () => {
   const w = world({});
   w.deps.canWrite = () => Promise.resolve(w.downloads.length === 0);
   await runYoutubeFollowUps({
-    videoId: VIDEO_ID, accessToken: "fixture", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello",
+    videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "fixture", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello",
   }, w.deps);
   assertEquals(w.downloads.length, 1);
   assertEquals(w.calls.length, 0);

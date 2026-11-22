@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
-import { youtubeCategories } from "@/lib/platformConstants";
+import { YouTubeCategorySelect } from "./YouTubeCategorySelect";
 import { getPlatformProfileUrl } from "@/lib/platformProfileUrls";
 import {
   Select,
@@ -49,6 +49,8 @@ import { UploadedFile } from "@/hooks/usePostForm";
 import { Image as ImageIcon } from "lucide-react";
 import { ResolvedModelCards } from "@/components/ai/ResolvedModelCards";
 import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
+import { useYouTubeCategories } from "@/hooks/useYouTubeCategories";
+import { resolveYouTubeVideoTitle } from "../../../../supabase/functions/_shared/youtubeVideoTitle";
 
 export interface YouTubeSettingsState {
   // Video type
@@ -58,10 +60,11 @@ export interface YouTubeSettingsState {
   visibility: "public" | "unlisted" | "private";
   tags: string;
   category: string;
-  madeForKids: boolean;
+  /** null until the creator explicitly answers Yes or No. */
+  madeForKids: boolean | null;
   allowEmbedding: boolean;
   publicStatsViewable: boolean;
-  containsSyntheticMedia: boolean;
+  containsSyntheticMedia: boolean | null;
   hasPaidPromotion: boolean;
   notifySubscribers: boolean;
   commentsEnabled: boolean;
@@ -79,6 +82,8 @@ export interface YouTubeSettingsState {
   titleDescLanguage: string;
   thumbnailMode: "upload" | "auto" | "test";
   thumbnailUrl: string;
+  /** Authorized media library id, resolved by the worker before signing. */
+  thumbnailMediaId: string | null;
   thumbnailFile: File | null;
   playlist: string;
   allowedCountries: string;
@@ -107,9 +112,67 @@ interface YouTubeSettingsProps {
   isGeneratingAiThumbnail: boolean;
   onDownloadThumbnail: (url: string, filename: string) => void;
   selectedAccounts?: SelectedAccount[];
+  /** Caption used by the native request when no title override was saved. */
+  caption?: string;
 }
 
 const MAX_THUMBNAIL_REFERENCES = 5;
+
+interface DeclarationChoiceProps {
+  id: string;
+  label: string;
+  help: string;
+  value: boolean | null;
+  /** The selected provider cannot express an affirmative declaration. */
+  mismatch: boolean;
+  onChange: (value: boolean) => void;
+  yesText: string;
+  noText: string;
+  unsupportedText: string;
+}
+
+/** A Yes/No answer must be given; an untouched control is not an answer. */
+function DeclarationChoice({
+  id,
+  label,
+  help,
+  value,
+  mismatch,
+  onChange,
+  yesText,
+  noText,
+  unsupportedText,
+}: DeclarationChoiceProps) {
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium flex items-center gap-1">
+        {label}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+          </TooltipTrigger>
+          <TooltipContent><p>{help}</p></TooltipContent>
+        </Tooltip>
+      </legend>
+      <RadioGroup
+        value={value === null ? undefined : value ? "yes" : "no"}
+        onValueChange={(answer) => onChange(answer === "yes")}
+        className="flex gap-4"
+        aria-label={label}
+      >
+        <label className="flex items-center gap-2 cursor-pointer" htmlFor={`${id}-yes`}>
+          <RadioGroupItem id={`${id}-yes`} value="yes" />
+          <span className="text-sm">{yesText}</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer" htmlFor={`${id}-no`}>
+          <RadioGroupItem id={`${id}-no`} value="no" />
+          <span className="text-sm">{noText}</span>
+        </label>
+      </RadioGroup>
+      {mismatch && <p className="text-xs text-destructive">{unsupportedText}</p>}
+    </fieldset>
+  );
+}
 
 export function YouTubeSettings({
   settings,
@@ -124,14 +187,18 @@ export function YouTubeSettings({
   isGeneratingAiThumbnail,
   onDownloadThumbnail,
   selectedAccounts = [],
+  caption,
 }: YouTubeSettingsProps) {
   const { flags } = useFeatureFlags();
-  const { t } = useTranslation("postsettings");
+  const { t, i18n } = useTranslation("postsettings");
+  const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
+  const categoryCatalog = useYouTubeCategories(locale, selectedAccounts[0]?.id ?? null);
   const [thumbnailDialogOpen, setThumbnailDialogOpen] = useState(false);
   const [aiThumbnailPrompt, setAiThumbnailPrompt] = useState("");
   const { tiers: resolvedTiers } = useResolvedImageModels();
   const [aiThumbnailRefs, setAiThumbnailRefs] = useState<string[]>([]);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [isThumbnailLibraryOpen, setIsThumbnailLibraryOpen] = useState(false);
   const [isStockPickerOpen, setIsStockPickerOpen] = useState(false);
   const aiThumbnailRefInputRef = useRef<HTMLInputElement>(null);
   const composioManaged = selectedAccounts.some((account) => account.auth_provider === "composio");
@@ -193,9 +260,34 @@ export function YouTubeSettings({
     );
   };
 
+  // The preview uses the SAME resolver as the native request so a creator
+  // never approves "New Video" and publishes the caption instead.
+  const shortsTitle = resolveYouTubeVideoTitle({
+    title: settings.title,
+    caption,
+    videoType: settings.videoType,
+    fallback: settings.videoType === "short"
+      ? t("youtube.newShort", "New Video #Shorts")
+      : t("youtube.newVideo", "New Video"),
+  });
+
   return (
     <>
     <TooltipProvider>
+      <div className="rounded-lg border p-3 text-xs text-muted-foreground" data-testid="youtube-send-preview">
+        <p className="font-medium text-foreground">{t("youtube.preSendTitle", "Before you publish")}</p>
+        <p>
+          {t("youtube.previewTitle", "YouTube title: {{title}}", { title: shortsTitle })}
+        </p>
+        <p>
+          {t("youtube.previewPrivacy", "Requested privacy: {{privacy}}", { privacy: settings.visibility })}
+          {" · "}
+          {t("youtube.previewChannel", "Channel: {{channel}}", {
+            channel: selectedAccounts.map((account) => account.platform_username || "Unknown").join(", ") ||
+              t("youtube.noChannel", "none selected"),
+          })}
+        </p>
+      </div>
     <div className="space-y-4">
       {/* Posting to YouTube as: */}
       {selectedAccounts.length > 0 && (
@@ -381,25 +473,18 @@ export function YouTubeSettings({
             onSelect={(val) => onSettingsChange({ tags: val })}
           />
         </div>
-        <div className="space-y-2">
-          <Label className="text-sm font-medium flex items-center gap-2">
-            {t("youtube.categoryId", "Category ID")}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{t("youtube.categoryIdTooltip", "YouTube category (e.g., 22=People & Blogs, 24=Entertainment)")}</p>
-              </TooltipContent>
-            </Tooltip>
-          </Label>
-          <Input
-            placeholder="22"
-            value={settings.category}
-            onChange={(e) => onSettingsChange({ category: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">{t("youtube.useNumericValuesCategory", "Use numeric values from YouTube categories.")}</p>
-        </div>
+        <YouTubeCategorySelect
+          value={settings.category}
+          onValueChange={(category) => onSettingsChange({ category })}
+          locale={locale}
+          options={categoryCatalog.categories}
+          catalogUnavailable={categoryCatalog.unavailable}
+          onRetry={categoryCatalog.retry}
+          label={t("youtube.category", "Category")}
+          unavailableText={t("youtube.categoryUnavailable", "Currently unavailable")}
+          retryText={t("youtube.categoryRetry", "Retry catalog")}
+          helpText={t("youtube.categoryHelp", "Non-assignable categories stay visible but disabled and are preserved when a video already uses them.")}
+        />
       </div>
 
       {/* Privacy and License */}
@@ -491,47 +576,31 @@ export function YouTubeSettings({
             </Tooltip>
           </label>
         </div>
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id="madeForKids"
-            checked={settings.madeForKids}
-            disabled={composioManaged}
-            onCheckedChange={(checked) => onSettingsChange({ madeForKids: checked as boolean })}
-          />
-          <label htmlFor="madeForKids" className="text-sm cursor-pointer flex items-center gap-1">
-            {t("youtube.madeForKids", "Self-declared made for kids")}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{t("youtube.madeForKidsTooltip", "COPPA compliance - disables comments and personalized ads")}</p>
-              </TooltipContent>
-            </Tooltip>
-          </label>
-        </div>
+        <DeclarationChoice
+          id="madeForKids"
+          label={t("youtube.audienceDeclaration", "Audience (made for kids)")}
+          help={t("youtube.audienceDeclarationHelp", "Choose Yes or No before publishing to YouTube.")}
+          value={settings.madeForKids}
+          mismatch={composioManaged && settings.madeForKids === true}
+          onChange={(madeForKids) => onSettingsChange({ madeForKids })}
+          yesText={t("common:yes", "Yes")}
+          noText={t("common:no", "No")}
+          unsupportedText={t("youtube.declarationManagedUnsupported", "This provider cannot send this declaration. Use a native channel.")}
+        />
       </div>
 
       <div className="flex flex-wrap gap-x-6 gap-y-3">
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id="syntheticMedia"
-            checked={settings.containsSyntheticMedia}
-            disabled={composioManaged}
-            onCheckedChange={(checked) => onSettingsChange({ containsSyntheticMedia: checked as boolean })}
-          />
-          <label htmlFor="syntheticMedia" className="text-sm cursor-pointer flex items-center gap-1">
-            {t("youtube.syntheticMedia", "Contains synthetic media")}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{t("youtube.syntheticMediaTooltip", "Video contains AI-generated or altered content")}</p>
-              </TooltipContent>
-            </Tooltip>
-          </label>
-        </div>
+        <DeclarationChoice
+          id="syntheticMedia"
+          label={t("youtube.syntheticDeclaration", "Synthetic media")}
+          help={t("youtube.syntheticDeclarationHelp", "Choose Yes or No before publishing to YouTube.")}
+          value={settings.containsSyntheticMedia}
+          mismatch={composioManaged && settings.containsSyntheticMedia === true}
+          onChange={(containsSyntheticMedia) => onSettingsChange({ containsSyntheticMedia })}
+          yesText={t("common:yes", "Yes")}
+          noText={t("common:no", "No")}
+          unsupportedText={t("youtube.declarationManagedUnsupported", "This provider cannot send this declaration. Use a native channel.")}
+        />
         <div className="flex items-center gap-2">
           <Checkbox
             id="paidPromotion"
@@ -721,6 +790,16 @@ export function YouTubeSettings({
         <p className="text-xs text-muted-foreground">
           {t("youtube.thumbnailUrlHelp", "For direct YouTube publishing, use an HTTPS image URL from an approved media host.")}
         </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => setIsThumbnailLibraryOpen(true)}>
+            {t("youtube.chooseOwnedThumbnail", "Use owned media thumbnail")}
+          </Button>
+          {settings.thumbnailMediaId && (
+            <span className="text-xs text-muted-foreground">
+              {t("youtube.ownedThumbnailSelected", "Owned thumbnail: {{id}}", { id: settings.thumbnailMediaId })}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Auto-generated Thumbnail Dialog */}
@@ -951,7 +1030,12 @@ export function YouTubeSettings({
                   }
                   setThumbnailDialogOpen(false);
                 }}
-                disabled={selectedAutoThumbnail === null && !settings.thumbnailUrl}
+                // A browser frame is a data URL and is not a durable owned
+                // source. Apply stays disabled until the frame is materialized
+                // into owned media (or an approved HTTPS URL is supplied).
+                disabled={selectedAutoThumbnail === null ||
+                  !/^https:\/\//i.test(autoThumbnails[selectedAutoThumbnail] ?? "")}
+                title={t("youtube.frameApplyRequiresOwned", "Save the frame to your media library before applying it as a thumbnail.")}
               >
                 {t("youtube.applySelection", "Apply Selection")}
               </Button>
@@ -1005,6 +1089,22 @@ export function YouTubeSettings({
         currentFileCount={aiThumbnailRefs.length}
         imagesOnly={true}
         showExtendedFilters={true}
+      />
+
+      {/* Single owned image for the YouTube thumbnail; the worker resolves its
+          id through the owner-bound media resolver before any signing. */}
+      <MediaLibraryPicker
+        open={isThumbnailLibraryOpen}
+        onOpenChange={setIsThumbnailLibraryOpen}
+        onSelect={(files) => {
+          const chosen = files[0];
+          if (!chosen) return;
+          onSettingsChange({ thumbnailMediaId: chosen.id, thumbnailUrl: "" });
+          setIsThumbnailLibraryOpen(false);
+        }}
+        maxFiles={1}
+        currentFileCount={0}
+        imagesOnly={true}
       />
 
       {/* Stock Media Picker for reference images - Photos only from Pexels/Pixabay */}

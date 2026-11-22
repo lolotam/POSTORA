@@ -22,6 +22,18 @@ export interface KickPayload {
 
 export interface EnqueueDependencies {
   requestStoryRetry?(postId: string, resultId: string, userId: string): Promise<boolean>;
+  /**
+   * The durable request state owned by the server (pinned at insert by
+   * trg_posts_pin_publish_requested_at). Only a pending, non-review,
+   * non-retry row may reuse its stamp; terminal or scheduled rows keep the
+   * original RPC and status decisions.
+   */
+  readPublishRequest?(postId: string, userId: string): Promise<{
+    stamp: string;
+    status: string;
+    source: string | null;
+    isRetry: boolean;
+  } | null>;
   requestImmediatePublish(postId: string, userId: string): Promise<string | null>;
   requestPostRetry(postId: string, userId: string, accountIds?: string[], replacementMediaIds?: string[]): Promise<RetryResult>;
   readPostStatus(postId: string, userId: string): Promise<string | null>;
@@ -67,6 +79,23 @@ async function enqueue(deps: EnqueueDependencies, callerId: string, body: z.infe
     return retry.status === "accepted"
       ? await accept(deps, body.post_id, retry.requested_at)
       : await refuse(deps, callerId, body.post_id, retry.reason);
+  }
+  // An existing server stamp is the authoritative acceptance. Reusing it
+  // makes concurrent or replayed "publish now" calls idempotent: every kick
+  // carries the SAME expected stamp, so the processing claim can succeed once,
+  // and the stamp is never moved. Posts that were never stamped (older pending
+  // or scheduled rows) still take the original RPC path.
+  const existing = deps.readPublishRequest
+    ? await deps.readPublishRequest(body.post_id, callerId)
+    : null;
+  // Only a pending, already-accepted native post may reuse its stamp. A
+  // completed/failed post, a TikTok review post, a replay-queued retry or a
+  // scheduled row must keep the original RPC + status guards: an out-of-
+  // contract kick there could publish a second video or override an explicit
+  // decision.
+  if (existing && existing.status === "pending" &&
+      existing.source !== "tiktok_review" && !existing.isRetry) {
+    return await accept(deps, body.post_id, existing.stamp);
   }
   const requestedAt = await deps.requestImmediatePublish(body.post_id, callerId);
   if (requestedAt !== null) return await accept(deps, body.post_id, requestedAt);

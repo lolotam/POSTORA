@@ -88,6 +88,12 @@ export const YOUTUBE_UPLOAD_REASON = {
    * channel already holds a video of this post.
    */
   already_published: "youtube_upload_already_published",
+  /**
+   * A legacy, inert session whose post has no proven D3 declarations. The
+   * upload has not sent a byte, so it is safe to refuse rather than invent the
+   * creator's answers to resume it.
+   */
+  declaration_required: "youtube_upload_declaration_required",
 } as const;
 
 export type YoutubeUploadReason = (typeof YOUTUBE_UPLOAD_REASON)[keyof typeof YOUTUBE_UPLOAD_REASON];
@@ -138,6 +144,8 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
   [YOUTUBE_UPLOAD_REASON.already_published]:
     "This post was already published to this YouTube channel. " +
     "Create a new post to publish a different video to the same channel.",
+  [YOUTUBE_UPLOAD_REASON.declaration_required]:
+    "Choose Yes or No for the audience and synthetic-media declarations before this YouTube upload can continue.",
 };
 
 /** The public message for a reason code. Unknown codes get a neutral message. */

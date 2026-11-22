@@ -96,6 +96,10 @@ export function deriveYouTubeCapabilities(
     capabilities: {
       browse: browseCapability(context),
       upload: uploadCapability(context),
+      // D1: published edits stay disabled until a private fixture proves the
+      // provider honours the conditional write fence. No capability derives
+      // "available" from scopes alone; a DB lock cannot fence Studio.
+      edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
       comments: commentsCapability({
         needsReconnect,
         authProvider: account.authProvider,

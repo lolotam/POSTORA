@@ -31,7 +31,7 @@ export function youtubeOptionsUnsupportedOnComposio(
         "youtube_contains_synthetic_media",
       ].includes(key)
     )
-      return value === true;
+      return typeof value === "boolean";
     if (
       [
         "youtube_notify_subscribers",

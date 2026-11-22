@@ -41,6 +41,9 @@ import {
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { YOUTUBE_UPLOAD_REASON, type YoutubeUploadReason } from "./youtubeUploadPolicy.ts";
 import { isUncertainUploadOutcome } from "./youtubeUploadOutcome.ts";
+import { youtubeDeclarationProofOf } from "../_shared/youtubePublishSafety.ts";
+import { youtubeEvidenceFromMetadata, type YoutubePublishEvidence } from "./youtubePublishEvidence.ts";
+import type { YoutubeFollowUpResults } from "./youtubeUploadFollowUps.ts";
 
 /** What the continuation is asked to do. */
 export interface YoutubeContinuationRequest {
@@ -73,12 +76,18 @@ export interface ContinuationPost {
   thumbnailUrl: string | null;
   /** The first comment the customer asked for, if any. */
   firstComment: string | null;
+  /**
+   * The post metadata, so a resumed upload can check D3 provenance. A legacy
+   * boolean without a versioned proof is not a declaration.
+   */
+  metadata: Record<string, unknown>;
 }
 
 /** The account, as far as the continuation needs it. */
 export interface ContinuationAccount {
   id: string;
   userId: string;
+  channelId: string;
   platform: string;
   isActive: boolean;
   accessToken: string | null;
@@ -131,7 +140,8 @@ export interface ContinuationMedia {
 export interface YoutubeContinuationPorts {
   loadPost(postId: string): Promise<ContinuationPost | null>;
   loadAccount(accountId: string): Promise<ContinuationAccount | null>;
-  loadMedia(mediaFileId: string): Promise<ContinuationMedia | null>;
+  /** The owner filter is part of the query, not only a check on its result. */
+  loadMedia(mediaFileId: string, expectedOwnerId: string): Promise<ContinuationMedia | null>;
   /**
    * Takes the session for this worker.
    *
@@ -195,6 +205,25 @@ export interface YoutubeContinuationPorts {
    *
    * No provider is contacted and no media is read: the video already exists.
    */
+  /**
+   * Persist a receipt DISCOVERED by a read-only probe with the worker's live
+   * lease, before anything projects it. A stale or failed write returns false.
+   */
+  completeReceipt?(args: {
+    sessionId: string;
+    leaseToken: string;
+    videoId: string;
+  }): Promise<boolean>;
+  /**
+   * Read-only provider reconciliation. This may discover a receipt that a
+   * worker died before recording; it never writes a byte to the provider.
+   */
+  probeReceipt?(args: {
+    record: YoutubeUploadSessionRecord;
+    accessToken: string;
+    deadlineMs: number;
+    mimeType: string | null;
+  }): Promise<{ videoId: string | null }>;
   projectReceipt(args: { sessionId: string }): Promise<{
     settled: boolean;
     refused: YoutubeUploadRefusal | null;
@@ -217,8 +246,9 @@ export interface YoutubeContinuationPorts {
     leaseToken: string;
     post: ContinuationPost;
     videoId: string;
+    channelId: string;
     accessToken: string;
-  }): Promise<void>;
+  }): Promise<YoutubeFollowUpResults | void>;
   /**
    * Whether this worker may write to the provider NOW.
    *
@@ -442,6 +472,8 @@ export async function continueYoutubeUpload(
     if (recovery.scopeState === "incomplete") {
       return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
     }
+    // The stored receipt is projected by the SQL RPC alone. This worker did
+    // not observe the follow-ups, so no evidence is invented here.
     const projected = await ports.projectReceipt({ sessionId: session.id });
     if (!projected.settled) {
       return refused(refusalToReason(projected.refused ?? "session_not_found"));
@@ -508,6 +540,58 @@ export async function continueYoutubeUpload(
   // writes to, and nothing else is ever carried on by this worker.
   if (session.resolvedPlatform !== null && session.resolvedPlatform !== "youtube") {
     return refused(YOUTUBE_UPLOAD_REASON.session_not_open);
+  }
+
+  // D3 applies to EVERY continuation that has no stored receipt, including a
+  // session that already wrote bytes. The authority is the declarations SENT
+  // to Google when this session was opened (the saved provider request body),
+  // not a post that may have acquired answers later. A legacy row whose
+  // booleans came from implicit defaults is not an answer: no further byte may
+  // reach the provider on this attempt.
+  const uploadStatus = (session.uploadBody as { status?: Record<string, unknown> }).status ?? {};
+  const declarationProof = youtubeDeclarationProofOf(post.metadata);
+  const savedDeclarationsProven = declarationProof !== null &&
+    uploadStatus.selfDeclaredMadeForKids === declarationProof.made_for_kids &&
+    uploadStatus.containsSyntheticMedia === declarationProof.contains_synthetic_media;
+  if (!session.videoId && !savedDeclarationsProven) {
+    const mayHoldVideo = session.bytesSent > 0 || session.videoMayExist;
+    if (mayHoldVideo && ports.probeReceipt) {
+      const probed = await ports.probeReceipt({
+        record: session,
+        accessToken: account.accessToken,
+        deadlineMs: leaseDeadlineMs(ports.now(), session.leaseExpiresAt),
+        mimeType: session.uploadSettings.mimeType ?? null,
+      });
+      if (probed.videoId) {
+        // A discovered receipt is NOT a projection input until the fenced
+        // store has persisted it under this worker's live lease. The SQL
+        // projection refuses a session without a durable video id.
+        const persisted = ports.completeReceipt
+          ? await ports.completeReceipt({ sessionId: session.id, leaseToken: request.leaseToken, videoId: probed.videoId })
+          : false;
+        if (!persisted) return refused(YOUTUBE_UPLOAD_REASON.lease_conflict);
+        const recovery = await recoverFanout(ports, session.id, request.leaseToken);
+        if (recovery.scopeState === "incomplete") {
+          return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
+        }
+        const projected = await ports.projectReceipt({ sessionId: session.id });
+        if (!projected.settled) {
+          return refused(refusalToReason(projected.refused ?? "session_not_found"));
+        }
+        return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: projected.videoId ?? probed.videoId };
+      }
+      // No receipt from an inconclusive probe is not proof that no video
+      // exists. Leave the row open for reconciliation; never redispatch.
+      return refused(YOUTUBE_UPLOAD_REASON.reconcile);
+    }
+    // Definitely unsent: it is safe to end with an actionable declaration
+    // refusal, because no provider byte can exist for this session.
+    return await refusePermanently({
+      ports,
+      session,
+      leaseToken: request.leaseToken,
+      reason: YOUTUBE_UPLOAD_REASON.declaration_required,
+    });
   }
 
   const media = await loadMatchingMedia(ports, session, post);
@@ -638,7 +722,7 @@ export async function continueYoutubeUpload(
   const stopped = await stopOnLostAuthority();
   if (stopped) return stopped;
 
-  return await interpretOutcome({ ports, request, session, outcome, post, accessToken });
+  return await interpretOutcome({ ports, request, session, outcome, post, accessToken, channelId: account.channelId });
 }
 
 /**
@@ -790,7 +874,7 @@ async function loadMatchingMedia(
   }
   let media: ContinuationMedia | null;
   try {
-    media = await ports.loadMedia(session.mediaFileId);
+    media = await ports.loadMedia(session.mediaFileId, post.userId);
   } catch {
     console.warn("[youtube] media lookup could not be confirmed");
     return { media: null, reason: YOUTUBE_UPLOAD_REASON.resumable };
@@ -857,8 +941,9 @@ async function interpretOutcome(args: {
   outcome: ResumableUploadOutcome;
   post: ContinuationPost;
   accessToken: string;
+  channelId: string;
 }): Promise<ContinuationResult> {
-  const { ports, request, session, outcome, post, accessToken } = args;
+  const { ports, request, session, outcome, post, accessToken, channelId } = args;
   const { leaseToken } = request;
 
   if (outcome.kind === "completed") {
@@ -878,10 +963,12 @@ async function interpretOutcome(args: {
     //
     // The receipt does not depend on that answer. The video exists, so it is
     // settled either way.
+    let followUpResults: YoutubeFollowUpResults | undefined;
     try {
       const followUpAuthority = await ports.effectAuthority({ sessionId: session.id, leaseToken });
       if (followUpAuthority.authorized) {
-        await ports.followUps({ post, videoId: outcome.videoId, accessToken, sessionId: session.id, leaseToken });
+        const observed = await ports.followUps({ post, videoId: outcome.videoId, channelId, accessToken, sessionId: session.id, leaseToken });
+        if (observed) followUpResults = observed;
       }
     } catch {
       console.warn("[youtube] optional follow-ups could not be confirmed");
@@ -908,7 +995,21 @@ async function interpretOutcome(args: {
       status: "success",
       videoId: outcome.videoId,
       errorMessage: null,
-      responseData: { youtube_video_id: outcome.videoId, youtube_upload_source: "continuation" },
+      responseData: {
+        youtube_video_id: outcome.videoId,
+        youtube_upload_source: "continuation",
+        // The provider id and the upload success are preserved. Follow-up
+        // states are not claimed here: they are settled separately by the
+        // follow-up port, so a worker that inherited this video cannot replay
+        // a first comment.
+        youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, {
+          effectivePrivacy: "unknown",
+          thumbnailState: followUpResults?.thumbnail.state,
+          thumbnailReason: followUpResults?.thumbnail.reason,
+          commentState: followUpResults?.first_comment.state,
+          commentReason: followUpResults?.first_comment.reason,
+        }),
+      },
     });
     if (!settled.settled) {
       // The lease is gone. Nothing is settled: the worker that owns the
@@ -978,6 +1079,7 @@ async function interpretOutcome(args: {
     responseData: {
       youtube_upload_reason: reason,
       ...(uncertain ? { publish_outcome: "uncertain" } : {}),
+      youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
     },
   });
   if (!settled.settled) {

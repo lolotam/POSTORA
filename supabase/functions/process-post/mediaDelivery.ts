@@ -221,7 +221,10 @@ function isOwnedPath(path: string, prefix: string | null | undefined): boolean {
  * to a workspace instead, and the post may only publish from a workspace it
  * targets.
  */
-function belongsToPost(file: MediaFile, options: MediaDeliveryOptions): boolean {
+function belongsToPost(
+  file: MediaFile,
+  options: Pick<MediaDeliveryOptions, "ownerUserId" | "allowedWorkspaceIds">,
+): boolean {
   if (file.storage_bucket === PARTNER_MEDIA_BUCKET) {
     const workspaceId = file.workspace_id;
     return typeof workspaceId === "string" && options.allowedWorkspaceIds.has(workspaceId);
@@ -283,7 +286,10 @@ async function signStorageObject(supabase: SupabaseClient, file: MediaFile): Pro
  * in ANY bucket, so the path has to be inside the namespace of the media's
  * own tenancy before it is signed.
  */
-function isOwnedStoragePath(file: MediaFile, options: MediaDeliveryOptions): boolean {
+function isOwnedStoragePath(
+  file: MediaFile,
+  options: Pick<MediaDeliveryOptions, "ownerUserId" | "allowedWorkspaceIds">,
+): boolean {
   const prefix = file.storage_bucket === PARTNER_MEDIA_BUCKET ? file.workspace_id : options.ownerUserId;
   return isOwnedPath(file.file_path, prefix);
 }
@@ -295,25 +301,44 @@ function isOwnedStoragePath(file: MediaFile, options: MediaDeliveryOptions): boo
  * serves, and a storage signed URL is the fallback. The two CDN buckets carry
  * the whole URL in their file path.
  */
-export async function resolveMediaUrl(
-  supabase: SupabaseClient,
+/**
+ * The ownership, bucket and path checks every media row must pass BEFORE a
+ * signed URL is minted. Exported so the managed signing closure cannot invent
+ * a weaker rule: the service role may sign any bucket, so signing an
+ * unvalidated row is the whole vulnerability.
+ */
+export function assertMediaRowAdmissible(
   file: MediaFile,
-  providerRowsByMedia: MediaProviderRows,
-  options: MediaDeliveryOptions,
-): Promise<string | null> {
+  options: Pick<MediaDeliveryOptions, "ownerUserId" | "allowedWorkspaceIds">,
+): void {
   if (!isAllowedBucket(file.storage_bucket)) {
     throw new MediaDeliveryRefusedError(
       "bucket_not_allowed",
       `The media bucket ${file.storage_bucket} is not one this worker may read.`,
     );
   }
-
   if (!belongsToPost(file, options)) {
     throw new MediaDeliveryRefusedError(
       "not_owned",
       "The media is not this post's media.",
     );
   }
+  if (!CDN_BUCKETS.has(file.storage_bucket) && !isDeliveryUrl(file.file_path) &&
+      !isOwnedStoragePath(file, options)) {
+    throw new MediaDeliveryRefusedError(
+      "not_owned",
+      "The media is not stored under its own prefix.",
+    );
+  }
+}
+
+export async function resolveMediaUrl(
+  supabase: SupabaseClient,
+  file: MediaFile,
+  providerRowsByMedia: MediaProviderRows,
+  options: MediaDeliveryOptions,
+): Promise<string | null> {
+  assertMediaRowAdmissible(file, options);
 
   const providerUrl = readyProviderUrl(file, providerRowsByMedia, options.preferenceOrder);
   if (providerUrl) return approvedDeliveryUrl(providerUrl, options.approvedHosts);
@@ -322,11 +347,5 @@ export async function resolveMediaUrl(
     return approvedDeliveryUrl(file.file_path, options.approvedHosts);
   }
 
-  if (!isOwnedStoragePath(file, options)) {
-    throw new MediaDeliveryRefusedError(
-      "not_owned",
-      "The media is not stored under its own prefix.",
-    );
-  }
   return await signStorageObject(supabase, file);
 }

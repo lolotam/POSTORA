@@ -10,6 +10,10 @@ import {
   resolveWorkspaceForCall,
   withConnectorCall,
 } from "../_shared/connectorTelemetry.ts";
+import {
+  assertComposioYoutubeDeclarations,
+  youtubeUploadPrivacy,
+} from "../_shared/youtubePublishSafety.ts";
 
 // Provisional (spec §10.6): Composio does not fetch from a URL, so the bytes
 // cross this worker twice (storage read, then the presigned PUT) inside one
@@ -132,7 +136,7 @@ function uploadArguments(
     description: stringMetadata(metadata, "youtube_description") ??
       post.caption ?? "",
     categoryId: stringMetadata(metadata, "youtube_category") ?? "22",
-    privacyStatus: stringMetadata(metadata, "youtube_visibility") ?? "public",
+    privacyStatus: youtubeUploadPrivacy(metadata),
     tags: stringArrayMetadata(metadata, "youtube_tags"),
     videoFile,
   };
@@ -153,6 +157,12 @@ export async function publishYouTubeViaComposio(
   mediaFiles: YouTubeComposioMediaFile[],
   deps: YouTubeComposioDeps,
 ): Promise<YouTubeComposioResult> {
+  // Final-dispatch fence. A post queued before the explicit-declaration rule
+  // existed still reaches this path; it must not be published on the strength
+  // of a missing value or an implicit default. Nothing has been signed or sent
+  // when this refuses, so there is no uncertain outcome to reconcile.
+  assertComposioYoutubeDeclarations();
+
   const timeoutMs = deps.timeoutMs ?? YOUTUBE_COMPOSIO_TIMEOUT_MS;
   const fetchImpl = deps.fetch ?? fetch;
   const uploadFile = deps.uploadFile ?? uploadFileForTool;

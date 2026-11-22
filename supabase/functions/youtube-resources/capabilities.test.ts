@@ -26,6 +26,7 @@ Deno.test("native row with all scopes recorded can browse, upload and comment", 
   assertEquals(result.capabilities, {
     browse: { state: "available" },
     upload: { state: "available" },
+    edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
     comments: { state: "available" },
   });
 });
@@ -52,7 +53,12 @@ Deno.test("needs_reauth makes every capability reconnect_required", () => {
   const result = deriveYouTubeCapabilities(account({ needsReauth: true }));
   assertEquals(result.connection, "reconnect_required");
   const expected: YouTubeCapabilityState = { state: "unavailable", reason: "reconnect_required" };
-  assertEquals(result.capabilities, { browse: expected, upload: expected, comments: expected });
+  assertEquals(result.capabilities, {
+    browse: expected,
+    upload: expected,
+    edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
+    comments: expected,
+  });
 });
 
 Deno.test("a native row with no token at all needs a reconnect", () => {

@@ -4,6 +4,8 @@ import { youtubeOptionsUnsupportedOnComposio } from "./youtubeComposioOptions.ts
 
 const unsupportedCases: Array<[string, unknown]> = [
   ["youtube_made_for_kids", true],
+  ["youtube_made_for_kids", false],
+  ["youtube_contains_synthetic_media", false],
   ["youtube_notify_subscribers", false],
   ["youtube_allow_embedding", false],
   ["youtube_public_stats_viewable", false],
@@ -33,7 +35,7 @@ Deno.test("Composio YouTube cannot carry an explicit paid-placement declaration"
   }
 });
 
-Deno.test("Composio YouTube accepts mapped metadata and harmless defaults", () => {
+Deno.test("Composio YouTube reports explicit No/No declarations as unexpressible", () => {
   assertEquals(
     youtubeOptionsUnsupportedOnComposio({
       youtube_title: "Title",
@@ -57,7 +59,7 @@ Deno.test("Composio YouTube accepts mapped metadata and harmless defaults", () =
       youtube_blocked_countries: null,
       youtube_first_comment: undefined,
     }),
-    [],
+    ["youtube_made_for_kids", "youtube_contains_synthetic_media"],
   );
   assertEquals(youtubeOptionsUnsupportedOnComposio(null), []);
   assertEquals(youtubeOptionsUnsupportedOnComposio(undefined), []);

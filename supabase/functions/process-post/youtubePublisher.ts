@@ -94,16 +94,24 @@ function buildSnippet(
 }
 
 function buildStatus(metadata: Record<string, unknown>): Record<string, unknown> {
-  return {
+  const status: Record<string, unknown> = {
     privacyStatus: youtubePrivacyOrDefault(metadata.youtube_visibility),
     embeddable: booleanOrDefault(metadata.youtube_allow_embedding, true),
     publicStatsViewable: booleanOrDefault(metadata.youtube_public_stats_viewable, true),
-    // `status.madeForKids` is read-only in the API, so only its writable twin
-    // is sent.
-    selfDeclaredMadeForKids: booleanOrDefault(metadata.youtube_made_for_kids, false),
     license: metadata.youtube_license === "creativeCommon" ? "creativeCommon" : "youtube",
-    containsSyntheticMedia: booleanOrDefault(metadata.youtube_contains_synthetic_media, false),
   };
+
+  // An untouched checkbox is not a declaration. Sending an implicit `false`
+  // would assert to Google that the creator checked "No" when they did not.
+  // The dispatch fence refuses an upload that has not answered, so these
+  // properties are only present when a real answer was stored.
+  if (typeof metadata.youtube_made_for_kids === "boolean") {
+    status.selfDeclaredMadeForKids = metadata.youtube_made_for_kids;
+  }
+  if (typeof metadata.youtube_contains_synthetic_media === "boolean") {
+    status.containsSyntheticMedia = metadata.youtube_contains_synthetic_media;
+  }
+  return status;
 }
 
 /**

@@ -18,7 +18,7 @@ import { TIKTOK_PHOTO_WARNING } from "@/lib/platformConstants";
 import { enqueuePostPublish } from "@/features/publishing/infrastructure/enqueuePostPublish";
 import { TikTokSettingsState } from "@/components/post/settings/TikTokSettings";
 import { YouTubeSettingsState } from "@/components/post/settings/YouTubeSettings";
-import { youtubeOptionsUnsupportedOnComposio } from "@/lib/youtubeComposioOptions";
+import { missingYoutubeDeclarations, youtubeDeclarationProofOf } from "@/lib/youtubePublishSafety";
 import { useSavedFieldSuggestions } from "@/hooks/useSavedFieldSuggestions";
 import { useQuotas } from "@/hooks/useQuotas";
 import { useTranslation } from "react-i18next";
@@ -54,6 +54,21 @@ interface CreatePostComposerProps {
   onStartNewPost: () => void;
 }
 
+/** Submit ids this tab has already seen accepted; no second enqueue per intent. */
+const acceptedSubmitIds = new Set<string>();
+
+/** Stable JSON for an immutable intent: object keys sorted, array order kept. */
+function canonicalIntentJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalIntentJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalIntentJson(item)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
 export default function CreatePost() {
   const location = useLocation();
   const editIdentity = new URLSearchParams(location.search).get("edit") || "";
@@ -75,6 +90,13 @@ function CreatePostSession() {
     sessionStorage.removeItem("postora_post_draft");
     sessionStorage.removeItem("postora_reuse_payload");
     sessionStorage.removeItem("mediaLibrarySelection");
+    // A NEW upload gets a fresh submit identity. Only the browser keys are
+    // cleared; the already-persisted post row is never deleted or overwritten.
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith("youtube-stage3-submit:") || key.startsWith("youtube-stage3-intent:")) {
+        sessionStorage.removeItem(key);
+      }
+    }
     const params = new URLSearchParams(location.search);
     params.delete("edit");
     params.delete("from");
@@ -173,6 +195,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     showErrorToast,
     uploadUrlToStorage,
     editPostId,
+    editMetadata,
     isLoadingEditPost,
     editLoadError,
     retryEditPost,
@@ -229,6 +252,45 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
   // UI state
   const [currentStep, setCurrentStep] = useState<PostStep>(1);
   const submittingRef = useRef(false);
+
+  // A deliberate submission owns one stable id. A lost acknowledgement or a
+  // reload reuses it, so the posts primary key rejects the second insert
+  // instead of putting a second video on the channel.
+  const submitStorageKey = `youtube-stage3-submit:${user?.id ?? "anonymous"}:${editPostId ?? "new"}`;
+  // The immutable source intent is persisted with the submit id so a reload
+  // can restore the EXACT YouTube settings and external source inputs before
+  // it compares intent with the stored row. Without this, a customized draft
+  // reloads blank and its changed fingerprint is rejected as a new intent.
+  const intentSnapshotKey = `youtube-stage3-intent:${user?.id ?? "anonymous"}:${editPostId ?? "new"}`;
+  const [restoredIntent] = useState<{
+    youtubeSettings?: Partial<YouTubeSettingsState>;
+    intake?: {
+      uploadMethod?: "local" | "url" | "text";
+      urlMediaType?: "images" | "video";
+      imageUrls?: string;
+      videoUrl?: string;
+    };
+  } | null>(() => {
+    try {
+      const raw = sessionStorage.getItem(intentSnapshotKey);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const getOrCreateSubmitId = () => {
+    let id = sessionStorage.getItem(submitStorageKey);
+    if (!id) {
+      id = crypto.randomUUID();
+      sessionStorage.setItem(submitStorageKey, id);
+    }
+    return id;
+  };
+  const clearSubmitId = (submitId: string) => {
+    if (sessionStorage.getItem(submitStorageKey) !== submitId) return;
+    sessionStorage.removeItem(submitStorageKey);
+    sessionStorage.removeItem(intentSnapshotKey);
+  };
   const [previewOpen, setPreviewOpen] = useState(false);
   const [urlMediaType, setUrlMediaType] = useState<"images" | "video">("images");
   const [imageUrls, setImageUrls] = useState("");
@@ -368,6 +430,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     titleDescLanguage: platformSettings.youtubeTitleDescLanguage,
     thumbnailMode: platformSettings.youtubeThumbnailMode,
     thumbnailUrl: platformSettings.youtubeThumbnailUrl,
+    thumbnailMediaId: platformSettings.youtubeThumbnailMediaId,
     thumbnailFile: platformSettings.youtubeThumbnailFile,
     playlist: platformSettings.youtubePlaylist,
     allowedCountries: platformSettings.youtubeAllowedCountries,
@@ -376,7 +439,62 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     enableFirstComment: platformSettings.youtubeEnableFirstComment,
   };
 
+  // Complete inverse of buildPostMetadata's YouTube section. Every field that
+  // participates in the immutable fingerprint must round-trip with its
+  // serialized type; otherwise an unchanged reload looks like a changed draft.
+  // Only a versioned proof restores a declaration: a legacy boolean stays
+  // unanswered instead of minting a declaration for a different post.
+  const youtubeSettingsFromMetadata = (stored: Record<string, unknown>): Partial<YouTubeSettingsState> => {
+    const text = (key: string) => typeof stored[key] === "string" ? stored[key] as string : undefined;
+    const bool = (key: string) => typeof stored[key] === "boolean" ? stored[key] as boolean : undefined;
+    const list = (key: string) => Array.isArray(stored[key])
+      ? (stored[key] as unknown[]).filter((item): item is string => typeof item === "string").join(",")
+      : text(key);
+    const proof = youtubeDeclarationProofOf(stored);
+    const comment = text("youtube_first_comment");
+    const thumbnailMediaId = text("youtube_thumbnail_media_id") ?? null;
+    return {
+      videoType: (text("youtube_video_type") as "video" | "short" | undefined) ?? "video",
+      title: text("youtube_title") ?? "",
+      description: text("youtube_description") ?? "",
+      tags: list("youtube_tags") ?? "",
+      category: text("youtube_category") ?? "22",
+      visibility: (text("youtube_visibility") as "public" | "unlisted" | "private" | undefined) ?? "private",
+      madeForKids: proof?.made_for_kids ?? null,
+      containsSyntheticMedia: proof?.contains_synthetic_media ?? null,
+      allowEmbedding: bool("youtube_allow_embedding") ?? true,
+      publicStatsViewable: bool("youtube_public_stats_viewable") ?? true,
+      hasPaidPromotion: bool("youtube_has_paid_promotion") ?? false,
+      notifySubscribers: bool("youtube_notify_subscribers") ?? true,
+      recordingDate: text("youtube_recording_date") ?? "",
+      license: (text("youtube_license") as "youtube" | "creativeCommon" | undefined) ?? "youtube",
+      videoLanguage: text("youtube_video_language") ?? "",
+      audioLanguage: text("youtube_audio_language") ?? "",
+      allowedCountries: list("youtube_allowed_countries") ?? "",
+      blockedCountries: list("youtube_blocked_countries") ?? "",
+      firstComment: comment ?? "",
+      enableFirstComment: Boolean(comment),
+      thumbnailUrl: text("youtube_thumbnail_url") ?? "",
+      thumbnailMediaId,
+      thumbnailMode: thumbnailMediaId ? "upload" : "auto",
+    };
+  };
+
+  // Switching scheduled posts on one mounted route must not carry the previous
+  // post's answers into a new save. Applying full defaults first resets every
+  // control, then the stored metadata (if any) restores only proven values.
+  const resetYoutubeSettings = () => youtubeSettingsFromMetadata({});
+
   const handleYoutubeSettingsChange = (changes: Partial<YouTubeSettingsState>) => {
+    // A thumbnail has exactly one source. Switching between the URL field and
+    // the owned media picker clears the other so the worker never sees two
+    // competing instructions for the same thumbnails.set call.
+    if (changes.thumbnailUrl !== undefined && changes.thumbnailUrl.length > 0) {
+      platformSettings.setYoutubeThumbnailMediaId(null);
+    }
+    if (changes.thumbnailMediaId !== undefined && changes.thumbnailMediaId !== null) {
+      platformSettings.setYoutubeThumbnailUrl("");
+    }
     if (changes.videoType !== undefined) platformSettings.setYoutubeVideoType(changes.videoType);
     if (changes.title !== undefined) platformSettings.setYoutubeTitle(changes.title);
     if (changes.description !== undefined) platformSettings.setYoutubeDescription(changes.description);
@@ -404,6 +522,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     if (changes.titleDescLanguage !== undefined) platformSettings.setYoutubeTitleDescLanguage(changes.titleDescLanguage);
     if (changes.thumbnailMode !== undefined) platformSettings.setYoutubeThumbnailMode(changes.thumbnailMode);
     if (changes.thumbnailUrl !== undefined) platformSettings.setYoutubeThumbnailUrl(changes.thumbnailUrl);
+    if (changes.thumbnailMediaId !== undefined) platformSettings.setYoutubeThumbnailMediaId(changes.thumbnailMediaId);
     if (changes.thumbnailFile !== undefined) platformSettings.setYoutubeThumbnailFile(changes.thumbnailFile);
     if (changes.playlist !== undefined) platformSettings.setYoutubePlaylist(changes.playlist);
     if (changes.allowedCountries !== undefined) platformSettings.setYoutubeAllowedCountries(changes.allowedCountries);
@@ -412,6 +531,41 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     if (changes.enableFirstComment !== undefined) platformSettings.setYoutubeEnableFirstComment(changes.enableFirstComment);
   };
 
+  // Restore the persisted source intent BEFORE the user can submit again.
+  // This runs on reload, so the fingerprint computed from the hydrated form
+  // still identifies the original submission rather than an empty draft.
+  const youtubeChangeRef = useRef(handleYoutubeSettingsChange);
+  youtubeChangeRef.current = handleYoutubeSettingsChange;
+  const youtubeResetRef = useRef(resetYoutubeSettings);
+  youtubeResetRef.current = resetYoutubeSettings;
+  const setUploadMethodRef = useRef(setUploadMethod);
+  setUploadMethodRef.current = setUploadMethod;
+  useEffect(() => {
+    if (!restoredIntent) return;
+    youtubeChangeRef.current(youtubeResetRef.current());
+    if (restoredIntent.youtubeSettings) {
+      youtubeChangeRef.current(youtubeSettingsFromMetadata(restoredIntent.youtubeSettings));
+    }
+    if (restoredIntent.intake) {
+      setUploadMethodRef.current(restoredIntent.intake.uploadMethod ?? "local");
+      setUrlMediaType(restoredIntent.intake.urlMediaType ?? "images");
+      setImageUrls(restoredIntent.intake.imageUrls ?? "");
+      setVideoUrl(restoredIntent.intake.videoUrl ?? "");
+    }
+  }, [restoredIntent]);
+
+  // Switching scheduled posts on one mounted route resets ALL YouTube controls
+  // and declarations first. A legacy post with no proof cannot inherit the
+  // previous post's Public visibility or answers; an untouched thumbnail or
+  // first comment is restored from this post's own metadata.
+  const hydratedEditMetadataRef = useRef<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    if (!editMetadata || hydratedEditMetadataRef.current === editMetadata) return;
+    hydratedEditMetadataRef.current = editMetadata;
+    youtubeChangeRef.current(youtubeResetRef.current());
+    youtubeChangeRef.current(youtubeSettingsFromMetadata(editMetadata));
+  }, [editMetadata]);
+
   // Validate and post
   const handlePost = async () => {
     if (submittingRef.current) return;
@@ -419,65 +573,194 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     setIsPosting(true);
 
     try {
-      if (!validatePost(unsplashValidationError)) return;
+      // The stable id and the SOURCE intent are computed before any gate. A
+      // reload after a lost acknowledgement must be able to find its own row
+      // and compare intent without re-running quota, declaration or media
+      // upload work that belongs to a brand-new submission.
+      const submitId = getOrCreateSubmitId();
+      const youtubeIntentMetadata = platformSettings.buildPostMetadata() as Record<string, unknown>;
+      // Every stored publishing setting is part of the immutable intent. Only
+      // the transport markers are excluded; nothing else is hand-picked, so a
+      // new YouTube control cannot silently fall outside the fingerprint.
+      const youtubeSettings = Object.fromEntries(
+        Object.entries(youtubeIntentMetadata).filter(([key]) =>
+          key !== "submit_id" && key !== "submit_fingerprint" && key !== "publish_enqueue_accepted"
+        ),
+      );
+      const submitFingerprint = canonicalIntentJson({
+        platforms: [...selectedPlatforms].sort(),
+        accountIds: [...selectedAccountIds].sort(),
+        // Media order is publishing intent. The array is NOT sorted: reordering
+        // a carousel is a different submission, not the same one retried.
+        localMediaIds: files.map((file) => file.storagePath),
+        // The external source identity, not a derived upload id, so recovery
+        // never needs to upload the same URL again to match its own intent.
+        intake: {
+          uploadMethod,
+          urlMediaType,
+          imageUrls: imageUrls.trim(),
+          videoUrl: videoUrl.trim(),
+        },
+        caption: caption.trim(),
+        scheduledAt: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
+        scheduleTimezone: scheduleTimezone || null,
+        youtube: youtubeSettings,
+      });
+
+      type RecoveredPost = {
+        id: string;
+        status: string;
+        metadata: Record<string, unknown> | null;
+        /** Server-owned, trigger-pinned acceptance stamp. */
+        publishRequestedAt: string | null;
+      };
+      type PendingLookup =
+        | { state: "none" }
+        | { state: "found"; post: RecoveredPost }
+        | { state: "conflict"; reason: "owner" | "intent" };
+
+      // One owner-scoped read, used by BOTH the pre-flight recovery and the
+      // duplicate-key readback. A foreign row and a changed immutable intent
+      // are distinct visible refusals, never a silent second submission.
+      const lookupPending = async (): Promise<PendingLookup> => {
+        const { data: pending, error: pendingError } = await supabase
+          .from("posts")
+          .select("id, user_id, status, metadata, publish_requested_at")
+          .eq("id", submitId)
+          .eq("user_id", user?.id ?? "")
+          .maybeSingle();
+        if (pendingError) throw pendingError;
+        if (!pending) return { state: "none" };
+        const existingMetadata = pending.metadata as Record<string, unknown> | null;
+        if (existingMetadata?.submit_id !== submitId) return { state: "conflict", reason: "owner" };
+        if (existingMetadata?.submit_fingerprint !== submitFingerprint) {
+          return { state: "conflict", reason: "intent" };
+        }
+        return {
+          state: "found",
+          post: {
+            id: String(pending.id),
+            status: String(pending.status),
+            metadata: existingMetadata,
+            publishRequestedAt: typeof pending.publish_requested_at === "string"
+              ? pending.publish_requested_at
+              : null,
+          },
+        };
+      };
+      const refusePending = (lookup: Extract<PendingLookup, { state: "conflict" }>) => {
+        if (lookup.reason === "owner") {
+          showErrorToast(
+            t("toast.submitConflictTitle", "Submission conflict"),
+            t("toast.submitConflictDesc", "This submission belongs to another request. Review it before publishing again."),
+          );
+        } else {
+          showErrorToast(
+            t("toast.submitIntentChangedTitle", "Submission changed"),
+            t("toast.submitIntentChangedDesc", "The draft changed after it was submitted. Review the saved post before publishing again."),
+          );
+        }
+      };
+
+      let recoveredPost: RecoveredPost | null = null;
+      if (!editPostId) {
+        const lookup = await lookupPending();
+        if (lookup.state === "conflict") {
+          // Never overwrite the accepted snapshot with a rejected draft.
+          refusePending(lookup);
+          return;
+        }
+        if (lookup.state === "none") {
+          sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
+            fingerprint: submitFingerprint,
+            youtubeSettings: youtubeIntentMetadata,
+            intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
+          }));
+        }
+        if (lookup.state === "found") {
+          recoveredPost = lookup.post;
+          // Rehydrate the full YouTube form from the immutable stored intent
+          // so a reload after a lost acknowledgement restores what the creator
+          // actually submitted, including the thumbnail source and declarations.
+          const stored = (lookup.post.metadata ?? {}) as Record<string, unknown>;
+          handleYoutubeSettingsChange(youtubeSettingsFromMetadata(stored));
+        }
+      }
+
+      if (!recoveredPost && !validatePost(unsplashValidationError)) return;
       const clearSubmittedDraft = captureDraftCleanup();
 
-    const hasComposioYouTubeTarget = connectedAccounts.some((account) =>
-      selectedAccountIds.includes(account.id) && account.platform === "youtube" &&
-      (account as typeof account & { auth_provider?: string }).auth_provider === "composio"
-    );
-    if (hasComposioYouTubeTarget) {
-      const unsupported = youtubeOptionsUnsupportedOnComposio(platformSettings.buildPostMetadata());
-      if (unsupported.length > 0) {
+      if (!recoveredPost && selectedPlatforms.includes("youtube")) {
+      const missingDeclarations = missingYoutubeDeclarations(platformSettings.buildPostMetadata());
+      if (missingDeclarations.length > 0) {
         showErrorToast(
-          t("toast.youtubeOptionsUnavailable", "YouTube options unavailable"),
-          t("toast.youtubeOptionsUnavailableDesc", "This Composio-managed channel cannot use: {{unsupported}}", { unsupported: unsupported.join(", ") }),
+          t("youtube.declarationRequiredTitle", "Missing YouTube declarations"),
+          t("youtube.declarationRequiredDesc", "Choose Yes or No for both the audience and synthetic-media declarations before publishing."),
         );
         return;
       }
     }
 
-    // Enforce daily/monthly post quotas on new posts (edits reuse existing row)
-    if (!editPostId) {
-      const quotaCheck = await canCreatePost();
-      if (!quotaCheck.allowed) {
-        showErrorToast(
-          t("toast.postLimitReached", "Post limit reached"),
-          quotaCheck.message || t("toast.postQuotaReached", "You've reached your post quota.")
+      let mediaFileIds: string[] = [];
+      if (!recoveredPost) {
+        const hasComposioYouTubeTarget = connectedAccounts.some((account) =>
+          selectedAccountIds.includes(account.id) && account.platform === "youtube" &&
+          (account as typeof account & { auth_provider?: string }).auth_provider === "composio"
         );
-        return;
-      }
-    }
+        if (hasComposioYouTubeTarget) {
+          // Managed YouTube dispatch is disabled unconditionally: the provider
+          // cannot send the mandatory declarations (yes or no) and the
+          // exactly-once pre-execute receipt is not proven.
+          showErrorToast(
+            t("youtube.composioDispatchUnavailableTitle", "Managed YouTube publishing unavailable"),
+            t("youtube.composioDispatchUnavailableDesc", "A Composio-managed YouTube channel cannot publish yet. Use a native channel."),
+          );
+          return;
+        }
 
-    if (selectedPlatforms.includes("tiktok")) {
-      const tiktokError = platformSettings.validateTiktokSettings(hasVideo);
-      if (tiktokError) {
-        showErrorToast(t("toast.tiktokValidationFailed", "TikTok validation failed"), tiktokError);
-        return;
-      }
-    }
+        // Enforce quotas on new posts only. A recovered submission has already
+        // consumed its quota at insert time.
+        if (!editPostId) {
+          const quotaCheck = await canCreatePost();
+          if (!quotaCheck.allowed) {
+            showErrorToast(
+              t("toast.postLimitReached", "Post limit reached"),
+              quotaCheck.message || t("toast.postQuotaReached", "You've reached your post quota.")
+            );
+            return;
+          }
+        }
 
-    if (selectedPlatforms.includes("pinterest")) {
-      const pinterestError = platformSettings.validatePinterestSettings();
-      if (pinterestError) {
-        showErrorToast(t("toast.pinterestValidationFailed", "Pinterest validation failed"), pinterestError);
-        return;
-      }
-    }
+        if (selectedPlatforms.includes("tiktok")) {
+          const tiktokError = platformSettings.validateTiktokSettings(hasVideo);
+          if (tiktokError) {
+            showErrorToast(t("toast.tiktokValidationFailed", "TikTok validation failed"), tiktokError);
+            return;
+          }
+        }
 
-      if (files.some((file) => !file.uploaded || !file.storagePath)) {
-        throw new Error("Every selected media item must finish uploading and have a media ID. The post was not saved.");
-      }
-      let mediaFileIds = files.map((file) => file.storagePath!);
+        if (selectedPlatforms.includes("pinterest")) {
+          const pinterestError = platformSettings.validatePinterestSettings();
+          if (pinterestError) {
+            showErrorToast(t("toast.pinterestValidationFailed", "Pinterest validation failed"), pinterestError);
+            return;
+          }
+        }
 
-      if (uploadMethod === "url") {
-        if (urlMediaType === "images" && imageUrls.trim()) {
-          const urls = imageUrls.split("\n").map((url) => url.trim()).filter(Boolean);
-          const uploaded = await Promise.all(urls.map((url) => uploadUrlToStorage(url, "image")));
-          mediaFileIds = [...mediaFileIds, ...uploaded.map((upload) => upload.id)];
-        } else if (urlMediaType === "video" && videoUrl.trim()) {
-          const uploaded = await uploadUrlToStorage(videoUrl.trim(), "video");
-          mediaFileIds = [...mediaFileIds, uploaded.id];
+        if (files.some((file) => !file.uploaded || !file.storagePath)) {
+          throw new Error("Every selected media item must finish uploading and have a media ID. The post was not saved.");
+        }
+        mediaFileIds = files.map((file) => file.storagePath!);
+
+        if (uploadMethod === "url") {
+          if (urlMediaType === "images" && imageUrls.trim()) {
+            const urls = imageUrls.split("\n").map((url) => url.trim()).filter(Boolean);
+            const uploaded = await Promise.all(urls.map((url) => uploadUrlToStorage(url, "image")));
+            mediaFileIds = [...mediaFileIds, ...uploaded.map((upload) => upload.id)];
+          } else if (urlMediaType === "video" && videoUrl.trim()) {
+            const uploaded = await uploadUrlToStorage(videoUrl.trim(), "video");
+            mediaFileIds = [...mediaFileIds, uploaded.id];
+          }
         }
       }
 
@@ -491,6 +774,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       ) as Platform[];
 
       const postPayload = {
+        ...(editPostId ? {} : { id: submitId }),
         user_id: user?.id,
         caption: caption.trim() || null,
         platforms: platformsForInsert,
@@ -502,6 +786,8 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         status: scheduleEnabled && scheduledAt ? "scheduled" : "pending",
         metadata: {
           ...platformSettings.buildPostMetadata(),
+          submit_id: submitId,
+          submit_fingerprint: submitFingerprint,
           schedule_timezone: scheduleTimezone || null,
         },
       };
@@ -518,6 +804,15 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           .single();
         if (error) throw error;
         post = data;
+      } else if (recoveredPost) {
+        // The row is already ours with the same source intent. No second
+        // insert, no new quota charge, no re-upload of the same media.
+        post = {
+          id: recoveredPost.id,
+          metadata: recoveredPost.metadata,
+          status: recoveredPost.status,
+          publish_requested_at: recoveredPost.publishRequestedAt,
+        };
       } else {
         // Create new post (DB trigger also enforces quota server-side)
         const { data, error } = await supabase
@@ -534,9 +829,27 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             );
             return;
           }
-          throw error;
+          if (error.code === "23505") {
+            // The insert committed but its acknowledgement was lost. The same
+            // owner-scoped read and intent check decide whether this row is
+            // ours; no second insert is attempted either way.
+            const lookup = await lookupPending();
+            if (lookup.state === "found") {
+              // The duplicate-key path MUST feed the same recovery state as the
+              // preflight path, or the accepted stamp is ignored and a second
+              // enqueue is sent for this already-accepted intent.
+              recoveredPost = lookup.post;
+              post = lookup.post;
+            } else if (lookup.state === "conflict") {
+              refusePending(lookup);
+              return;
+            } else throw error;
+          } else {
+            throw error;
+          }
+        } else {
+          post = data;
         }
-        post = data;
       }
 
       // Save field suggestions for future reuse (fire and forget)
@@ -571,7 +884,29 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       saveFieldSuggestions();
 
       let completionStatus: SavedPostCompletion["status"] = scheduleEnabled && scheduledAt ? "scheduled" : "submitted";
+      const recoveredStatus = recoveredPost?.status;
+      // The SERVER stamp is the acceptance authority. A row whose
+      // publish_requested_at is set was already accepted, even if the worker
+      // has not started yet and the browser never saw the enqueue response.
+      const alreadyAccepted = recoveredPost !== null && (
+        recoveredPost.publishRequestedAt !== null ||
+        recoveredStatus === "scheduled" ||
+        recoveredStatus === "processing" ||
+        recoveredStatus === "completed" ||
+        recoveredStatus === "failed" ||
+        acceptedSubmitIds.has(submitId)
+      );
       if (!scheduleEnabled || !scheduledAt) {
+        if (alreadyAccepted) {
+          // The first submission already reached the worker (or the scheduler
+          // owns it). A second enqueue would be a duplicate request for the
+          // same intent, so only the receipt is reported again.
+          trackPublishingPost(post.id, []);
+          toast({
+            title: t("toast.publishedAlreadyTitle", "Already submitted"),
+            description: t("toast.publishedAlreadyDesc", "This post was already submitted. Check History for its status."),
+          });
+        } else {
         // Track this post for realtime updates
         trackPublishingPost(post.id, platformsForInsert);
 
@@ -589,6 +924,13 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             title: t("common:publishing.submitted", "Submitted, publishing"),
             description: t("toast.checkHistory", "Check the History page for real-time status updates."),
           });
+          // The server's publish_requested_at (pinned at insert by the trigger
+          // or stamped by the RPC) is the sole durable acceptance. No browser
+          // metadata write is needed or trusted: a conditional JSON marker
+          // written after the response would neither fence a racing replay nor
+          // cover the lost-acknowledgement window before the worker starts.
+          acceptedSubmitIds.add(submitId);
+        }
         }
       } else {
         const actionLabel = editPostId
@@ -604,6 +946,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       }
 
       clearSubmittedDraft();
+      clearSubmitId(submitId);
       onSaved({ postId: post.id, status: completionStatus });
 
     } catch (error) {
