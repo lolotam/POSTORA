@@ -270,6 +270,22 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
   // reload reuses it, so the posts primary key rejects the second insert
   // instead of putting a second video on the channel.
   const submitStorageKey = `youtube-stage3-submit:${user?.id ?? "anonymous"}:${editPostId ?? "new"}`;
+  // The immutable source intent is persisted with the submit id so a reload
+  // can restore the EXACT YouTube settings and external source inputs before
+  // it compares intent with the stored row. Without this, a customized draft
+  // reloads blank and its changed fingerprint is rejected as a new intent.
+  const intentSnapshotKey = `youtube-stage3-intent:${user?.id ?? "anonymous"}:${editPostId ?? "new"}`;
+  const [restoredIntent] = useState<{
+    youtubeSettings?: Partial<YouTubeSettingsState>;
+    intake?: { urlMediaType?: "images" | "video"; imageUrls?: string; videoUrl?: string };
+  } | null>(() => {
+    try {
+      const raw = sessionStorage.getItem(intentSnapshotKey);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
   const getOrCreateSubmitId = () => {
     let id = sessionStorage.getItem(submitStorageKey);
     if (!id) {
@@ -278,7 +294,10 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     }
     return id;
   };
-  const clearSubmitId = () => sessionStorage.removeItem(submitStorageKey);
+  const clearSubmitId = () => {
+    sessionStorage.removeItem(submitStorageKey);
+    sessionStorage.removeItem(intentSnapshotKey);
+  };
   const [previewOpen, setPreviewOpen] = useState(false);
   const [urlMediaType, setUrlMediaType] = useState<"images" | "video">("images");
   const [imageUrls, setImageUrls] = useState("");
@@ -427,6 +446,29 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     enableFirstComment: platformSettings.youtubeEnableFirstComment,
   };
 
+  // Stored YouTube metadata -> form state. Only a versioned proof restores a
+  // declaration; a legacy boolean is deliberately left unanswered.
+  const youtubeSettingsFromMetadata = (stored: Record<string, unknown>): Partial<YouTubeSettingsState> => {
+    const text = (key: string) => typeof stored[key] === "string" ? stored[key] as string : undefined;
+    const bool = (key: string) => typeof stored[key] === "boolean" ? stored[key] as boolean : undefined;
+    const proof = youtubeDeclarationProofOf(stored);
+    return {
+      title: text("youtube_title"),
+      description: text("youtube_description"),
+      tags: text("youtube_tags"),
+      category: text("youtube_category"),
+      visibility: text("youtube_visibility") as "public" | "unlisted" | "private" | undefined,
+      madeForKids: proof?.made_for_kids,
+      containsSyntheticMedia: proof?.contains_synthetic_media,
+      thumbnailUrl: text("youtube_thumbnail_url") ?? "",
+      thumbnailMediaId: text("youtube_thumbnail_media_id") ?? null,
+      firstComment: text("youtube_first_comment") ?? "",
+      allowEmbedding: bool("youtube_allow_embedding"),
+      publicStatsViewable: bool("youtube_public_stats_viewable"),
+      videoType: text("youtube_video_type") as "video" | "short" | undefined,
+    };
+  };
+
   const handleYoutubeSettingsChange = (changes: Partial<YouTubeSettingsState>) => {
     // A thumbnail has exactly one source. Switching between the URL field and
     // the owned media picker clears the other so the worker never sees two
@@ -473,6 +515,23 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     if (changes.enableFirstComment !== undefined) platformSettings.setYoutubeEnableFirstComment(changes.enableFirstComment);
   };
 
+  // Restore the persisted source intent BEFORE the user can submit again.
+  // This runs on reload, so the fingerprint computed from the hydrated form
+  // still identifies the original submission rather than an empty draft.
+  const youtubeChangeRef = useRef(handleYoutubeSettingsChange);
+  youtubeChangeRef.current = handleYoutubeSettingsChange;
+  useEffect(() => {
+    if (!restoredIntent) return;
+    if (restoredIntent.youtubeSettings) {
+      youtubeChangeRef.current(youtubeSettingsFromMetadata(restoredIntent.youtubeSettings));
+    }
+    if (restoredIntent.intake) {
+      setUrlMediaType(restoredIntent.intake.urlMediaType ?? "images");
+      setImageUrls(restoredIntent.intake.imageUrls ?? "");
+      setVideoUrl(restoredIntent.intake.videoUrl ?? "");
+    }
+  }, [restoredIntent]);
+
   // Validate and post
   const handlePost = async () => {
     if (submittingRef.current) return;
@@ -513,6 +572,14 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         scheduleTimezone: scheduleTimezone || null,
         youtube: youtubeSettings,
       });
+
+      if (!editPostId) {
+        sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
+          fingerprint: submitFingerprint,
+          youtubeSettings: youtubeIntentMetadata,
+          intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
+        }));
+      }
 
       type RecoveredPost = {
         id: string;
@@ -582,24 +649,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           // so a reload after a lost acknowledgement restores what the creator
           // actually submitted, including the thumbnail source and declarations.
           const stored = (lookup.post.metadata ?? {}) as Record<string, unknown>;
-          const text = (key: string) => typeof stored[key] === "string" ? stored[key] as string : undefined;
-          const bool = (key: string) => typeof stored[key] === "boolean" ? stored[key] as boolean : undefined;
-          const proof = youtubeDeclarationProofOf(stored);
-          handleYoutubeSettingsChange({
-            title: text("youtube_title"),
-            description: text("youtube_description"),
-            tags: text("youtube_tags"),
-            category: text("youtube_category"),
-            visibility: text("youtube_visibility") as "public" | "unlisted" | "private" | undefined,
-            madeForKids: proof?.made_for_kids,
-            containsSyntheticMedia: proof?.contains_synthetic_media,
-            thumbnailUrl: text("youtube_thumbnail_url") ?? "",
-            thumbnailMediaId: text("youtube_thumbnail_media_id") ?? null,
-            firstComment: text("youtube_first_comment") ?? "",
-            allowEmbedding: bool("youtube_allow_embedding"),
-            publicStatsViewable: bool("youtube_public_stats_viewable"),
-            videoType: text("youtube_video_type") as "video" | "short" | undefined,
-          });
+          handleYoutubeSettingsChange(youtubeSettingsFromMetadata(stored));
         }
       }
 
@@ -750,8 +800,13 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             // owner-scoped read and intent check decide whether this row is
             // ours; no second insert is attempted either way.
             const lookup = await lookupPending();
-            if (lookup.state === "found") post = lookup.post;
-            else if (lookup.state === "conflict") {
+            if (lookup.state === "found") {
+              // The duplicate-key path MUST feed the same recovery state as the
+              // preflight path, or the accepted stamp is ignored and a second
+              // enqueue is sent for this already-accepted intent.
+              recoveredPost = lookup.post;
+              post = lookup.post;
+            } else if (lookup.state === "conflict") {
               refusePending(lookup);
               return;
             } else throw error;

@@ -24,6 +24,8 @@ const fixture = vi.hoisted(() => ({
   toasts: [] as string[],
   quotaAllowed: true,
   quotaCalls: 0,
+  captureInsert: null as null | ((payload: Record<string, unknown>) => void),
+  forceDuplicate: false,
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -97,6 +99,10 @@ vi.mock("@/integrations/supabase/client", () => ({
             select: () => ({
               single: async () => {
                 fixture.inserted.push(payload);
+                if (fixture.captureInsert) fixture.captureInsert(payload);
+                if (fixture.forceDuplicate) {
+                  return { data: null, error: { code: "23505", message: "duplicate key" } };
+                }
                 // First attempt commits but its acknowledgement is lost.
                 if (!fixture.stored) {
                   fixture.stored = { ...payload };
@@ -156,6 +162,8 @@ beforeEach(() => {
   fixture.toasts = [];
   fixture.quotaAllowed = true;
   fixture.quotaCalls = 0;
+  fixture.captureInsert = null;
+  fixture.forceDuplicate = false;
 });
 
 describe("CreatePost lost acknowledgement recovery", () => {
@@ -201,6 +209,30 @@ describe("CreatePost lost acknowledgement recovery", () => {
     expect(fixture.quotaCalls).toBe(1);
     expect(fixture.enqueue).not.toHaveBeenCalled();
     second.unmount();
+  });
+
+  it("a duplicate-key readback feeds the same acceptance state as the preflight lookup", async () => {
+    // A foreign row already owns the generated id. The insert returns 23505,
+    // the readback recovers OUR matching row, and the accepted stamp must stop
+    // a second enqueue. Before the shared recovery path, recoveredPost stayed
+    // null here and a duplicate HTTP enqueue was still sent.
+    // The row appears only when the insert commits; its metadata carries the
+    // exact fingerprint the real submit computes so the readback accepts it.
+    fixture.forceDuplicate = true;
+    fixture.captureInsert = (payload) => {
+      fixture.stored = {
+        id: String(payload.id),
+        user_id: "owner",
+        status: "pending",
+        publish_requested_at: "2026-11-22T10:00:00.000Z",
+        metadata: payload.metadata,
+      };
+    };
+    const user = userEvent.setup();
+    render(<CreatePost />, { wrapper: wrapper() });
+    await submit(user, "Exact same intent");
+    await waitFor(() => expect(fixture.toasts.join(" ")).toMatch(/network lost|already submitted/i));
+    expect(fixture.enqueue).not.toHaveBeenCalled();
   });
 
   it("does not enqueue again when the server stamp exists but the worker has not started", async () => {
