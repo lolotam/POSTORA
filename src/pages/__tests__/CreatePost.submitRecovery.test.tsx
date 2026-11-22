@@ -265,7 +265,7 @@ describe("CreatePost lost acknowledgement recovery", () => {
 
   it("preserves a newer submission when an earlier acknowledgement arrives", async () => {
     fixture.acknowledgeInsert = true;
-    let acknowledge = () => { throw new Error("No publish request to acknowledge"); };
+    let acknowledge: () => void = () => { throw new Error("No publish request to acknowledge"); };
     fixture.enqueue.mockImplementationOnce(() => new Promise((resolve) => {
       acknowledge = () => { resolve({ accepted: true }); };
     }));
