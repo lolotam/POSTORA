@@ -172,11 +172,8 @@ import {
 } from "./metaPublishReauth.ts";
 import { claimFinalNotification, claimThreadsImageNotification, confirmThreadsImageNotification } from "./finalNotification.ts";
 import {
-  classifyProviderStatus,
-  isAllowedProviderUploadUri,
+  probeResumableUploadStatus,
   runResumableVideoUpload,
-  YOUTUBE_PROVIDER_UPLOAD_HOSTS,
-  YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS,
   type ResumableUploadOutcome,
 } from "./youtubeResumableUpload.ts";
 import {
@@ -10294,37 +10291,27 @@ function buildYoutubeContinuationPorts(
     },
 
     async probeReceipt(args) {
-      // A GET with a zero byte range is read-only: it asks the provider what
-      // it holds and never sends video bytes. It is the only provider call a
-      // legacy unproven session is allowed to make.
+      // The protocol's status-only step: a zero-byte PUT with the exact total
+      // in Content-Range, manual redirects, host allowlist and bounded body and
+      // deadline. It can only find a receipt that already exists; it can never
+      // re-enter the upload, so an unproven session sends no video byte.
       const uri = args.record.sessionUri;
-      if (!uri || !isAllowedProviderUploadUri(uri, YOUTUBE_PROVIDER_UPLOAD_HOSTS)) {
-        return { videoId: null };
-      }
+      if (!uri) return { videoId: null };
       try {
-        const response = await fetch(uri, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${args.accessToken}`,
-            "Content-Range": "bytes */*",
-          },
-          signal: AbortSignal.timeout(Math.min(args.deadlineMs, YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS)),
-        });
-        const bodyText = await response.text();
-        const status = classifyProviderStatus({
-          status: response.status,
-          rangeHeader: response.headers.get("range"),
-          bodyText,
+        const status = await probeResumableUploadStatus({
+          fetchImpl: fetch,
+          sessionUri: uri,
+          accessToken: args.accessToken,
           totalBytes: args.record.totalBytes,
-          previousConfirmedBytes: args.record.bytesSent,
-          retryAfterHeader: response.headers.get("retry-after"),
-        });
-        if (status.kind === "accepted" && /^[A-Za-z0-9_-]{6,64}$/.test(status.videoId)) {
-          return { videoId: status.videoId };
-        }
-        return { videoId: null };
+          deadlineMs: args.deadlineMs,
+          now: () => Date.now(),
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        }, args.record.bytesSent, args.record.bytesSent);
+        return status.kind === "accepted" && /^[A-Za-z0-9_-]{6,64}$/.test(status.videoId)
+          ? { videoId: status.videoId }
+          : { videoId: null };
       } catch {
-        // A probe that could not be read is not a receipt. No byte is sent.
+        // An unreadable probe is not a receipt. No byte was sent.
         return { videoId: null };
       }
     },

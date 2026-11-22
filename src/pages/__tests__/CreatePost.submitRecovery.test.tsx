@@ -172,12 +172,14 @@ describe("CreatePost lost acknowledgement recovery", () => {
 
     const second = render(<CreatePost />, { wrapper: wrapper() });
     await submit(user, "Original intent");
-    await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+    // The server stamp written with the first insert is the acceptance. On
+    // reload the row is recovered and NOT enqueued again: the worker owns it.
+    expect(fixture.enqueue).not.toHaveBeenCalled();
     // The retry is an INSERT attempt against the same primary key; exactly one
     // post row exists and every attempt carried the same stable identity.
     expect(fixture.inserted.every((payload) => payload.id === id)).toBe(true);
     expect(fixture.stored?.id).toBe(id);
-    expect(fixture.enqueue.mock.calls[0][0]).toMatchObject({ postId: id });
+    expect(fixture.stored?.publish_requested_at).toBeTruthy();
     second.unmount();
   });
 
@@ -198,6 +200,26 @@ describe("CreatePost lost acknowledgement recovery", () => {
     // Quota and enqueue are new-intent work; neither runs for a completed post.
     expect(fixture.quotaCalls).toBe(1);
     expect(fixture.enqueue).not.toHaveBeenCalled();
+    second.unmount();
+  });
+
+  it("does not enqueue again when the server stamp exists but the worker has not started", async () => {
+    const user = userEvent.setup();
+    const first = render(<CreatePost />, { wrapper: wrapper() });
+    await submit(user, "Original intent");
+    await waitFor(() => expect(fixture.inserted).toHaveLength(1));
+    first.unmount();
+    sessionStorage.removeItem("postora_post_draft");
+
+    // The row was accepted at insert; the enqueue acknowledgement was lost and
+    // the worker has not claimed it yet. The server stamp alone must fence a
+    // second enqueue.
+    fixture.stored = { ...fixture.stored!, status: "pending" };
+    const second = render(<CreatePost />, { wrapper: wrapper() });
+    await submit(user, "Original intent");
+    await waitFor(() => expect(fixture.toasts.join(" ")).toMatch(/Already submitted/i));
+    expect(fixture.enqueue).not.toHaveBeenCalled();
+    expect(fixture.quotaCalls).toBe(1);
     second.unmount();
   });
 

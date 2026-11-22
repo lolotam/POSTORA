@@ -22,6 +22,12 @@ export interface KickPayload {
 
 export interface EnqueueDependencies {
   requestStoryRetry?(postId: string, resultId: string, userId: string): Promise<boolean>;
+  /**
+   * The durable stamp already owned by the server (pinned at insert by
+   * trg_posts_pin_publish_requested_at). A non-null value IS the acceptance:
+   * reusing it makes a replay idempotent without restamping a pending post.
+   */
+  readPublishRequestedAt?(postId: string, userId: string): Promise<string | null>;
   requestImmediatePublish(postId: string, userId: string): Promise<string | null>;
   requestPostRetry(postId: string, userId: string, accountIds?: string[], replacementMediaIds?: string[]): Promise<RetryResult>;
   readPostStatus(postId: string, userId: string): Promise<string | null>;
@@ -68,6 +74,15 @@ async function enqueue(deps: EnqueueDependencies, callerId: string, body: z.infe
       ? await accept(deps, body.post_id, retry.requested_at)
       : await refuse(deps, callerId, body.post_id, retry.reason);
   }
+  // An existing server stamp is the authoritative acceptance. Reusing it
+  // makes concurrent or replayed "publish now" calls idempotent: every kick
+  // carries the SAME expected stamp, so the processing claim can succeed once,
+  // and the stamp is never moved. Posts that were never stamped (older pending
+  // or scheduled rows) still take the original RPC path.
+  const existingStamp = deps.readPublishRequestedAt
+    ? await deps.readPublishRequestedAt(body.post_id, callerId)
+    : null;
+  if (existingStamp !== null) return await accept(deps, body.post_id, existingStamp);
   const requestedAt = await deps.requestImmediatePublish(body.post_id, callerId);
   if (requestedAt !== null) return await accept(deps, body.post_id, requestedAt);
   const postStatus = await deps.readPostStatus(body.post_id, callerId);

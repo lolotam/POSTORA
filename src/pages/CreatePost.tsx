@@ -514,7 +514,13 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         youtube: youtubeSettings,
       });
 
-      type RecoveredPost = { id: string; status: string; metadata: Record<string, unknown> | null };
+      type RecoveredPost = {
+        id: string;
+        status: string;
+        metadata: Record<string, unknown> | null;
+        /** Server-owned, trigger-pinned acceptance stamp. */
+        publishRequestedAt: string | null;
+      };
       type PendingLookup =
         | { state: "none" }
         | { state: "found"; post: RecoveredPost }
@@ -526,7 +532,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       const lookupPending = async (): Promise<PendingLookup> => {
         const { data: pending, error: pendingError } = await supabase
           .from("posts")
-          .select("id, user_id, status, metadata")
+          .select("id, user_id, status, metadata, publish_requested_at")
           .eq("id", submitId)
           .eq("user_id", user?.id ?? "")
           .maybeSingle();
@@ -539,7 +545,14 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         }
         return {
           state: "found",
-          post: { id: String(pending.id), status: String(pending.status), metadata: existingMetadata },
+          post: {
+            id: String(pending.id),
+            status: String(pending.status),
+            metadata: existingMetadata,
+            publishRequestedAt: typeof pending.publish_requested_at === "string"
+              ? pending.publish_requested_at
+              : null,
+          },
         };
       };
       const refusePending = (lookup: Extract<PendingLookup, { state: "conflict" }>) => {
@@ -710,7 +723,12 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       } else if (recoveredPost) {
         // The row is already ours with the same source intent. No second
         // insert, no new quota charge, no re-upload of the same media.
-        post = { id: recoveredPost.id, metadata: recoveredPost.metadata, status: recoveredPost.status };
+        post = {
+          id: recoveredPost.id,
+          metadata: recoveredPost.metadata,
+          status: recoveredPost.status,
+          publish_requested_at: recoveredPost.publishRequestedAt,
+        };
       } else {
         // Create new post (DB trigger also enforces quota server-side)
         const { data, error } = await supabase
@@ -778,12 +796,15 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
 
       let completionStatus: SavedPostCompletion["status"] = scheduleEnabled && scheduledAt ? "scheduled" : "submitted";
       const recoveredStatus = recoveredPost?.status;
+      // The SERVER stamp is the acceptance authority. A row whose
+      // publish_requested_at is set was already accepted, even if the worker
+      // has not started yet and the browser never saw the enqueue response.
       const alreadyAccepted = recoveredPost !== null && (
+        recoveredPost.publishRequestedAt !== null ||
         recoveredStatus === "scheduled" ||
         recoveredStatus === "processing" ||
         recoveredStatus === "completed" ||
         recoveredStatus === "failed" ||
-        recoveredPost.metadata?.publish_enqueue_accepted === true ||
         acceptedSubmitIds.has(submitId)
       );
       if (!scheduleEnabled || !scheduledAt) {
@@ -814,24 +835,11 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             title: t("common:publishing.submitted", "Submitted, publishing"),
             description: t("toast.checkHistory", "Check the History page for real-time status updates."),
           });
-          // The server's acceptance is the authority, not a client-side guess.
-          // Persist it with an awaited, conditional write: a concurrent replay
-          // cannot move this marker twice, and a failed receipt write can only
-          // cause a later idempotent enqueue, never a second accepted post.
-          const acceptedMetadata = {
-            ...(post.metadata ?? {}),
-            publish_enqueue_accepted: true,
-            publish_enqueue_accepted_at: new Date().toISOString(),
-          };
-          const { error: acceptanceError } = await supabase.from("posts")
-            .update({ metadata: acceptedMetadata })
-            .eq("id", post.id)
-            .is("metadata->publish_enqueue_accepted", null);
-          if (acceptanceError) {
-            console.warn("[CreatePost] acceptance receipt could not be persisted");
-          } else {
-            post.metadata = acceptedMetadata;
-          }
+          // The server's publish_requested_at (pinned at insert by the trigger
+          // or stamped by the RPC) is the sole durable acceptance. No browser
+          // metadata write is needed or trusted: a conditional JSON marker
+          // written after the response would neither fence a racing replay nor
+          // cover the lost-acknowledgement window before the worker starts.
           acceptedSubmitIds.add(submitId);
         }
         }

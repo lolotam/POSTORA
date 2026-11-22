@@ -56,6 +56,25 @@ Deno.test("publish_now accepts the owner RPC stamp verbatim and kicks once", asy
   assertEquals(f.logs, []);
 });
 
+Deno.test("an existing server stamp is reused verbatim, so a replay never restamps the post", async () => {
+  const f = fixture({
+    readPublishRequestedAt: () => Promise.resolve(STAMP),
+    requestImmediatePublish: () => {
+      throw new Error("a stamped post must not be restamped");
+    },
+  });
+  const body = { post_id: POST, mode: "publish_now" as const };
+  const first = await run(f.deps, { callerId: OWNER, body });
+  const second = await run(f.deps, { callerId: OWNER, body });
+  assertEquals(first.status, 202);
+  assertEquals(second.status, 202);
+  assertEquals(f.calls, []);
+  assertEquals(f.kicks, [
+    { post_id: POST, expected_publish_requested_at: STAMP },
+    { post_id: POST, expected_publish_requested_at: STAMP },
+  ]);
+});
+
 Deno.test("an already processing post is accepted without a second kick", async () => {
   const f = fixture({
     requestImmediatePublish: () => Promise.resolve(null),
@@ -250,6 +269,7 @@ Deno.test("background kicks return 202 before completion, drain responses, and l
         const req = new Request(input, init);
         const url = new URL(req.url);
         assertEquals(url.origin, "https://enqueue-fixture.invalid");
+        if (url.pathname === "/rest/v1/posts") return Response.json([{ publish_requested_at: null }]);
         if (url.pathname === "/rest/v1/rpc/request_immediate_publish") return Response.json(STAMP);
         if (url.pathname === "/rest/v1/system_logs") {
           logs.push(await req.json());

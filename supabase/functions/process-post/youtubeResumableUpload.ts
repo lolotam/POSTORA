@@ -1825,6 +1825,41 @@ async function writeChunk(
 }
 
 /**
+ * The read-only status probe a caller may use WITHOUT permission to write
+ * bytes. It is the same protocol step 4.1 the upload runner uses: a zero-byte
+ * PUT with the exact total in Content-Range, manual redirects, a bounded body
+ * read and a bounded deadline. It never opens or writes an upload.
+ */
+export interface ResumableStatusProbeInput {
+  fetchImpl: typeof fetch;
+  sessionUri: string;
+  accessToken: string;
+  totalBytes: number;
+  deadlineMs: number;
+  now(): number;
+  sleep(ms: number): Promise<void>;
+  /** Approved upload hosts; a foreign or redirect target is never contacted. */
+  allowedHosts?: readonly string[];
+}
+
+export async function probeResumableUploadStatus(
+  input: ResumableStatusProbeInput,
+  previousConfirmedBytes: number,
+  submittedBytes: number,
+): Promise<ProviderUploadStatus> {
+  if (!isAllowedProviderUploadUri(input.sessionUri, input.allowedHosts ?? YOUTUBE_PROVIDER_UPLOAD_HOSTS)) {
+    return { kind: "unknown", reason: "The provider session host is not approved.", retryable: false };
+  }
+  return await probeStatus({
+    ...input,
+    store: null as unknown as YoutubeUploadSessionStore,
+    sessionId: "",
+    leaseToken: "",
+    mimeType: "",
+  }, previousConfirmedBytes, submittedBytes);
+}
+
+/**
  * Asks the provider how much of the upload it holds.
  *
  * The probe is an empty `PUT` whose `Content-Range` names the total with an
