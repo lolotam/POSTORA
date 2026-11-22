@@ -115,15 +115,19 @@ describe("YouTubeVideoEditCard", () => {
           disabledReason=""
           accountId="acc-1"
           onSave={onSave}
+          onSnapshot={vi.fn().mockResolvedValue("rev-1")}
         />,
       );
       fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
       fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed" } });
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      const save = screen.getByRole("button", { name: "Save" });
+      await waitFor(() => expect(save).not.toBeDisabled());
+      fireEvent.click(save);
 
       await waitFor(() => expect(onSave).toHaveBeenCalledWith({
         title: "Renamed",
         categoryId: "998",
+        baseRevision: "rev-1",
       }));
       expect(await screen.findByRole("status")).toBeInTheDocument();
       expect(screen.getByRole("status").textContent).toContain(

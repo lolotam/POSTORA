@@ -172,6 +172,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
   const [youtubeTitleDescLanguage, setYoutubeTitleDescLanguage] = useState("");
   const [youtubeThumbnailMode, setYoutubeThumbnailMode] = useState<"upload" | "auto" | "test">("auto");
   const [youtubeThumbnailUrl, setYoutubeThumbnailUrl] = useState("");
+  const [youtubeThumbnailMediaId, setYoutubeThumbnailMediaId] = useState<string | null>(null);
   const [youtubeThumbnailFile, setYoutubeThumbnailFile] = useState<File | null>(null);
   const [youtubeThumbnailDialogOpen, setYoutubeThumbnailDialogOpen] = useState(false);
   const [youtubeAutoThumbnails, setYoutubeAutoThumbnails] = useState<string[]>([]);
@@ -567,6 +568,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       youtube_blocked_countries: youtubeBlockedCountries ? youtubeBlockedCountries.split(",").map(c => c.trim()).filter(Boolean) : null,
       youtube_first_comment: youtubeEnableFirstComment && youtubeFirstComment ? youtubeFirstComment : null,
       youtube_thumbnail_url: youtubeThumbnailUrl || null,
+      youtube_thumbnail_media_id: youtubeThumbnailMediaId,
       // Facebook Reel description
       facebook_reel_description: facebookReelDescription || null,
       // Threads settings
@@ -789,6 +791,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     youtubeTitleDescLanguage, setYoutubeTitleDescLanguage,
     youtubeThumbnailMode, setYoutubeThumbnailMode,
     youtubeThumbnailUrl, setYoutubeThumbnailUrl,
+    youtubeThumbnailMediaId, setYoutubeThumbnailMediaId,
     youtubeThumbnailFile, setYoutubeThumbnailFile,
     youtubeThumbnailDialogOpen, setYoutubeThumbnailDialogOpen,
     youtubeAutoThumbnails, setYoutubeAutoThumbnails,

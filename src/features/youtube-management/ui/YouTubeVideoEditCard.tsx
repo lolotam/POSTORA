@@ -19,8 +19,9 @@ export interface YouTubeVideoEditCardProps {
   disabledReason: string;
   /** Owner-bound account whose token reads the regional catalog. */
   accountId?: string | null;
-  /** Injected real save seam. Production omits it while D1/D5 are unmet. */
-  onSave?: (draft: { title: string; categoryId: string }) => Promise<EditSaveOutcome>;
+  /** Injected real snapshot/save seam; production capability is off. */
+  onSnapshot?: (videoId: string) => Promise<string | null>;
+  onSave?: (draft: { title: string; categoryId: string; baseRevision: string }) => Promise<EditSaveOutcome>;
 }
 
 /**
@@ -37,6 +38,7 @@ export function YouTubeVideoEditCard({
   canEdit,
   disabledReason,
   accountId,
+  onSnapshot,
   onSave,
 }: YouTubeVideoEditCardProps): JSX.Element {
   const { t, i18n } = useTranslation("accounts");
@@ -45,6 +47,8 @@ export function YouTubeVideoEditCard({
   const [draftTitle, setDraftTitle] = useState(video.title);
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<EditSaveOutcome | null>(null);
+  const [revision, setRevision] = useState<string | null>(null);
+  const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
   const categoryCatalog = useYouTubeCategories(locale, accountId);
 
@@ -55,12 +59,21 @@ export function YouTubeVideoEditCard({
     setOutcome(null);
   }, [video.id, video.category_id, video.title]);
 
+  const openEditor = async () => {
+    setEditing(true);
+    setOutcome(null);
+    if (!onSnapshot) return;
+    const freshRevision = await onSnapshot(video.id);
+    setRevision(freshRevision);
+    if (freshRevision === null) setOutcome("outcome_unknown");
+  };
+
   const save = async () => {
-    if (!onSave || saving) return;
+    if (!onSave || saving || revision === null) return;
     setSaving(true);
     setOutcome(null);
     try {
-      setOutcome(await onSave({ title: draftTitle, categoryId: draftCategory }));
+      setOutcome(await onSave({ title: draftTitle, categoryId: draftCategory, baseRevision: revision }));
     } finally {
       setSaving(false);
     }
@@ -75,7 +88,7 @@ export function YouTubeVideoEditCard({
           size="sm"
           variant="outline"
           disabled={!canEdit}
-          onClick={() => setEditing(true)}
+          onClick={openEditor}
         >
           {t("youtubeManagement.detail.edit", "Edit video details")}
         </Button>
@@ -107,10 +120,26 @@ export function YouTubeVideoEditCard({
             label={t("youtubeManagement.detail.category", "Category")}
             unavailableText={t("youtubeManagement.detail.categoryUnavailable", "Currently unavailable")}
           />
+          <fieldset className="space-y-1 rounded-md border p-2">
+            <legend className="text-xs font-medium">
+              {t("youtubeManagement.detail.visibilityLegend", "Visibility")}
+            </legend>
+            <p className="text-xs text-muted-foreground">
+              {t("youtubeManagement.detail.currentVisibility", "Current: {{privacy}}", { privacy: video.privacy_status ?? "unknown" })}
+            </p>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={privacyConfirmed}
+                onChange={(event) => setPrivacyConfirmed(event.target.checked)}
+              />
+              {t("youtubeManagement.detail.privacyConfirm", "I understand this changes who can see the video")}
+            </label>
+          </fieldset>
           <Button
             type="button"
             size="sm"
-            disabled={!onSave || saving || draftTitle.trim().length === 0}
+            disabled={!onSave || saving || revision === null || draftTitle.trim().length === 0}
             onClick={save}
           >
             {saving

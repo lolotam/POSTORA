@@ -130,6 +130,7 @@ import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { assertNativeYoutubeDeclarations } from "../_shared/youtubePublishSafety.ts";
 import { withYoutubePublishEvidence, youtubePublishEvidence } from "./youtubePublishEvidence.ts";
+import { resolveYoutubeThumbnail } from "./youtubeThumbnailIntake.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { CHECK_ONCE_DEADLINE, classifyContainerStatus, CONTAINER_STATUS_FIELDS, type ContainerState, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
@@ -10087,6 +10088,20 @@ function buildYoutubeContinuationPorts(
       const selected = Array.isArray(metadata.selected_account_ids)
         ? metadata.selected_account_ids.filter((value): value is string => typeof value === "string")
         : [];
+      const thumbnail = await resolveYoutubeThumbnail({
+        supabase,
+        loadOwnedMedia: async (mediaId, ownerId) => {
+          const { data: file, error } = await supabase
+            .from("media_files")
+            .select("*")
+            .eq("id", mediaId)
+            .eq("user_id", ownerId)
+            .maybeSingle();
+          return error ? null : file as MediaFileRow | null;
+        },
+        allowedWorkspaceIds: await loadPostTargetWorkspaceIds(supabase, id),
+        mediaHosts,
+      }, String(data.user_id), metadata);
       return {
         id: String(data.id),
         userId: String(data.user_id),
@@ -10096,7 +10111,7 @@ function buildYoutubeContinuationPorts(
         mediaFileIds: Array.isArray(data.media_file_ids)
           ? data.media_file_ids.filter((value): value is string => typeof value === "string")
           : [],
-        thumbnailUrl: typeof metadata.youtube_thumbnail_url === "string" ? metadata.youtube_thumbnail_url : null,
+        thumbnailUrl: thumbnail.ok ? thumbnail.url : null,
         firstComment: typeof metadata.youtube_first_comment === "string" ? metadata.youtube_first_comment : null,
       };
     },
@@ -10488,7 +10503,6 @@ async function postToYouTube(
   console.log(`[YouTube Debug] Tags type: ${typeof tags}, Is Array: ${Array.isArray(tags)}, Length: ${tags.length}`);
 
   const firstComment = metadata?.youtube_first_comment;
-  const thumbnailUrl = metadata?.youtube_thumbnail_url;
 
   console.log(`YouTube upload - type: ${isShort ? "Short" : "Video"}, title: ${title}, privacy: ${privacyStatus}`);
 
@@ -10501,6 +10515,23 @@ async function postToYouTube(
   // hop again.
   // ─────────────────────────────────────────────────────────────────────
   const mediaHosts = await approvedMediaHostSet(supabase);
+  // A media-id thumbnail is resolved through the owner-bound media contract;
+  // an external URL is accepted only from an approved HTTPS host.
+  const thumbnailIntake = await resolveYoutubeThumbnail({
+    supabase,
+    loadOwnedMedia: async (id, ownerId) => {
+      const { data, error } = await supabase
+        .from("media_files")
+        .select("*")
+        .eq("id", id)
+        .eq("user_id", ownerId)
+        .maybeSingle();
+      return error ? null : data as MediaFileRow | null;
+    },
+    allowedWorkspaceIds: await loadPostTargetWorkspaceIds(supabase, post.id),
+    mediaHosts,
+  }, post.user_id, metadata);
+  const thumbnailUrl = thumbnailIntake.ok ? thumbnailIntake.url : null;
   const readUrl = youtubeStorageReadUrl(videoUrl);
   if (!isApprovedMediaUrl(readUrl, mediaHosts)) {
     throw new Error(youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.media_origin_not_approved));

@@ -81,6 +81,8 @@ export interface YouTubeSettingsState {
   titleDescLanguage: string;
   thumbnailMode: "upload" | "auto" | "test";
   thumbnailUrl: string;
+  /** Authorized media library id, resolved by the worker before signing. */
+  thumbnailMediaId: string | null;
   thumbnailFile: File | null;
   playlist: string;
   allowedCountries: string;
@@ -192,6 +194,7 @@ export function YouTubeSettings({
   const { tiers: resolvedTiers } = useResolvedImageModels();
   const [aiThumbnailRefs, setAiThumbnailRefs] = useState<string[]>([]);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [isThumbnailLibraryOpen, setIsThumbnailLibraryOpen] = useState(false);
   const [isStockPickerOpen, setIsStockPickerOpen] = useState(false);
   const aiThumbnailRefInputRef = useRef<HTMLInputElement>(null);
   const composioManaged = selectedAccounts.some((account) => account.auth_provider === "composio");
@@ -778,6 +781,16 @@ export function YouTubeSettings({
         <p className="text-xs text-muted-foreground">
           {t("youtube.thumbnailUrlHelp", "For direct YouTube publishing, use an HTTPS image URL from an approved media host.")}
         </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => setIsThumbnailLibraryOpen(true)}>
+            {t("youtube.chooseOwnedThumbnail", "Use owned media thumbnail")}
+          </Button>
+          {settings.thumbnailMediaId && (
+            <span className="text-xs text-muted-foreground">
+              {t("youtube.ownedThumbnailSelected", "Owned thumbnail: {{id}}", { id: settings.thumbnailMediaId })}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Auto-generated Thumbnail Dialog */}
@@ -1062,6 +1075,22 @@ export function YouTubeSettings({
         currentFileCount={aiThumbnailRefs.length}
         imagesOnly={true}
         showExtendedFilters={true}
+      />
+
+      {/* Single owned image for the YouTube thumbnail; the worker resolves its
+          id through the owner-bound media resolver before any signing. */}
+      <MediaLibraryPicker
+        open={isThumbnailLibraryOpen}
+        onOpenChange={setIsThumbnailLibraryOpen}
+        onSelect={(files) => {
+          const chosen = files[0];
+          if (!chosen) return;
+          onSettingsChange({ thumbnailMediaId: chosen.id, thumbnailUrl: "" });
+          setIsThumbnailLibraryOpen(false);
+        }}
+        maxFiles={1}
+        currentFileCount={0}
+        imagesOnly={true}
       />
 
       {/* Stock Media Picker for reference images - Photos only from Pexels/Pixabay */}

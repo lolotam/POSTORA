@@ -155,6 +155,17 @@
   "pagination": {
     "showing": "عرض {{start}}-{{end}} من أصل {{total}} منشور"
   },
+  "youtube": {
+    "applied": "تم تطبيقه",
+    "failed": "فشل",
+    "firstComment": "أول تعليق",
+    "notRequested": "مش مطلوب",
+    "privacyEffective": "الخصوصية المؤكدة: {{privacy}}",
+    "privacyRequested": "الخصوصية المطلوبة: {{privacy}}",
+    "skipped": "تم تخطيه",
+    "thumbnail": "الصورة المصغرة",
+    "unconfirmed": "مش متأكد"
+  },
   "retryDialog": {
     "failedPlatforms": "المنصات اللي فشلت",
     "retryCount": "إعادة المحاولة ({{count}})",

@@ -106,6 +106,38 @@ async function call<T>(
 }
 
 export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway {
+  getEditSnapshot(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<{
+    revision: string;
+    values: { title: string; privacyStatus: string; categoryId: string | null };
+  }>> {
+    return call(
+      { operation: "edit_snapshot", account_id: params.accountId, video_id: params.videoId },
+      (data): data is { revision: string; values: { title: string; privacyStatus: string; categoryId: string | null } } =>
+        typeof data === "object" && data !== null && typeof (data as { revision?: unknown }).revision === "string",
+    );
+  }
+
+  updateVideo(params: {
+    accountId: string;
+    videoId: string;
+    baseRevision: string;
+    changes: { title?: string; category_id?: string; privacy_status?: "private" | "unlisted" | "public" };
+    privacyConfirmation?: { to: "private" | "unlisted" | "public" };
+  }): Promise<YouTubeResourceSuccess<{ revision: string }>> {
+    return call(
+      {
+        operation: "update_video",
+        account_id: params.accountId,
+        video_id: params.videoId,
+        base_revision: params.baseRevision,
+        changes: params.changes,
+        ...(params.privacyConfirmation ? { privacy_confirmation: params.privacyConfirmation } : {}),
+      },
+      (data): data is { revision: string } =>
+        typeof data === "object" && data !== null && typeof (data as { revision?: unknown }).revision === "string",
+    );
+  }
+
   getCategories(params: { accountId: string; region?: string; locale?: string }): Promise<YouTubeResourceSuccess<{
     region: string;
     locale: string;

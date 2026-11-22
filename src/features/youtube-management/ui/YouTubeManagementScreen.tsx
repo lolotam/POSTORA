@@ -47,6 +47,8 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
   const capabilities = useYouTubeCapabilities({ gateway, accountId: activeAccountId });
   const browse = capabilities.data?.data.capabilities.browse;
   const canBrowse = browse !== undefined && browse.state !== "unavailable";
+  const editCapability = capabilities.data?.data.capabilities.edit_metadata;
+  const editUnavailableReason = editCapability?.state === "unavailable" ? editCapability.reason : null;
 
   const channel = useYouTubeChannel({ gateway, accountId: activeAccountId, enabled: canBrowse });
   const videos = useYouTubeVideos({ gateway, accountId: activeAccountId, enabled: canBrowse });
@@ -212,10 +214,39 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                   fetchedAt={video.data.freshness.fetched_at}
                   canEdit={capabilities.data?.data.capabilities.edit_metadata?.state === "available"}
                   accountId={activeAccountId}
-                  disabledReason={t(
-                    "youtubeManagement.detail.editUnavailable",
-                    "Editing is not enabled until conditional write enforcement is verified.",
-                  )}
+                  onSnapshot={async (videoId) => {
+                    if (!activeAccountId) return null;
+                    try {
+                      const result = await gateway.getEditSnapshot({ accountId: activeAccountId, videoId });
+                      return result.data.revision;
+                    } catch {
+                      return null;
+                    }
+                  }}
+                  onSave={async ({ title, categoryId, baseRevision }) => {
+                    if (!activeAccountId || !selectedVideoId) return "outcome_unknown";
+                    try {
+                      await gateway.updateVideo({
+                        accountId: activeAccountId,
+                        videoId: selectedVideoId,
+                        baseRevision,
+                        changes: { title, ...(categoryId ? { category_id: categoryId } : {}) },
+                      });
+                      return "saved";
+                    } catch (error) {
+                      const code = (error as { code?: string }).code;
+                      return code === "edit_conflict" ? "edit_conflict" : "outcome_unknown";
+                    }
+                  }}
+                  disabledReason={editUnavailableReason === "reconnect_required"
+                    ? t(
+                      "youtubeManagement.detail.reconnectRequired",
+                      "This channel needs to be reconnected before editing is available.",
+                    )
+                    : t(
+                      "youtubeManagement.detail.editUnavailable",
+                      "Editing is not enabled until conditional write enforcement is verified.",
+                    )}
                 />
               ) : selectedVideoId === null ? (
                 <p className="text-sm text-muted-foreground">

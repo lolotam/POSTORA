@@ -401,6 +401,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     titleDescLanguage: platformSettings.youtubeTitleDescLanguage,
     thumbnailMode: platformSettings.youtubeThumbnailMode,
     thumbnailUrl: platformSettings.youtubeThumbnailUrl,
+    thumbnailMediaId: platformSettings.youtubeThumbnailMediaId,
     thumbnailFile: platformSettings.youtubeThumbnailFile,
     playlist: platformSettings.youtubePlaylist,
     allowedCountries: platformSettings.youtubeAllowedCountries,
@@ -437,6 +438,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     if (changes.titleDescLanguage !== undefined) platformSettings.setYoutubeTitleDescLanguage(changes.titleDescLanguage);
     if (changes.thumbnailMode !== undefined) platformSettings.setYoutubeThumbnailMode(changes.thumbnailMode);
     if (changes.thumbnailUrl !== undefined) platformSettings.setYoutubeThumbnailUrl(changes.thumbnailUrl);
+    if (changes.thumbnailMediaId !== undefined) platformSettings.setYoutubeThumbnailMediaId(changes.thumbnailMediaId);
     if (changes.thumbnailFile !== undefined) platformSettings.setYoutubeThumbnailFile(changes.thumbnailFile);
     if (changes.playlist !== undefined) platformSettings.setYoutubePlaylist(changes.playlist);
     if (changes.allowedCountries !== undefined) platformSettings.setYoutubeAllowedCountries(changes.allowedCountries);
