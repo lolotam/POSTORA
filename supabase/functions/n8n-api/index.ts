@@ -1005,7 +1005,12 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    let youtubeTargets = selectedAccounts.filter((account: any) => account.platform === 'youtube');
+    let youtubeTargets: {
+      id: string;
+      auth_provider: string | null;
+      connection_id?: string | null;
+      workspace_id?: string | null;
+    }[] = selectedAccounts.filter((account: { platform: string }) => account.platform === 'youtube');
     if (youtubeTargets.length === 0) {
       const { data, error } = await supabase.from('social_accounts')
         .select('id, auth_provider, connection_id, workspace_id')
@@ -1020,7 +1025,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       }
       youtubeTargets = data || [];
     }
-    if (youtubeTargets.some((account: any) => account.auth_provider === 'composio')) {
+    if (youtubeTargets.some((account) => account.auth_provider === 'composio')) {
       // social_accounts.workspace_id is nullable but the ledger's is a NOT
       // NULL uuid: resolve a missing one to the owner's personal workspace
       // (spec §4.3). Resolved once and guarded: telemetry must never break
@@ -1037,8 +1042,8 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
         );
       }
       await Promise.all(youtubeTargets
-        .filter((account: any) => account.auth_provider === 'composio')
-        .map(async (account: any) => {
+        .filter((account) => account.auth_provider === 'composio')
+        .map(async (account) => {
           const workspaceId = account.workspace_id ?? fallbackWorkspaceId;
           if (!workspaceId) return;
           await recordConnectorCall(supabase, {
