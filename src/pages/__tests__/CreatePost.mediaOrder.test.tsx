@@ -179,6 +179,27 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it("writes a stable client-generated post id and immutable intent fingerprint, then clears it on success", async () => {
+    const user = userEvent.setup();
+    const view = render(<CreatePost />, { wrapper: wrapper("/post") });
+    await user.type(screen.getByLabelText("Caption"), "Stable submission");
+    await chooseAccountAndReview(user);
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+
+    await waitFor(() => expect(fixture.inserts).toHaveLength(1));
+    const insert = fixture.inserts[0];
+    expect(typeof insert.id).toBe("string");
+    expect(String(insert.id)).toMatch(/^[0-9a-f-]{36}$/);
+    const metadata = insert.metadata as Record<string, unknown>;
+    expect(metadata.submit_id).toBe(insert.id);
+    expect(typeof metadata.submit_fingerprint).toBe("string");
+    expect(String(metadata.submit_fingerprint)).toContain("Stable submission");
+
+    await screen.findByTestId("saved-post-id");
+    expect(sessionStorage.getItem("youtube-stage3-submit:owner:new")).toBeNull();
+    view.unmount();
+  });
+
   it.each(["saving", "enqueueing"])("does not restore a submitted draft when profile timezone arrives during %s", async (phase) => {
     fixture.profile = null;
     let release!: () => void;
