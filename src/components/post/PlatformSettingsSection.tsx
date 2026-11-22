@@ -557,6 +557,7 @@ export function PlatformSettingsSection({
                   isGeneratingAiThumbnail={platformSettings.youtubeGeneratingAiThumbnail}
                   onDownloadThumbnail={youtubeThumbnails.downloadThumbnail}
                   selectedAccounts={getSelectedAccountsForPlatform("youtube")}
+                  caption={caption}
                 />
                 
                 {youtubeSettingsState.videoType === "short" && hasVideo && (

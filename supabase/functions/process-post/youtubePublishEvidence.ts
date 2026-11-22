@@ -71,7 +71,7 @@ export function youtubeEvidenceFromMetadata(
   overrides: Partial<YoutubeEvidenceInput> = {},
 ): YoutubePublishEvidence {
   const values = (metadata ?? {}) as Record<string, unknown>;
-  const thumbnailRequested = typeof values.youtube_thumbnail_media_id === "string" ||
+  const thumbnailRequested = (typeof values.youtube_thumbnail_media_id === "string" && values.youtube_thumbnail_media_id.length > 0) ||
     (typeof values.youtube_thumbnail_url === "string" && values.youtube_thumbnail_url.length > 0);
   const commentRequested = typeof values.youtube_first_comment === "string" && values.youtube_first_comment.length > 0;
   return youtubePublishEvidence({

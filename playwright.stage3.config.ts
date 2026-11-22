@@ -15,12 +15,14 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   timeout: 120_000,
+  // Playwright reads assertion settings from top-level/project-level expect,
+  // not from use.expect. Keep the real 30 s allowance here.
+  expect: { timeout: 30_000 },
   reporter: [["line"]],
   use: {
     baseURL: "http://127.0.0.1:8091",
     navigationTimeout: 60_000,
     actionTimeout: 30_000,
-    expect: { timeout: 30_000 },
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {

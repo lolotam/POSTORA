@@ -6,7 +6,7 @@
  * are not live D1/D5 provider proof.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { startStage3Journey, VIDEO } from "./fixtures/youtubeStage3";
+import { startStage3Journey, youtubeFixtureState, VIDEO } from "./fixtures/youtubeStage3";
 
 async function openEditor(page: Page, locale: "en" | "ar" = "en") {
   await page.goto("/youtube", { waitUntil: "domcontentloaded" });
@@ -27,6 +27,13 @@ test.describe("YouTube Stage 3 offline journeys", () => {
     await expect(page.getByRole("checkbox", { name: /changes who can see the video/i })).toBeChecked();
     await page.getByRole("button", { name: /^save$/i }).click();
     await expect(page.getByRole("status")).toContainText(/match your changes/i);
+    // The success is only meaningful if the intended mutation reached the wire.
+    expect(youtubeFixtureState.updateRequests).toHaveLength(1);
+    expect(youtubeFixtureState.updateRequests[0]).toMatchObject({
+      videoId: VIDEO.id,
+      changes: { title: "Renamed in the offline journey" },
+    });
+    expect(typeof youtubeFixtureState.updateRequests[0].baseRevision).toBe("string");
   });
 
   test("a stale base is reported as a conflict without claiming success", async ({ page }) => {

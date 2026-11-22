@@ -84,6 +84,8 @@ interface World {
   authorityChecks: number;
   /** Read-only provider reconciliations of an unproven session. */
   probes: number;
+  /** Fenced persistence of a probed receipt, before projection. */
+  completions: Array<{ sessionId: string; leaseToken: string; videoId: string }>;
 }
 
 interface WorldOptions {
@@ -99,6 +101,8 @@ interface WorldOptions {
   projectRefused?: YoutubeUploadRefusal | null;
   /** The video a read-only reconciliation probe discovers, if any. */
   probeVideoId?: string | null;
+  /** A fenced receipt write that loses its lease or fails. */
+  completeReceiptRefused?: boolean;
   /** Observed follow-up outcomes from the run that created the video. */
   followUpResults?: YoutubeFollowUpResults;
   /** The verdict the store answers the write-authority question with. */
@@ -179,7 +183,10 @@ function world(options: WorldOptions = {}): World {
     mediaFileId: MEDIA_ID,
     mediaObjectVersion: 1,
     continuationCount: 0,
-    uploadBody: { snippet: { title: "A video" } },
+    uploadBody: {
+      snippet: { title: "A video" },
+      status: { selfDeclaredMadeForKids: false, containsSyntheticMedia: false },
+    },
     uploadSettings: { part: "snippet,status", notifySubscribers: false },
     resolvedPlatform: "youtube",
     targetAccountIds: [ACCOUNT_ID],
@@ -200,6 +207,7 @@ function world(options: WorldOptions = {}): World {
     timeline: [],
     authorityChecks: 0,
     probes: 0,
+    completions: [],
     ports: {
       loadPost() {
         return Promise.resolve(post);
@@ -246,6 +254,10 @@ function world(options: WorldOptions = {}): World {
           responseData: args.responseData ?? {},
         });
         return Promise.resolve({ settled: true, refused: null });
+      },
+      completeReceipt(args) {
+        world.completions.push(args);
+        return Promise.resolve(!options.completeReceiptRefused);
       },
       probeReceipt() {
         world.probes += 1;
@@ -589,15 +601,18 @@ Deno.test("a partially uploaded legacy session sends no further byte without pro
     session: { bytesSent: 40, confirmedBytes: 40 },
   });
   const result = await continueYoutubeUpload(w.ports, request);
-  assertEquals(result.status, "failed");
-  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.declaration_required);
-  // A read-only reconciliation is allowed; another chunk is not.
+  // An inconclusive probe on a session that may hold a video is uncertainty,
+  // not a declaration problem: leave it for reconciliation and send no byte.
+  assertEquals(result.status, "refused");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.reconcile);
   assertEquals(w.probes, 1);
   assertEquals(w.uploads, 0);
   assertEquals(w.mediaReads, 0);
+  assertEquals(w.completions.length, 0);
+  assertEquals(w.settled.length, 0);
 });
 
-Deno.test("a read-only probe that finds a video projects the receipt without proof", async () => {
+Deno.test("a probed receipt is fenced into the store before it is projected", async () => {
   const w = world({
     post: { metadata: unproven },
     session: { bytesSent: 40, videoMayExist: true },
@@ -607,9 +622,44 @@ Deno.test("a read-only probe that finds a video projects the receipt without pro
   assertEquals(result.status, "completed");
   assertEquals(result.videoId, "AbcD1234eFg");
   assertEquals(w.probes, 1);
+  assertEquals(w.completions.length, 1);
+  assertEquals(w.completions[0].sessionId, "session-1");
+  assertEquals(w.completions[0].leaseToken, request.leaseToken);
+  assertEquals(w.completions[0].videoId, "AbcD1234eFg");
+  assertEquals(w.timeline.indexOf("project"), w.timeline.length - 1);
   assertEquals(w.uploads, 0);
   assertEquals(w.mediaReads, 0);
   assertEquals(w.projected.length, 1);
+});
+
+Deno.test("a failed fenced receipt write neither projects nor reports completion", async () => {
+  const w = world({
+    post: { metadata: unproven },
+    session: { bytesSent: 40, videoMayExist: true },
+    probeVideoId: "AbcD1234eFg",
+    completeReceiptRefused: true,
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "refused");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.lease_conflict);
+  assertEquals(w.completions.length, 1);
+  assertEquals(w.projected.length, 0);
+  assertEquals(w.settled.length, 0);
+});
+
+Deno.test("saved provider declarations are required even when the post now has proof", async () => {
+  const w = world({
+    session: {
+      uploadBody: {
+        snippet: { title: "A video" },
+        status: { selfDeclaredMadeForKids: false },
+      },
+    },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "failed");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.declaration_required);
+  assertEquals(w.uploads, 0);
 });
 
 Deno.test("a proven declaration lets the same inert session continue", async () => {

@@ -109,7 +109,10 @@ vi.mock("@/integrations/supabase/client", () => ({
             select: () => ({
               single: async () => {
                 if (!fixture.stored) {
-                  fixture.stored = { ...payload };
+                  fixture.stored = {
+                    ...payload,
+                    publish_requested_at: "2026-11-22T10:00:00.000Z",
+                  };
                   return { data: null, error: { message: "network lost" } };
                 }
                 return { data: null, error: { code: "23505", message: "duplicate key" } };

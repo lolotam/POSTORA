@@ -32,6 +32,15 @@ export const VIDEO = {
 
 export type EditScenario = "available" | "conflict" | "unknown" | "reconnect" | "off";
 
+/** Mutations the browser actually sent, so a journey can assert the wire body. */
+export const youtubeFixtureState = {
+  updateRequests: [] as Array<{
+    videoId: unknown;
+    baseRevision: unknown;
+    changes: Record<string, unknown>;
+  }>,
+};
+
 export interface Stage3Scenario {
   locale?: "en" | "ar";
   edit?: EditScenario;
@@ -59,6 +68,7 @@ function storageKey(url: string): string {
 }
 
 export async function startStage3Journey(page: Page, scenario: Stage3Scenario = {}): Promise<void> {
+  youtubeFixtureState.updateRequests = [];
   const url = requireLocalUrl();
   await page.addInitScript(
     ({ key, owner, locale }) => {
@@ -197,6 +207,11 @@ export async function startStage3Journey(page: Page, scenario: Stage3Scenario = 
       }));
     }
     if (operation === "update_video") {
+      youtubeFixtureState.updateRequests.push({
+        videoId: body.video_id,
+        baseRevision: body.base_revision,
+        changes: (body.changes ?? {}) as Record<string, unknown>,
+      });
       if (scenario.edit === "conflict") return json(route, 409, { error: "edit_conflict", request_id: "fixture" });
       if (scenario.edit === "unknown") return json(route, 502, { error: "outcome_unknown", request_id: "fixture" });
       if (scenario.edit === "reconnect") return json(route, 409, { error: "reconnect_required", request_id: "fixture" });

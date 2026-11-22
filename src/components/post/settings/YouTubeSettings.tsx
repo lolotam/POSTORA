@@ -50,6 +50,7 @@ import { Image as ImageIcon } from "lucide-react";
 import { ResolvedModelCards } from "@/components/ai/ResolvedModelCards";
 import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
 import { useYouTubeCategories } from "@/hooks/useYouTubeCategories";
+import { resolveYouTubeVideoTitle } from "../../../../supabase/functions/_shared/youtubeVideoTitle";
 
 export interface YouTubeSettingsState {
   // Video type
@@ -111,6 +112,8 @@ interface YouTubeSettingsProps {
   isGeneratingAiThumbnail: boolean;
   onDownloadThumbnail: (url: string, filename: string) => void;
   selectedAccounts?: SelectedAccount[];
+  /** Caption used by the native request when no title override was saved. */
+  caption?: string;
 }
 
 const MAX_THUMBNAIL_REFERENCES = 5;
@@ -184,6 +187,7 @@ export function YouTubeSettings({
   isGeneratingAiThumbnail,
   onDownloadThumbnail,
   selectedAccounts = [],
+  caption,
 }: YouTubeSettingsProps) {
   const { flags } = useFeatureFlags();
   const { t, i18n } = useTranslation("postsettings");
@@ -256,11 +260,16 @@ export function YouTubeSettings({
     );
   };
 
-  const finalTitle = settings.title.trim() ||
-    (settings.videoType === "short" ? `${t("youtube.newShort", "New Video #Shorts")}` : t("youtube.newVideo", "New Video"));
-  const shortsTitle = settings.videoType === "short" && !finalTitle.toLowerCase().includes("#shorts")
-    ? `${finalTitle.length > 90 ? finalTitle.substring(0, 90) : finalTitle} #Shorts`
-    : finalTitle;
+  // The preview uses the SAME resolver as the native request so a creator
+  // never approves "New Video" and publishes the caption instead.
+  const shortsTitle = resolveYouTubeVideoTitle({
+    title: settings.title,
+    caption,
+    videoType: settings.videoType,
+    fallback: settings.videoType === "short"
+      ? t("youtube.newShort", "New Video #Shorts")
+      : t("youtube.newVideo", "New Video"),
+  });
 
   return (
     <>

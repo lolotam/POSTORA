@@ -90,6 +90,13 @@ function CreatePostSession() {
     sessionStorage.removeItem("postora_post_draft");
     sessionStorage.removeItem("postora_reuse_payload");
     sessionStorage.removeItem("mediaLibrarySelection");
+    // A NEW upload gets a fresh submit identity. Only the browser keys are
+    // cleared; the already-persisted post row is never deleted or overwritten.
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith("youtube-stage3-submit:") || key.startsWith("youtube-stage3-intent:")) {
+        sessionStorage.removeItem(key);
+      }
+    }
     const params = new URLSearchParams(location.search);
     params.delete("edit");
     params.delete("from");
@@ -242,26 +249,6 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     }
   }, [location.state]);
 
-  // Restoring a scheduled edit must not replace an explicit saved privacy
-  // with the form's private default. Apply the saved values once per load.
-  const hydratedEditMetadataRef = useRef<Record<string, unknown> | null>(null);
-  useEffect(() => {
-    if (!editMetadata || hydratedEditMetadataRef.current === editMetadata) return;
-    hydratedEditMetadataRef.current = editMetadata;
-    const savedPrivacy = editMetadata.youtube_visibility;
-    if (savedPrivacy === "public" || savedPrivacy === "unlisted" || savedPrivacy === "private") {
-      platformSettings.setYoutubeVisibility(savedPrivacy);
-    }
-    // A stored boolean is a legacy default unless it is backed by the proof
-    // written at ingress. Restoring an unproven `false` would let a scheduled
-    // post inherit a declaration the creator never gave.
-    const declarationProof = youtubeDeclarationProofOf(editMetadata);
-    if (declarationProof) {
-      platformSettings.setYoutubeMadeForKids(declarationProof.made_for_kids);
-      platformSettings.setYoutubeContainsSyntheticMedia(declarationProof.contains_synthetic_media);
-    }
-  }, [editMetadata, platformSettings]);
-
   // UI state
   const [currentStep, setCurrentStep] = useState<PostStep>(1);
   const submittingRef = useRef(false);
@@ -277,7 +264,12 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
   const intentSnapshotKey = `youtube-stage3-intent:${user?.id ?? "anonymous"}:${editPostId ?? "new"}`;
   const [restoredIntent] = useState<{
     youtubeSettings?: Partial<YouTubeSettingsState>;
-    intake?: { urlMediaType?: "images" | "video"; imageUrls?: string; videoUrl?: string };
+    intake?: {
+      uploadMethod?: "local" | "url" | "text";
+      urlMediaType?: "images" | "video";
+      imageUrls?: string;
+      videoUrl?: string;
+    };
   } | null>(() => {
     try {
       const raw = sessionStorage.getItem(intentSnapshotKey);
@@ -446,28 +438,51 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     enableFirstComment: platformSettings.youtubeEnableFirstComment,
   };
 
-  // Stored YouTube metadata -> form state. Only a versioned proof restores a
-  // declaration; a legacy boolean is deliberately left unanswered.
+  // Complete inverse of buildPostMetadata's YouTube section. Every field that
+  // participates in the immutable fingerprint must round-trip with its
+  // serialized type; otherwise an unchanged reload looks like a changed draft.
+  // Only a versioned proof restores a declaration: a legacy boolean stays
+  // unanswered instead of minting a declaration for a different post.
   const youtubeSettingsFromMetadata = (stored: Record<string, unknown>): Partial<YouTubeSettingsState> => {
     const text = (key: string) => typeof stored[key] === "string" ? stored[key] as string : undefined;
     const bool = (key: string) => typeof stored[key] === "boolean" ? stored[key] as boolean : undefined;
+    const list = (key: string) => Array.isArray(stored[key])
+      ? (stored[key] as unknown[]).filter((item): item is string => typeof item === "string").join(",")
+      : text(key);
     const proof = youtubeDeclarationProofOf(stored);
+    const comment = text("youtube_first_comment");
+    const thumbnailMediaId = text("youtube_thumbnail_media_id") ?? null;
     return {
-      title: text("youtube_title"),
-      description: text("youtube_description"),
-      tags: text("youtube_tags"),
-      category: text("youtube_category"),
-      visibility: text("youtube_visibility") as "public" | "unlisted" | "private" | undefined,
-      madeForKids: proof?.made_for_kids,
-      containsSyntheticMedia: proof?.contains_synthetic_media,
+      videoType: (text("youtube_video_type") as "video" | "short" | undefined) ?? "video",
+      title: text("youtube_title") ?? "",
+      description: text("youtube_description") ?? "",
+      tags: list("youtube_tags") ?? "",
+      category: text("youtube_category") ?? "22",
+      visibility: (text("youtube_visibility") as "public" | "unlisted" | "private" | undefined) ?? "private",
+      madeForKids: proof?.made_for_kids ?? null,
+      containsSyntheticMedia: proof?.contains_synthetic_media ?? null,
+      allowEmbedding: bool("youtube_allow_embedding") ?? true,
+      publicStatsViewable: bool("youtube_public_stats_viewable") ?? true,
+      hasPaidPromotion: bool("youtube_has_paid_promotion") ?? false,
+      notifySubscribers: bool("youtube_notify_subscribers") ?? true,
+      recordingDate: text("youtube_recording_date") ?? "",
+      license: (text("youtube_license") as "youtube" | "creativeCommon" | undefined) ?? "youtube",
+      videoLanguage: text("youtube_video_language") ?? "",
+      audioLanguage: text("youtube_audio_language") ?? "",
+      allowedCountries: list("youtube_allowed_countries") ?? "",
+      blockedCountries: list("youtube_blocked_countries") ?? "",
+      firstComment: comment ?? "",
+      enableFirstComment: Boolean(comment),
       thumbnailUrl: text("youtube_thumbnail_url") ?? "",
-      thumbnailMediaId: text("youtube_thumbnail_media_id") ?? null,
-      firstComment: text("youtube_first_comment") ?? "",
-      allowEmbedding: bool("youtube_allow_embedding"),
-      publicStatsViewable: bool("youtube_public_stats_viewable"),
-      videoType: text("youtube_video_type") as "video" | "short" | undefined,
+      thumbnailMediaId,
+      thumbnailMode: thumbnailMediaId ? "upload" : "auto",
     };
   };
+
+  // Switching scheduled posts on one mounted route must not carry the previous
+  // post's answers into a new save. Applying full defaults first resets every
+  // control, then the stored metadata (if any) restores only proven values.
+  const resetYoutubeSettings = () => youtubeSettingsFromMetadata({});
 
   const handleYoutubeSettingsChange = (changes: Partial<YouTubeSettingsState>) => {
     // A thumbnail has exactly one source. Switching between the URL field and
@@ -520,17 +535,35 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
   // still identifies the original submission rather than an empty draft.
   const youtubeChangeRef = useRef(handleYoutubeSettingsChange);
   youtubeChangeRef.current = handleYoutubeSettingsChange;
+  const youtubeResetRef = useRef(resetYoutubeSettings);
+  youtubeResetRef.current = resetYoutubeSettings;
+  const setUploadMethodRef = useRef(setUploadMethod);
+  setUploadMethodRef.current = setUploadMethod;
   useEffect(() => {
     if (!restoredIntent) return;
+    youtubeChangeRef.current(youtubeResetRef.current());
     if (restoredIntent.youtubeSettings) {
       youtubeChangeRef.current(youtubeSettingsFromMetadata(restoredIntent.youtubeSettings));
     }
     if (restoredIntent.intake) {
+      setUploadMethodRef.current(restoredIntent.intake.uploadMethod ?? "local");
       setUrlMediaType(restoredIntent.intake.urlMediaType ?? "images");
       setImageUrls(restoredIntent.intake.imageUrls ?? "");
       setVideoUrl(restoredIntent.intake.videoUrl ?? "");
     }
   }, [restoredIntent]);
+
+  // Switching scheduled posts on one mounted route resets ALL YouTube controls
+  // and declarations first. A legacy post with no proof cannot inherit the
+  // previous post's Public visibility or answers; an untouched thumbnail or
+  // first comment is restored from this post's own metadata.
+  const hydratedEditMetadataRef = useRef<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    if (!editMetadata || hydratedEditMetadataRef.current === editMetadata) return;
+    hydratedEditMetadataRef.current = editMetadata;
+    youtubeChangeRef.current(youtubeResetRef.current());
+    youtubeChangeRef.current(youtubeSettingsFromMetadata(editMetadata));
+  }, [editMetadata]);
 
   // Validate and post
   const handlePost = async () => {
@@ -572,14 +605,6 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         scheduleTimezone: scheduleTimezone || null,
         youtube: youtubeSettings,
       });
-
-      if (!editPostId) {
-        sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
-          fingerprint: submitFingerprint,
-          youtubeSettings: youtubeIntentMetadata,
-          intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
-        }));
-      }
 
       type RecoveredPost = {
         id: string;
@@ -640,8 +665,16 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       if (!editPostId) {
         const lookup = await lookupPending();
         if (lookup.state === "conflict") {
+          // Never overwrite the accepted snapshot with a rejected draft.
           refusePending(lookup);
           return;
+        }
+        if (lookup.state === "none") {
+          sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
+            fingerprint: submitFingerprint,
+            youtubeSettings: youtubeIntentMetadata,
+            intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
+          }));
         }
         if (lookup.state === "found") {
           recoveredPost = lookup.post;

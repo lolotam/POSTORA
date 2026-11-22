@@ -206,6 +206,15 @@ export interface YoutubeContinuationPorts {
    * No provider is contacted and no media is read: the video already exists.
    */
   /**
+   * Persist a receipt DISCOVERED by a read-only probe with the worker's live
+   * lease, before anything projects it. A stale or failed write returns false.
+   */
+  completeReceipt?(args: {
+    sessionId: string;
+    leaseToken: string;
+    videoId: string;
+  }): Promise<boolean>;
+  /**
    * Read-only provider reconciliation. This may discover a receipt that a
    * worker died before recording; it never writes a byte to the provider.
    */
@@ -215,15 +224,7 @@ export interface YoutubeContinuationPorts {
     deadlineMs: number;
     mimeType: string | null;
   }): Promise<{ videoId: string | null }>;
-  projectReceipt(args: {
-    sessionId: string;
-    /** Evidence carried onto the resumed public row, never inferred as success. */
-    evidence?: YoutubePublishEvidence;
-    /** The durable result row this session owns; never a broad post lookup. */
-    platformPostId?: string | null;
-    /** The attempt the claimed session is fenced to. */
-    attemptStartedAt?: string | null;
-  }): Promise<{
+  projectReceipt(args: { sessionId: string }): Promise<{
     settled: boolean;
     refused: YoutubeUploadRefusal | null;
     videoId: string | null;
@@ -471,14 +472,9 @@ export async function continueYoutubeUpload(
     if (recovery.scopeState === "incomplete") {
       return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
     }
-    const projected = await ports.projectReceipt({
-      sessionId: session.id,
-      // The inheriting worker did not perform the follow-ups. Their outcomes
-      // are unknown, never applied or failed by inference.
-      evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
-      platformPostId: session.platformPostId,
-      attemptStartedAt: session.attemptStartedAt,
-    });
+    // The stored receipt is projected by the SQL RPC alone. This worker did
+    // not observe the follow-ups, so no evidence is invented here.
+    const projected = await ports.projectReceipt({ sessionId: session.id });
     if (!projected.settled) {
       return refused(refusalToReason(projected.refused ?? "session_not_found"));
     }
@@ -547,15 +543,18 @@ export async function continueYoutubeUpload(
   }
 
   // D3 applies to EVERY continuation that has no stored receipt, including a
-  // session that already wrote bytes. A legacy row whose booleans came from
-  // implicit defaults is not an answer: no further byte may reach the provider.
-  //
-  // A read-only probe is still allowed, because a video the provider already
-  // holds is a fact rather than a declaration-dependent upload. If the probe
-  // finds one, the receipt is projected exactly like a stored receipt. If it
-  // does not, the attempt is refused without another byte being sent.
-  if (!session.videoId && !youtubeDeclarationProofOf(post.metadata)) {
-    if ((session.bytesSent > 0 || session.videoMayExist) && ports.probeReceipt) {
+  // session that already wrote bytes. The authority is the declarations SENT
+  // to Google when this session was opened (the saved provider request body),
+  // not a post that may have acquired answers later. A legacy row whose
+  // booleans came from implicit defaults is not an answer: no further byte may
+  // reach the provider on this attempt.
+  const uploadStatus = (session.uploadBody as { status?: Record<string, unknown> }).status ?? {};
+  const savedDeclarationsProven = typeof uploadStatus.selfDeclaredMadeForKids === "boolean" &&
+    typeof uploadStatus.containsSyntheticMedia === "boolean" &&
+    youtubeDeclarationProofOf(post.metadata) !== null;
+  if (!session.videoId && !savedDeclarationsProven) {
+    const mayHoldVideo = session.bytesSent > 0 || session.videoMayExist;
+    if (mayHoldVideo && ports.probeReceipt) {
       const probed = await ports.probeReceipt({
         record: session,
         accessToken: account.accessToken,
@@ -563,22 +562,29 @@ export async function continueYoutubeUpload(
         mimeType: session.uploadSettings.mimeType ?? null,
       });
       if (probed.videoId) {
+        // A discovered receipt is NOT a projection input until the fenced
+        // store has persisted it under this worker's live lease. The SQL
+        // projection refuses a session without a durable video id.
+        const persisted = ports.completeReceipt
+          ? await ports.completeReceipt({ sessionId: session.id, leaseToken: request.leaseToken, videoId: probed.videoId })
+          : false;
+        if (!persisted) return refused(YOUTUBE_UPLOAD_REASON.lease_conflict);
         const recovery = await recoverFanout(ports, session.id, request.leaseToken);
         if (recovery.scopeState === "incomplete") {
           return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
         }
-        const projected = await ports.projectReceipt({
-          sessionId: session.id,
-          evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
-          platformPostId: session.platformPostId,
-          attemptStartedAt: session.attemptStartedAt,
-        });
+        const projected = await ports.projectReceipt({ sessionId: session.id });
         if (!projected.settled) {
           return refused(refusalToReason(projected.refused ?? "session_not_found"));
         }
-        return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: probed.videoId };
+        return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: projected.videoId ?? probed.videoId };
       }
+      // No receipt from an inconclusive probe is not proof that no video
+      // exists. Leave the row open for reconciliation; never redispatch.
+      return refused(YOUTUBE_UPLOAD_REASON.reconcile);
     }
+    // Definitely unsent: it is safe to end with an actionable declaration
+    // refusal, because no provider byte can exist for this session.
     return await refusePermanently({
       ports,
       session,

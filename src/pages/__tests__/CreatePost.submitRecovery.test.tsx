@@ -105,7 +105,12 @@ vi.mock("@/integrations/supabase/client", () => ({
                 }
                 // First attempt commits but its acknowledgement is lost.
                 if (!fixture.stored) {
-                  fixture.stored = { ...payload };
+                  // The database trigger pins an immediate post's acceptance
+                  // stamp at insert; the browser payload never carries it.
+                  fixture.stored = {
+                    ...payload,
+                    publish_requested_at: "2026-11-22T10:00:00.000Z",
+                  };
                   return { data: null, error: { message: "network lost" } };
                 }
                 // The reload retries the same deliberate submission and the
