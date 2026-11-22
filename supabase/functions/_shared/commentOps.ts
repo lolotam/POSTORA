@@ -54,12 +54,12 @@ async function signingKey(deps: CommentDeps): Promise<CryptoKey> {
   if (!secret) throw new CommentOpError("internal_error");
   return await crypto.subtle.importKey("raw", bytes.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
-async function seal(prefix: string, value: unknown, deps: CommentDeps): Promise<string> {
+export async function seal(prefix: string, value: unknown, deps: CommentDeps): Promise<string> {
   const payload = pack(bytes.encode(JSON.stringify(value)));
   const signature = await crypto.subtle.sign("HMAC", await signingKey(deps), bytes.encode(`${prefix}.${payload}`));
   return `${prefix}.${payload}.${pack(new Uint8Array(signature))}`;
 }
-async function unseal<T>(prefix: string, token: string, deps: CommentDeps): Promise<T | null> {
+export async function unseal<T>(prefix: string, token: string, deps: CommentDeps): Promise<T | null> {
   const key = await signingKey(deps);
   try {
     const parts = token.split(".");

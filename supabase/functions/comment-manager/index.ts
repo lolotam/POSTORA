@@ -12,6 +12,8 @@ import {
   groupThreadsByVideo,
 } from "./youtubeCommentsView.ts";
 import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
+import { STAGE4_ACTIONS } from "./stage4/contracts.ts";
+import { handleStage4 } from "./stage4/handler.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -168,6 +170,23 @@ Deno.serve(async (req) => {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Stage 4 private actions are handled by a separate module, BEFORE the
+    // legacy account lookup (which checks neither is_active nor platform).
+    if (typeof action === "string" && (STAGE4_ACTIONS as readonly string[]).includes(action)) {
+      const stage4Deps = {
+        admin: supabase,
+        fetcher: fetch,
+        now: () => Date.now(),
+        newRequestId: () => crypto.randomUUID(),
+        auth: async (_req: Request) => {
+          if (serviceUserId) return { userId: serviceUserId, isServiceRole: true };
+          return { userId: user.id, isServiceRole: false };
+        },
+        signingSecret: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      };
+      return await handleStage4(req, stage4Deps, corsHeaders);
     }
 
     // Get access token for the social account
