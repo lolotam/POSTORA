@@ -8,7 +8,7 @@
 // The bucket key is `stage4:<action>:<user_id>` so a user's reads and writes
 // are capped independently per action.
 
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
 export interface Stage4RateLimitResult {
   allowed: boolean;

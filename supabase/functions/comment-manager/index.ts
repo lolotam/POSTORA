@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
 import { isDirectInstagramAccount } from "../_shared/messengerCredentials.ts";
 import {
@@ -173,7 +173,7 @@ async function peekIsStage4Action(req: Request): Promise<boolean> {
  */
 export async function serveCommentManager(
   req: Request,
-  inject?: { supabase?: any; fetcher?: typeof fetch },
+  inject?: { supabase?: SupabaseClient; fetcher?: typeof fetch },
 ): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -238,10 +238,8 @@ export async function serveCommentManager(
     // has. The legacy switch below was written against an untyped body and
     // passes these fields straight into helpers that expect their JSON types;
     // the Stage 4 path never reads from here (its own strict schema is the
-    // authority), so this seam keeps the baseline's `any` shape (ARCHITECTURE
-    // 31: a documented legacy seam, not new untyped code).
-    // deno-lint-ignore no-explicit-any
-    const body = await req.json() as any;
+    // authority).
+    const body = await req.json();
     const { action, social_account_id, comment_id, message, page_id, ig_user_id } = body;
 
     // Stage 4 private actions are handled by a separate module, BEFORE the

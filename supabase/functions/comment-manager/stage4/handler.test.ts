@@ -7,6 +7,7 @@
 // receipt store recorded. No test touches Google, Supabase or a real token.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { handleStage4, type Stage4Deps } from "./handler.ts";
 import { STAGE4_ACTIONS } from "./contracts.ts";
 import { sealCursor, sealHandle, HANDLE_TTL_MS } from "./sealing.ts";
@@ -60,6 +61,80 @@ export interface ProviderCall {
   path: string;
   query: URLSearchParams;
   body?: unknown;
+}
+
+/** The reply of one fake RPC: supabase-js's `{ data, error }`. */
+interface FakeRpcResult {
+  data: unknown;
+  error: { message: string } | null;
+}
+
+/** The SQL parameters the fake claim / mark / settle / status functions read. */
+interface FakeRpcParams {
+  p_owner_id?: string;
+  p_operation_id?: string;
+  p_account_id?: string;
+  p_expected_channel?: string;
+  p_expected_generation?: number;
+  p_attempt_token?: string;
+  p_action?: string;
+  p_intent_digest?: string;
+  p_intent_digests?: Record<string, string> | null;
+  p_logical_digests?: Record<string, string>;
+  p_targets?: {
+    video_id?: string;
+    parent_comment_id?: string;
+    comment_id?: string;
+    moderation_status?: string;
+    ban_author?: boolean;
+    author_channel_id?: string;
+  };
+  p_outcome?: string;
+  p_reason?: string | null;
+  p_provider_class?: string | null;
+  p_result_thread_id?: string | null;
+  p_result_comment_id?: string | null;
+}
+
+/** The two methods of the admin client the handler calls, as the fake provides them. */
+interface FakeAdmin {
+  from(table: string): unknown;
+  rpc(fn: string, params: Record<string, unknown>): Promise<FakeRpcResult>;
+}
+
+/** An item of a parsed list answer, as far as the tests read it. */
+interface AnswerItem {
+  id: string;
+  title: string;
+  handle: string;
+  comment_id: string;
+  kind: string;
+  thread_id: string;
+  video_id: string;
+  canonical_parent_id: string;
+}
+
+/** The parsed JSON answer of the handler: the envelope and the payload fields the tests read. */
+interface Answer {
+  ok: boolean;
+  request_id: string;
+  reason?: string;
+  data: {
+    state?: string;
+    operation_id?: string;
+    observation?: string;
+    reason?: string | null;
+    confirmation?: string;
+    expires_in_seconds?: number;
+    items: AnswerItem[];
+    inconsistent_count?: number;
+    next_cursor?: string | null;
+    result_comment_id?: string | null;
+    moderation_status?: string | null;
+    ban_requested?: boolean;
+    author_channel_id?: string;
+    capabilities: Record<string, { allowed: boolean; reason: string | null }>;
+  };
 }
 
 export interface WorldOptions {
@@ -222,7 +297,7 @@ export function createWorld(options: WorldOptions = {}): World {
     return reasons;
   }
 
-  const admin: any = {
+  const admin: FakeAdmin = {
     from(table: string) {
       if (table === "system_logs") {
         return {
@@ -286,12 +361,12 @@ export function createWorld(options: WorldOptions = {}): World {
         if (options.digestKeysError) return { data: null, error: { message: "keys unavailable" } };
         return { data: { active_version: digestKey.version, keys: [digestKey] }, error: null };
       }
-      if (fn === "youtube_comment_op_claim") return claim(params);
-      if (fn === "youtube_comment_op_mark_dispatched") return mark(params);
-      if (fn === "youtube_comment_op_settle") return settle(params);
+      if (fn === "youtube_comment_op_claim") return claim(params as FakeRpcParams);
+      if (fn === "youtube_comment_op_mark_dispatched") return mark(params as FakeRpcParams);
+      if (fn === "youtube_comment_op_settle") return settle(params as FakeRpcParams);
       if (fn === "youtube_comment_op_status") {
         if (options.statusRpcError) return { data: null, error: { message: "database unavailable" } };
-        return status(params);
+        return status(params as FakeRpcParams);
       }
       return { data: null, error: { message: `unknown rpc ${fn}` } };
     },
@@ -299,7 +374,7 @@ export function createWorld(options: WorldOptions = {}): World {
 
   // ---- the receipt state machine (mirrors the migration) -------------------
 
-  function claim(p: Record<string, any>): { data: any; error: null } {
+  function claim(p: FakeRpcParams): FakeRpcResult {
     const owner = p.p_owner_id as string;
     const key = `${owner}:${p.p_operation_id}`;
     const account = accounts.get(String(p.p_account_id));
@@ -400,7 +475,7 @@ export function createWorld(options: WorldOptions = {}): World {
     };
   }
 
-  function mark(p: Record<string, any>): { data: any; error: null } {
+  function mark(p: FakeRpcParams): FakeRpcResult {
     const key = `${p.p_owner_id}:${p.p_operation_id}`;
     const row = receipts.get(key);
     if (!row) return { data: { ok: false, reason: "not_found" }, error: null };
@@ -432,7 +507,7 @@ export function createWorld(options: WorldOptions = {}): World {
     return { data: { ok: true, state: "dispatched", dispatched_at: row.dispatched_at }, error: null };
   }
 
-  function settle(p: Record<string, any>): { data: any; error: null } {
+  function settle(p: FakeRpcParams): FakeRpcResult {
     if (options.failSettleOnce) {
       options.failSettleOnce = false;
       throw new Error("settlement database failure");
@@ -451,7 +526,7 @@ export function createWorld(options: WorldOptions = {}): World {
     } else if (p.p_outcome === "refused" && p.p_provider_class !== "http_4xx") {
       return { data: { ok: false, reason: "invalid_outcome", state: row.state }, error: null };
     }
-    row.state = p.p_outcome;
+    row.state = p.p_outcome as ReceiptRow["state"];
     row.reason = p.p_reason ?? null;
     row.provider_class = p.p_provider_class ?? null;
     row.result_thread_id = p.p_result_thread_id ?? null;
@@ -460,7 +535,7 @@ export function createWorld(options: WorldOptions = {}): World {
     return { data: { ok: true, state: row.state }, error: null };
   }
 
-  function status(p: Record<string, any>): { data: any; error: null } {
+  function status(p: FakeRpcParams): FakeRpcResult {
     const key = `${p.p_owner_id}:${p.p_operation_id}`;
     const row = receipts.get(key);
     if (!row) return { data: { ok: false, reason: "not_found" }, error: null };
@@ -497,7 +572,7 @@ export function createWorld(options: WorldOptions = {}): World {
   }
 
   const deps: Stage4Deps = {
-    admin,
+    admin: admin as unknown as SupabaseClient,
     fetcher,
     now,
     newRequestId: () => crypto.randomUUID(),
@@ -631,7 +706,7 @@ function createdThreadFixture(videoId: string) {
   };
 }
 
-async function jsonOf(res: Response): Promise<any> {
+async function jsonOf(res: Response): Promise<Answer> {
   return await res.json();
 }
 
@@ -752,7 +827,7 @@ Deno.test("more than 100 replies page with cursors and a hop cap kills a cycle",
   assertEquals(page1.data.items.length, 50);
   assertEquals(typeof page1.data.next_cursor, "string");
   const page2 = await jsonOf(await world.calls("youtube_reply_page", { parent_handle: handle, cursor: page1.data.next_cursor }));
-  assertEquals(page2.data.items.map((i: any) => i.comment_id), ["r-last"]);
+  assertEquals(page2.data.items.map((i) => i.comment_id), ["r-last"]);
 
   // A cyclic provider that always hands back the same token dies at the cap:
   // seal a cursor beyond the cap and the handler refuses it.
@@ -805,7 +880,7 @@ Deno.test("a reply to a reply posts against the canonical parent, once", async (
   assertEquals(world.writes.length, 1);
   const write = world.writes[0];
   assertEquals(write.path, "comments");
-  assertEquals((write.body as any).snippet.parentId, "comment-7", "the canonical top-level parent is sent, not the reply's own id");
+  assertEquals((write.body as { snippet: { parentId: unknown } }).snippet.parentId, "comment-7", "the canonical top-level parent is sent, not the reply's own id");
 });
 
 Deno.test("the channel can edit its own comment and its own reply", async () => {
@@ -822,7 +897,7 @@ Deno.test("the channel can edit its own comment and its own reply", async () => 
         return { status: 200, body: { items: [commentFixture(call.query.get("id")!, { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "old text" } })] } };
       }
       if (call.path === "comments" && call.method === "PUT") {
-        return { status: 200, body: { id: (call.body as any).id, snippet: { textOriginal: "new text" } } };
+        return { status: 200, body: { id: (call.body as { id?: string }).id, snippet: { textOriginal: "new text" } } };
       }
       return undefined;
     },
@@ -1085,11 +1160,12 @@ Deno.test("credential preparation failure claims nothing", async () => {
 Deno.test("a rebinding between the claim and the mark refuses before any send", async () => {
   const world = createWorld();
   // The claim hook: rebind right after the receipt exists.
-  const originalRpc = (world.deps.admin as any).rpc.bind(world.deps.admin);
+  const fakeAdmin = world.deps.admin as unknown as FakeAdmin;
+  const originalRpc = fakeAdmin.rpc.bind(fakeAdmin);
   let rebinding = false;
-  (world.deps.admin as any).rpc = async (fn: string, params: Record<string, unknown>) => {
+  fakeAdmin.rpc = async (fn: string, params: Record<string, unknown>) => {
     const out = await originalRpc(fn, params);
-    if (fn === "youtube_comment_op_claim" && out?.data?.ok && rebinding) {
+    if (fn === "youtube_comment_op_claim" && (out.data as { ok?: boolean } | null)?.ok && rebinding) {
       world.accounts.get(nativeAccount().id)!.binding_generation += 1;
     }
     return out;
@@ -1222,7 +1298,7 @@ Deno.test("the edit observation distinguishes requested from different text", as
         return { status: 200, body: { items: [commentFixture(call.query.get("id")!, { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "edited text" } })] } };
       }
       if (call.path === "comments" && call.method === "PUT") {
-        return { status: 200, body: { id: (call.body as any).id, snippet: {} } };
+        return { status: 200, body: { id: (call.body as { id?: string }).id, snippet: {} } };
       }
       return undefined;
     },
@@ -1456,8 +1532,7 @@ Deno.test("ban: the capability is checked before any provider read, and the auth
 });
 
 Deno.test("ban turned off between the claim and the mark: the mark refuses and nothing is sent", async () => {
-  let world: World;
-  world = createWorld({
+  const world: World = createWorld({
     policy: { [nativeAccount().id]: { read: true, held: true, write: true, ban: true } },
     onClaim: () => world.setPolicy({ [nativeAccount().id]: { read: true, held: true, write: true, ban: false } }),
   });
@@ -1519,8 +1594,7 @@ Deno.test("refusal audit rows carry only verified identifiers", async () => {
   assertEquals("operation_id" in pre, false, "a key is not logged before a receipt exists for it");
 
   // A post-claim refusal (the mark refuses): the key is proven by the receipt.
-  let late: World;
-  late = createWorld({ onClaim: () => late.setPolicy({ [nativeAccount().id]: { read: true, held: true, write: false, ban: false } }) });
+  const late: World = createWorld({ onClaim: () => late.setPolicy({ [nativeAccount().id]: { read: true, held: true, write: false, ban: false } }) });
   const op = crypto.randomUUID();
   const lh = await firstHandle(late);
   await late.calls("youtube_moderate_comment", { target_handle: lh, status: "published", operation_id: op });

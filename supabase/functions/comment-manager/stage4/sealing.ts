@@ -47,6 +47,8 @@ export interface CursorPayload {
    * structurally instead of by remembering consumed tokens in state.
    */
   h: number;
+  /** The provider's page token for the next page (absent on a first-page cursor). */
+  pt?: string;
   e: number;
 }
 

@@ -7,6 +7,7 @@
 // The SQL is the authority. This module never decides membership from a
 // copied array, and it never caches the decision beyond the request.
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import type { Stage4Capability, Stage4CapabilitiesPayload, Stage4Reason } from "./contracts.ts";
 
 export interface RolloutAccountResult {
@@ -14,7 +15,7 @@ export interface RolloutAccountResult {
 }
 
 export async function readCapabilities(
-  admin: any,
+  admin: SupabaseClient,
   accountId: string,
 ): Promise<RolloutAccountResult> {
   const { data, error } = await admin.rpc("youtube_comments_stage4_capability_status", {
@@ -49,7 +50,7 @@ export async function readCapabilities(
 }
 
 export async function admitsCapability(
-  admin: any,
+  admin: SupabaseClient,
   accountId: string,
   capability: Stage4Capability,
 ): Promise<boolean> {

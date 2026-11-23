@@ -137,7 +137,7 @@ Deno.test("authentication comes first: a request that never finishes its body is
   const stalled = new Request("http://localhost/functions/v1/comment-manager", {
     method: "POST",
     headers: { Authorization: "Bearer bad-token", "Content-Type": "application/json" },
-    // A body that starts and never ends. @ts-expect-error duplex is required by the platform for stream bodies
+    // A body that starts and never ends. The platform requires the duplex option for stream bodies.
     body: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{"action":')); } }),
     duplex: "half",
   } as RequestInit);

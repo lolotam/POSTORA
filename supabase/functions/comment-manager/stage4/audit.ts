@@ -17,6 +17,7 @@
 // `user_id` is set only once the caller is identified. `account_id` and
 // `operation_id` are added only after they are verified against that owner.
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import type { Stage4Reason } from "./contracts.ts";
 
 export interface Stage4AuditRow {
@@ -50,7 +51,7 @@ export function sanitiseAction(action: unknown): string {
 }
 
 export async function writeRefusalAudit(
-  admin: any,
+  admin: SupabaseClient,
   row: Stage4AuditRow,
   opts: {
     rateLimitBucket: () => Promise<boolean>;

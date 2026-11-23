@@ -7,6 +7,7 @@
 // The handler is built from injected ports so it is testable without Supabase.
 
 import { z } from "https://esm.sh/zod@3.25.76";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import {
   STAGE4_ACTIONS,
   type Stage4Action,
@@ -36,6 +37,7 @@ import {
   unsealCursor,
   sealBanConfirmation,
   unsealBanConfirmation,
+  type HandlePayload,
   HANDLE_TTL_MS,
   CURSOR_TTL_MS,
   BAN_CONFIRMATION_TTL_MS,
@@ -49,7 +51,7 @@ import { readCapabilities, admitsCapability } from "./rollout.ts";
 import { stage4RateLimit, STAGE4_RATE_LIMITS } from "./rateLimit.ts";
 
 export interface Stage4Deps {
-  admin: any;
+  admin: SupabaseClient;
   fetcher: typeof fetch;
   now: () => number;
   newRequestId: () => string;
@@ -83,7 +85,7 @@ function json(status: number, body: unknown, headers: Record<string, string>): R
  */
 const ANON_AUDIT_MAX_PER_MINUTE = 30;
 
-let anonAuditSuppressedSinceCounter = 0;
+const anonAuditSuppressedSinceCounter = 0;
 
 async function refusal(
   deps: Stage4Deps,
@@ -176,7 +178,7 @@ interface AccountRow {
  * receipt is gone for good.
  */
 async function readAccount(
-  admin: any,
+  admin: SupabaseClient,
   accountId: string,
   userId: string,
 ): Promise<{ kind: "found"; account: AccountRow } | { kind: "absent" } | { kind: "failed" }> {
@@ -214,7 +216,7 @@ async function prepareToken(
   };
   // Health-neutral: a Stage 4 read or write never records needs_reauth or
   // rewrites granted scopes (spec 11); a refusal is only reported to the caller.
-  const result = await (mod as any).nativeAccessToken(
+  const result = await mod.nativeAccessToken(
     nativeAccount,
     { admin: deps.admin, fetcher: deps.fetcher },
     { healthNeutral: true },
@@ -229,7 +231,7 @@ async function prepareToken(
 // ---- digest keys ----------------------------------------------------------
 
 /** The SQL-held digest keys, or null when they cannot be read (a temporary 503, never a throw). */
-async function loadDigestKeys(admin: any): Promise<DigestKeys | null> {
+async function loadDigestKeys(admin: SupabaseClient): Promise<DigestKeys | null> {
   try {
     const { data, error } = await admin.rpc("youtube_comment_digest_keys");
     if (error || !data) return null;
@@ -365,8 +367,58 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
+// What this handler reads out of a YouTube response. The body is untrusted
+// provider input, so every field is optional and each use checks the value
+// before it is relied on; these types only name the shape that is read.
+interface YtCommentSnippet {
+  channelId?: string;
+  videoId?: string;
+  parentId?: string;
+  authorChannelId?: { value?: string };
+  authorDisplayName?: string;
+  authorProfileImageUrl?: string;
+  textOriginal?: string;
+  textDisplay?: string;
+  publishedAt?: string;
+  likeCount?: number;
+  moderationStatus?: string;
+}
+interface YtComment {
+  id?: string;
+  snippet?: YtCommentSnippet;
+}
+interface YtThread {
+  id?: string;
+  snippet?: { videoId?: string; channelId?: string; topLevelComment?: YtComment };
+  replies?: { comments?: YtComment[] };
+}
+interface YtVideo {
+  id?: string;
+  snippet?: { channelId?: string };
+}
+interface YtUpload {
+  snippet?: {
+    resourceId?: { videoId?: string };
+    title?: string;
+    publishedAt?: string;
+    thumbnails?: { default?: { url?: string } };
+  };
+}
+/** A list response body: `items` and the next page token. */
+type YtList<T> = { items?: T[]; nextPageToken?: string } | null | undefined;
+/** A write response body: the created or updated resource, as far as the evidence check reads it. */
+type YtWriteBody = {
+  id?: unknown;
+  snippet?: {
+    videoId?: unknown;
+    channelId?: unknown;
+    parentId?: unknown;
+    topLevelComment?: { id?: unknown };
+  };
+} | null | undefined;
+
 type WriteTargetCheck =
-  | { ok: true; citem: any }
+  | { ok: true; citem: YtComment }
   | { ok: false; status: number; reason: Stage4Reason; providerClass?: Stage4ProviderClass };
 
 /**
@@ -389,7 +441,7 @@ async function verifyWriteTarget(
       ? { ok: false, status: 404, reason: "target_not_verified", providerClass: "http_4xx" }
       : { ok: false, status: 502, reason: "upstream", providerClass: vres.providerClass };
   }
-  const videoItem = ((vres.body as any)?.items ?? [])[0];
+  const videoItem = ((vres.body as YtList<YtVideo>)?.items ?? [])[0];
   if (!videoItem || videoItem.id !== h.vi || videoItem?.snippet?.channelId !== account.platform_user_id) {
     return { ok: false, status: 403, reason: "video_not_owned" };
   }
@@ -399,7 +451,7 @@ async function verifyWriteTarget(
       ? { ok: false, status: 404, reason: "target_not_verified", providerClass: "http_4xx" }
       : { ok: false, status: 502, reason: "upstream", providerClass: cres.providerClass };
   }
-  const citem = ((cres.body as any)?.items ?? [])[0];
+  const citem = ((cres.body as YtList<YtComment>)?.items ?? [])[0];
   if (!citem || citem.id !== h.co) return { ok: false, status: 404, reason: "target_not_verified" };
   const snippet = citem.snippet ?? {};
   if (snippet.channelId && String(snippet.channelId) !== account.platform_user_id) {
@@ -444,7 +496,7 @@ async function verifyHandle(
   handle: string,
   deps: Stage4Deps,
   expected: { ownerId: string; accountId: string; generation: number; videoId?: string; commentId?: string },
-): Promise<{ ok: true; payload: any } | { ok: false; reason: Stage4Reason }> {
+): Promise<{ ok: true; payload: HandlePayload } | { ok: false; reason: Stage4Reason }> {
   const payload = await unsealHandle(handle, { signingSecret: deps.signingSecret, now: deps.now() });
   if (!payload) return { ok: false, reason: "invalid_handle" };
   if (payload.e < deps.now()) return { ok: false, reason: "expired_handle" };
@@ -466,7 +518,7 @@ async function verifyTargetHandle(
   deps: Stage4Deps,
   account: AccountRow,
   userId: string,
-): Promise<{ ok: true; payload: any } | { ok: false; reason: Stage4Reason }> {
+): Promise<{ ok: true; payload: HandlePayload } | { ok: false; reason: Stage4Reason }> {
   return await verifyHandle(handle, deps, {
     ownerId: userId,
     accountId: account.id,
@@ -484,7 +536,7 @@ interface ChainCheckResult {
 
 function validateThreadChain(
   videoId: string,
-  thread: any,
+  thread: YtThread,
   accountChannel: string,
   verifiedVideoChannel: string,
 ): { ok: boolean; inconsistent: boolean } {
@@ -516,9 +568,9 @@ function sealRow(
   deps: Stage4Deps,
   account: AccountRow,
   videoId: string,
-  thread: any,
+  thread: { id?: string },
   kind: "thread" | "reply",
-  comment: any,
+  comment: { id?: string } | undefined,
   observedStatus: string | null,
   canonicalParent: string,
   authorChannel: string | null,
@@ -544,7 +596,7 @@ function sealRow(
 // ---- parse rows -----------------------------------------------------------
 
 function parseThreadRow(
-  thread: any,
+  thread: YtThread,
   account: AccountRow,
   videoId: string,
 ): { threadRow: Stage4CommentRow; replyRows: Stage4CommentRow[] } | null {
@@ -567,7 +619,7 @@ function parseThreadRow(
     moderation_status: top?.snippet?.moderationStatus ? String(top.snippet.moderationStatus) : null,
     is_own: !!account.platform_user_id && authorChannel === account.platform_user_id,
   };
-  const replyRows: Stage4CommentRow[] = (Array.isArray(thread?.replies?.comments) ? thread.replies.comments : []).map((r: any) => ({
+  const replyRows: Stage4CommentRow[] = (Array.isArray(thread?.replies?.comments) ? thread.replies.comments : []).map((r: YtComment) => ({
     handle: "",
     kind: "reply" as const,
     comment_id: String(r?.id ?? ""),
@@ -726,18 +778,18 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     const status = await readCapabilities(deps.admin, accountId);
     const payload: Stage4CapabilitiesPayload = {
       account_id: accountId,
-      capabilities: status.capabilities as any,
+      capabilities: status.capabilities,
     };
     return ok({ ok: true, request_id: requestId, data: payload }, headers);
   }
 
   // ---- youtube_video_page ------------------------------------------------
   if (action === "youtube_video_page") {
-    const cursorToken = (input as any).cursor as string | undefined;
+    const cursorToken = (input as Extract<Stage4Request, { action: "youtube_video_page" }>).cursor;
     let pt: string | undefined;
     let hop = 0;
     if (cursorToken) {
-      const c = await unsealCursor(cursorToken, { signingSecret: deps.signingSecret, now: deps.now() }) as any;
+      const c = await unsealCursor(cursorToken, { signingSecret: deps.signingSecret, now: deps.now() });
       if (!c || c.o !== userId || c.a !== accountId || c.g !== account.binding_generation || c.a2 !== "video_page") {
         return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
       }
@@ -769,17 +821,17 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (res.kind === "indeterminate") {
       return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null, providerClass: res.providerClass });
     }
-    const items = ((res.body as any)?.items ?? []).map((it: any) => ({
+    const items = ((res.body as YtList<YtUpload>)?.items ?? []).map((it: YtUpload) => ({
       id: String(it?.snippet?.resourceId?.videoId ?? ""),
       title: String(it?.snippet?.title ?? ""),
       published_at: it?.snippet?.publishedAt ? String(it.snippet.publishedAt) : null,
       thumbnail_url: it?.snippet?.thumbnails?.default?.url ?? null,
     })).filter((v: Stage4VideoRow) => v.id);
-    const nextProviderToken = (res.body as any)?.nextPageToken ? String((res.body as any)?.nextPageToken) : null;
+    const nextProviderToken = (res.body as YtList<unknown>)?.nextPageToken ? String((res.body as YtList<unknown>)?.nextPageToken) : null;
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
-        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: "", l: "published", p: null, a2: "video_page", h: hop + 1, e: 0, pt: nextProviderToken } as any,
+        { o: userId, a: accountId, g: account.binding_generation, vi: "", l: "published", p: null, a2: "video_page", h: hop + 1, pt: nextProviderToken },
         { signingSecret: deps.signingSecret, now: deps.now(), ttlMs: CURSOR_TTL_MS },
       );
     }
@@ -816,7 +868,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (vres.kind === "indeterminate") {
       return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null, providerClass: vres.providerClass });
     }
-    const videoItem = ((vres.body as any)?.items ?? [])[0];
+    const videoItem = ((vres.body as YtList<YtVideo>)?.items ?? [])[0];
     if (!videoItem || videoItem.id !== inp.video_id) {
       return refusal(deps, 404, "not_found_provider", requestId, headers, { action, userId, accountId, operationId: null });
     }
@@ -827,8 +879,8 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     // Cursor.
     let pageToken: string | undefined;
     let hop = 0;
-    if ((input as any).cursor) {
-      const c = await unsealCursor((input as any).cursor, { signingSecret: deps.signingSecret, now: deps.now() });
+    if (inp.cursor) {
+      const c = await unsealCursor(inp.cursor, { signingSecret: deps.signingSecret, now: deps.now() });
       if (!c || c.o !== userId || c.a !== accountId || c.g !== account.binding_generation || c.vi !== inp.video_id || c.l !== inp.list || c.a2 !== "thread_page") {
         return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
       }
@@ -842,7 +894,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       if (hop > MAX_CURSOR_HOPS) {
         return refusal(deps, 400, "expired_handle", requestId, headers, { action, userId, accountId, operationId: null });
       }
-      pageToken = (c as any).pt;
+      pageToken = c.pt;
     }
 
     const res = await provider.listThreadsPage(
@@ -860,7 +912,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     }
 
     // Seal rows.
-    const threads = Array.isArray((res.body as any)?.items) ? (res.body as any)?.items : [];
+    const threads: YtThread[] = Array.isArray((res.body as YtList<YtThread>)?.items) ? (res.body as YtList<YtThread>)?.items ?? [] : [];
     const rows: Stage4CommentRow[] = [];
     let inconsistent = 0;
     for (const th of threads) {
@@ -881,11 +933,11 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       }
     }
 
-    const nextProviderToken = (res.body as any)?.nextPageToken ? String((res.body as any)?.nextPageToken) : null;
+    const nextProviderToken = (res.body as YtList<unknown>)?.nextPageToken ? String((res.body as YtList<unknown>)?.nextPageToken) : null;
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
-        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: inp.video_id, l: inp.list, p: null, a2: "thread_page", h: hop + 1, e: 0, pt: nextProviderToken } as any,
+        { o: userId, a: accountId, g: account.binding_generation, vi: inp.video_id, l: inp.list, p: null, a2: "thread_page", h: hop + 1, pt: nextProviderToken },
         { signingSecret: deps.signingSecret, now: deps.now(), ttlMs: CURSOR_TTL_MS },
       );
     }
@@ -920,8 +972,8 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     }
     let pageToken: string | undefined;
     let hop = 0;
-    if ((input as any).cursor) {
-      const c = await unsealCursor((input as any).cursor, { signingSecret: deps.signingSecret, now: deps.now() });
+    if (inp.cursor) {
+      const c = await unsealCursor(inp.cursor, { signingSecret: deps.signingSecret, now: deps.now() });
       if (!c || c.o !== userId || c.a !== accountId || c.g !== account.binding_generation || c.a2 !== "reply_page" || c.p !== canonicalParent) {
         return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
       }
@@ -935,7 +987,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       if (hop > MAX_CURSOR_HOPS) {
         return refusal(deps, 400, "expired_handle", requestId, headers, { action, userId, accountId, operationId: null });
       }
-      pageToken = (c as any).pt;
+      pageToken = c.pt;
     }
     const res = await provider.listRepliesPage({ fetcher: deps.fetcher }, tok.token, { parentId: canonicalParent, pageToken });
     if (res.kind === "refused") {
@@ -944,7 +996,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (res.kind === "indeterminate") {
       return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null, providerClass: res.providerClass });
     }
-    const items = Array.isArray((res.body as any)?.items) ? (res.body as any)?.items : [];
+    const items: YtComment[] = Array.isArray((res.body as YtList<YtComment>)?.items) ? (res.body as YtList<YtComment>)?.items ?? [] : [];
     const rows: Stage4CommentRow[] = [];
     let inconsistent = 0;
     for (const r of items) {
@@ -976,11 +1028,11 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       row.handle = replyHandle;
       rows.push(row);
     }
-    const nextProviderToken = (res.body as any)?.nextPageToken ? String((res.body as any)?.nextPageToken) : null;
+    const nextProviderToken = (res.body as YtList<unknown>)?.nextPageToken ? String((res.body as YtList<unknown>)?.nextPageToken) : null;
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
-        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: h.vi, l: "published", p: canonicalParent, a2: "reply_page", h: hop + 1, e: 0, pt: nextProviderToken } as any,
+        { o: userId, a: accountId, g: account.binding_generation, vi: h.vi, l: "published", p: canonicalParent, a2: "reply_page", h: hop + 1, pt: nextProviderToken },
         { signingSecret: deps.signingSecret, now: deps.now(), ttlMs: CURSOR_TTL_MS },
       );
     }
@@ -1007,7 +1059,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (vres.kind !== "success") {
       return refusal(deps, vres.kind === "refused" ? 403 : 502, vres.kind === "refused" ? (vres.reason as Stage4Reason) : "upstream", requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: vres.kind === "refused" ? "http_4xx" : vres.providerClass });
     }
-    const videoItem = ((vres.body as any)?.items ?? [])[0];
+    const videoItem = ((vres.body as YtList<YtVideo>)?.items ?? [])[0];
     if (!videoItem || videoItem.id !== inp.video_id || videoItem?.snippet?.channelId !== account.platform_user_id) {
       return refusal(deps, 403, "video_not_owned", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
@@ -1086,7 +1138,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       // Spec 9.2: create is confirmed only by COMPLETE, matching evidence —
       // the thread id, the top-level comment id (its own field, never the
       // thread id standing in for it), and the request's video and channel.
-      const body = write.body as any;
+      const body = write.body as YtWriteBody;
       // Evidence is a non-empty STRING id; a number, object or array is
       // malformed and is never coerced into one.
       const threadId = nonEmptyString(body?.id);
@@ -1201,7 +1253,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     let reason2: string | null = null;
     let resultCommentId: string | null = null;
     if (write.kind === "success") {
-      const body = write.body as any;
+      const body = write.body as YtWriteBody;
       const id = nonEmptyString(body?.id);
       // Spec 9.2: reply evidence is the comment id AND a parentId equal to the
       // canonical parent; a missing parentId is incomplete, not a pass.
@@ -1310,7 +1362,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     let providerClass: Stage4ProviderClass = "none";
     let reason2: string | null = null;
     if (write.kind === "success") {
-      const body = write.body as any;
+      const body = write.body as YtWriteBody;
       if (nonEmptyString(body?.id) === h.co) {
         outcome = "confirmed";
       }
@@ -1549,7 +1601,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
         const tok = await prepareToken(account, deps);
         if (tok.ok) {
           const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(data.result_comment_id));
-          const citem = cres.kind === "success" ? ((cres.body as any)?.items ?? [])[0] : null;
+          const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
           const text = citem?.snippet?.textOriginal ? String(citem.snippet.textOriginal) : null;
           if (text === null) {
             observation = "unavailable";

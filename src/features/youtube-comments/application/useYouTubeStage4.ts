@@ -124,12 +124,13 @@ export function useYouTubeStage4(params: {
         // The live page is the tail; earlier pages are cached snapshots.
         const entry = i === cursors.length - 1
           ? tailQuery.data
-          : queryClient.getQueryData<{ page: Item[] } | undefined>(pages[i].queryKey);
+          : queryClient.getQueryData<{ page: Item[] } | undefined>(
+            youtubeCommentsKey(userId, accountId, listOptions.resource, cursors[i] ?? `page-${i}`),
+          );
         for (const item of entry?.page ?? []) byKey.set(item.key, item);
       }
       return [...byKey.values()];
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- queryClient is a stable outer-scope value; pages is derived from cursors
-    }, [cursors, tailQuery.data]);
+    }, [cursors, tailQuery.data, listOptions.resource]);
 
     return {
       items,
@@ -474,8 +475,7 @@ export function useStage4Replies(params: {
     }
     for (const item of tailQuery.data?.page ?? []) byKey.set(item.key, item);
     return [...byKey.values()];
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- queryClient is a stable outer-scope value; the key parts are all in deps
-  }, [cursors, tailIndex, tailQuery.data, userId, accountId, parentHandle]);
+  }, [cursors, tailIndex, tailQuery.data, queryClient, userId, accountId, parentHandle]);
 
   return {
     items,
