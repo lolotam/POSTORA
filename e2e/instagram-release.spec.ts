@@ -302,8 +302,19 @@ test("canonical owner and competitor screens retain exact outliers across period
     const body = reply.request().postDataJSON();
     return body?.social_account_id === account.id && body.period_days === period && Boolean(body.cursor) === cursor;
   });
+  // Registered before anything that can trigger the request. The screen opens on
+  // the first account the account list returns, and that list has no defined
+  // order, so the account under test is selected explicitly; the one waiter
+  // below resolves on its report whether that came with the initial load or
+  // after the selection.
   const ownerFirst = ownerResponse(30);
   await page.goto("/analytics/instagram?tab=performance");
+  const accountSelect = page.getByRole("combobox");
+  await expect(accountSelect).toContainText("@release_");
+  if (!(await accountSelect.innerText()).includes("@release_pagegranted")) {
+    await accountSelect.click();
+    await page.getByRole("option", { name: /@release_pagegranted/ }).click();
+  }
   const ownerReply = await ownerFirst;
   expect(ownerReply.status()).toBe(200);
   const owner: OwnerReport = await ownerReply.json();
