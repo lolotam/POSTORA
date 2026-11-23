@@ -484,10 +484,11 @@ INSERT INTO public.youtube_comment_digest_keys (version, key)
 VALUES (1, sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'utf8')))
 ON CONFLICT (version) DO NOTHING;
 
--- A version that any receipt still references cannot be removed, and the
--- active version cannot be removed at all. This is the "rotation adds a
--- version and never deletes one while any row references it" rule, made
--- structural instead of a convention.
+-- A version that any receipt still references cannot be removed, the last
+-- active version can be neither removed nor retired, and the bytes of a key
+-- never change under an existing version (a rotation inserts a NEW version).
+-- This is the "rotation adds a version and never deletes one while any row
+-- references it" rule, made structural instead of a convention.
 CREATE OR REPLACE FUNCTION public.youtube_stage4_guard_digest_keys()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -495,6 +496,10 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 BEGIN
+  -- Key maintenance is serialised: two sessions that each remove a different
+  -- active key would otherwise each see the other one still standing.
+  PERFORM pg_advisory_xact_lock(hashtextextended('youtube_stage4_digest_keys', 0));
+
   IF TG_OP = 'DELETE' THEN
     IF EXISTS (
       SELECT 1 FROM public.youtube_comment_operations
@@ -505,9 +510,12 @@ BEGIN
         'youtube_stage4_guard_digest_keys: digest key version % is still referenced by a receipt',
         OLD.version;
     END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM public.youtube_comment_digest_keys
-       WHERE retired_at IS NULL
+    -- A BEFORE DELETE trigger still sees the row being deleted, so it is
+    -- excluded: another active key must remain.
+    IF OLD.retired_at IS NULL AND NOT EXISTS (
+      SELECT 1 FROM public.youtube_comment_digest_keys AS k
+       WHERE k.retired_at IS NULL
+         AND k.version <> OLD.version
     ) THEN
       RAISE EXCEPTION
         'youtube_stage4_guard_digest_keys: the last active digest key cannot be removed';
@@ -515,9 +523,26 @@ BEGIN
     RETURN OLD;
   END IF;
 
-  IF TG_OP = 'UPDATE' AND NEW.version <> OLD.version THEN
-    RAISE EXCEPTION
-      'youtube_stage4_guard_digest_keys: a digest key version cannot be changed';
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.version <> OLD.version THEN
+      RAISE EXCEPTION
+        'youtube_stage4_guard_digest_keys: a digest key version cannot be changed';
+    END IF;
+    -- The bytes are what every stored digest was computed with. Replacing
+    -- them under an existing version turns every retry into a conflict and
+    -- blinds the duplicate fence.
+    IF NEW.key IS DISTINCT FROM OLD.key THEN
+      RAISE EXCEPTION
+        'youtube_stage4_guard_digest_keys: the key material of a version cannot be changed; rotate by inserting a new version';
+    END IF;
+    IF OLD.retired_at IS NULL AND NEW.retired_at IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM public.youtube_comment_digest_keys AS k
+       WHERE k.retired_at IS NULL
+         AND k.version <> OLD.version
+    ) THEN
+      RAISE EXCEPTION
+        'youtube_stage4_guard_digest_keys: the last active digest key cannot be retired';
+    END IF;
   END IF;
 
   RETURN NEW;
@@ -526,8 +551,9 @@ $function$;
 
 COMMENT ON FUNCTION public.youtube_stage4_guard_digest_keys() IS
   'Trigger function on youtube_comment_digest_keys. A version referenced by '
-  'any receipt cannot be deleted, the last active version cannot be deleted, '
-  'and a version cannot be renumbered.';
+  'any receipt cannot be deleted, the last active version can be neither '
+  'deleted nor retired, a version cannot be renumbered and its key bytes '
+  'never change. Maintenance is serialised by an advisory lock.';
 
 DROP TRIGGER IF EXISTS trg_youtube_comment_digest_keys_guard
   ON public.youtube_comment_digest_keys;
@@ -746,6 +772,7 @@ DECLARE
   v_cap_key    text;
   v_cap_value  jsonb;
   v_keys       text[];
+  v_version_ok boolean;
 BEGIN
   -- --- the tile flag -------------------------------------------------------
   BEGIN
@@ -805,14 +832,21 @@ BEGIN
       'tile_enabled', true, 'accounts', '{}'::jsonb);
   END IF;
 
-  IF jsonb_typeof(v_policy -> 'version') <> 'number'
-     OR (v_policy ->> 'version')::numeric <> 1 THEN
+  -- A missing version makes jsonb_typeof(NULL) NULL, and a NULL condition is
+  -- treated as false by IF: the check is null-safe on purpose, and the cast
+  -- only runs on a value already known to be a number.
+  -- (An assignment, not an IF condition: plpgsql ends an IF expression at the
+  -- first THEN, which would cut a CASE in half.)
+  v_version_ok := CASE WHEN jsonb_typeof(v_policy -> 'version') = 'number'
+                       THEN (v_policy ->> 'version')::numeric = 1
+                       ELSE false END;
+  IF v_version_ok IS NOT TRUE THEN
     RETURN jsonb_build_object(
       'status', 'rollout_invalid', 'reason', 'rollout_invalid',
       'tile_enabled', true, 'accounts', '{}'::jsonb);
   END IF;
 
-  IF jsonb_typeof(v_policy -> 'accounts') <> 'object' THEN
+  IF jsonb_typeof(v_policy -> 'accounts') IS DISTINCT FROM 'object' THEN
     RETURN jsonb_build_object(
       'status', 'rollout_invalid', 'reason', 'rollout_invalid',
       'tile_enabled', true, 'accounts', '{}'::jsonb);
@@ -1298,6 +1332,13 @@ BEGIN
     v_logical := p_logical_digests ->> v_active::text;
 
     IF v_logical IS NULL OR btrim(v_logical) = '' THEN
+      -- Digests computed under an older key (a rotation between the caller
+      -- reading the keys and this claim) are a TEMPORARY refusal, exactly as
+      -- for edit and moderate: the caller keeps its key and recomputes.
+      IF p_intent_digests IS NOT NULL
+         AND btrim(COALESCE(p_intent_digests ->> v_active::text, '')) = '' THEN
+        RETURN jsonb_build_object('ok', false, 'reason', 'upstream');
+      END IF;
       RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
     END IF;
 
@@ -1493,6 +1534,20 @@ BEGIN
   -- comparison below reads as NULL, so the explicit found flag must refuse.
   v_reason := NULL;
 
+  -- The rollout settings are read by the evaluator below without a lock, so a
+  -- revocation could commit after that read and before this transaction's
+  -- commit, and the send would proceed after the capability was revoked. A
+  -- share lock on both rows (fixed key order) makes a concurrent revocation
+  -- wait until this mark commits, and makes a revocation that already
+  -- committed visible to the evaluator that runs next (each statement of a
+  -- volatile function takes a fresh snapshot). Only the mark takes it; the
+  -- claim and the status keep the plain read.
+  PERFORM 1
+     FROM public.app_settings AS s
+    WHERE s.key IN ('feature_youtube_comments', 'youtube_comments_stage4_rollout')
+    ORDER BY s.key
+      FOR SHARE;
+
   IF NOT v_account_found THEN
     v_reason := 'binding_changed';
   ELSIF v_account.platform <> 'youtube'
@@ -1686,6 +1741,7 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_op      public.youtube_comment_operations%ROWTYPE;
+  v_op_id   uuid;
   v_account public.social_accounts%ROWTYPE;
 BEGIN
   IF p_owner_id IS NULL OR p_account_id IS NULL OR p_operation_id IS NULL THEN
@@ -1696,6 +1752,7 @@ BEGIN
     FROM public.youtube_comment_operations
    WHERE owner_id = p_owner_id
      AND operation_id = p_operation_id;
+  v_op_id := v_op.id;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'not_found');
@@ -1729,6 +1786,10 @@ BEGIN
 
   -- The 90 second conversion. A dispatched receipt that was never settled
   -- reads as indeterminate.
+  -- The answer is always the row as it stands AFTER the conversion: when a
+  -- concurrent settlement won the race the conditional UPDATE matches nothing
+  -- and the winning row is read back, so a confirmed result is never reported
+  -- as an unknown outcome.
   IF v_op.state = 'dispatched'
      AND v_op.dispatched_at IS NOT NULL
      AND v_op.dispatched_at < clock_timestamp() - interval '90 seconds' THEN
@@ -1736,12 +1797,34 @@ BEGIN
        SET state = 'indeterminate',
            reason = COALESCE(reason, 'no_settlement'),
            settled_at = clock_timestamp()
-     WHERE id = v_op.id
+     WHERE id = v_op_id
        AND state = 'dispatched'
-       AND attempt_token = v_op.attempt_token;
+       AND attempt_token = v_op.attempt_token
+    RETURNING * INTO v_op;
 
-    v_op.state := 'indeterminate';
-    v_op.settled_at := clock_timestamp();
+    IF NOT FOUND THEN
+      SELECT * INTO v_op FROM public.youtube_comment_operations WHERE id = v_op_id;
+    END IF;
+  -- A claim that was never dispatched is closed after 120 s, as the claim does
+  -- for the same owner; the status read closes it for the one receipt asked
+  -- about, so a reload after a handler that stopped before the mark learns
+  -- that nothing was sent instead of waiting for another claim.
+  ELSIF v_op.state = 'claimed'
+     AND v_op.dispatched_at IS NULL
+     AND v_op.claimed_at < clock_timestamp() - interval '120 seconds' THEN
+    UPDATE public.youtube_comment_operations
+       SET state = 'refused',
+           reason = 'abandoned_before_dispatch',
+           settled_at = clock_timestamp()
+     WHERE id = v_op_id
+       AND state = 'claimed'
+       AND dispatched_at IS NULL
+       AND claimed_at < clock_timestamp() - interval '120 seconds'
+    RETURNING * INTO v_op;
+
+    IF NOT FOUND THEN
+      SELECT * INTO v_op FROM public.youtube_comment_operations WHERE id = v_op_id;
+    END IF;
   END IF;
 
   RETURN jsonb_build_object(
@@ -1755,6 +1838,9 @@ BEGIN
     'ban_requested', v_op.ban_author,
     'result_thread_id', v_op.result_thread_id,
     'result_comment_id', v_op.result_comment_id,
+    -- The comment the operation was aimed at, kept apart from the result: an
+    -- edit whose settlement failed has no result id, but its target is known.
+    'target_comment_id', v_op.comment_id,
     'claimed_at', v_op.claimed_at,
     'dispatched_at', v_op.dispatched_at,
     'settled_at', v_op.settled_at,

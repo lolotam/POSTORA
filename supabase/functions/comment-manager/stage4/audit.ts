@@ -18,7 +18,7 @@
 // `operation_id` are added only after they are verified against that owner.
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import type { Stage4Reason } from "./contracts.ts";
+import { STAGE4_ACTIONS, type Stage4Reason } from "./contracts.ts";
 
 export interface Stage4AuditRow {
   action: string;
@@ -30,18 +30,9 @@ export interface Stage4AuditRow {
   operationId?: string | null;
 }
 
-const KNOWN_ACTIONS = new Set([
-  "youtube_stage4_capabilities",
-  "youtube_video_page",
-  "youtube_thread_page",
-  "youtube_reply_page",
-  "youtube_create_thread",
-  "youtube_reply",
-  "youtube_edit_comment",
-  "youtube_ban_confirmation",
-  "youtube_moderate_comment",
-  "youtube_operation_status",
-]);
+// Built from the canonical action list, so a new action is audited by name
+// the moment it is routed.
+const KNOWN_ACTIONS = new Set<string>(STAGE4_ACTIONS);
 
 /** In-memory tally of suppressed anonymous refusals since the last counter row. */
 let anonAuditSuppressedCount = 0;
@@ -55,8 +46,12 @@ export async function writeRefusalAudit(
   row: Stage4AuditRow,
   opts: {
     rateLimitBucket: () => Promise<boolean>;
-    /** Called at most once a minute with the suppression count since the last counter row. */
-    counterSink?: (suppressed: number) => Promise<void>;
+    /**
+     * Called at most once a minute with the suppression count since the last
+     * counter row. Resolves true only when that count was durably recorded, so
+     * a throttled or failed write keeps the tally for the next attempt.
+     */
+    counterSink?: (suppressed: number) => Promise<boolean>;
   },
 ): Promise<void> {
   const action = sanitiseAction(row.action);
@@ -88,9 +83,13 @@ export async function writeRefusalAudit(
       // The counter row is the durable trace of the suppression volume; the
       // in-memory count carries the tally between counter rows.
       if (opts.counterSink) {
+        // Only the snapshot that was recorded is subtracted: refusals that
+        // arrive while the write is pending stay in the tally.
+        const snapshot = anonAuditSuppressedCount;
         try {
-          await opts.counterSink(anonAuditSuppressedCount);
-          anonAuditSuppressedCount = 0;
+          if (await opts.counterSink(snapshot)) {
+            anonAuditSuppressedCount = Math.max(0, anonAuditSuppressedCount - snapshot);
+          }
         } catch {
           // Never let the counter change anything about the refusal.
         }
@@ -114,10 +113,11 @@ export async function writeRefusalAudit(
         `comment-manager stage4 audit insert failed: action=${action} reason=${row.reason} request_id=${row.requestId} cause=insert_error`,
       );
     }
-  } catch (error) {
-    // A failed insert must not change the response.
+  } catch {
+    // A failed insert must not change the response, and the exception text
+    // (which can carry request or database details) is never logged.
     console.warn(
-      `comment-manager stage4 audit insert failed: action=${action} reason=${row.reason} request_id=${row.requestId} error=${error instanceof Error ? error.message : String(error)}`,
+      `comment-manager stage4 audit insert failed: action=${action} reason=${row.reason} request_id=${row.requestId} cause=exception`,
     );
   }
 }

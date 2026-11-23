@@ -239,7 +239,16 @@ export async function serveCommentManager(
     // passes these fields straight into helpers that expect their JSON types;
     // the Stage 4 path never reads from here (its own strict schema is the
     // authority).
-    const body = await req.json();
+    // Unreadable JSON after identification is a refusal like any other (spec
+    // 12): it is audited with the caller's user id and action "unknown", and
+    // the legacy 500 answer is unchanged.
+    let body: Awaited<ReturnType<Request["json"]>>;
+    try {
+      body = await req.json();
+    } catch (error) {
+      await handleStage4({ deps: stage4Deps, corsHeaders, userId: user.id, isServiceRole: !!serviceUserId, body: undefined });
+      throw error;
+    }
     const { action, social_account_id, comment_id, message, page_id, ig_user_id } = body;
 
     // Stage 4 private actions are handled by a separate module, BEFORE the

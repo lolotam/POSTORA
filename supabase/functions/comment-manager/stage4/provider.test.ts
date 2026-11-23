@@ -149,6 +149,30 @@ Deno.test("a 4xx with a Google envelope is a refusal with the mapped reason", as
   }
 });
 
+Deno.test("a 4xx whose error list is empty or holds no error object is indeterminate, not a refusal", async () => {
+  for (const errors of [[], [null], ["text"], [[]]]) {
+    const { fetcher } = fakeFetch(() => ({ status: 403, body: { error: { errors, message: "x" } } }));
+    const res = await readVideo({ fetcher }, "tok", "v");
+    assertEquals(res.kind, "indeterminate", JSON.stringify(errors));
+    assertEquals(indeterminate(res).providerClass, "http_4xx");
+  }
+});
+
+Deno.test("one call is one request: redirects are not followed and a 3xx is indeterminate", async () => {
+  let redirectOption: RequestRedirect | undefined;
+  let requests = 0;
+  const fetcher = ((_url: RequestInfo | URL, init?: RequestInit) => {
+    requests += 1;
+    redirectOption = init?.redirect;
+    return Promise.resolve(new Response(null, { status: 307, headers: { Location: "https://elsewhere.invalid/replay" } }));
+  }) as typeof fetch;
+  const res = await insertThread({ fetcher }, "tok", { channelId: "UC", videoId: "v", text: "hello" });
+  assertEquals(redirectOption, "manual", "the platform is told not to follow redirects");
+  assertEquals(requests, 1);
+  assertEquals(res.kind, "indeterminate");
+  assertEquals(indeterminate(res).status, 307);
+});
+
 Deno.test("a 4xx without an envelope is indeterminate, not a refusal", async () => {
   const { fetcher } = fakeFetch(() => ({ status: 403, body: { hello: "world" } }));
   const res = await readVideo({ fetcher }, "tok", "v");

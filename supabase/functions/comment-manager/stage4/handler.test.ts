@@ -11,6 +11,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4
 import { handleStage4, type Stage4Deps } from "./handler.ts";
 import { STAGE4_ACTIONS } from "./contracts.ts";
 import { sealCursor, sealHandle, HANDLE_TTL_MS } from "./sealing.ts";
+import { writeRefusalAudit } from "./audit.ts";
 
 const TEST_SIGNER = "stage4-handler-test-secret";
 const USER = "11111111-1111-4111-8111-111111111111";
@@ -564,6 +565,7 @@ export function createWorld(options: WorldOptions = {}): World {
         ban_requested: row.ban_author,
         result_thread_id: row.result_thread_id,
         result_comment_id: row.result_comment_id,
+        target_comment_id: row.comment_id,
         binding_generation: row.binding_generation,
         channel_id: row.channel_id,
       },
@@ -1094,7 +1096,8 @@ Deno.test("a Composio account, a foreign account and a missing account are refus
   assertEquals((await jsonOf(res)).reason, "provider_unsupported");
 
   const foreign = await world.callAs(OTHER_USER, "youtube_stage4_capabilities");
-  assertEquals(res.status, 403);
+  assertEquals(foreign.status, 404);
+  assertEquals((await jsonOf(foreign)).reason, "not_found", "a foreign account is refused exactly like a missing one (spec 8.1)");
 
   const missing = await world.calls("youtube_stage4_capabilities", { social_account_id: "55555555-5555-4555-8555-555555555555" });
   assertEquals(missing.status, 404);
@@ -1261,6 +1264,7 @@ Deno.test("status converts a dispatched receipt to indeterminate after 90 second
   let clock = Date.now();
   const world = createWorld({
     now: () => clock,
+    failSettleOnce: true,
     provider: (call) => {
       if (call.path === "commentThreads" && call.method === "POST") throw new Error("response lost before settlement");
       return undefined;
@@ -1269,10 +1273,13 @@ Deno.test("status converts a dispatched receipt to indeterminate after 90 second
   const op = crypto.randomUUID();
   const body = await jsonOf(await world.calls("youtube_create_thread", { video_id: "vid-1", text: "lost", operation_id: op }));
   assertEquals(body.data.state, "indeterminate");
+  assertEquals([...world.receipts.values()][0].state, "dispatched", "the settlement failed, so the receipt is still dispatched");
+  const early = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op }));
+  assertEquals(early.data.state, "dispatched", "inside the 90 seconds it is not converted");
 
   clock += 91_000;
   const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op }));
-  assertEquals(status.data.state, "indeterminate");
+  assertEquals(status.data.state, "indeterminate", "after 90 seconds the status read converts it");
 });
 
 Deno.test("operation status is exempt from the needs_reauth refusal", async () => {
@@ -1746,4 +1753,169 @@ Deno.test("a key rotation between the digests and the claim is a retryable 503 f
   assertEquals(world.writes.length, 0, "nothing reached the provider");
   assertEquals(world.receipts.size, 0, "no receipt was stored");
   assertEquals(world.rpcLog.some((c) => c.fn === "youtube_comment_op_mark_dispatched"), false, "nothing was marked dispatched");
+});
+
+Deno.test("a ban confirmation with Hold or Publish is refused before any provider work", async () => {
+  const world = createWorld({
+    policy: { [nativeAccount().id]: { read: true, held: true, write: true, ban: true } },
+  });
+  const handle = await firstHandle(world);
+  const op = crypto.randomUUID();
+  const conf = await jsonOf(await world.calls("youtube_ban_confirmation", { target_handle: handle, operation_id: op }));
+  world.reads.length = 0;
+  world.writes.length = 0;
+  world.rpcLog.length = 0;
+  for (const status of ["published", "heldForReview"]) {
+    const res = await world.calls("youtube_moderate_comment", {
+      target_handle: handle, status, operation_id: op, ban_confirmation: conf.data.confirmation,
+    });
+    assertEquals(res.status, 400, status);
+    assertEquals((await jsonOf(res)).reason, "invalid_request", status);
+  }
+  assertEquals(world.reads.length, 0, "no provider read");
+  assertEquals(world.writes.length, 0, "no provider write");
+  assertEquals(world.rpcLog.some((c) => c.fn === "youtube_comment_op_claim"), false, "nothing claimed");
+});
+
+Deno.test("a provider refusal while verifying a target keeps its classified reason", async () => {
+  let refuseWith: { status: number; reason: string } | null = null;
+  const world = createWorld({
+    provider: (call) => refuseWith && call.path === "comments" && call.method === "GET" && call.query.get("id")
+      ? { status: refuseWith.status, body: envelope(refuseWith.reason) }
+      : undefined,
+  });
+  const handle = await firstHandle(world);
+  const cases: Array<[number, string, number, string]> = [
+    [403, "quotaExceeded", 403, "quota"],
+    [404, "commentNotFound", 404, "target_not_verified"],
+  ];
+  for (const [providerStatus, providerReason, expectedStatus, expectedReason] of cases) {
+    refuseWith = { status: providerStatus, reason: providerReason };
+    const res = await world.calls("youtube_reply", { target_handle: handle, text: "hi", operation_id: crypto.randomUUID() });
+    assertEquals(res.status, expectedStatus, providerReason);
+    assertEquals((await jsonOf(res)).reason, expectedReason, providerReason);
+  }
+  assertEquals(world.writes.length, 0, "nothing was sent");
+});
+
+Deno.test("a provider page that is not a list is an upstream error, never an empty page", async () => {
+  let malformed: { body: unknown } | null = null;
+  const world = createWorld({
+    provider: (call) => {
+      if (!malformed) return undefined;
+      const isList = call.path === "playlistItems"
+        || (call.path === "commentThreads" && call.method === "GET")
+        || (call.path === "comments" && call.method === "GET" && call.query.get("parentId"));
+      return isList ? { status: 200, body: malformed.body } : undefined;
+    },
+  });
+  const handle = await firstHandle(world);
+  const pages = [
+    ["youtube_video_page", {}],
+    ["youtube_thread_page", { video_id: "vid-1", list: "published" }],
+    ["youtube_reply_page", { parent_handle: handle }],
+  ] as const;
+  for (const body of [null, { items: {} }, { items: "x" }, []]) {
+    malformed = { body };
+    for (const [action, extra] of pages) {
+      const res = await world.calls(action, extra);
+      assertEquals(res.status, 502, `${action} ${JSON.stringify(body)}`);
+      assertEquals((await jsonOf(res)).reason, "upstream", action);
+    }
+  }
+  malformed = { body: {} };
+  for (const [action, extra] of pages) {
+    const res = await world.calls(action, extra);
+    assertEquals(res.status, 200, `a valid empty page is still a success: ${action}`);
+    assertEquals((await jsonOf(res)).data.items.length, 0, action);
+  }
+});
+
+Deno.test("a provider token equal to the one just consumed is refused, not sealed again", async () => {
+  const world = createWorld({
+    provider: (call) => call.path === "comments" && call.method === "GET" && call.query.get("parentId")
+      ? { status: 200, body: { items: [replyFixture("r-1")], nextPageToken: "same-token" } }
+      : undefined,
+  });
+  const handle = await firstHandle(world);
+  const page1 = await jsonOf(await world.calls("youtube_reply_page", { parent_handle: handle }));
+  assertEquals(typeof page1.data.next_cursor, "string", "a fresh token seals a continuation");
+  const page2 = await world.calls("youtube_reply_page", { parent_handle: handle, cursor: page1.data.next_cursor });
+  assertEquals(page2.status, 502);
+  assertEquals((await jsonOf(page2)).reason, "upstream");
+});
+
+Deno.test("a reply without a comment id is dropped as inconsistent", async () => {
+  const noId = replyFixture("x") as Record<string, unknown>;
+  delete noId.id;
+  const world = createWorld({
+    provider: (call) => call.path === "comments" && call.method === "GET" && call.query.get("parentId")
+      ? { status: 200, body: { items: [replyFixture("r-ok"), noId, { ...replyFixture("y"), id: "" }] } }
+      : undefined,
+  });
+  const handle = await firstHandle(world);
+  const page = await jsonOf(await world.calls("youtube_reply_page", { parent_handle: handle }));
+  assertEquals(page.data.items.map((i) => i.comment_id), ["r-ok"]);
+  assertEquals(page.data.inconsistent_count, 2);
+});
+
+Deno.test("an edit whose settlement failed is still observed through its claimed target", async () => {
+  let clock = Date.now();
+  const world = createWorld({
+    now: () => clock,
+    failSettleOnce: true,
+    provider: ownTopProvider((call) => {
+      if (call.path === "comments" && call.method === "GET" && call.query.get("id")) {
+        return { status: 200, body: { items: [commentFixture(call.query.get("id")!, { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "edited text" } })] } };
+      }
+      if (call.path === "comments" && call.method === "PUT") {
+        return { status: 200, body: { id: (call.body as { id?: string }).id, snippet: {} } };
+      }
+      return undefined;
+    }),
+  });
+  const handle = await firstHandle(world);
+  const op = crypto.randomUUID();
+  await world.calls("youtube_edit_comment", { target_handle: handle, text: "edited text", operation_id: op });
+  assertEquals([...world.receipts.values()][0].state, "dispatched", "the settlement failed");
+  clock += 91_000;
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited text" }));
+  assertEquals(status.data.state, "indeterminate");
+  assertEquals(status.data.result_comment_id ?? null, null, "no result id was ever recorded");
+  assertEquals(status.data.observation, "requested_text_observed", "the claimed target is observed instead");
+});
+
+Deno.test("the anonymous suppression tally keeps what was not durably recorded", async () => {
+  const anonymous = { action: "youtube_reply", reason: "rate_limited", requestId: "req-tally", userId: null };
+  const never = { rateLimitBucket: () => Promise.resolve(false) };
+  const unused = {} as unknown as SupabaseClient;
+  const seen: number[] = [];
+  const failing = { ...never, counterSink: (n: number) => { seen.push(n); return Promise.resolve(false); } };
+  await writeRefusalAudit(unused, anonymous, failing);
+  await writeRefusalAudit(unused, anonymous, failing);
+  assertEquals(seen[1], seen[0] + 1, "a count that was not recorded carries forward to the next attempt");
+  const recording = { ...never, counterSink: (n: number) => { seen.push(n); return Promise.resolve(true); } };
+  await writeRefusalAudit(unused, anonymous, recording);
+  assertEquals(seen[2], seen[1] + 1);
+  await writeRefusalAudit(unused, anonymous, recording);
+  assertEquals(seen[3], 1, "after a recorded count the tally starts again");
+});
+
+Deno.test("a throwing audit insert logs a fixed cause, never the exception text", async () => {
+  const warnings: string[] = [];
+  const nativeWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+  try {
+    const throwing = {
+      from: () => ({ insert: () => Promise.reject(new Error("connection string postgres://secret-host/db")) }),
+    } as unknown as SupabaseClient;
+    await writeRefusalAudit(throwing, { action: "youtube_reply", reason: "rate_limited", requestId: "req-throw", userId: USER }, {
+      rateLimitBucket: () => Promise.resolve(true),
+    });
+  } finally {
+    console.warn = nativeWarn;
+  }
+  assertEquals(warnings.length, 1);
+  assertEquals(warnings[0].includes("secret-host"), false, "the exception text is not logged");
+  assertEquals(warnings[0].includes("cause=exception"), true);
 });

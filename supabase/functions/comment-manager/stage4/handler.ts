@@ -85,8 +85,6 @@ function json(status: number, body: unknown, headers: Record<string, string>): R
  */
 const ANON_AUDIT_MAX_PER_MINUTE = 30;
 
-const anonAuditSuppressedSinceCounter = 0;
-
 async function refusal(
   deps: Stage4Deps,
   status: number,
@@ -122,7 +120,7 @@ async function refusal(
     counterSink: async (suppressed) => {
       // At most one counter row per minute, whatever the suppression volume.
       const counter = await stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60);
-      if (!counter.allowed) return;
+      if (!counter.allowed) return false;
       try {
         const inserted = await deps.admin.from("system_logs").insert({
           level: "warn",
@@ -140,10 +138,13 @@ async function refusal(
         });
         if (inserted && inserted.error) {
           console.warn("comment-manager stage4 audit counter insert failed: cause=insert_error");
+          return false;
         }
+        return true;
       } catch {
         // A failed counter insert must not change the response either.
         console.warn("comment-manager stage4 audit counter insert failed: cause=exception");
+        return false;
       }
     },
   });
@@ -417,6 +418,30 @@ type YtWriteBody = {
   };
 } | null | undefined;
 
+/**
+ * The items of a provider list body: an empty array for a valid empty page
+ * (no `items`), the array otherwise, and null when the body did not parse to
+ * an object or `items` is present but not an array. A null is an upstream
+ * error the user can retry, never an empty successful page.
+ */
+function listItems<T>(body: unknown): T[] | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const items = (body as { items?: unknown }).items;
+  if (items === undefined) return [];
+  return Array.isArray(items) ? (items as T[]) : null;
+}
+
+/**
+ * A provider refusal while verifying a target keeps its classified reason
+ * (quota, scope, authorisation, ...); only a resource the provider says does
+ * not exist is "target not verified".
+ */
+function targetRefusal(reason: string): WriteTargetCheck {
+  return reason === "not_found_provider"
+    ? { ok: false, status: 404, reason: "target_not_verified", providerClass: "http_4xx" }
+    : { ok: false, status: 403, reason: reason as Stage4Reason, providerClass: "http_4xx" };
+}
+
 type WriteTargetCheck =
   | { ok: true; citem: YtComment }
   | { ok: false; status: number; reason: Stage4Reason; providerClass?: Stage4ProviderClass };
@@ -438,7 +463,7 @@ async function verifyWriteTarget(
   const vres = await provider.readVideo({ fetcher: deps.fetcher }, token, h.vi);
   if (vres.kind !== "success") {
     return vres.kind === "refused"
-      ? { ok: false, status: 404, reason: "target_not_verified", providerClass: "http_4xx" }
+      ? targetRefusal(vres.reason)
       : { ok: false, status: 502, reason: "upstream", providerClass: vres.providerClass };
   }
   const videoItem = ((vres.body as YtList<YtVideo>)?.items ?? [])[0];
@@ -448,7 +473,7 @@ async function verifyWriteTarget(
   const cres = await provider.readComment({ fetcher: deps.fetcher }, token, h.co);
   if (cres.kind !== "success") {
     return cres.kind === "refused"
-      ? { ok: false, status: 404, reason: "target_not_verified", providerClass: "http_4xx" }
+      ? targetRefusal(cres.reason)
       : { ok: false, status: 502, reason: "upstream", providerClass: cres.providerClass };
   }
   const citem = ((cres.body as YtList<YtComment>)?.items ?? [])[0];
@@ -821,13 +846,22 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (res.kind === "indeterminate") {
       return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null, providerClass: res.providerClass });
     }
-    const items = ((res.body as YtList<YtUpload>)?.items ?? []).map((it: YtUpload) => ({
+    const uploads = listItems<YtUpload>(res.body);
+    if (uploads === null) {
+      return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
+    const items = uploads.map((it: YtUpload) => ({
       id: String(it?.snippet?.resourceId?.videoId ?? ""),
       title: String(it?.snippet?.title ?? ""),
       published_at: it?.snippet?.publishedAt ? String(it.snippet.publishedAt) : null,
       thumbnail_url: it?.snippet?.thumbnails?.default?.url ?? null,
     })).filter((v: Stage4VideoRow) => v.id);
     const nextProviderToken = (res.body as YtList<unknown>)?.nextPageToken ? String((res.body as YtList<unknown>)?.nextPageToken) : null;
+    // A provider that hands back the token it was just given can only loop: refuse
+    // it now instead of sealing the same page again with a higher hop count.
+    if (nextProviderToken !== null && nextProviderToken === pt) {
+      return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
@@ -912,7 +946,10 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     }
 
     // Seal rows.
-    const threads: YtThread[] = Array.isArray((res.body as YtList<YtThread>)?.items) ? (res.body as YtList<YtThread>)?.items ?? [] : [];
+    const threads = listItems<YtThread>(res.body);
+    if (threads === null) {
+      return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     const rows: Stage4CommentRow[] = [];
     let inconsistent = 0;
     for (const th of threads) {
@@ -934,6 +971,11 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     }
 
     const nextProviderToken = (res.body as YtList<unknown>)?.nextPageToken ? String((res.body as YtList<unknown>)?.nextPageToken) : null;
+    // A provider that hands back the token it was just given can only loop: refuse
+    // it now instead of sealing the same page again with a higher hop count.
+    if (nextProviderToken !== null && nextProviderToken === pageToken) {
+      return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
@@ -996,7 +1038,10 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (res.kind === "indeterminate") {
       return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null, providerClass: res.providerClass });
     }
-    const items: YtComment[] = Array.isArray((res.body as YtList<YtComment>)?.items) ? (res.body as YtList<YtComment>)?.items ?? [] : [];
+    const items = listItems<YtComment>(res.body);
+    if (items === null) {
+      return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     const rows: Stage4CommentRow[] = [];
     let inconsistent = 0;
     for (const r of items) {
@@ -1005,10 +1050,12 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       const authorChannel = r?.snippet?.authorChannelId?.value ? String(r.snippet.authorChannelId.value) : null;
       if (r?.snippet?.channelId && r.snippet.channelId !== account.platform_user_id) { inconsistent++; continue; }
       if (r?.snippet?.videoId && r.snippet.videoId !== h.vi) { inconsistent++; continue; }
+      const replyId = nonEmptyString(r?.id);
+      if (!replyId) { inconsistent++; continue; }
       const row: Stage4CommentRow = {
         handle: "",
         kind: "reply",
-        comment_id: String(r?.id ?? ""),
+        comment_id: replyId,
         thread_id: h.th,
         video_id: h.vi,
         canonical_parent_id: canonicalParent,
@@ -1029,6 +1076,11 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       rows.push(row);
     }
     const nextProviderToken = (res.body as YtList<unknown>)?.nextPageToken ? String((res.body as YtList<unknown>)?.nextPageToken) : null;
+    // A provider that hands back the token it was just given can only loop: refuse
+    // it now instead of sealing the same page again with a higher hop count.
+    if (nextProviderToken !== null && nextProviderToken === pageToken) {
+      return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
@@ -1427,6 +1479,11 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
   // ---- youtube_moderate_comment --------------------------------------
   if (action === "youtube_moderate_comment") {
     const inp = input as Extract<Stage4Request, { action: "youtube_moderate_comment" }>;
+    // A ban confirmation belongs to a Reject and to nothing else: the
+    // combination is malformed and is refused before any account or provider work.
+    if (inp.ban_confirmation && inp.status !== "rejected") {
+      return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     const verified = await verifyTargetHandle(inp.target_handle, deps, account, userId);
     if (!verified.ok) {
       return refusal(deps, 400, verified.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
@@ -1595,12 +1652,21 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     // never stores text, so without a draft the observation is unavailable.
     let observation: Stage4OperationStatusPayload["observation"] = null;
     let observedText: string | null = null;
-    if (data.action === "edit" && data.result_comment_id) {
+    // The comment the edit was aimed at: the result id when settlement recorded
+    // one, otherwise the receipt's claimed target (an edit whose settlement
+    // failed has no result id). The two stay separate fields on the receipt.
+    const observedTargetId = data.result_comment_id ?? data.target_comment_id;
+    if (data.action === "edit" && observedTargetId) {
       const admits = await admitsCapability(deps.admin, accountId, "read");
       if (admits) {
-        const tok = await prepareToken(account, deps);
-        if (tok.ok) {
-          const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(data.result_comment_id));
+        // The account snapshot was read before the status call: a reconnect in
+        // between must not let the provider read use the superseded binding's
+        // credential.
+        const fresh = await readAccount(deps.admin, accountId, userId);
+        const sameBinding = fresh.kind === "found" && fresh.account.binding_generation === account.binding_generation;
+        const tok = sameBinding ? await prepareToken(account, deps) : null;
+        if (tok && tok.ok) {
+          const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
           const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
           const text = citem?.snippet?.textOriginal ? String(citem.snippet.textOriginal) : null;
           if (text === null) {

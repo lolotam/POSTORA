@@ -7,19 +7,34 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 const USER = "11111111-1111-4111-8111-111111111111";
 
 type ServeFn = (req: Request, inject?: { supabase?: unknown; fetcher?: typeof fetch }) => Promise<Response>;
+type RegisteredHandler = (req: Request) => Response | Promise<Response>;
+
+let loaded: Promise<{ serve: ServeFn; registered: RegisteredHandler | null }> | null = null;
+
+/** Imports the production entry point once, capturing what it registers with Deno.serve. */
+function loadModule() {
+  loaded ??= (async () => {
+    Deno.env.set("SUPABASE_URL", "http://127.0.0.1:1");
+    Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "route-test-service-key-never-used-by-a-caller");
+    // index.ts registers itself with Deno.serve on import; capture the callback instead of listening.
+    const nativeServe = Deno.serve;
+    let registered: RegisteredHandler | null = null;
+    Deno.serve = ((handler: RegisteredHandler) => {
+      registered = handler;
+      return { finished: Promise.resolve(), shutdown: () => Promise.resolve() };
+    }) as unknown as typeof Deno.serve;
+    try {
+      const mod = await import("../index.ts") as { serveCommentManager: ServeFn };
+      return { serve: mod.serveCommentManager, registered };
+    } finally {
+      Deno.serve = nativeServe;
+    }
+  })();
+  return loaded;
+}
 
 async function loadRoute(): Promise<ServeFn> {
-  Deno.env.set("SUPABASE_URL", "http://127.0.0.1:1");
-  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "route-test-service-key-never-used-by-a-caller");
-  // index.ts registers itself with Deno.serve on import; capture instead of listening.
-  const nativeServe = Deno.serve;
-  Deno.serve = (() => ({ finished: Promise.resolve(), shutdown: () => Promise.resolve() })) as unknown as typeof Deno.serve;
-  try {
-    const mod = await import("../index.ts") as { serveCommentManager: ServeFn };
-    return mod.serveCommentManager;
-  } finally {
-    Deno.serve = nativeServe;
-  }
+  return (await loadModule()).serve;
 }
 
 function fakeSupabase() {
@@ -113,7 +128,15 @@ Deno.test("an authenticated Stage 4 call reaches the handler through the route (
   assertEquals((auditRows[0].metadata as Record<string, unknown>).account_id, undefined, "the unverified account id is not logged");
 });
 
-Deno.test("legacy behaviour is exactly the baseline's: malformed JSON after auth is a 500 for every action", async () => {
+Deno.test("the production entry point registers one handler, and it is the route", async () => {
+  const { registered } = await loadModule();
+  assertEquals(typeof registered, "function", "importing index.ts registers a handler with Deno.serve");
+  const res = await registered!(new Request("http://localhost/functions/v1/comment-manager", { method: "OPTIONS" }));
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get("Access-Control-Allow-Origin"), "*", "the registered callback answers through the route");
+});
+
+Deno.test("legacy behaviour is the baseline's: malformed JSON after auth is a 500 for every action, and unreadable JSON is audited", async () => {
   const serve = await loadRoute();
   const { supabase, auditRows } = fakeSupabase();
   const nativeError = console.error;
@@ -128,7 +151,14 @@ Deno.test("legacy behaviour is exactly the baseline's: malformed JSON after auth
     console.error = nativeError;
   }
   await settle();
-  assertEquals(auditRows.length, 0, "a body that names no action is not a Stage 4 refusal");
+  // Spec 12: invalid JSON after identification is a refusal with the caller's
+  // user id. "null" is valid JSON that names no action: not a Stage 4 refusal.
+  assertEquals(auditRows.length, 1);
+  assertEquals(auditRows[0].user_id, USER);
+  const metadata = auditRows[0].metadata as Record<string, unknown>;
+  assertEquals(metadata.action, "unknown");
+  assertEquals(metadata.reason, "invalid_request");
+  assertEquals(JSON.stringify(auditRows[0]).includes("not json"), false, "the body text is never logged");
 });
 
 Deno.test("authentication comes first: a request that never finishes its body is answered 401 within the bound", async () => {

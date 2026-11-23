@@ -12,17 +12,14 @@
 
 import type { YouTubeCommentAccount } from "../../_shared/youtubeComments.ts";
 import { classifyGoogleError } from "../../_shared/youtubeApiErrors.ts";
+import type { Stage4ProviderClass } from "./contracts.ts";
 
 const DATA_API = "https://www.googleapis.com/youtube/v3";
 
 export const PROVIDER_TIMEOUT_MS = 15_000;
 
-export type Stage4ProviderClass =
-  | "http_4xx"
-  | "http_5xx"
-  | "network"
-  | "timeout"
-  | "none";
+// The one definition lives in contracts.ts; this module re-exports it.
+export type { Stage4ProviderClass };
 
 export type Stage4ProviderResult =
   | { kind: "success"; status: number; body: unknown }
@@ -57,6 +54,8 @@ async function singleRequest(
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+      // One call is one request: a followed 307/308 would replay a write.
+      redirect: "manual",
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "network error";
@@ -67,6 +66,11 @@ async function singleRequest(
   }
 
   const status = response.status;
+  // A redirect was not followed, so the request left and what became of it is
+  // not known: never a refusal, never a success.
+  if (status >= 300 && status < 400) {
+    return { kind: "indeterminate", providerClass: "network", status };
+  }
   let parsed: unknown = null;
   if (status !== 204) {
     parsed = await response.json().catch(() => null);
@@ -80,7 +84,11 @@ async function singleRequest(
   // A 4xx without a Google error envelope is indeterminate, not a refusal.
   if (status >= 400 && status < 500) {
     const reason = (parsed as { error?: { message?: string } } | null)?.error?.message;
-    const hasEnvelope = Array.isArray((parsed as { error?: { errors?: unknown[] } } | null)?.error?.errors);
+    // A parseable Google envelope names at least one error object: an empty or
+    // malformed list proves nothing about whether the write was applied.
+    const errors = (parsed as { error?: { errors?: unknown[] } } | null)?.error?.errors;
+    const hasEnvelope = Array.isArray(errors)
+      && errors.some((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry));
     if (!hasEnvelope) {
       return { kind: "indeterminate", providerClass: "http_4xx", status };
     }

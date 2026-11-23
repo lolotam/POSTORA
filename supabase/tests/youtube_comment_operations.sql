@@ -26,6 +26,11 @@ CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA extensions;
 -- re-creates everything it needs.
 DELETE FROM public.youtube_comment_operations
  WHERE owner_id IN ('6e9a0001-0000-4000-8000-000000000001', '6e8a0001-0000-4000-8000-000000000001');
+-- The rotation fixtures of the R blocks are committed: a killed run may have
+-- left an extra key version, or version 1 retired. Receipts first (a version
+-- a receipt references cannot be deleted), then the fixtures.
+UPDATE public.youtube_comment_digest_keys SET retired_at = NULL WHERE version = 1;
+DELETE FROM public.youtube_comment_digest_keys WHERE version > 1;
 DELETE FROM public.social_accounts
  WHERE id IN ('6e9b0001-0000-4000-8000-000000000001', '6e8b0006-0000-4000-8000-000000000006');
 DELETE FROM public.connector_connections
@@ -448,6 +453,34 @@ $s3b$;
 RESET ROLE;
 
 -- ---------------------------------------------------------------------------
+-- S3b. The service role holds EXECUTE on every public Stage 4 RPC, and the
+-- browser roles hold none: the suite runs as the function owner, which would
+-- pass even if a grant were lost, so the catalog is asserted directly.
+DO $s3b$
+DECLARE
+  v_fn text;
+  v_role text;
+BEGIN
+  FOREACH v_fn IN ARRAY ARRAY[
+    'public.youtube_comments_stage4_rollout_state()',
+    'public.youtube_comments_stage4_capability_status(uuid)',
+    'public.youtube_comments_stage4_admits(uuid, text)',
+    'public.youtube_comment_digest_keys()',
+    'public.youtube_comment_op_claim(uuid, uuid, text, bigint, uuid, text, jsonb, text, jsonb, text, text, jsonb)',
+    'public.youtube_comment_op_mark_dispatched(uuid, uuid, uuid, text, bigint)',
+    'public.youtube_comment_op_settle(uuid, uuid, uuid, text, text, text, text, text)',
+    'public.youtube_comment_op_status(uuid, uuid, uuid)'
+  ] LOOP
+    ASSERT has_function_privilege('service_role', v_fn, 'EXECUTE'),
+      format('S3b service_role can execute %s', v_fn);
+    FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+      ASSERT NOT has_function_privilege(v_role, v_fn, 'EXECUTE'),
+        format('S3b %s cannot execute %s', v_role, v_fn);
+    END LOOP;
+  END LOOP;
+END
+$s3b$;
+
 -- S4. Tenant isolation under the service role.
 -- ---------------------------------------------------------------------------
 DO $s4$
@@ -715,7 +748,12 @@ BEGIN
       format('S7 the same text to a different reply in the thread is the same logical operation: %s', r);
   END;
 
-  -- across a binding change the recent-confirmation refusal is the bare reason
+  -- across a binding change the recent-confirmation refusal is the bare reason.
+  -- The never-dispatched claim 404 above would answer first with the unresolved
+  -- fence and mask the confirmed receipt, so it is closed as refused.
+  UPDATE public.youtube_comment_operations
+     SET state = 'refused', reason = 'suite_closed', settled_at = clock_timestamp()
+   WHERE owner_id = u_a AND operation_id = '00000000-0000-4000-8000-000000000404';
   UPDATE public.youtube_comment_operations
      SET settled_at = clock_timestamp()
    WHERE owner_id = u_a AND operation_id = '00000000-0000-4000-8000-000000000401';
@@ -727,9 +765,8 @@ BEGIN
     '00000000-0000-4000-8000-000000000407',
     'create_thread', '{"video_id":"vid-s4-7"}'::jsonb,
     repeat('g', 64), v_logical, 'write', 's7-7');
-  ASSERT r ->> 'reason' IN ('possible_duplicate', 'recently_posted')
-    AND r ->> 'result_comment_id' IS NULL,
-    format('S7 across a binding change the fence refusal is the bare reason: %s', r);
+  ASSERT r ->> 'reason' = 'recently_posted' AND r ->> 'result_comment_id' IS NULL,
+    format('S7 across a binding change the fence refusal is the bare recently_posted: %s', r);
 END
 $s7$;
 
@@ -1966,6 +2003,309 @@ BEGIN
   DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
 END
 $r15$;
+
+-- R15b. The same rotation for create_thread and reply: digests computed under
+-- version 1 only while version 2 is active are a TEMPORARY refusal, nothing is
+-- stored, and a caller that sends no intent map keeps the permanent one.
+INSERT INTO public.youtube_comment_digest_keys (version, key)
+VALUES (2, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+
+DO $r15b$
+DECLARE
+  v_a uuid := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct uuid := '6e9b0001-0000-4000-8000-000000000001';
+  v_gen bigint;
+  v_old jsonb := jsonb_build_object('1', repeat('1', 64));
+  v_case record;
+  r jsonb;
+BEGIN
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct;
+  FOR v_case IN SELECT * FROM (VALUES
+    ('create_thread', '{"video_id":"vid-r15b"}', '00000000-0000-4000-8000-00000000c311'),
+    ('reply', '{"video_id":"vid-r15b","parent_comment_id":"cmt-r15b"}', '00000000-0000-4000-8000-00000000c312')
+  ) AS c(action, targets, op) LOOP
+    r := public.youtube_comment_op_claim(
+      v_a, v_acct, 'UC-s4-race', v_gen, v_case.op::uuid, v_case.action, v_case.targets::jsonb,
+      repeat('1', 64), jsonb_build_object('1', 'r15b-logical-v1'), 'write', 'r15b', v_old);
+    ASSERT NOT (r ->> 'ok')::boolean AND r ->> 'reason' = 'upstream' AND (r ->> 'attempt_token') IS NULL,
+      format('R15b %s: digests for an older key version are a temporary refusal: %s', v_case.action, r);
+    ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_case.op::uuid),
+      format('R15b %s: no receipt row was stored', v_case.action);
+
+    r := public.youtube_comment_op_claim(
+      v_a, v_acct, 'UC-s4-race', v_gen, v_case.op::uuid, v_case.action, v_case.targets::jsonb,
+      repeat('1', 64), jsonb_build_object('1', 'r15b-logical-v1'), 'write', 'r15b', NULL);
+    ASSERT NOT (r ->> 'ok')::boolean AND r ->> 'reason' = 'invalid_request',
+      format('R15b %s: with no intent map a missing logical digest stays a permanent refusal: %s', v_case.action, r);
+  END LOOP;
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
+END
+$r15b$;
+
+-- R16. The digest key guard: the only active key can be neither deleted nor
+-- retired, key bytes never change under a version, and a rotation (insert a new
+-- version, then retire the old one) still works. Version 7 carries no receipt,
+-- so only the last-active rule can stop its removal.
+DO $r16$
+DECLARE
+  v_refused text;
+BEGIN
+  INSERT INTO public.youtube_comment_digest_keys (version, key)
+  VALUES (7, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+  -- the rotation itself: version 1 retires while version 7 is active.
+  UPDATE public.youtube_comment_digest_keys SET retired_at = now() WHERE version = 1;
+
+  BEGIN
+    DELETE FROM public.youtube_comment_digest_keys WHERE version = 7;
+    v_refused := NULL;
+  EXCEPTION WHEN OTHERS THEN
+    v_refused := SQLERRM;
+  END;
+  ASSERT v_refused LIKE '%last active digest key cannot be removed%',
+    format('R16 the only active key cannot be deleted: %s', v_refused);
+
+  BEGIN
+    UPDATE public.youtube_comment_digest_keys SET retired_at = now() WHERE version = 7;
+    v_refused := NULL;
+  EXCEPTION WHEN OTHERS THEN
+    v_refused := SQLERRM;
+  END;
+  ASSERT v_refused LIKE '%last active digest key cannot be retired%',
+    format('R16 the only active key cannot be retired: %s', v_refused);
+
+  BEGIN
+    UPDATE public.youtube_comment_digest_keys SET key = sha256(convert_to('other', 'utf8')) WHERE version = 7;
+    v_refused := NULL;
+  EXCEPTION WHEN OTHERS THEN
+    v_refused := SQLERRM;
+  END;
+  ASSERT v_refused LIKE '%key material of a version cannot be changed%',
+    format('R16 the bytes of a version cannot be replaced: %s', v_refused);
+
+  -- with another active key standing, version 7 can go.
+  UPDATE public.youtube_comment_digest_keys SET retired_at = NULL WHERE version = 1;
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = 7;
+  ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_digest_keys WHERE version = 7),
+    'R16 a key can be deleted while another active key remains';
+  ASSERT (SELECT retired_at IS NULL FROM public.youtube_comment_digest_keys WHERE version = 1),
+    'R16 version 1 is active again for the blocks that follow';
+END
+$r16$;
+
+-- Session B's last result (R13's refused delete) was an error, which leaves the
+-- connection unusable for another asynchronous query: start from a fresh one.
+SELECT extensions.dblink_disconnect('s4_b');
+SELECT extensions.dblink_connect(
+  's4_b', format('dbname=%s user=%s application_name=s4_race_b', current_database(), current_user));
+
+-- R17. The mark and a revocation are ordered. Session A marks (and holds its
+-- transaction open); session B revokes the write capability and must PARK on
+-- A's share lock on the settings row until A commits. Without the lock the
+-- revocation commits at once, the mark commits afterwards, and the send
+-- proceeds after the capability was revoked.
+DO $r17$
+DECLARE
+  v_a text := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct text := '6e9b0001-0000-4000-8000-000000000001';
+  v_op text := '00000000-0000-4000-8000-00000000c501';
+  v_gen bigint;
+  v_policy jsonb;
+  r jsonb;
+  r_a text;
+  v_token text;
+  v_pid_b int;
+BEGIN
+  SELECT value INTO v_policy FROM public.app_settings WHERE key = 'youtube_comments_stage4_rollout';
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
+  -- Committed (session B autocommits) so that session A can see the receipt.
+  SELECT res::jsonb INTO r FROM extensions.dblink('s4_b', format(
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)',
+    v_a, v_acct, 'UC-s4-race', v_gen, v_op, 'edit', '{"video_id":"vid-r17","comment_id":"cmt-r17"}',
+    repeat('v', 64), '{}', 'write', 'r17')) AS t(res text);
+  ASSERT (r ->> 'ok')::boolean, format('R17 claimed: %s', r);
+  v_token := r ->> 'attempt_token';
+
+  PERFORM extensions.dblink_exec('s4_a', 'BEGIN');
+  SELECT res INTO r_a FROM extensions.dblink('s4_a', format(
+    'SELECT public.youtube_comment_op_mark_dispatched(%L::uuid, %L::uuid, %L::uuid, %L, %s)',
+    v_a, v_op, v_token, 'UC-s4-race', v_gen)) AS t(res text);
+  ASSERT (r_a::jsonb ->> 'ok')::boolean, format('R17 session A marked: %s', r_a);
+
+  SELECT pid INTO v_pid_b FROM extensions.dblink('s4_b', 'SELECT pg_backend_pid()') AS t(pid int);
+  PERFORM extensions.dblink_send_query('s4_b', format(
+    'UPDATE public.app_settings SET value = jsonb_set(value, %L::text[], %L::jsonb) WHERE key = %L',
+    format('{accounts,%s,write}', v_acct), 'false', 'youtube_comments_stage4_rollout'));
+  PERFORM extensions.dblink_exec('s4_a', format(
+    'DO $$ BEGIN
+       FOR i IN 1..100 LOOP
+         EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ');
+         PERFORM pg_sleep(0.05);
+       END LOOP;
+       IF NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ') THEN
+         RAISE EXCEPTION ''R17 the revocation did not wait for the mark'';
+       END IF;
+     END $$;', v_pid_b, v_pid_b));
+  ASSERT (SELECT value #>> ARRAY['accounts', v_acct, 'write'] FROM public.app_settings
+           WHERE key = 'youtube_comments_stage4_rollout') = 'true',
+    'R17 the revocation is not visible while the mark is open';
+
+  PERFORM extensions.dblink_exec('s4_a', 'COMMIT');
+  PERFORM * FROM extensions.dblink_get_result('s4_b') AS t(res text);
+  PERFORM * FROM extensions.dblink_get_result('s4_b') AS t(res text);
+
+  ASSERT (SELECT state FROM public.youtube_comment_operations
+           WHERE owner_id = v_a::uuid AND operation_id = v_op::uuid) = 'dispatched',
+    'R17 the mark committed before the revocation';
+  ASSERT (SELECT value #>> ARRAY['accounts', v_acct, 'write'] FROM public.app_settings
+           WHERE key = 'youtube_comments_stage4_rollout') = 'false',
+    'R17 the revocation applied once the mark committed';
+
+  -- A revocation that committed BEFORE a mark is seen by it.
+  r := public.youtube_comment_op_claim(
+    v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen, '00000000-0000-4000-8000-00000000c502'::uuid,
+    'edit', '{"video_id":"vid-r17","comment_id":"cmt-r17b"}'::jsonb,
+    repeat('w', 64), '{}'::jsonb, 'write', 'r17b');
+  ASSERT r ->> 'reason' = 'capability_denied', format('R17 a committed revocation stops the next claim: %s', r);
+
+  UPDATE public.app_settings SET value = v_policy WHERE key = 'youtube_comments_stage4_rollout';
+END
+$r17$;
+
+-- R18. A status read that decides to convert a dispatched receipt to
+-- indeterminate loses the race to a settlement: it must answer with the
+-- settlement (confirmed, with its comment id), never with the stale guess.
+DO $r18$
+DECLARE
+  v_a text := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct text := '6e9b0001-0000-4000-8000-000000000001';
+  v_op text := '00000000-0000-4000-8000-00000000c601';
+  v_gen bigint;
+  r jsonb;
+  r_a text;
+  r_b text;
+  v_token text;
+  v_pid_b int;
+BEGIN
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
+  SELECT res::jsonb INTO r FROM extensions.dblink('s4_b', format(
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)',
+    v_a, v_acct, 'UC-s4-race', v_gen, v_op, 'edit', '{"video_id":"vid-r18","comment_id":"cmt-r18"}',
+    repeat('x', 64), '{}', 'write', 'r18')) AS t(res text);
+  ASSERT (r ->> 'ok')::boolean, format('R18 claimed: %s', r);
+  v_token := r ->> 'attempt_token';
+  SELECT res::jsonb INTO r FROM extensions.dblink('s4_b', format(
+    'SELECT public.youtube_comment_op_mark_dispatched(%L::uuid, %L::uuid, %L::uuid, %L, %s)',
+    v_a, v_op, v_token, 'UC-s4-race', v_gen)) AS t(res text);
+  ASSERT (r ->> 'ok')::boolean, format('R18 marked: %s', r);
+  PERFORM extensions.dblink_exec('s4_b', format(
+    'UPDATE public.youtube_comment_operations SET dispatched_at = clock_timestamp() - interval ''100 seconds'' WHERE owner_id = %L::uuid AND operation_id = %L::uuid',
+    v_a, v_op));
+
+  PERFORM extensions.dblink_exec('s4_a', 'BEGIN');
+  SELECT res INTO r_a FROM extensions.dblink('s4_a', format(
+    'SELECT public.youtube_comment_op_settle(%L::uuid, %L::uuid, %L::uuid, %L, NULL, %L, NULL, %L)',
+    v_a, v_op, v_token, 'confirmed', 'none', 'cmt-r18')) AS t(res text);
+  ASSERT (r_a::jsonb ->> 'ok')::boolean, format('R18 session A settled (uncommitted): %s', r_a);
+
+  SELECT pid INTO v_pid_b FROM extensions.dblink('s4_b', 'SELECT pg_backend_pid()') AS t(pid int);
+  PERFORM extensions.dblink_send_query('s4_b', format(
+    'SELECT public.youtube_comment_op_status(%L::uuid, %L::uuid, %L::uuid)', v_a, v_acct, v_op));
+  PERFORM extensions.dblink_exec('s4_a', format(
+    'DO $$ BEGIN
+       FOR i IN 1..100 LOOP
+         EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ');
+         PERFORM pg_sleep(0.05);
+       END LOOP;
+       IF NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ') THEN
+         RAISE EXCEPTION ''R18 the status conversion did not wait for the settlement'';
+       END IF;
+     END $$;', v_pid_b, v_pid_b));
+  PERFORM extensions.dblink_exec('s4_a', 'COMMIT');
+
+  SELECT res INTO r_b FROM extensions.dblink_get_result('s4_b') AS t(res text);
+  PERFORM * FROM extensions.dblink_get_result('s4_b') AS t(res text);
+  ASSERT r_b::jsonb ->> 'state' = 'confirmed' AND r_b::jsonb ->> 'result_comment_id' = 'cmt-r18',
+    format('R18 the status answers with the winning settlement: %s', r_b);
+END
+$r18$;
+
+-- R19. The rollout policy shape is null-safe: a policy with valid accounts but
+-- no version, a non-numeric version, or no accounts is invalid and admits nothing.
+DO $r19$
+DECLARE
+  v_acct text := '6e9b0001-0000-4000-8000-000000000001';
+  v_policy jsonb;
+  v_variant jsonb;
+  v_label text;
+  st jsonb;
+BEGIN
+  SELECT value INTO v_policy FROM public.app_settings WHERE key = 'youtube_comments_stage4_rollout';
+  FOR v_label, v_variant IN SELECT * FROM (VALUES
+    ('no version', v_policy - 'version'),
+    ('string version', jsonb_set(v_policy, '{version}', '"1"'::jsonb)),
+    ('version 2', jsonb_set(v_policy, '{version}', '2'::jsonb)),
+    ('no accounts', v_policy - 'accounts')
+  ) AS t(label, variant) LOOP
+    UPDATE public.app_settings SET value = v_variant WHERE key = 'youtube_comments_stage4_rollout';
+    st := public.youtube_comments_stage4_rollout_state();
+    ASSERT st ->> 'status' = 'rollout_invalid', format('R19 %s is rollout_invalid: %s', v_label, st);
+    ASSERT NOT public.youtube_comments_stage4_admits(v_acct::uuid, 'write'),
+      format('R19 %s admits nothing', v_label);
+  END LOOP;
+  UPDATE public.app_settings SET value = v_policy WHERE key = 'youtube_comments_stage4_rollout';
+  st := public.youtube_comments_stage4_rollout_state();
+  ASSERT st ->> 'status' = 'ok', format('R19 the valid policy is ok again: %s', st);
+END
+$r19$;
+
+-- R20. The status read: an abandoned claim closes after 120 s, a fresh claim
+-- stays claimed, an unsettled dispatch converts after 90 s with its reason,
+-- and the edit target is reported apart from the result.
+DO $r20$
+DECLARE
+  v_a text := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct text := '6e9b0001-0000-4000-8000-000000000001';
+  v_gen bigint;
+  r jsonb;
+  st jsonb;
+  v_token text;
+BEGIN
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
+
+  r := public.youtube_comment_op_claim(
+    v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen, '00000000-0000-4000-8000-00000000c701'::uuid,
+    'edit', '{"video_id":"vid-r20","comment_id":"cmt-r20a"}'::jsonb,
+    repeat('y', 64), '{}'::jsonb, 'write', 'r20a');
+  ASSERT (r ->> 'ok')::boolean, format('R20 claimed a: %s', r);
+  st := public.youtube_comment_op_status(v_a::uuid, v_acct::uuid, '00000000-0000-4000-8000-00000000c701'::uuid);
+  ASSERT st ->> 'state' = 'claimed' AND st ->> 'target_comment_id' = 'cmt-r20a',
+    format('R20 a fresh claim stays claimed and names its target: %s', st);
+
+  UPDATE public.youtube_comment_operations SET claimed_at = clock_timestamp() - interval '121 seconds'
+   WHERE owner_id = v_a::uuid AND operation_id = '00000000-0000-4000-8000-00000000c701'::uuid;
+  st := public.youtube_comment_op_status(v_a::uuid, v_acct::uuid, '00000000-0000-4000-8000-00000000c701'::uuid);
+  ASSERT st ->> 'state' = 'refused' AND st ->> 'reason' = 'abandoned_before_dispatch',
+    format('R20 an abandoned claim closes as refused: %s', st);
+  r := public.youtube_comment_op_mark_dispatched(
+    v_a::uuid, '00000000-0000-4000-8000-00000000c701'::uuid, '00000000-0000-4000-8000-000000000000'::uuid, 'UC-s4-race', v_gen);
+  ASSERT NOT (r ->> 'ok')::boolean, 'R20 a closed claim can never be marked';
+
+  r := public.youtube_comment_op_claim(
+    v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen, '00000000-0000-4000-8000-00000000c702'::uuid,
+    'edit', '{"video_id":"vid-r20","comment_id":"cmt-r20b"}'::jsonb,
+    repeat('z', 64), '{}'::jsonb, 'write', 'r20b');
+  v_token := r ->> 'attempt_token';
+  r := public.youtube_comment_op_mark_dispatched(
+    v_a::uuid, '00000000-0000-4000-8000-00000000c702'::uuid, v_token::uuid, 'UC-s4-race', v_gen);
+  ASSERT (r ->> 'ok')::boolean, format('R20 marked b: %s', r);
+  UPDATE public.youtube_comment_operations SET dispatched_at = clock_timestamp() - interval '91 seconds'
+   WHERE owner_id = v_a::uuid AND operation_id = '00000000-0000-4000-8000-00000000c702'::uuid;
+  st := public.youtube_comment_op_status(v_a::uuid, v_acct::uuid, '00000000-0000-4000-8000-00000000c702'::uuid);
+  ASSERT st ->> 'state' = 'indeterminate' AND st ->> 'reason' = 'no_settlement'
+    AND st ->> 'result_comment_id' IS NULL AND st ->> 'target_comment_id' = 'cmt-r20b',
+    format('R20 an unsettled dispatch converts with its reason and still names its target: %s', st);
+END
+$r20$;
 
 SELECT extensions.dblink_disconnect('s4_a');
 SELECT extensions.dblink_disconnect('s4_b');
