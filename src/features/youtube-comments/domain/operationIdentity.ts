@@ -85,12 +85,23 @@ export function findPendingOperation(
   userId: string,
   target: { accountId: string; videoId: string; action: Stage4OperationAction; targetCommentId?: string },
 ): PendingStage4Operation | null {
-  return readAll(userId).find((op) =>
+  return findPendingOperations(userId, target)[0] ?? null;
+}
+
+/**
+ * Every pending operation for one target. An unresolved earlier submit can sit
+ * beside the one in flight, so a guard has to look at all of them.
+ */
+export function findPendingOperations(
+  userId: string,
+  target: { accountId: string; videoId: string; action: Stage4OperationAction; targetCommentId?: string },
+): PendingStage4Operation[] {
+  return readAll(userId).filter((op) =>
     op.accountId === target.accountId
     && op.videoId === target.videoId
     && op.action === target.action
     && (target.targetCommentId === undefined || op.targetCommentId === target.targetCommentId)
-  ) ?? null;
+  );
 }
 
 export function listPendingOperations(userId: string, accountId: string): PendingStage4Operation[] {

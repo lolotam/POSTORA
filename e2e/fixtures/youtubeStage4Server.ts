@@ -443,9 +443,12 @@ async function serveRequest(request: Request): Promise<Response> {
       },
     });
   }
+  // A foreign browser origin is refused BEFORE any route runs: a cross-origin
+  // request that needs no preflight must not reach the control routes, the
+  // rollout settings or the counters.
+  if (origin && origin !== APP_URL) return new Response(null, { status: 403 });
   try {
     const response = await route(request);
-    if (origin && origin !== APP_URL) return new Response(null, { status: 403 });
     const headers = new Headers(response.headers);
     if (origin) {
       headers.set("Access-Control-Allow-Origin", origin);

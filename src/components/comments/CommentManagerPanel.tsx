@@ -59,9 +59,11 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
   // The Stage 4 surface mounts only when the server says this account is
   // admitted for reads; every other answer keeps the baseline inbox exactly
   // as it was (Composio, gate-off, old backend, transport failure).
+  // A Composio connection can never be admitted, so it skips the question
+  // and its baseline inbox loads at once.
   const stage4Admission = useYouTubeStage4Admission(
     platform === "youtube" ? activeAccountId : null,
-    platform === "youtube" && !needsReconnect,
+    platform === "youtube" && !needsReconnect && activeAccount?.auth_provider !== "composio",
     defaultYouTubeCommentsGateway,
   );
 
@@ -76,7 +78,10 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
     socialAccountId: activeAccountId,
     pageId,
     igUserId,
-    enabled: !needsReconnect && stage4Admission !== "admitted",
+    // While admission is still being decided the panel shows a spinner, and a
+    // legacy provider read for a channel that is about to be admitted would
+    // spend quota and could drop a stored grant that Stage 4 leaves alone.
+    enabled: !needsReconnect && stage4Admission !== "admitted" && stage4Admission !== "loading",
   });
 
   const EmptyIcon = EMPTY_ICONS[platform];

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { YouTubeCommentsGateway } from "./ports";
-import { listPendingOperations, type PendingStage4Operation } from "../domain/operationIdentity";
+import { clearPendingOperation, listPendingOperations, type PendingStage4Operation } from "../domain/operationIdentity";
 import type { Stage4OperationStatusPayload } from "../domain/types";
 import { clearSettled, recoverOperation, type RecoveryResult } from "./recoverOperation";
 
@@ -29,6 +29,18 @@ export function useStage4Recovery(params: {
   const { userId, accountId, enabled } = params;
   const gateway = params.gateway;
   const [recovered, setRecovered] = useState<StandaloneRecoveredOperation[]>([]);
+  // The view's lifetime and context, read after an await: a manual re-check
+  // that completes for a view that is gone (or an account that is no longer
+  // current) must not clear an identity nobody has seen the outcome of.
+  const alive = useRef(true);
+  const currentContext = useRef(`${userId}:${accountId}`);
+  currentContext.current = `${userId}:${accountId}`;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!enabled || !accountId || !userId) return;
@@ -54,11 +66,20 @@ export function useStage4Recovery(params: {
 
   return {
     recovered,
-    clear: (operationId: string) => setRecovered((prev) => prev.filter((r) => r.operation.operationId !== operationId)),
+    clear: (operationId: string) => {
+      const entry = recovered.find((r) => r.operation.operationId === operationId);
+      // Dismissing acknowledges a terminal state the owner was shown. A
+      // receipt still in flight, or one that could not be read, keeps its identity.
+      const inFlight = entry?.status?.state === "claimed" || entry?.status?.state === "dispatched";
+      if (entry && !entry.unavailable && !inFlight) clearPendingOperation(userId, operationId);
+      setRecovered((prev) => prev.filter((r) => r.operation.operationId !== operationId));
+    },
     recheck: async (operationId: string) => {
       const current = recovered.find((r) => r.operation.operationId === operationId);
       if (!current) return;
+      const context = `${userId}:${accountId}`;
       const next = await recoverOperation(gateway, accountId, current.operation);
+      if (!alive.current || currentContext.current !== context) return;
       setRecovered((prev) => prev.map((r) => (
         r.operation.operationId === operationId ? { operation: next.operation, status: next.status, unavailable: next.unavailable } : r
       )));

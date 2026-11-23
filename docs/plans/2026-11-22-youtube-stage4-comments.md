@@ -94,7 +94,7 @@ All automated evidence is **offline**: fake provider, synthetic accounts, dispos
 ### Denied effects — each must be shown impossible, not merely untested
 
 1. A second public comment or reply from one deliberate submit, by any path: double click, second tab, reload, lost acknowledgement, token refresh, `401`, timeout, restart, rollback, reconnect, delete-and-recreate, digest key rotation.
-2. A send for an account that is not owned, not active, not stored-native, not admitted for that capability, or whose channel or generation differs from the values verified.
+2. A send for an account that is not owned, not active, not stored-native, not admitted for that capability, or whose channel or generation differs from the values verified. (Deleting the channel's own comment is not a Stage 4 send: per spec A4 it stays on the existing `delete_comment` action, unchanged and not behind a Stage 4 capability, so this item does not cover it.)
 3. A receipt, or any field of one, returned across owners, accounts, or a disconnect or reconnect.
 4. `banAuthor` on any request not backed by a server-issued, unexpired, single-operation confirmation on a Reject; any ban reachable **through Stage 4 code** by the AI agent, a workflow, Partner, n8n, MCP or a service-role caller.
 5. A reject or a ban reported as observed; an author reported as banned; an undo offered; any conclusion drawn from a `404` or a vanished row.

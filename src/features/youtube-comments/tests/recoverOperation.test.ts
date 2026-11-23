@@ -7,9 +7,9 @@ import { YouTubeCommentsError } from "../domain/errors";
 const USER = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
 
-function pendingOperation(operationId: string): PendingStage4Operation {
+function pendingOperation(operationId: string, createdAt: number = Date.now()): PendingStage4Operation {
   const operation: PendingStage4Operation = {
-    operationId, accountId: ACCOUNT, videoId: "vid-1", action: "create_thread", targetCommentId: "", createdAt: Date.now(),
+    operationId, accountId: ACCOUNT, videoId: "vid-1", action: "create_thread", targetCommentId: "", createdAt,
   };
   savePendingOperation(USER, operation);
   return operation;
@@ -26,7 +26,8 @@ describe("recoverOperation", () => {
     { label: "a confirmed receipt", answer: () => Promise.resolve({ state: "confirmed" }), settled: true, unavailable: false },
     { label: "a refused receipt", answer: () => Promise.resolve({ state: "refused" }), settled: true, unavailable: false },
     { label: "an indeterminate receipt (still unresolved)", answer: () => Promise.resolve({ state: "indeterminate" }), settled: false, unavailable: false },
-    { label: "not_found (the binding changed)", answer: () => Promise.reject(new YouTubeCommentsError("not_found")), settled: true, unavailable: false },
+    // Right after the submit a missing receipt can be a pre-claim miss (the handler is still verifying the target): not final.
+    { label: "not_found right after the submit (the receipt may not exist yet)", answer: () => Promise.reject(new YouTubeCommentsError("not_found")), settled: false, unavailable: true },
     { label: "binding_changed", answer: () => Promise.reject(new YouTubeCommentsError("binding_changed")), settled: true, unavailable: false },
     { label: "a 503 upstream (the server could not read the receipt)", answer: () => Promise.reject(new YouTubeCommentsError("upstream")), settled: false, unavailable: true },
     { label: "a 429", answer: () => Promise.reject(new YouTubeCommentsError("rate_limited")), settled: false, unavailable: true },
@@ -36,6 +37,20 @@ describe("recoverOperation", () => {
     const result = await recoverOperation(gatewayThatAnswers(answer), ACCOUNT, operation);
     expect({ settled: result.settled, unavailable: result.unavailable }).toEqual({ settled, unavailable });
     // Reading never clears: only the view that has the result may do that.
+    expect(listPendingOperations(USER, ACCOUNT)).toHaveLength(1);
+  });
+
+  it("not_found long after the submit means the binding changed: final, the identity may go", async () => {
+    const operation = pendingOperation("op-old", Date.now() - 10 * 60_000);
+    const result = await recoverOperation(gatewayThatAnswers(() => Promise.reject(new YouTubeCommentsError("not_found"))), ACCOUNT, operation);
+    expect({ settled: result.settled, unavailable: result.unavailable }).toEqual({ settled: true, unavailable: false });
+  });
+
+  it.each(["claimed", "dispatched"])("a %s receipt is in flight: neither applied nor refused, and the identity stays", async (state) => {
+    const result = await recoverOperation(gatewayThatAnswers(() => Promise.resolve({ state })), ACCOUNT, pendingOperation("op-flight"));
+    expect({ settled: result.settled, unavailable: result.unavailable, inFlight: result.inFlight })
+      .toEqual({ settled: false, unavailable: false, inFlight: true });
+    clearSettled(USER, [result]);
     expect(listPendingOperations(USER, ACCOUNT)).toHaveLength(1);
   });
 

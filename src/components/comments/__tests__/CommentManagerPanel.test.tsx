@@ -53,6 +53,19 @@ describe("CommentManagerPanel for YouTube", () => {
     );
   });
 
+  // While Stage 4 admission is still being decided the panel shows a spinner; a
+  // legacy provider read then would spend quota (and can drop a stored grant)
+  // for a channel that is about to be admitted.
+  it("starts no legacy query for a native channel while its admission is loading", () => {
+    accounts = [{ ...OLD_NATIVE, account_metadata: { granted_scopes: ["https://www.googleapis.com/auth/youtube.force-ssl"] } }];
+    stage4Admission = "loading";
+    render(<CommentManagerPanel platform="youtube" />);
+    expect(useComments).toHaveBeenLastCalledWith(expect.objectContaining({ socialAccountId: "yt-old", enabled: false }));
+    stage4Admission = "legacy";
+    render(<CommentManagerPanel platform="youtube" />);
+    expect(useComments).toHaveBeenLastCalledWith(expect.objectContaining({ socialAccountId: "yt-old", enabled: true }));
+  });
+
   // Composio's Google app already holds the comments scope, so a Composio channel needs no
   // reconnect: the query runs, and the row says which provider it came through.
   it("queries a Composio channel straight away and labels it", () => {

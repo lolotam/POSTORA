@@ -306,23 +306,174 @@ describe("YouTubeCommentsScreen", () => {
     expect((input as HTMLTextAreaElement).value).toBe("again");
   });
 
-  it("never re-sends an indeterminate operation: the same submit answers pending", async () => {
+  it("never re-sends an indeterminate operation's key: a new deliberate submit gets its own key", async () => {
     const { calls, gateway } = renderScreen({
       threads: [row()],
       createResult: () => Promise.resolve(receipt({ state: "indeterminate", reason: "indeterminate" })),
+      statusResult: Promise.resolve({ state: "indeterminate", reason: null }),
     });
     await screen.findByTestId("yt-stage4-composer");
-    fireEvent.change(screen.getByLabelText(/Post a comment as your channel/), { target: { value: "ghost" } });
+    const input = screen.getByLabelText(/Post a comment as your channel/);
+    fireEvent.change(input, { target: { value: "ghost" } });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
     });
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/may or may not have been applied/));
+    // The earlier one stays unresolved on the server (its fence guards the
+    // original); a different text is a different comment and is not blocked.
+    fireEvent.change(input, { target: { value: "a different comment" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(calls.create).toBe(2));
+    const keys = (gateway.createThread as ReturnType<typeof vi.fn>).mock.calls.map((call) => (call[0] as { operationId: string }).operationId);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("an earlier submit that may still land blocks a new one: the answer is pending, nothing is sent", async () => {
+    const { calls } = renderScreen({
+      threads: [row()],
+      createResult: () => Promise.resolve(receipt({ state: "dispatched" })),
+      statusResult: Promise.resolve({ state: "dispatched", reason: null }),
+    });
+    await screen.findByTestId("yt-stage4-composer");
+    fireEvent.change(screen.getByLabelText(/Post a comment as your channel/), { target: { value: "in flight" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
     });
     await waitFor(() => expect(screen.getByText(/still being checked/)).toBeInTheDocument());
     expect(calls.create).toBe(1);
-    expect(gateway.createThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("a lost response offers a status check that reads and never resends", async () => {
+    const { calls, gateway } = renderScreen({
+      threads: [row()],
+      createResult: () => Promise.reject(new Error("Failed to fetch")),
+    });
+    await screen.findByTestId("yt-stage4-composer");
+    fireEvent.change(screen.getByLabelText(/Post a comment as your channel/), { target: { value: "lost" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+    });
+    await waitFor(() => expect(screen.getAllByRole("status").some((el) => /Accepted by YouTube/.test(el.textContent ?? ""))).toBe(true));
+    expect(gateway.operationStatus).toHaveBeenCalledTimes(1);
+    expect(calls.create).toBe(1);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toEqual([]));
+  });
+
+  it("a receipt still in flight after a reload is pending with a status check, never 'not applied'", async () => {
+    localStorage.setItem(`postora:yt-stage4:ops:${USER}`, JSON.stringify([{
+      operationId: "op-flight", accountId: ACCOUNT, videoId: "vid-1", action: "create_thread", targetCommentId: "", createdAt: Date.now(),
+    }]));
+    renderScreen({ threads: [row()], statusResult: Promise.resolve({ state: "dispatched", reason: null }) });
+    const banner = await screen.findByTestId("yt-stage4-recovered");
+    expect(banner).toHaveTextContent(/still being processed/);
+    expect(banner).not.toHaveTextContent(/not applied/);
+    expect(within(banner).getByRole("button", { name: "Check status" })).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toHaveLength(1);
+  });
+
+  it("dismissing a recovered indeterminate outcome forgets its identity, so a reload does not bring it back", async () => {
+    localStorage.setItem(`postora:yt-stage4:ops:${USER}`, JSON.stringify([{
+      operationId: "op-unsure", accountId: ACCOUNT, videoId: "vid-1", action: "create_thread", targetCommentId: "", createdAt: Date.now() - 5 * 60_000,
+    }]));
+    renderScreen({ threads: [row()], statusResult: Promise.resolve({ state: "indeterminate", reason: null }) });
+    const banner = await screen.findByTestId("yt-stage4-recovered");
+    expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toHaveLength(1);
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toEqual([]);
+  });
+
+  it("each thread in the Held list says so when none of ITS rows is held", async () => {
+    renderScreen({
+      threads: [
+        row({ comment_id: "c-a", handle: "hdl-a", moderation_status: "heldForReview", text: "held thread" }),
+        row({ comment_id: "c-b", handle: "hdl-b", moderation_status: "published", text: "plain thread" }),
+      ],
+    });
+    await screen.findByText("plain thread");
+    fireEvent.click(screen.getByRole("tab", { name: "Held for review" }));
+    await screen.findByText("plain thread");
+    // One notice, for the thread with no held row; the thread that has one is not silenced by it, nor does it silence the other.
+    await waitFor(() => expect(screen.getAllByTestId("yt-stage4-held-hidden")).toHaveLength(1));
+  });
+
+  it("refreshes the comment list on request, apart from the uploads", async () => {
+    const { gateway } = renderScreen({ threads: [row()] });
+    await screen.findByText("a top-level comment");
+    const before = (gateway.threadPage as ReturnType<typeof vi.fn>).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
+    await waitFor(() => expect((gateway.threadPage as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("gives every composer its own input id, so a label reaches its own textarea", async () => {
+    renderScreen({ threads: [row()] });
+    await screen.findByText("a top-level comment");
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    const reply = await screen.findByLabelText("Write a reply");
+    const top = screen.getByLabelText(/Post a comment as your channel/);
+    expect(reply).not.toBe(top);
+    expect(reply.id).not.toBe(top.id);
+  });
+
+  describe("the ban step", () => {
+    it("locks the box while the confirmation is pending and never downgrades to a plain reject", async () => {
+      const { gateway, calls } = renderScreen({ caps: capabilities({ ban: true }), threads: [row()] });
+      let release!: () => void;
+      (gateway.banConfirmation as ReturnType<typeof vi.fn>).mockImplementation(async (params: { operationId: string }) => {
+        calls.banKeys.push(params.operationId);
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { confirmation: "bnc-server-token", expires_in_seconds: 120, author_channel_id: "UC-author-1", author_name: "Author One" };
+      });
+      await screen.findByText("a top-level comment");
+      fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+      const box = await screen.findByRole("checkbox", { name: "Also ban this author" });
+      fireEvent.click(box);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      });
+      expect(box).toBeDisabled();
+      await act(async () => { release(); });
+      const confirm = await screen.findByRole("button", { name: "Reject and ban" });
+      await act(async () => {
+        fireEvent.click(confirm);
+      });
+      await waitFor(() => expect(calls.moderate).toHaveLength(1));
+      expect(calls.moderate[0]).toMatchObject({ status: "rejected", banConfirmation: "bnc-server-token" });
+      expect(calls.moderateKeys[0]).toBe(calls.banKeys[0]);
+    });
+
+    it("ignores a confirmation that answers after the dialog was closed and reopened", async () => {
+      const { gateway, calls } = renderScreen({ caps: capabilities({ ban: true }), threads: [row()] });
+      let release!: () => void;
+      (gateway.banConfirmation as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { confirmation: "bnc-stale-token", expires_in_seconds: 120, author_channel_id: "UC-author-1", author_name: "Author One" };
+      });
+      await screen.findByText("a top-level comment");
+      fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+      fireEvent.click(await screen.findByRole("checkbox", { name: "Also ban this author" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+      await screen.findByRole("checkbox", { name: "Also ban this author" });
+      await act(async () => { release(); });
+      // The reopened dialog is still on its first step, and no ban step can submit.
+      expect(screen.queryByRole("button", { name: "Reject and ban" })).not.toBeInTheDocument();
+      expect(calls.moderate).toHaveLength(0);
+    });
   });
 
   it("restores a pending operation on mount and reads its status before anything else", async () => {
@@ -349,7 +500,7 @@ describe("YouTubeCommentsScreen", () => {
       videoId: "vid-1",
       action: "reply",
       targetCommentId: "c-1",
-      createdAt: Date.now(),
+      createdAt: Date.now() - 10 * 60_000,
     }]));
     renderScreen({
       threads: [row()],

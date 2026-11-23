@@ -5,7 +5,7 @@ import { YouTubeCommentsError } from "../domain/errors";
 import {
   clearPendingOperation,
   clearPendingOperationsForAccount,
-  findPendingOperation,
+  findPendingOperations,
   listPendingOperations,
   mintOperationId,
   savePendingOperation,
@@ -22,11 +22,12 @@ import { youtubeCommentsKey, YOUTUBE_COMMENTS_STALE_MS } from "./queryKeys";
 import { clearSettled, recoverOperation } from "./recoverOperation";
 /** The outcome of one deliberate submit, as the composer must show it. */
 export type SubmissionOutcome =
-  | { kind: "confirmed"; receipt: Stage4ReceiptPayload }
-  | { kind: "refused"; reason: string; draftKept: true }
-  | { kind: "indeterminate"; receipt: Stage4ReceiptPayload }
+  | { kind: "confirmed"; receipt: Stage4ReceiptPayload; operationId: string }
+  | { kind: "refused"; reason: string; draftKept: true; operationId: string }
+  | { kind: "indeterminate"; receipt: Stage4ReceiptPayload; operationId: string }
   | { kind: "pending"; operationId: string }
-  | { kind: "error"; reason: string; draftKept: true };
+  /** A failure with no receipt (a lost response): the operation id is what a status check needs. */
+  | { kind: "error"; reason: string; draftKept: true; operationId: string };
 
 /** A restored operation from storage, after its status was read. */
 export interface RecoveredOperation {
@@ -36,6 +37,8 @@ export interface RecoveredOperation {
   settled: boolean;
   /** True when the status could not be read for a TEMPORARY reason; the identity is kept. */
   unavailable: boolean;
+  /** True when the receipt is still claimed or dispatched. */
+  inFlight: boolean;
 }
 
 export interface Stage4PageState<Item> {
@@ -84,13 +87,18 @@ export function useYouTubeStage4(params: {
   // ---- a generic cursor-paged list ------------------------------------------
 
   function usePagedList<Item extends { key: string }>(listOptions: {
+    userId: string;
+    accountId: string;
     resource: string;
     enabled: boolean;
     fetchPage: (cursor: string | undefined) => Promise<{ page: Item[]; next: string | null; account_id: string }>;
   }): Stage4PageState<Item> {
+    const listQueryClient = useQueryClient();
     const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
-    // Reset the chain whenever the list identity changes.
-    const identity = `${accountId}:${listOptions.resource}`;
+    // Reset the chain whenever the list identity changes: a cursor is signed
+    // for one user and account, and a hook that stays mounted across a user
+    // switch must never submit the previous user's cursor.
+    const identity = `${listOptions.userId}:${listOptions.accountId}:${listOptions.resource}`;
     const lastIdentity = useRef(identity);
     if (lastIdentity.current !== identity) {
       lastIdentity.current = identity;
@@ -98,7 +106,7 @@ export function useYouTubeStage4(params: {
     }
 
     const pages = cursors.map((cursor, index) => ({
-      queryKey: youtubeCommentsKey(userId, accountId, listOptions.resource, cursor ?? `page-${index}`),
+      queryKey: youtubeCommentsKey(listOptions.userId, listOptions.accountId, listOptions.resource, cursor ?? `page-${index}`),
       queryFn: async (): Promise<{ page: Item[]; next: string | null; stale: boolean }> => {
         const result = await listOptions.fetchPage(cursor);
         return guard(result) ? { page: result.page, next: result.next, stale: false } : { page: [], next: null, stale: true };
@@ -124,13 +132,13 @@ export function useYouTubeStage4(params: {
         // The live page is the tail; earlier pages are cached snapshots.
         const entry = i === cursors.length - 1
           ? tailQuery.data
-          : queryClient.getQueryData<{ page: Item[] } | undefined>(
-            youtubeCommentsKey(userId, accountId, listOptions.resource, cursors[i] ?? `page-${i}`),
+          : listQueryClient.getQueryData<{ page: Item[] } | undefined>(
+            youtubeCommentsKey(listOptions.userId, listOptions.accountId, listOptions.resource, cursors[i] ?? `page-${i}`),
           );
         for (const item of entry?.page ?? []) byKey.set(item.key, item);
       }
       return [...byKey.values()];
-    }, [cursors, tailQuery.data, listOptions.resource]);
+    }, [cursors, tailQuery.data, listQueryClient, listOptions.userId, listOptions.accountId, listOptions.resource]);
 
     return {
       items,
@@ -146,7 +154,7 @@ export function useYouTubeStage4(params: {
       // current tail would re-run the last page and leave page one stale.
       reload: () => {
         setCursors([undefined]);
-        void queryClient.invalidateQueries({ queryKey: pages[0].queryKey });
+        void listQueryClient.invalidateQueries({ queryKey: pages[0].queryKey });
       },
     };
   }
@@ -157,6 +165,8 @@ export function useYouTubeStage4(params: {
   const [listMode, setListMode] = useState<"published" | "heldForReview">("published");
 
   const videos = usePagedList({
+    userId,
+    accountId,
     resource: "videos",
     enabled: canRead,
     fetchPage: async (cursor) => {
@@ -174,6 +184,8 @@ export function useYouTubeStage4(params: {
     : videos.items[0]?.id ?? null;
 
   const threads = usePagedList({
+    userId,
+    accountId,
     resource: `threads:${effectiveVideoId ?? "-"}:${listMode}`,
     enabled: canRead && !!effectiveVideoId,
     fetchPage: async (cursor) => {
@@ -211,6 +223,15 @@ export function useYouTubeStage4(params: {
   // the draft; an indeterminate one is never re-sent (spec 9.1, 14).
 
   const [recovered, setRecovered] = useState<RecoveredOperation[]>([]);
+  const aliveRef = useRef(true);
+  const contextRef = useRef(`${userId}:${accountId}`);
+  contextRef.current = `${userId}:${accountId}`;
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   const submit = useCallback(
     async (action: Stage4OperationAction, input: {
@@ -225,8 +246,17 @@ export function useYouTubeStage4(params: {
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
       const targetCommentId = input.targetCommentId ?? "";
-      const pending = findPendingOperation(userId, { accountId, videoId: input.videoId, action, targetCommentId });
-      if (pending) return { kind: "pending", operationId: pending.operationId };
+      // An earlier submit for this target blocks a new one only while it may
+      // still land (claimed or dispatched) or cannot be read right now. An
+      // INDETERMINATE one stays guarded by the server's fence for the
+      // original (the same logical create or reply is refused while it is
+      // unresolved), so a different text, a deliberate new edit or a new
+      // reject is a new intent and gets its own key (spec 9.1 and 9.3).
+      for (const earlier of findPendingOperations(userId, { accountId, videoId: input.videoId, action, targetCommentId })) {
+        const recovery = await recoverOperation(gateway, accountId, earlier);
+        if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
+        if (recovery.settled) clearPendingOperation(userId, earlier.operationId);
+      }
 
       const operationId = input.operationId ?? mintOperationId();
       savePendingOperation(userId, {
@@ -248,25 +278,31 @@ export function useYouTubeStage4(params: {
         // A transport failure after the claim is indeterminate unless the
         // server said otherwise; the local identity stays until status is read.
         if (isShownRefusal(reason)) {
-          clearPendingOperation(userId, operationId);
-          return { kind: "refused", reason, draftKept: true };
+          return { kind: "refused", reason, draftKept: true, operationId };
         }
-        return { kind: "error", reason, draftKept: true };
+        return { kind: "error", reason, draftKept: true, operationId };
       }
 
-      if (receipt.state === "confirmed" || receipt.state === "refused") {
-        clearPendingOperation(userId, operationId);
-      }
+      // The identity is NOT cleared here. Only a surface that shows the
+      // outcome acknowledges it (see `acknowledge`): a response that lands
+      // after its composer is gone leaves the identity for the recovery
+      // banner of the next view instead of losing the only reference.
       if (receipt.state === "confirmed") {
         void threads.reload();
       }
-      if (receipt.state === "confirmed") return { kind: "confirmed", receipt };
-      if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true };
-      if (receipt.state === "indeterminate") return { kind: "indeterminate", receipt };
+      if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
+      if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
+      if (receipt.state === "indeterminate") return { kind: "indeterminate", receipt, operationId };
       // claimed/dispatched: the browser lost the answer before settlement.
-      return { kind: "indeterminate", receipt };
+      return { kind: "indeterminate", receipt, operationId };
     },
-    [userId, accountId, threads],
+    [userId, accountId, threads, gateway],
+  );
+
+  /** A surface that has shown this operation's outcome forgets its identity. */
+  const acknowledge = useCallback(
+    (operationId: string) => clearPendingOperation(userId, operationId),
+    [userId],
   );
 
   const createThread = useCallback(
@@ -328,9 +364,28 @@ export function useYouTubeStage4(params: {
     [gateway, accountId, threads],
   );
 
+  /**
+   * Read one operation's receipt again (a lost response, an indeterminate
+   * outcome). It reads only, never resends, and answers in the same shape as
+   * a submit so the composer shows it the same way.
+   */
   const checkStatus = useCallback(
-    async (operationId: string) => gateway.operationStatus({ accountId, operationId }),
-    [gateway, accountId],
+    async (operationId: string): Promise<SubmissionOutcome> => {
+      try {
+        const status = await gateway.operationStatus({ accountId, operationId });
+        if (status.state === "confirmed") {
+          void threads.reload();
+          return { kind: "confirmed", receipt: status as Stage4ReceiptPayload, operationId };
+        }
+        if (status.state === "refused") return { kind: "refused", reason: status.reason ?? "upstream", draftKept: true, operationId };
+        if (status.state === "indeterminate") return { kind: "indeterminate", receipt: status as Stage4ReceiptPayload, operationId };
+        return { kind: "pending", operationId };
+      } catch (error) {
+        const reason = error instanceof YouTubeCommentsError ? error.code : "upstream";
+        return { kind: "error", reason, draftKept: true, operationId };
+      }
+    },
+    [gateway, accountId, threads],
   );
 
   // ---- recovery on mount and account change ------------------------------------
@@ -398,12 +453,23 @@ export function useYouTubeStage4(params: {
     requestBanConfirmation,
     checkStatus,
     recovered,
-    clearRecovered: (operationId: string) => setRecovered((prev) => prev.filter((r) => r.operation.operationId !== operationId)),
+    acknowledge,
+    clearRecovered: (operationId: string) => {
+      const entry = recovered.find((r) => r.operation.operationId === operationId);
+      // Dismissing acknowledges a terminal state the owner was shown. A
+      // receipt still in flight, or one that could not be read, keeps its identity.
+      if (entry && !entry.inFlight && !entry.unavailable) clearPendingOperation(userId, operationId);
+      setRecovered((prev) => prev.filter((r) => r.operation.operationId !== operationId));
+    },
     /** Check the status of one recovered operation again (after a temporary failure). */
     recheckRecovered: async (operationId: string) => {
       const current = recovered.find((r) => r.operation.operationId === operationId);
       if (!current) return;
+      const context = `${userId}:${accountId}`;
       const next = await recoverOperation(gateway, accountId, current.operation);
+      // A view that is gone, or an account that is no longer current, never
+      // acknowledges: the identity stays for the view that can show it.
+      if (!aliveRef.current || contextRef.current !== context) return;
       setRecovered((prev) => prev.map((r) => (r.operation.operationId === operationId ? next : r)));
       clearSettled(userId, [next]);
     },
@@ -447,6 +513,13 @@ export function useStage4Replies(params: {
   const { userId, accountId, gateway, parentHandle, enabled } = params;
   const queryClient = useQueryClient();
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  // A cursor belongs to one user, account and parent: reset the chain when any changes.
+  const repliesIdentity = `${userId}:${accountId}:${parentHandle}`;
+  const lastRepliesIdentity = useRef(repliesIdentity);
+  if (lastRepliesIdentity.current !== repliesIdentity) {
+    lastRepliesIdentity.current = repliesIdentity;
+    setCursors([undefined]);
+  }
 
   const tailIndex = cursors.length - 1;
   const tailQuery = useQuery({

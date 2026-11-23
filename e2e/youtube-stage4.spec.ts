@@ -273,9 +273,12 @@ test.describe("Stage 4 fences across tabs and reloads (en)", () => {
     }
     await Promise.all([pageA, pageB].map((tab) =>
       tab.getByTestId("yt-stage4-composer").getByRole("button", { name: /^Comment$/ }).click()));
-    // Both tabs settle on an answer; whichever lost the race says so.
-    await expect.poll(async () => (await providerState()).writes, { timeout: 15_000 }).toBe(1);
-    await pageA.waitForTimeout(1_500);
+    // Both tabs settle on an answer: one is accepted, the other is refused or
+    // reported as already recorded. Each composer shows its own outcome line.
+    for (const tab of [pageA, pageB]) {
+      await expect(tab.getByTestId("yt-stage4-composer").locator("[role=status], [role=alert]").first())
+        .toBeVisible({ timeout: 20_000 });
+    }
     expect((await providerState()).writes).toBe(1);
     await context.close();
   });
@@ -284,9 +287,12 @@ test.describe("Stage 4 fences across tabs and reloads (en)", () => {
     await signIn(page, "en");
     await openInbox(page);
     await control("drop-next-response");
+    const dropped = page.waitForResponse((reply) => reply.url().includes("/functions/v1/comment-manager") && reply.status() === 599);
     await submitTopLevelComment(page, uniqueText("lost in transit"));
-    // The browser saw an error; the receipt settled inside the handler.
-    await page.waitForTimeout(500);
+    // The browser saw an error; the receipt settled inside the handler. The
+    // composer now offers a status check instead of an error with no way out.
+    await dropped;
+    await expect(page.getByRole("button", { name: /Check status|تحقق من الحالة/ })).toBeVisible({ timeout: 10_000 });
     expect((await providerState()).writes).toBe(1);
 
     await page.reload();
@@ -305,9 +311,10 @@ test.describe("Stage 4 fences across tabs and reloads (en)", () => {
     await page.reload();
     await openInbox(page);
     await expect(page.getByTestId("yt-stage4-recovered")).toContainText(/may or may not|قد يكون/, { timeout: 15_000 });
-    // The composer for that target is blocked from re-sending the same text.
+    // The earlier create stays unresolved on the server: the same text under a
+    // new key is refused by the logical fence, and nothing reaches YouTube.
     await submitTopLevelComment(page, ghost);
-    await expect(page.getByText(/still being checked|لا يزال يتم التحقق/).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/may already be on its way|قد يكون التعليق نفسه/).first()).toBeVisible({ timeout: 10_000 });
     expect((await providerState()).writes).toBe(1);
   });
 
@@ -315,8 +322,9 @@ test.describe("Stage 4 fences across tabs and reloads (en)", () => {
     await signIn(page, "en");
     await openInbox(page);
     await control("drop-next-response");
+    const droppedBeforeSwitch = page.waitForResponse((reply) => reply.url().includes("/functions/v1/comment-manager") && reply.status() === 599);
     await submitTopLevelComment(page, uniqueText("before the switch"));
-    await page.waitForTimeout(300);
+    await droppedBeforeSwitch;
 
     await control("capabilities", { on: false });
     await page.reload();

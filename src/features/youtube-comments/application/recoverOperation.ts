@@ -12,6 +12,20 @@ export interface RecoveryResult {
   settled: boolean;
   /** True when the read failed for a TEMPORARY reason: the identity is kept and the owner can check again. */
   unavailable: boolean;
+  /** True when the receipt is still claimed or dispatched: the write may yet land, so it is neither applied nor refused. */
+  inFlight: boolean;
+}
+
+/**
+ * How long after its submit a missing receipt can still be a pre-claim miss:
+ * the handler may still be verifying the target or preparing a credential
+ * before it records the claim, and an unclaimed row is closed after 120 s.
+ */
+export const PRE_CLAIM_GRACE_MS = 150_000;
+
+/** A `not_found` this soon after the submit is not yet proof that the binding changed. */
+export function isWithinPreClaimGrace(operation: PendingStage4Operation, now: number = Date.now()): boolean {
+  return typeof operation.createdAt === "number" && now - operation.createdAt < PRE_CLAIM_GRACE_MS;
 }
 
 /**
@@ -35,12 +49,18 @@ export async function recoverOperation(
   try {
     const status = await gateway.operationStatus({ accountId, operationId: operation.operationId });
     const settled = status.state === "confirmed" || status.state === "refused";
-    return { operation, status, settled, unavailable: false };
+    const inFlight = status.state === "claimed" || status.state === "dispatched";
+    return { operation, status, settled, unavailable: false, inFlight };
   } catch (error) {
     if (error instanceof YouTubeCommentsError && isRebindReason(error.code)) {
-      return { operation, status: null, settled: true, unavailable: false };
+      // A fresh submit's receipt may simply not exist yet: keep the identity
+      // and let the owner check again. Only a binding change is final at once.
+      if (error.code === "not_found" && isWithinPreClaimGrace(operation)) {
+        return { operation, status: null, settled: false, unavailable: true, inFlight: false };
+      }
+      return { operation, status: null, settled: true, unavailable: false, inFlight: false };
     }
-    return { operation, status: null, settled: false, unavailable: true };
+    return { operation, status: null, settled: false, unavailable: true, inFlight: false };
   }
 }
 

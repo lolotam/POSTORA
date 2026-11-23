@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import "@/i18n";
@@ -206,6 +206,15 @@ function RecoveredBannerList(props: {
                   {t("youtubeStage4.recovered.rebindBody", "Its result can no longer be checked here. Check the video on YouTube.")}
                 </p>
               </>
+            ) : entry.status.state === "claimed" || entry.status.state === "dispatched" ? (
+              <>
+                <p className="font-medium text-amber-700 dark:text-amber-300">
+                  {t("youtubeStage4.recovered.pendingTitle", "A previous action is still being processed")}
+                </p>
+                <p className="text-amber-700/80 dark:text-amber-300/80 mt-0.5">
+                  {t("youtubeStage4.recovered.pendingBody", "It was not sent again. Check the status in a moment.")}
+                </p>
+              </>
             ) : entry.status.state === "indeterminate" ? (
               <>
                 <p className="font-medium text-amber-700 dark:text-amber-300">
@@ -226,7 +235,7 @@ function RecoveredBannerList(props: {
               </p>
             )}
           </div>
-          {entry.unavailable && (
+          {(entry.unavailable || entry.status?.state === "claimed" || entry.status?.state === "dispatched") && (
             <Button size="sm" variant="outline" onClick={() => props.onRecheck(entry.operation.operationId)}>
               {t("youtubeStage4.recovered.checkStatus", "Check status")}
             </Button>
@@ -326,12 +335,15 @@ function ThreadList({ stage4, onNotice }: { stage4: ReturnType<typeof useYouTube
 
   if (!videoId) return <></>;
 
-  const heldButHidden = stage4.listMode === "heldForReview"
-    && stage4.threads.items.length > 0
-    && stage4.threads.items.every((item) => item.row.moderation_status !== "heldForReview");
-
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-end">
+        <Button size="sm" variant="outline" onClick={stage4.threads.reload} disabled={stage4.threads.loading}>
+          {stage4.threads.loading ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
+          {t("youtubeStage4.list.refresh", "Refresh comments")}
+        </Button>
+      </div>
+
       {stage4.canWrite && <TopLevelComposer stage4={stage4} videoId={videoId} onNotice={onNotice} />}
 
       {stage4.threads.error && (
@@ -341,15 +353,6 @@ function ThreadList({ stage4, onNotice }: { stage4: ReturnType<typeof useYouTube
             {t("youtubeStage4.list.retry", "Retry this page")}
           </Button>
         </div>
-      )}
-
-      {heldButHidden && (
-        <p className="text-sm text-muted-foreground" data-testid="yt-stage4-held-hidden">
-          {t(
-            "youtubeStage4.list.heldHidden",
-            "A reply in this thread is awaiting review, but YouTube did not make it available here.",
-          )}
-        </p>
       )}
 
       {stage4.threads.items.length === 0 && !stage4.threads.loading && !stage4.threads.error && (
@@ -400,6 +403,16 @@ function CommentCard(params: {
   const [composer, setComposer] = useState<"none" | "reply" | "edit">("none");
   const [rejectOpen, setRejectOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // An outcome that lands after this card is gone has nobody to show it to:
+  // it must not clear the operation's identity (see runModerate).
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const isCurrent = () => mounted.current;
 
   // Controls follow the VISIBLE row's own status (spec 8.4 / 10.1).
   const status = row.moderation_status;
@@ -455,12 +468,12 @@ function CommentCard(params: {
             </Button>
           )}
           {showPublish && (
-            <Button size="sm" variant="outline" onClick={() => void runModerate(stage4, row, videoId, "published", onNotice, t)}>
+            <Button size="sm" variant="outline" onClick={() => void runModerate(stage4, row, videoId, "published", onNotice, t, undefined, undefined, isCurrent)}>
               {t("youtubeStage4.actions.publish", "Publish")}
             </Button>
           )}
           {showHold && (
-            <Button size="sm" variant="outline" onClick={() => void runModerate(stage4, row, videoId, "heldForReview", onNotice, t)}>
+            <Button size="sm" variant="outline" onClick={() => void runModerate(stage4, row, videoId, "heldForReview", onNotice, t, undefined, undefined, isCurrent)}>
               {t("youtubeStage4.actions.hold", "Hold")}
             </Button>
           )}
@@ -482,6 +495,8 @@ function CommentCard(params: {
             }}
             onCancel={() => setComposer("none")}
             onNotice={onNotice}
+            onCheckStatus={stage4.checkStatus}
+            onAcknowledge={stage4.acknowledge}
           />
         )}
         {composer === "edit" && (
@@ -496,6 +511,8 @@ function CommentCard(params: {
             }}
             onCancel={() => setComposer("none")}
             onNotice={onNotice}
+            onCheckStatus={stage4.checkStatus}
+            onAcknowledge={stage4.acknowledge}
           />
         )}
 
@@ -512,6 +529,7 @@ function CommentCard(params: {
           open={rejectOpen}
           onOpenChange={setRejectOpen}
           onNotice={onNotice}
+          isCurrent={isCurrent}
         />
       </CardContent>
     </Card>
@@ -527,13 +545,20 @@ async function runModerate(
   t: Translate,
   banConfirmation?: string,
   operationId?: string,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const outcome = await stage4.moderate(videoId, row, status, banConfirmation, operationId);
+  // Only a surface that is still there to show the outcome acknowledges it.
+  if (isCurrent()) {
+    if (outcome.kind === "confirmed" || outcome.kind === "refused") stage4.acknowledge(outcome.operationId);
+  }
   if (outcome.kind === "confirmed") {
     onNotice(t("youtubeStage4.notice.moderated", "Done. Refresh the list to see the current state."));
     return;
   }
-  if (outcome.kind === "indeterminate") {
+  if (outcome.kind === "indeterminate" || outcome.kind === "error") {
+    // A lost response is as unknown as an indeterminate receipt: nothing was
+    // resent, and the identity stays so the status can be read after a reload.
     onNotice(t("youtubeStage4.notice.indeterminate", "This may or may not have been applied. It was not sent again."));
     return;
   }
@@ -541,7 +566,7 @@ async function runModerate(
     onNotice(t("youtubeStage4.notice.pending", "An earlier attempt for this comment is still being checked."));
     return;
   }
-  onNotice(reasonText(t, outcome.kind === "refused" || outcome.kind === "error" ? outcome.reason : null));
+  onNotice(reasonText(t, outcome.reason));
 }
 
 // ---- the reply block with paged replies ---------------------------------------------
@@ -569,16 +594,33 @@ function ReplyBlock(params: {
   for (const row of inlineReplies) merged.set(row.comment_id, { key: row.comment_id, row });
   for (const item of replies.items) merged.set(item.key, item);
   const allReplies = [...merged.values()];
+  // A thread in the Held list with no loaded row (its own, an inline reply or
+  // a paged reply) that reads heldForReview says so, per thread (spec 8.4).
+  const heldHidden = stage4.listMode === "heldForReview"
+    && parent.moderation_status !== "heldForReview"
+    && allReplies.every((item) => item.row.moderation_status !== "heldForReview");
+  const heldHiddenNotice = heldHidden ? (
+    <p className="text-sm text-muted-foreground" data-testid="yt-stage4-held-hidden">
+      {t(
+        "youtubeStage4.list.heldHidden",
+        "A reply in this thread is awaiting review, but YouTube did not make it available here.",
+      )}
+    </p>
+  ) : null;
 
   if (!open) {
     return (
-      <Button size="sm" variant="ghost" onClick={() => stage4.openReplies(parent.handle)}>
-        {t("youtubeStage4.replies.load", "Load replies")}
-      </Button>
+      <>
+        {heldHiddenNotice}
+        <Button size="sm" variant="ghost" onClick={() => stage4.openReplies(parent.handle)}>
+          {t("youtubeStage4.replies.load", "Load replies")}
+        </Button>
+      </>
     );
   }
   return (
     <div className="space-y-2 ms-6 border-s ps-3" data-testid="yt-stage4-replies">
+      {heldHiddenNotice}
       <div className="flex items-center gap-2">
         <p className="text-xs font-medium text-muted-foreground">{t("youtubeStage4.replies.title", "Replies")}</p>
         <Button size="sm" variant="ghost" onClick={() => stage4.closeReplies(parent.handle)}>
@@ -623,6 +665,8 @@ function TopLevelComposer(params: {
       submitLabel={t("youtubeStage4.composer.topSubmit", "Comment")}
       onSubmit={async (text) => stage4.createThread(videoId, text)}
       onNotice={onNotice}
+      onCheckStatus={stage4.checkStatus}
+      onAcknowledge={stage4.acknowledge}
     />
   );
 }
@@ -636,35 +680,66 @@ function Composer(params: {
   onSubmit: (text: string) => Promise<SubmissionOutcome>;
   onCancel?: () => void;
   onNotice?: (text: string | null) => void;
+  /** Reads one operation's receipt again; never resends. Offered after a lost response or an unknown outcome. */
+  onCheckStatus?: (operationId: string) => Promise<SubmissionOutcome>;
+  /** Called once this composer has shown a definite outcome, so its identity can be forgotten. */
+  onAcknowledge?: (operationId: string) => void;
 }): JSX.Element {
   const { t } = useTranslation("automation");
+  const inputId = useId();
   const [text, setText] = useState(params.initialText ?? "");
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [localOutcome, setLocalOutcome] = useState<SubmissionOutcome | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  // An answer that arrives after this composer is gone has nobody to show it
+  // to: it must neither update state nor acknowledge (clear) the identity.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (localOutcome) inputRef.current?.focus();
   }, [localOutcome]);
+
+  const show = (outcome: SubmissionOutcome) => {
+    if (!mounted.current) return;
+    setLocalOutcome(outcome);
+    if (outcome.kind === "confirmed") {
+      params.onAcknowledge?.(outcome.operationId);
+      setText("");
+      params.onNotice?.(t("youtubeStage4.notice.posted", "Posted. Refresh the thread to see it."));
+    } else if (outcome.kind === "refused") {
+      params.onAcknowledge?.(outcome.operationId);
+    }
+  };
 
   const submit = async () => {
     if (!text.trim() || busy) return;
     setBusy(true);
     setLocalOutcome(null);
     const outcome = await params.onSubmit(text);
-    setBusy(false);
-    setLocalOutcome(outcome);
-    if (outcome.kind === "confirmed") {
-      setText("");
-      params.onNotice?.(t("youtubeStage4.notice.posted", "Posted. Refresh the thread to see it."));
-    }
+    if (mounted.current) setBusy(false);
+    show(outcome);
+  };
+
+  const checkStatus = async (operationId: string) => {
+    if (!params.onCheckStatus || checking) return;
+    setChecking(true);
+    const outcome = await params.onCheckStatus(operationId);
+    if (mounted.current) setChecking(false);
+    show(outcome);
   };
 
   return (
     <div className="space-y-2 rounded-lg border p-3" data-testid="yt-stage4-composer">
-      <label className="sr-only" htmlFor="yt-stage4-composer-input">{params.placeholder}</label>
+      <label className="sr-only" htmlFor={inputId}>{params.placeholder}</label>
       <textarea
-        id="yt-stage4-composer-input"
+        id={inputId}
         ref={inputRef}
         className="w-full min-h-[70px] rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
         placeholder={params.placeholder}
@@ -683,13 +758,36 @@ function Composer(params: {
           </Button>
         )}
       </div>
-      {localOutcome && <OutcomeLine outcome={localOutcome} />}
+      {localOutcome && (
+        <OutcomeLine
+          outcome={localOutcome}
+          checking={checking}
+          onCheckStatus={params.onCheckStatus ? (operationId) => void checkStatus(operationId) : undefined}
+        />
+      )}
     </div>
   );
 }
 
-function OutcomeLine({ outcome }: { outcome: SubmissionOutcome }): JSX.Element {
+/** The operation a not-yet-settled outcome belongs to, when a status check can read it. */
+function checkableOperationId(outcome: SubmissionOutcome): string | null {
+  if (outcome.kind === "indeterminate" || outcome.kind === "pending" || outcome.kind === "error") return outcome.operationId;
+  return null;
+}
+
+function OutcomeLine({ outcome, checking, onCheckStatus }: {
+  outcome: SubmissionOutcome;
+  checking: boolean;
+  onCheckStatus?: (operationId: string) => void;
+}): JSX.Element {
   const { t } = useTranslation("automation");
+  const operationId = checkableOperationId(outcome);
+  const checkButton = operationId && onCheckStatus ? (
+    <Button size="sm" variant="outline" disabled={checking} onClick={() => onCheckStatus(operationId)}>
+      {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin me-1" /> : null}
+      {t("youtubeStage4.recovered.checkStatus", "Check status")}
+    </Button>
+  ) : null;
   if (outcome.kind === "confirmed") {
     return (
       <p role="status" className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
@@ -699,20 +797,33 @@ function OutcomeLine({ outcome }: { outcome: SubmissionOutcome }): JSX.Element {
   }
   if (outcome.kind === "indeterminate") {
     return (
-      <p role="alert" className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+      <p role="alert" className="flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
         <HelpCircle className="h-3.5 w-3.5" />
         {t("youtubeStage4.outcome.indeterminate", "This may or may not have been applied. It was not sent again — refresh the thread to see what is there.")}
+        {checkButton}
       </p>
     );
   }
   if (outcome.kind === "pending") {
     return (
-      <p role="status" className="text-xs text-muted-foreground">
+      <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         {t("youtubeStage4.outcome.pending", "An earlier attempt for this comment is still being checked. Reload to see its status.")}
+        {checkButton}
       </p>
     );
   }
-  const reason = outcome.kind === "refused" || outcome.kind === "error" ? outcome.reason : "upstream";
+  const reason = outcome.reason;
+  // A failure with no receipt (the answer was lost) may have been applied: say
+  // so and offer a status check, which reads and never resends.
+  if (outcome.kind === "error" && !isRebindReason(reason)) {
+    return (
+      <p role="alert" className="flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+        <HelpCircle className="h-3.5 w-3.5" />
+        {t("youtubeStage4.outcome.lost", "We did not get YouTube's answer, so this may or may not have been applied. It was not sent again.")}
+        {checkButton}
+      </p>
+    );
+  }
   return (
     <p role="alert" className="flex items-center gap-2 text-xs text-destructive">
       <AlertTriangle className="h-3.5 w-3.5" />
@@ -781,39 +892,60 @@ function RejectDialog(params: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onNotice: (text: string | null) => void;
+  isCurrent: () => boolean;
 }): JSX.Element | null {
-  const { stage4, row, videoId, open, onOpenChange, onNotice } = params;
+  const { stage4, row, videoId, open, onOpenChange, onNotice, isCurrent } = params;
   const { t } = useTranslation("automation");
   const [alsoBan, setAlsoBan] = useState(false);
   const [step, setStep] = useState<"reject" | "ban">("reject");
-  const [banInfo, setBanInfo] = useState<{ confirmation: string; authorName: string; authorChannelId: string } | null>(null);
+  // The confirmation carries the operation id it was issued for: the ban step
+  // submits with exactly that pair and with nothing else.
+  const [banInfo, setBanInfo] = useState<{ confirmation: string; authorName: string; authorChannelId: string; operationId: string } | null>(null);
   const [banError, setBanError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // One operation id per dialog instance; the server confirmation is bound
   // to it, so cancel-and-retry mints a fresh one through a new submit.
   const operationIdRef = useRef<string>("");
   if (!operationIdRef.current) operationIdRef.current = mintOperationIdDialog();
+  // Advances every time the dialog opens or closes, so a confirmation request
+  // started in an earlier opening can tell that it is stale when it answers.
+  const generationRef = useRef(0);
 
   useEffect(() => {
+    generationRef.current += 1;
     if (open) {
       setAlsoBan(false);
       setStep("reject");
       setBanInfo(null);
       setBanError(null);
+      setBusy(false);
       operationIdRef.current = mintOperationIdDialog();
     }
   }, [open]);
 
-  const confirmReject = async () => {
+  /** A plain Reject: no ban is requested and none is implied. */
+  const confirmPlainReject = async () => {
     setBusy(true);
     try {
-      if (alsoBan && banInfo) {
-        // The server bound this confirmation to the dialog's operation key, so
-        // the submit must use that same key (a fresh one would be refused).
-        await runModerate(stage4, row, videoId, "rejected", onNotice, t, banInfo.confirmation, operationIdRef.current);
-      } else {
-        await runModerate(stage4, row, videoId, "rejected", onNotice, t);
-      }
+      await runModerate(stage4, row, videoId, "rejected", onNotice, t, undefined, undefined, isCurrent);
+      onOpenChange(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Reject AND ban. It has its own handler and requires the issued
+   * confirmation with its operation id: with none, it does nothing. It never
+   * falls back to a plain Reject (spec 10.2).
+   */
+  const confirmRejectAndBan = async () => {
+    if (!banInfo) return;
+    setBusy(true);
+    try {
+      // The server bound the confirmation to this operation key, so the submit
+      // must use that same key (a fresh one would be refused).
+      await runModerate(stage4, row, videoId, "rejected", onNotice, t, banInfo.confirmation, banInfo.operationId, isCurrent);
       onOpenChange(false);
     } finally {
       setBusy(false);
@@ -821,21 +953,26 @@ function RejectDialog(params: {
   };
 
   const requestConfirmation = async () => {
+    const generation = generationRef.current;
+    const operationId = operationIdRef.current;
     setBusy(true);
     setBanError(null);
     try {
-      const payload = await stage4.requestBanConfirmation(row, operationIdRef.current);
+      const payload = await stage4.requestBanConfirmation(row, operationId);
+      if (generation !== generationRef.current) return;
       setBanInfo({
         confirmation: payload.confirmation,
         authorName: payload.author_name,
         authorChannelId: payload.author_channel_id,
+        operationId,
       });
       setStep("ban");
     } catch (error) {
+      if (generation !== generationRef.current) return;
       const reason = typeof (error as { code?: string }).code === "string" ? (error as { code: string }).code : "upstream";
       setBanError(reasonText(t, reason));
     } finally {
-      setBusy(false);
+      if (generation === generationRef.current) setBusy(false);
     }
   };
 
@@ -864,6 +1001,7 @@ function RejectDialog(params: {
                 <Checkbox
                   id="yt-stage4-ban"
                   checked={alsoBan}
+                  disabled={busy}
                   onCheckedChange={(checked) => setAlsoBan(checked === true)}
                 />
                 <label htmlFor="yt-stage4-ban" className="text-sm leading-relaxed">
@@ -878,7 +1016,7 @@ function RejectDialog(params: {
               <Button
                 variant="destructive"
                 disabled={busy}
-                onClick={() => (alsoBan ? void requestConfirmation() : void confirmReject())}
+                onClick={() => (alsoBan ? void requestConfirmation() : void confirmPlainReject())}
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : null}
                 {alsoBan
@@ -908,7 +1046,7 @@ function RejectDialog(params: {
               }}>
                 {t("common:back", "Back")}
               </Button>
-              <Button variant="destructive" disabled={busy} onClick={() => void confirmReject()}>
+              <Button variant="destructive" disabled={busy || !banInfo} onClick={() => void confirmRejectAndBan()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : null}
                 {t("youtubeStage4.ban.confirm", "Reject and ban")}
               </Button>
