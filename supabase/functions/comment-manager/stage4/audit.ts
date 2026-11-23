@@ -42,6 +42,9 @@ const KNOWN_ACTIONS = new Set([
   "youtube_operation_status",
 ]);
 
+/** In-memory tally of suppressed anonymous refusals since the last counter row. */
+let anonAuditSuppressedCount = 0;
+
 export function sanitiseAction(action: unknown): string {
   return typeof action === "string" && KNOWN_ACTIONS.has(action) ? action : "unknown";
 }
@@ -49,7 +52,11 @@ export function sanitiseAction(action: unknown): string {
 export async function writeRefusalAudit(
   admin: any,
   row: Stage4AuditRow,
-  opts: { rateLimitBucket: () => Promise<boolean> },
+  opts: {
+    rateLimitBucket: () => Promise<boolean>;
+    /** Called at most once a minute with the suppression count since the last counter row. */
+    counterSink?: (suppressed: number) => Promise<void>;
+  },
 ): Promise<void> {
   const action = sanitiseAction(row.action);
   const metadata: Record<string, unknown> = {
@@ -73,15 +80,27 @@ export async function writeRefusalAudit(
       admitted = false;
     }
     if (!admitted) {
+      anonAuditSuppressedCount += 1;
       console.warn(
         `comment-manager stage4 refusal suppressed: action=${action} reason=${row.reason} request_id=${row.requestId}`,
       );
+      // The counter row is the durable trace of the suppression volume; the
+      // in-memory count carries the tally between counter rows.
+      if (opts.counterSink) {
+        try {
+          await opts.counterSink(anonAuditSuppressedCount);
+          anonAuditSuppressedCount = 0;
+        } catch {
+          // Never let the counter change anything about the refusal.
+        }
+      }
       return;
     }
   }
 
   try {
-    await admin.from("system_logs").insert({
+    // supabase-js returns `{ error }` rather than throwing; read it.
+    const result = await admin.from("system_logs").insert({
       level: "warn",
       category: "edge",
       source: "comment-manager",
@@ -89,6 +108,11 @@ export async function writeRefusalAudit(
       user_id: userId,
       metadata,
     });
+    if (result && result.error) {
+      console.warn(
+        `comment-manager stage4 audit insert failed: action=${action} reason=${row.reason} request_id=${row.requestId} cause=insert_error`,
+      );
+    }
   } catch (error) {
     // A failed insert must not change the response.
     console.warn(

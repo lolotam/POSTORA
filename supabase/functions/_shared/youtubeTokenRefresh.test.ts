@@ -903,3 +903,68 @@ Deno.test("adminRecovery reads needs_reauth from the database row, not only the 
   if (outcome.ok) assertEquals(outcome.status, "refreshed");
   assertEquals(state.stores.length, 1);
 });
+
+Deno.test("healthNeutral: invalid_grant records NOTHING (no needs_reauth, no failure) and still releases the lease", async () => {
+  const { state, store } = makeFakeStore();
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store,
+    healthNeutral: true,
+    nowMs: () => NOW,
+    exchange: async () => ({ ok: false, invalidGrant: true, retryable: false, reason: "invalid_grant", status: 400 }),
+  });
+  assertEquals(outcome.ok, false);
+  if (!outcome.ok) {
+    assertEquals(outcome.reason, "invalid_grant");
+    assertEquals(outcome.needsReauth, true, "the caller is still told the grant is gone");
+  }
+  assertEquals(state.failures.length, 0, "no failure was recorded");
+  assertEquals(state.account?.needs_reauth, false, "the stored account health is untouched");
+  assertEquals(state.releases.length, 1, "the lease was released, not consumed");
+});
+
+Deno.test("healthNeutral: a successful exchange stores the token but never rewrites granted scopes", async () => {
+  const { state, store } = makeFakeStore();
+  const outcome = await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store,
+    healthNeutral: true,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: synth("new", "access"),
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: "https://www.googleapis.com/auth/youtube.readonly",
+    }),
+  });
+  assertEquals(outcome.ok, true);
+  assertEquals(state.stores.length, 1);
+  assertEquals(state.stores[0].grantedScopes, null, "scope grants are never rewritten by a health-neutral caller");
+});
+
+Deno.test("default mode is unchanged: the same exchange DOES record needs_reauth and DOES store scopes", async () => {
+  const bad = makeFakeStore();
+  await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store: bad.store,
+    nowMs: () => NOW,
+    exchange: async () => ({ ok: false, invalidGrant: true, retryable: false, reason: "invalid_grant", status: 400 }),
+  });
+  assertEquals(bad.state.failures.length, 1);
+
+  const good = makeFakeStore();
+  await refreshYouTubeAccountToken({
+    accountId: ACCOUNT_ID,
+    store: good.store,
+    nowMs: () => NOW,
+    exchange: async () => ({
+      ok: true,
+      accessToken: synth("new", "access"),
+      expiresIn: 3600,
+      refreshToken: null,
+      scope: "https://www.googleapis.com/auth/youtube.readonly",
+    }),
+  });
+  assertEquals(good.state.stores[0].grantedScopes, ["https://www.googleapis.com/auth/youtube.readonly"]);
+});

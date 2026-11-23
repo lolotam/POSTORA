@@ -11,8 +11,11 @@ import { CommentFilters } from "@/components/comments/CommentFilters";
 import { getPlatformName } from "@/components/PlatformIcon";
 import { useComments } from "@/hooks/useCommentInbox";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
+import { useAuth } from "@/hooks/useAuth";
 import { youtubeCommentCapability } from "@/lib/youtubeCommentCapability";
-import { RefreshCw, Loader2, Facebook, Camera, Youtube, AlertTriangle } from "lucide-react";
+import { useYouTubeStage4Admission, Stage4RecoveredOperations, YouTubeCommentsScreen, defaultYouTubeCommentsGateway } from "@/features/youtube-comments";
+import { Loader2 } from "lucide-react";
+import { RefreshCw, Facebook, Camera, Youtube, AlertTriangle } from "lucide-react";
 
 type CommentManagerPlatform = "facebook" | "instagram" | "youtube";
 
@@ -33,6 +36,7 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
   const [sentimentFilter, setSentimentFilter] = useState("all");
 
   const { data: socialAccounts = [] } = useSocialAccounts();
+  const { session } = useAuth();
 
   const platformAccounts = useMemo(
     () => socialAccounts.filter((a) => a.platform === platform && a.is_active),
@@ -52,6 +56,15 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
     && !!activeAccount
     && youtubeCommentCapability(activeAccount) === "reconnect_required";
 
+  // The Stage 4 surface mounts only when the server says this account is
+  // admitted for reads; every other answer keeps the baseline inbox exactly
+  // as it was (Composio, gate-off, old backend, transport failure).
+  const stage4Admission = useYouTubeStage4Admission(
+    platform === "youtube" ? activeAccountId : null,
+    platform === "youtube" && !needsReconnect,
+    defaultYouTubeCommentsGateway,
+  );
+
   const {
     data: comments = [],
     isLoading: commentsLoading,
@@ -63,7 +76,7 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
     socialAccountId: activeAccountId,
     pageId,
     igUserId,
-    enabled: !needsReconnect,
+    enabled: !needsReconnect && stage4Admission !== "admitted",
   });
 
   const EmptyIcon = EMPTY_ICONS[platform];
@@ -114,23 +127,27 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
             </Select>
           )}
 
-          <CommentFilters
-            sentimentFilter={sentimentFilter}
-            onSentimentChange={setSentimentFilter}
-            hiddenFilter={hiddenFilter}
-            onHiddenChange={setHiddenFilter}
-          />
+          {!(platform === "youtube" && stage4Admission === "admitted") && (
+            <CommentFilters
+              sentimentFilter={sentimentFilter}
+              onSentimentChange={setSentimentFilter}
+              hiddenFilter={hiddenFilter}
+              onHiddenChange={setHiddenFilter}
+            />
+          )}
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => refetch()}
-          disabled={isFetching}
-        >
-          {isFetching ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
-          {t("common:refresh", "Refresh")}
-        </Button>
+        {!(platform === "youtube" && stage4Admission === "admitted") && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isFetching}
+          >
+            {isFetching ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
+            {t("common:refresh", "Refresh")}
+          </Button>
+        )}
       </div>
 
       {igPermissionError && (
@@ -163,11 +180,32 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
         </div>
       )}
 
+      {/* Receipt recovery with capabilities off: status is deliberately not
+          behind the rollout policy, so the legacy inbox still shows the
+          outcome of a pending send. No list or provider read happens. */}
+      {/* Only once the admission answer is FINAL: while it is still loading,
+          this surface would read and clear the pending identity, and the
+          admitted screen (which shows the outcome inline) would then find
+          nothing left to show. */}
+      {platform === "youtube" && stage4Admission !== "admitted" && stage4Admission !== "loading" && (
+        <Stage4RecoveredOperations userId={session?.user?.id ?? ""} accountId={activeAccountId!} />
+      )}
+
       {platformAccounts.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <EmptyIcon className="h-12 w-12 mx-auto mb-3 opacity-40" />
           <p className="font-medium">{emptyLabel}</p>
           <p className="text-sm mt-1">{emptyHint}</p>
+        </div>
+      ) : platform === "youtube" && stage4Admission === "admitted" ? (
+        <YouTubeCommentsScreen
+          key={`${session?.user?.id ?? ""}:${activeAccountId}`}
+          userId={session?.user?.id ?? ""}
+          accountId={activeAccountId!}
+        />
+      ) : platform === "youtube" && stage4Admission === "loading" ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : commentsLoading ? (
         <div className="flex items-center justify-center py-12">

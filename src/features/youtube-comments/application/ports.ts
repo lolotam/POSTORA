@@ -19,4 +19,10 @@ export interface YouTubeCommentsGateway {
   banConfirmation(params: { accountId: string; targetHandle: string; operationId: string }): Promise<Stage4BanConfirmationPayload>;
   moderate(params: { accountId: string; targetHandle: string; status: "published" | "heldForReview" | "rejected"; operationId: string; banConfirmation?: string }): Promise<Stage4ReceiptPayload>;
   operationStatus(params: { accountId: string; operationId: string }): Promise<Stage4OperationStatusPayload>;
+  /**
+   * Delete the channel's OWN comment through the existing (legacy) delete
+   * action, which Stage 4 does not replace. It carries no operation key:
+   * deleting twice is harmless, the second answer is simply "not found".
+   */
+  deleteOwnComment(params: { accountId: string; commentId: string }): Promise<void>;
 }

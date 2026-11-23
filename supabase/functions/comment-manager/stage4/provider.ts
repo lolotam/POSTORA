@@ -40,7 +40,7 @@ function makeUrl(path: string, query: Record<string, string>): string {
 
 async function singleRequest(
   deps: Stage4ProviderDeps,
-  method: "GET" | "POST" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   query: Record<string, string>,
   body: unknown,
@@ -97,12 +97,20 @@ function mapReason(kind: string, body: unknown): string {
   const errors = (body as { error?: { errors?: Array<{ reason?: string }> } } | null)?.error?.errors;
   const reason = Array.isArray(errors) ? errors[0]?.reason : undefined;
   if (reason === "commentsDisabled") return "comments_disabled";
+  // Text-shape refusals are draft problems, not upstream ones: the interface
+  // keeps the draft and reports them inline (spec 11, `invalid_text`).
+  if (reason === "commentTextTooLong" || reason === "commentTextRequired"
+    || reason === "invalidCommentMetadata" || reason === "invalidCustomEmoji") {
+    return "invalid_text";
+  }
+  // The specific 403 account reason outranks the generic forbidden class,
+  // because the interface states it differently (per account, not per request).
+  if (reason === "ineligibleAccount") return "ineligible_account";
   if (kind === "scope_missing") return "scope_missing";
   if (kind === "quota") return "quota";
   if (kind === "unauthorized") return "unauthorized_provider";
   if (kind === "not_found") return "not_found_provider";
   if (kind === "forbidden") return "forbidden";
-  if (reason === "ineligibleAccount") return "ineligible_account";
   return "upstream";
 }
 
@@ -220,7 +228,8 @@ export async function updateComment(
   token: string,
   args: { commentId: string; text: string },
 ): Promise<Stage4ProviderResult> {
-  return singleRequest(deps, "POST", "comments", { part: "snippet" }, {
+  // comments.update is a PUT; a POST to this path is comments.insert.
+  return singleRequest(deps, "PUT", "comments", { part: "snippet" }, {
     id: args.commentId,
     snippet: { textOriginal: args.text },
   }, token);

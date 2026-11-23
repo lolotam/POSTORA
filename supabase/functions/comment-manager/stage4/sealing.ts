@@ -40,8 +40,18 @@ export interface CursorPayload {
   l: "published" | "heldForReview";
   p: string | null; // parent comment id for a reply page
   a2: "video_page" | "thread_page" | "reply_page";
+  /**
+   * Hop count: 1 for the first sealed continuation, one more for each page
+   * after it. A provider that keeps handing back the same page token can only
+   * produce a cycle, and a cycle can only run until the cap, so it is bounded
+   * structurally instead of by remembering consumed tokens in state.
+   */
+  h: number;
   e: number;
 }
+
+/** The most pages one browsing chain may request. A cycle dies at the cap. */
+export const MAX_CURSOR_HOPS = 500;
 
 export interface BanConfirmationPayload {
   v: number;
@@ -76,8 +86,9 @@ export async function unsealHandle(
   });
   if (!payload) return null;
   if (payload.v !== 1) return null;
-  if (payload.e < deps.now) return null;
   if (!payload.o || !payload.a || !payload.co || !payload.th || !payload.vi) return null;
+  // Expiry is deliberately NOT checked here: the caller distinguishes
+  // `expired_handle` from `invalid_handle`, and both are refusals it names.
   return payload;
 }
 
@@ -98,7 +109,7 @@ export async function unsealCursor(
   });
   if (!payload) return null;
   if (payload.v !== 1) return null;
-  if (payload.e < deps.now) return null;
+  // Expiry and the hop cap are the caller's refusal reasons to name.
   return payload;
 }
 
@@ -119,7 +130,8 @@ export async function unsealBanConfirmation(
   });
   if (!payload) return null;
   if (payload.v !== 1) return null;
-  if (payload.e < deps.now) return null;
+  // The caller names `ban_confirmation_expired` separately from an invalid
+  // seal; both are refusals, but only one is honest about the cause.
   return payload;
 }
 

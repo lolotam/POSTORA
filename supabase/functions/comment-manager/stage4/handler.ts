@@ -1,9 +1,10 @@
 // The Stage 4 handler.
 //
 // `index.ts` only routes: when `action` is in the Stage 4 set it hands the
-// already-authenticated caller to this module BEFORE the legacy account
-// lookup. The handler is built from injected ports so it is testable
-// without Supabase.
+// already-authenticated caller, and the body it already parsed, to this module
+// BEFORE the legacy account lookup. A Request body can be read exactly once,
+// so the caller passes the parsed value and this module never touches `req`.
+// The handler is built from injected ports so it is testable without Supabase.
 
 import { z } from "https://esm.sh/zod@3.25.76";
 import {
@@ -38,6 +39,7 @@ import {
   HANDLE_TTL_MS,
   CURSOR_TTL_MS,
   BAN_CONFIRMATION_TTL_MS,
+  MAX_CURSOR_HOPS,
 } from "./sealing.ts";
 import { normaliseText, computeIntentDigest, computeLogicalDigests, type DigestKeys } from "./digests.ts";
 import * as provider from "./provider.ts";
@@ -51,8 +53,17 @@ export interface Stage4Deps {
   fetcher: typeof fetch;
   now: () => number;
   newRequestId: () => string;
-  auth: (req: Request) => Promise<{ userId: string; isServiceRole: boolean }>;
   signingSecret: string;
+}
+
+/** One routed Stage 4 call: the authenticated caller and the parsed body. */
+export interface Stage4Call {
+  deps: Stage4Deps;
+  corsHeaders: Record<string, string>;
+  userId: string;
+  isServiceRole: boolean;
+  /** The body `index.ts` already parsed from the request. */
+  body: unknown;
 }
 
 const cors = (extra: Record<string, string> = {}) => ({
@@ -64,13 +75,23 @@ function json(status: number, body: unknown, headers: Record<string, string>): R
   return new Response(JSON.stringify(body), { status, headers });
 }
 
+/**
+ * The anonymous audit bucket: at most 30 rows per minute for the whole
+ * function. Beyond that, one counter row per minute records how many were
+ * suppressed (the counter insert itself is gated to 1/minute), and each
+ * suppressed refusal still emits a sanitised console event above.
+ */
+const ANON_AUDIT_MAX_PER_MINUTE = 30;
+
+let anonAuditSuppressedSinceCounter = 0;
+
 function refusal(
   deps: Stage4Deps,
   status: number,
   reason: Stage4Reason,
   requestId: string,
   headers: Record<string, string>,
-  audit: { action: string; userId: string | null; accountId: string | null; operationId: string | null; providerClass?: string | null },
+  audit: { action: string; userId: string | null; accountId: string | null; operationId: string | null; providerClass?: string | null; operationVerified?: boolean },
 ): Response {
   // Fire and forget the audit; never let it change the response.
   void writeRefusalAudit(deps.admin, {
@@ -80,8 +101,44 @@ function refusal(
     requestId,
     userId: audit.userId,
     accountId: audit.accountId,
-    operationId: audit.operationId,
-  }, { rateLimitBucket: async () => true });
+    // A client-supplied operation key is an UNVERIFIED identifier until a
+    // receipt row exists for it (spec 12); only post-claim refusals pass it.
+    operationId: audit.operationVerified === true ? audit.operationId : null,
+  }, {
+    rateLimitBucket: async () => {
+      const admitted = await stage4RateLimit(
+        deps.admin,
+        "anonymous",
+        "stage4_audit_anon",
+        ANON_AUDIT_MAX_PER_MINUTE,
+        60,
+      );
+      return admitted.allowed;
+    },
+    counterSink: async (suppressed) => {
+      // At most one counter row per minute, whatever the suppression volume.
+      const counter = await stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60);
+      if (!counter.allowed) return;
+      try {
+        await deps.admin.from("system_logs").insert({
+          level: "warn",
+          category: "edge",
+          source: "comment-manager",
+          message: "Stage 4 refusal audit suppressed",
+          user_id: null,
+          metadata: {
+            action: "unknown",
+            reason: "audit_suppressed",
+            provider_class: null,
+            request_id: "",
+            suppressed: suppressed,
+          },
+        });
+      } catch {
+        // A failed counter insert must not change the response either.
+      }
+    },
+  });
   return json(status, { ok: false, request_id: requestId, reason }, headers);
 }
 
@@ -135,7 +192,13 @@ async function prepareToken(
     platform_user_id: account.platform_user_id,
     needs_reauth: account.needs_reauth,
   };
-  const result = await (mod as any).nativeAccessToken(nativeAccount, { admin: deps.admin, fetcher: deps.fetcher }, {});
+  // Health-neutral: a Stage 4 read or write never records needs_reauth or
+  // rewrites granted scopes (spec 11); a refusal is only reported to the caller.
+  const result = await (mod as any).nativeAccessToken(
+    nativeAccount,
+    { admin: deps.admin, fetcher: deps.fetcher },
+    { healthNeutral: true },
+  );
   if (!result.ok) {
     if (result.kind === "unauthorized") return { ok: false, reason: "account_needs_reauth" };
     return { ok: false, reason: "upstream" };
@@ -153,6 +216,196 @@ async function loadDigestKeys(admin: any): Promise<DigestKeys> {
     key: k.key,
   }));
   return { activeVersion: data.active_version, keys };
+}
+
+/**
+ * Settle the receipt without ever letting a settlement write failure change
+ * the answer about a response that already happened: the row stays
+ * `dispatched`, the status read converts it to `indeterminate` after 90 s,
+ * and the failure is logged with the request id only (spec 9.2).
+ */
+async function settleQuietly(
+  deps: Stage4Deps,
+  args: {
+    ownerId: string;
+    operationId: string;
+    attemptToken: string;
+    outcome: "confirmed" | "refused" | "indeterminate";
+    reason: string | null;
+    providerClass: Stage4ProviderClass;
+    resultThreadId: string | null;
+    resultCommentId: string | null;
+  },
+  requestId: string,
+): Promise<boolean> {
+  try {
+    // supabase-js reports a failed call as `{ error }` and the SQL function
+    // reports a refusal as `{ ok: false }`; neither throws, so both are read.
+    const { data, error } = await deps.admin.rpc("youtube_comment_op_settle", {
+      p_owner_id: args.ownerId,
+      p_operation_id: args.operationId,
+      p_attempt_token: args.attemptToken,
+      p_outcome: args.outcome,
+      p_reason: args.reason,
+      p_provider_class: args.providerClass,
+      p_result_thread_id: args.resultThreadId,
+      p_result_comment_id: args.resultCommentId,
+    });
+    if (error || !data || data.ok !== true) {
+      console.warn(
+        `comment-manager stage4 settlement not recorded: request_id=${requestId} outcome=${args.outcome} cause=${error ? "rpc_error" : "refused"}`,
+      );
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn(
+      `comment-manager stage4 settlement write failed: request_id=${requestId} outcome=${args.outcome} error_class=${error instanceof Error ? error.name : "unknown"}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Settle, then answer. When the settlement did not commit, the receipt is
+ * still `dispatched` (it reads `indeterminate` after 90 s), so the answer is
+ * `indeterminate` whatever the provider said: a client that was told
+ * "confirmed" would drop its key while the receipt cannot be resolved, and a
+ * "refused" would invite a resend of something that may have been applied.
+ * The same key is queryable through youtube_operation_status.
+ */
+async function settleAndRespond(
+  deps: Stage4Deps,
+  ctx: {
+    userId: string;
+    accountId: string;
+    account: AccountRow;
+    action: Stage4Action;
+    receiptAction: Stage4ReceiptPayload["action"];
+    operationId: string;
+    attemptToken: string;
+    requestId: string;
+    headers: Record<string, string>;
+    moderationStatus: string | null;
+    banRequested: boolean;
+  },
+  result: {
+    outcome: "confirmed" | "refused" | "indeterminate";
+    reason: string | null;
+    providerClass: Stage4ProviderClass;
+    resultThreadId: string | null;
+    resultCommentId: string | null;
+  },
+): Promise<Response> {
+  const settled = await settleQuietly(deps, {
+    ownerId: ctx.userId,
+    operationId: ctx.operationId,
+    attemptToken: ctx.attemptToken,
+    outcome: result.outcome,
+    reason: result.reason,
+    providerClass: result.providerClass,
+    resultThreadId: result.resultThreadId,
+    resultCommentId: result.resultCommentId,
+  }, ctx.requestId);
+  const outcome = settled ? result.outcome : "indeterminate";
+  const base = {
+    operation_id: ctx.operationId,
+    action: ctx.receiptAction,
+    moderation_status: ctx.moderationStatus as Stage4ReceiptPayload["moderation_status"],
+    ban_requested: ctx.banRequested,
+    binding_generation: ctx.account.binding_generation,
+    channel_id: ctx.account.platform_user_id,
+  };
+  if (outcome === "confirmed") {
+    const payload: Stage4ReceiptPayload = {
+      ...base, state: "confirmed", reason: null, provider_class: null,
+      result_thread_id: result.resultThreadId, result_comment_id: result.resultCommentId,
+    };
+    return ok({ ok: true, request_id: ctx.requestId, data: payload }, ctx.headers);
+  }
+  if (outcome === "refused") {
+    return refusal(deps, 403, result.reason as Stage4Reason, ctx.requestId, ctx.headers, {
+      action: ctx.action, userId: ctx.userId, accountId: ctx.accountId, operationId: ctx.operationId, providerClass: "http_4xx", operationVerified: true,
+    });
+  }
+  const payload: Stage4ReceiptPayload = {
+    ...base, state: "indeterminate", reason: "indeterminate", provider_class: result.providerClass,
+    result_thread_id: null, result_comment_id: result.resultCommentId,
+  };
+  return ok({ ok: true, request_id: ctx.requestId, data: payload }, ctx.headers);
+}
+
+type WriteTargetCheck =
+  | { ok: true; citem: any }
+  | { ok: false; status: number; reason: Stage4Reason; providerClass?: Stage4ProviderClass };
+
+/**
+ * The ONE validator for the last read before any write (spec 8.2, 9.1): the
+ * video is on the account's channel, the comment exists under the handle's
+ * id, its resource channel and video agree where Google returns them, and its
+ * parent matches the handle's kind (a thread has none, a reply has the
+ * handle's canonical parent). Reply, edit, moderate and the ban path all use
+ * this, so none of them can skip a leg.
+ */
+async function verifyWriteTarget(
+  deps: Stage4Deps,
+  account: AccountRow,
+  token: string,
+  h: { vi: string; co: string; k: string; p: string },
+): Promise<WriteTargetCheck> {
+  const vres = await provider.readVideo({ fetcher: deps.fetcher }, token, h.vi);
+  if (vres.kind !== "success") {
+    return vres.kind === "refused"
+      ? { ok: false, status: 404, reason: "target_not_verified", providerClass: "http_4xx" }
+      : { ok: false, status: 502, reason: "upstream", providerClass: vres.providerClass };
+  }
+  const videoItem = ((vres.body as any)?.items ?? [])[0];
+  if (!videoItem || videoItem.id !== h.vi || videoItem?.snippet?.channelId !== account.platform_user_id) {
+    return { ok: false, status: 403, reason: "video_not_owned" };
+  }
+  const cres = await provider.readComment({ fetcher: deps.fetcher }, token, h.co);
+  if (cres.kind !== "success") {
+    return cres.kind === "refused"
+      ? { ok: false, status: 404, reason: "target_not_verified", providerClass: "http_4xx" }
+      : { ok: false, status: 502, reason: "upstream", providerClass: cres.providerClass };
+  }
+  const citem = ((cres.body as any)?.items ?? [])[0];
+  if (!citem || citem.id !== h.co) return { ok: false, status: 404, reason: "target_not_verified" };
+  const snippet = citem.snippet ?? {};
+  if (snippet.channelId && String(snippet.channelId) !== account.platform_user_id) {
+    return { ok: false, status: 400, reason: "target_not_verified" };
+  }
+  if (snippet.videoId && String(snippet.videoId) !== h.vi) {
+    return { ok: false, status: 400, reason: "target_not_verified" };
+  }
+  const parent = snippet.parentId ? String(snippet.parentId) : "";
+  if (h.k === "thread" ? parent !== "" : parent !== h.p) {
+    return { ok: false, status: 400, reason: "target_not_verified" };
+  }
+  return { ok: true, citem };
+}
+
+/** The full receipt payload for an `already_recorded` answer. */
+function recordedPayload(
+  input: { operation_id: string },
+  claim: { state?: string; result_comment_id?: string | null; result_thread_id?: string | null },
+  account: AccountRow,
+  action: Stage4ReceiptPayload["action"],
+): Stage4ReceiptPayload {
+  const state = (claim.state ?? "refused") as Stage4ReceiptPayload["state"];
+  return {
+    operation_id: input.operation_id,
+    action,
+    state,
+    reason: state === "refused" ? "already_recorded" : null,
+    provider_class: null,
+    moderation_status: null,
+    ban_requested: false,
+    result_thread_id: claim.result_thread_id ?? null,
+    result_comment_id: claim.result_comment_id ?? null,
+    binding_generation: account.binding_generation,
+    channel_id: account.platform_user_id,
+  };
 }
 
 // ---- handle verification --------------------------------------------------
@@ -173,6 +426,24 @@ async function verifyHandle(
   return { ok: true, payload };
 }
 
+/**
+ * Unseal a mutation target handle and map every failure to its reason. The
+ * expected values are the live account's, so a cross-account, cross-binding
+ * or expired handle is named as such instead of a generic invalid_handle.
+ */
+async function verifyTargetHandle(
+  handle: string,
+  deps: Stage4Deps,
+  account: AccountRow,
+  userId: string,
+): Promise<{ ok: true; payload: any } | { ok: false; reason: Stage4Reason }> {
+  return await verifyHandle(handle, deps, {
+    ownerId: userId,
+    accountId: account.id,
+    generation: account.binding_generation,
+  });
+}
+
 // ---- chain validation for a thread row ------------------------------------
 
 interface ChainCheckResult {
@@ -188,14 +459,21 @@ function validateThreadChain(
   verifiedVideoChannel: string,
 ): { ok: boolean; inconsistent: boolean } {
   // video verified as owned in this request (caller ensures verifiedVideoChannel === accountChannel)
-  if (thread?.snippet?.videoId && thread.snippet.videoId !== videoId) return { ok: false, inconsistent: true };
-  if (thread?.snippet?.channelId && thread.snippet.channelId !== accountChannel) return { ok: false, inconsistent: true };
+  // Spec 8.2: the thread MUST name the video and the account's channel; a
+  // missing field is an inconsistency, not a pass. Only the comment-level
+  // optional fields (below) may be absent.
+  if (!thread?.snippet?.videoId || String(thread.snippet.videoId) !== videoId) return { ok: false, inconsistent: true };
+  if (!thread?.snippet?.channelId || String(thread.snippet.channelId) !== accountChannel) return { ok: false, inconsistent: true };
   const top = thread?.snippet?.topLevelComment;
+  if (!top?.id || !thread?.id) return { ok: false, inconsistent: true };
   if (top?.snippet?.parentId) return { ok: false, inconsistent: true };
   if (top?.snippet?.channelId && top.snippet.channelId !== accountChannel) return { ok: false, inconsistent: true };
   if (top?.snippet?.videoId && top.snippet.videoId !== videoId) return { ok: false, inconsistent: true };
+  // `replies.comments` sits at the resource top level, beside `snippet`
+  // (Google reference, CommentThreads resource representation).
   for (const r of thread?.replies?.comments ?? []) {
-    if (r?.snippet?.parentId && r.snippet.parentId !== top?.id) return { ok: false, inconsistent: true };
+    // An inline reply MUST carry its parent and it MUST be this thread's top comment.
+    if (!r?.id || !r?.snippet?.parentId || String(r.snippet.parentId) !== String(top.id)) return { ok: false, inconsistent: true };
     if (r?.snippet?.channelId && r.snippet.channelId !== accountChannel) return { ok: false, inconsistent: true };
     if (r?.snippet?.videoId && r.snippet.videoId !== videoId) return { ok: false, inconsistent: true };
   }
@@ -278,38 +556,49 @@ function parseThreadRow(
   return { threadRow, replyRows };
 }
 
+// ---- cursor hops -----------------------------------------------------------
+
+/**
+ * The hop count of a sealed cursor. 0 means the field was absent or malformed,
+ * which refuses the cursor; a hop above MAX_CURSOR_HOPS is the bounded way a
+ * page-token cycle dies (spec 8.2: cyclic tokens are refused).
+ */
+function cursorHop(c: { h?: unknown } | null): number {
+  if (typeof c?.h !== "number" || !Number.isFinite(c.h) || c.h < 1) return 0;
+  return Math.floor(c.h);
+}
+
+/**
+ * Only the actions that can change YouTube are held to the low write cap and
+ * the ban confirmation to the daily ban cap. Everything else — lists, the
+ * capability status the page asks for on every load, and receipt status — is
+ * a read. (Actions with no capability, like the status ones, used to fall
+ * through to the write cap, so a few page loads in a minute shut the whole
+ * view down fail-closed.)
+ */
+export function rateLimitFor(action: Stage4Action): { max: number; windowSeconds: number } {
+  if (action === "youtube_ban_confirmation") return STAGE4_RATE_LIMITS.ban;
+  return STAGE4_ACTION_CAPABILITY[action] === "write" ? STAGE4_RATE_LIMITS.write : STAGE4_RATE_LIMITS.read;
+}
+
 // ---- the handler ----------------------------------------------------------
 
-export async function handleStage4(
-  req: Request,
-  deps: Stage4Deps,
-  corsHeaders: Record<string, string>,
-): Promise<Response> {
+export async function handleStage4(call: Stage4Call): Promise<Response> {
+  const { deps, corsHeaders } = call;
+  const userId = call.userId;
+  const isServiceRole = call.isServiceRole === true;
   const requestId = deps.newRequestId();
   const headers = { ...corsHeaders, "Content-Type": "application/json", "X-Request-Id": requestId };
 
-  // Auth.
-  let userId: string;
-  let isServiceRole: boolean;
-  try {
-    const auth = await deps.auth(req);
-    userId = auth.userId;
-    isServiceRole = auth.isServiceRole;
-  } catch {
+  if (typeof userId !== "string" || userId.length === 0) {
     return refusal(deps, 401, "unauthorized", requestId, headers, {
       action: "unknown", userId: null, accountId: null, operationId: null,
     });
   }
 
-  // Parse body.
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return refusal(deps, 400, "invalid_request", requestId, headers, {
-      action: "unknown", userId, accountId: null, operationId: null,
-    });
-  }
+  // `index.ts` already parsed the body; anything unparseable or non-object
+  // fails the strict schema below with an audited invalid_request.
+  const body = call.body;
 
   const parsed = stage4RequestSchema.safeParse(body);
   if (!parsed.success) {
@@ -321,34 +610,39 @@ export async function handleStage4(
   const input = parsed.data as Stage4Request;
   const action = input.action as Stage4Action;
 
-  // Service-role callers are refused for every Stage 4 action.
+  // Service-role callers are refused for every Stage 4 action. The audit row
+  // carries the identified user but NOT the body's account id: it has not
+  // been verified against this owner, and unverified identifiers are never
+  // logged (spec 12).
   if (isServiceRole) {
     return refusal(deps, 403, "service_role_not_allowed", requestId, headers, {
-      action, userId, accountId: (input as { social_account_id?: string }).social_account_id ?? null, operationId: (input as { operation_id?: string }).operation_id ?? null,
+      action, userId, accountId: null, operationId: null,
     });
   }
 
   const accountId = (input as { social_account_id: string }).social_account_id;
 
   // Rate limit.
+  const limit = rateLimitFor(action);
   const rl = await stage4RateLimit(
     deps.admin,
     userId,
     action.startsWith("youtube_video_page") ? "read" : action,
-    action === "youtube_ban_confirmation" ? STAGE4_RATE_LIMITS.ban.max : (STAGE4_ACTION_CAPABILITY[action] === "read" ? STAGE4_RATE_LIMITS.read.max : STAGE4_RATE_LIMITS.write.max),
-    action === "youtube_ban_confirmation" ? STAGE4_RATE_LIMITS.ban.windowSeconds : (STAGE4_ACTION_CAPABILITY[action] === "read" ? STAGE4_RATE_LIMITS.read.windowSeconds : STAGE4_RATE_LIMITS.write.windowSeconds),
+    limit.max,
+    limit.windowSeconds,
   );
   if (!rl.allowed) {
     return refusal(deps, 429, "rate_limited", requestId, headers, {
-      action, userId, accountId, operationId: (input as { operation_id?: string }).operation_id ?? null,
+      action, userId, accountId: null, operationId: null,
     });
   }
 
-  // Account read (verified).
+  // Account read (verified). A miss is not_found, identical for a foreign, an
+  // absent and a re-bound row; the audit never carries the unverified id.
   const account = await readAccount(deps.admin, accountId, userId);
   if (!account) {
     return refusal(deps, 404, "not_found", requestId, headers, {
-      action, userId, accountId, operationId: (input as { operation_id?: string }).operation_id ?? null,
+      action, userId, accountId: null, operationId: (input as { operation_id?: string }).operation_id ?? null,
     });
   }
   if (account.platform !== "youtube") {
@@ -366,7 +660,11 @@ export async function handleStage4(
       action, userId, accountId, operationId: (input as { operation_id?: string }).operation_id ?? null,
     });
   }
-  if (account.needs_reauth) {
+  // `youtube_operation_status` deliberately keeps working on a row that merely
+  // needs a re-auth: needs_reauth does not change the binding, and the spec
+  // keeps the local receipt readable under the CURRENT binding with every
+  // capability off (spec 7.4). Every other action refuses here.
+  if (account.needs_reauth && action !== "youtube_operation_status") {
     return refusal(deps, 403, "account_needs_reauth", requestId, headers, {
       action, userId, accountId, operationId: (input as { operation_id?: string }).operation_id ?? null,
     });
@@ -401,10 +699,21 @@ export async function handleStage4(
   if (action === "youtube_video_page") {
     const cursorToken = (input as any).cursor as string | undefined;
     let pt: string | undefined;
+    let hop = 0;
     if (cursorToken) {
       const c = await unsealCursor(cursorToken, { signingSecret: deps.signingSecret, now: deps.now() }) as any;
       if (!c || c.o !== userId || c.a !== accountId || c.g !== account.binding_generation || c.a2 !== "video_page") {
         return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      if (c.e < deps.now()) {
+        return refusal(deps, 400, "expired_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      hop = cursorHop(c);
+      if (hop === 0) {
+        return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      if (hop > MAX_CURSOR_HOPS) {
+        return refusal(deps, 400, "expired_handle", requestId, headers, { action, userId, accountId, operationId: null });
       }
       pt = c.pt;
     }
@@ -434,7 +743,7 @@ export async function handleStage4(
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
-        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: "", l: "published", p: null, a2: "video_page", e: 0, pt: nextProviderToken } as any,
+        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: "", l: "published", p: null, a2: "video_page", h: hop + 1, e: 0, pt: nextProviderToken } as any,
         { signingSecret: deps.signingSecret, now: deps.now(), ttlMs: CURSOR_TTL_MS },
       );
     }
@@ -481,10 +790,21 @@ export async function handleStage4(
 
     // Cursor.
     let pageToken: string | undefined;
+    let hop = 0;
     if ((input as any).cursor) {
       const c = await unsealCursor((input as any).cursor, { signingSecret: deps.signingSecret, now: deps.now() });
       if (!c || c.o !== userId || c.a !== accountId || c.g !== account.binding_generation || c.vi !== inp.video_id || c.l !== inp.list || c.a2 !== "thread_page") {
         return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      if (c.e < deps.now()) {
+        return refusal(deps, 400, "expired_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      hop = cursorHop(c);
+      if (hop === 0) {
+        return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      if (hop > MAX_CURSOR_HOPS) {
+        return refusal(deps, 400, "expired_handle", requestId, headers, { action, userId, accountId, operationId: null });
       }
       pageToken = (c as any).pt;
     }
@@ -529,7 +849,7 @@ export async function handleStage4(
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
-        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: inp.video_id, l: inp.list, p: null, a2: "thread_page", e: 0, pt: nextProviderToken } as any,
+        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: inp.video_id, l: inp.list, p: null, a2: "thread_page", h: hop + 1, e: 0, pt: nextProviderToken } as any,
         { signingSecret: deps.signingSecret, now: deps.now(), ttlMs: CURSOR_TTL_MS },
       );
     }
@@ -549,10 +869,11 @@ export async function handleStage4(
   // ---- youtube_reply_page ---------------------------------------------
   if (action === "youtube_reply_page") {
     const inp = input as Extract<Stage4Request, { action: "youtube_reply_page" }>;
-    const h = await unsealHandle(inp.parent_handle, { signingSecret: deps.signingSecret, now: deps.now() });
-    if (!h || h.o !== userId || h.a !== accountId || h.g !== account.binding_generation) {
-      return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
+    const verified = await verifyTargetHandle(inp.parent_handle, deps, account, userId);
+    if (!verified.ok) {
+      return refusal(deps, 400, verified.reason, requestId, headers, { action, userId, accountId, operationId: null });
     }
+    const h = verified.payload;
     if (h.k !== "thread" && h.k !== "reply") {
       return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
     }
@@ -562,10 +883,21 @@ export async function handleStage4(
       return refusal(deps, 401, tok.reason, requestId, headers, { action, userId, accountId, operationId: null });
     }
     let pageToken: string | undefined;
+    let hop = 0;
     if ((input as any).cursor) {
       const c = await unsealCursor((input as any).cursor, { signingSecret: deps.signingSecret, now: deps.now() });
       if (!c || c.o !== userId || c.a !== accountId || c.g !== account.binding_generation || c.a2 !== "reply_page" || c.p !== canonicalParent) {
         return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      if (c.e < deps.now()) {
+        return refusal(deps, 400, "expired_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      hop = cursorHop(c);
+      if (hop === 0) {
+        return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      if (hop > MAX_CURSOR_HOPS) {
+        return refusal(deps, 400, "expired_handle", requestId, headers, { action, userId, accountId, operationId: null });
       }
       pageToken = (c as any).pt;
     }
@@ -612,7 +944,7 @@ export async function handleStage4(
     let nextCursor: string | null = null;
     if (nextProviderToken) {
       nextCursor = await sealCursor(
-        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: h.vi, l: "published", p: canonicalParent, a2: "reply_page", e: 0, pt: nextProviderToken } as any,
+        { v: 1, o: userId, a: accountId, g: account.binding_generation, vi: h.vi, l: "published", p: canonicalParent, a2: "reply_page", h: hop + 1, e: 0, pt: nextProviderToken } as any,
         { signingSecret: deps.signingSecret, now: deps.now(), ttlMs: CURSOR_TTL_MS },
       );
     }
@@ -678,7 +1010,7 @@ export async function handleStage4(
     if (claim.error || !claim.data?.ok) {
       const reason = (claim.data?.reason ?? "upstream") as Stage4Reason;
       if (reason === "already_recorded") {
-        return ok({ ok: true, request_id: requestId, data: { operation_id: inp.operation_id, state: claim.data.state, result_comment_id: claim.data.result_comment_id, result_thread_id: claim.data.result_thread_id } as Stage4ReceiptPayload }, headers);
+        return ok({ ok: true, request_id: requestId, data: recordedPayload(inp, claim.data, account, "create_thread") }, headers);
       }
       const status = reason === "possible_duplicate" || reason === "recently_posted" ? 409 : 400;
       return refusal(deps, status, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
@@ -696,7 +1028,7 @@ export async function handleStage4(
     if (mark.error || !mark.data?.ok) {
       const reason = (mark.data?.reason ?? "upstream") as Stage4Reason;
       // The receipt is already refused by the mark; nothing was sent.
-      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, operationVerified: true });
     }
 
     // Exactly one HTTP request.
@@ -711,11 +1043,14 @@ export async function handleStage4(
     let resultThreadId: string | null = null;
     let resultCommentId: string | null = null;
     if (write.kind === "success") {
+      // Spec 9.2: create is confirmed only by COMPLETE, matching evidence —
+      // the thread id, the top-level comment id (its own field, never the
+      // thread id standing in for it), and the request's video and channel.
       const body = write.body as any;
       const threadId = body?.id ? String(body.id) : null;
-      const topId = body?.snippet?.topLevelComment?.id ? String(body.snippet.topLevelComment.id) : (body?.id ? String(body.id) : null);
-      const videoIdOk = body?.snippet?.videoId ? String(body.snippet.videoId) === inp.video_id : true;
-      const channelOk = body?.snippet?.channelId ? String(body.snippet.channelId) === account.platform_user_id : true;
+      const topId = body?.snippet?.topLevelComment?.id ? String(body.snippet.topLevelComment.id) : null;
+      const videoIdOk = !!body?.snippet?.videoId && String(body.snippet.videoId) === inp.video_id;
+      const channelOk = !!body?.snippet?.channelId && String(body.snippet.channelId) === account.platform_user_id;
       if (threadId && topId && videoIdOk && channelOk) {
         outcome = "confirmed";
         resultThreadId = threadId;
@@ -733,63 +1068,29 @@ export async function handleStage4(
       providerClass = write.providerClass;
     }
 
-    // Settle.
-    await deps.admin.rpc("youtube_comment_op_settle", {
-      p_owner_id: userId,
-      p_operation_id: inp.operation_id,
-      p_attempt_token: attemptToken,
-      p_outcome: outcome,
-      p_reason: reason,
-      p_provider_class: providerClass,
-      p_result_thread_id: resultThreadId,
-      p_result_comment_id: resultCommentId,
-    });
-
-    if (outcome === "confirmed") {
-      const payload: Stage4ReceiptPayload = {
-        operation_id: inp.operation_id,
-        action: "create_thread",
-        state: "confirmed",
-        reason: null,
-        provider_class: null,
-        moderation_status: null,
-        ban_requested: false,
-        result_thread_id: resultThreadId,
-        result_comment_id: resultCommentId,
-        binding_generation: account.binding_generation,
-        channel_id: account.platform_user_id,
-      };
-      return ok({ ok: true, request_id: requestId, data: payload }, headers);
-    }
-    if (outcome === "refused") {
-      return refusal(deps, 403, reason as Stage4Reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: "http_4xx" });
-    }
-    return ok({ ok: true, request_id: requestId, data: { operation_id: inp.operation_id, action: "create_thread", state: "indeterminate", reason: "indeterminate", provider_class: providerClass, moderation_status: null, ban_requested: false, result_thread_id: null, result_comment_id: null, binding_generation: account.binding_generation, channel_id: account.platform_user_id } as Stage4ReceiptPayload }, headers);
+    return await settleAndRespond(deps, {
+      userId, accountId, account, action, receiptAction: "create_thread", operationId: inp.operation_id,
+      attemptToken, requestId, headers, moderationStatus: null, banRequested: false,
+    }, { outcome, reason, providerClass, resultThreadId, resultCommentId });
   }
 
   // ---- youtube_reply ---------------------------------------------------
   if (action === "youtube_reply") {
     const inp = input as Extract<Stage4Request, { action: "youtube_reply" }>;
-    const h = await unsealHandle(inp.target_handle, { signingSecret: deps.signingSecret, now: deps.now() });
-    if (!h || h.o !== userId || h.a !== accountId || h.g !== account.binding_generation) {
-      return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+    const verified = await verifyTargetHandle(inp.target_handle, deps, account, userId);
+    if (!verified.ok) {
+      return refusal(deps, 400, verified.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
+    const h = verified.payload;
     const canonicalParent = h.p === "" ? h.co : h.p;
     // Verify target by fresh read.
     const tok = await prepareToken(account, deps);
     if (!tok.ok) {
       return refusal(deps, 401, tok.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
-    const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, h.co);
-    if (cres.kind !== "success") {
-      return refusal(deps, cres.kind === "refused" ? 404 : 502, cres.kind === "refused" ? "target_not_verified" : "upstream", requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: cres.kind === "refused" ? "http_4xx" : cres.providerClass });
-    }
-    const citem = ((cres.body as any)?.items ?? [])[0];
-    if (!citem || citem.id !== h.co) {
-      return refusal(deps, 404, "target_not_verified", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
-    }
-    if (citem?.snippet?.parentId && String(citem.snippet.parentId) !== canonicalParent) {
-      return refusal(deps, 400, "target_not_verified", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+    const target = await verifyWriteTarget(deps, account, tok.token, h);
+    if (!target.ok) {
+      return refusal(deps, target.status, target.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: target.providerClass });
     }
 
     const digestKeys = await loadDigestKeys(deps.admin);
@@ -826,7 +1127,7 @@ export async function handleStage4(
     if (claim.error || !claim.data?.ok) {
       const reason = (claim.data?.reason ?? "upstream") as Stage4Reason;
       if (reason === "already_recorded") {
-        return ok({ ok: true, request_id: requestId, data: { operation_id: inp.operation_id, action: "reply", state: claim.data.state, result_comment_id: claim.data.result_comment_id } as Stage4ReceiptPayload }, headers);
+        return ok({ ok: true, request_id: requestId, data: recordedPayload(inp, claim.data, account, "reply") }, headers);
       }
       const status = reason === "possible_duplicate" || reason === "recently_posted" ? 409 : 400;
       return refusal(deps, status, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
@@ -842,7 +1143,7 @@ export async function handleStage4(
     });
     if (mark.error || !mark.data?.ok) {
       const reason = (mark.data?.reason ?? "upstream") as Stage4Reason;
-      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, operationVerified: true });
     }
 
     const write = await provider.insertReply({ fetcher: deps.fetcher }, tok.token, {
@@ -856,7 +1157,9 @@ export async function handleStage4(
     if (write.kind === "success") {
       const body = write.body as any;
       const id = body?.id ? String(body.id) : null;
-      const parentOk = body?.snippet?.parentId ? String(body.snippet.parentId) === canonicalParent : true;
+      // Spec 9.2: reply evidence is the comment id AND a parentId equal to the
+      // canonical parent; a missing parentId is incomplete, not a pass.
+      const parentOk = !!body?.snippet?.parentId && String(body.snippet.parentId) === canonicalParent;
       if (id && parentOk) {
         outcome = "confirmed";
         resultCommentId = id;
@@ -870,46 +1173,20 @@ export async function handleStage4(
       providerClass = write.providerClass;
     }
 
-    await deps.admin.rpc("youtube_comment_op_settle", {
-      p_owner_id: userId,
-      p_operation_id: inp.operation_id,
-      p_attempt_token: attemptToken,
-      p_outcome: outcome,
-      p_reason: reason2,
-      p_provider_class: providerClass,
-      p_result_thread_id: null,
-      p_result_comment_id: resultCommentId,
-    });
-
-    if (outcome === "confirmed") {
-      const payload: Stage4ReceiptPayload = {
-        operation_id: inp.operation_id,
-        action: "reply",
-        state: "confirmed",
-        reason: null,
-        provider_class: null,
-        moderation_status: null,
-        ban_requested: false,
-        result_thread_id: null,
-        result_comment_id: resultCommentId,
-        binding_generation: account.binding_generation,
-        channel_id: account.platform_user_id,
-      };
-      return ok({ ok: true, request_id: requestId, data: payload }, headers);
-    }
-    if (outcome === "refused") {
-      return refusal(deps, 403, reason2 as Stage4Reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: "http_4xx" });
-    }
-    return ok({ ok: true, request_id: requestId, data: { operation_id: inp.operation_id, action: "reply", state: "indeterminate", reason: "indeterminate", provider_class: providerClass, moderation_status: null, ban_requested: false, result_thread_id: null, result_comment_id: null, binding_generation: account.binding_generation, channel_id: account.platform_user_id } as Stage4ReceiptPayload }, headers);
+    return await settleAndRespond(deps, {
+      userId, accountId, account, action, receiptAction: "reply", operationId: inp.operation_id,
+      attemptToken, requestId, headers, moderationStatus: null, banRequested: false,
+    }, { outcome, reason: reason2, providerClass, resultThreadId: null, resultCommentId });
   }
 
   // ---- youtube_edit_comment -------------------------------------------
   if (action === "youtube_edit_comment") {
     const inp = input as Extract<Stage4Request, { action: "youtube_edit_comment" }>;
-    const h = await unsealHandle(inp.target_handle, { signingSecret: deps.signingSecret, now: deps.now() });
-    if (!h || h.o !== userId || h.a !== accountId || h.g !== account.binding_generation) {
-      return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+    const verified = await verifyTargetHandle(inp.target_handle, deps, account, userId);
+    if (!verified.ok) {
+      return refusal(deps, 400, verified.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
+    const h = verified.payload;
     if (h.k !== "thread" && h.k !== "reply") {
       return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
@@ -921,15 +1198,12 @@ export async function handleStage4(
     if (!tok.ok) {
       return refusal(deps, 401, tok.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
-    // Fresh target read.
-    const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, h.co);
-    if (cres.kind !== "success") {
-      return refusal(deps, cres.kind === "refused" ? 404 : 502, cres.kind === "refused" ? "target_not_verified" : "upstream", requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: cres.kind === "refused" ? "http_4xx" : cres.providerClass });
+    // Fresh target read, through the one shared validator.
+    const target = await verifyWriteTarget(deps, account, tok.token, h);
+    if (!target.ok) {
+      return refusal(deps, target.status, target.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: target.providerClass });
     }
-    const citem = ((cres.body as any)?.items ?? [])[0];
-    if (!citem || citem.id !== h.co) {
-      return refusal(deps, 404, "target_not_verified", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
-    }
+    const citem = target.citem;
     const author = citem?.snippet?.authorChannelId?.value ? String(citem.snippet.authorChannelId.value) : null;
     if (!author || author !== account.platform_user_id) {
       return refusal(deps, 403, "target_not_owned", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
@@ -963,7 +1237,7 @@ export async function handleStage4(
     if (claim.error || !claim.data?.ok) {
       const reason = (claim.data?.reason ?? "upstream") as Stage4Reason;
       if (reason === "already_recorded") {
-        return ok({ ok: true, request_id: requestId, data: { operation_id: inp.operation_id, action: "edit", state: claim.data.state, result_comment_id: h.co } as Stage4ReceiptPayload }, headers);
+        return ok({ ok: true, request_id: requestId, data: recordedPayload(inp, claim.data, account, "edit") }, headers);
       }
       return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
@@ -978,7 +1252,7 @@ export async function handleStage4(
     });
     if (mark.error || !mark.data?.ok) {
       const reason = (mark.data?.reason ?? "upstream") as Stage4Reason;
-      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, operationVerified: true });
     }
 
     const write = await provider.updateComment({ fetcher: deps.fetcher }, tok.token, { commentId: h.co, text: inp.text });
@@ -999,46 +1273,20 @@ export async function handleStage4(
       providerClass = write.providerClass;
     }
 
-    await deps.admin.rpc("youtube_comment_op_settle", {
-      p_owner_id: userId,
-      p_operation_id: inp.operation_id,
-      p_attempt_token: attemptToken,
-      p_outcome: outcome,
-      p_reason: reason2,
-      p_provider_class: providerClass,
-      p_result_thread_id: null,
-      p_result_comment_id: h.co,
-    });
-
-    if (outcome === "confirmed") {
-      const payload: Stage4ReceiptPayload = {
-        operation_id: inp.operation_id,
-        action: "edit",
-        state: "confirmed",
-        reason: null,
-        provider_class: null,
-        moderation_status: null,
-        ban_requested: false,
-        result_thread_id: null,
-        result_comment_id: h.co,
-        binding_generation: account.binding_generation,
-        channel_id: account.platform_user_id,
-      };
-      return ok({ ok: true, request_id: requestId, data: payload }, headers);
-    }
-    if (outcome === "refused") {
-      return refusal(deps, 403, reason2 as Stage4Reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: "http_4xx" });
-    }
-    return ok({ ok: true, request_id: requestId, data: { operation_id: inp.operation_id, action: "edit", state: "indeterminate", reason: "indeterminate", provider_class: providerClass, moderation_status: null, ban_requested: false, result_thread_id: null, result_comment_id: h.co, binding_generation: account.binding_generation, channel_id: account.platform_user_id } as Stage4ReceiptPayload }, headers);
+    return await settleAndRespond(deps, {
+      userId, accountId, account, action, receiptAction: "edit", operationId: inp.operation_id,
+      attemptToken, requestId, headers, moderationStatus: null, banRequested: false,
+    }, { outcome, reason: reason2, providerClass, resultThreadId: null, resultCommentId: h.co });
   }
 
   // ---- youtube_ban_confirmation --------------------------------------
   if (action === "youtube_ban_confirmation") {
     const inp = input as Extract<Stage4Request, { action: "youtube_ban_confirmation" }>;
-    const h = await unsealHandle(inp.target_handle, { signingSecret: deps.signingSecret, now: deps.now() });
-    if (!h || h.o !== userId || h.a !== accountId || h.g !== account.binding_generation) {
-      return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+    const verified = await verifyTargetHandle(inp.target_handle, deps, account, userId);
+    if (!verified.ok) {
+      return refusal(deps, 400, verified.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
+    const h = verified.payload;
     // Re-verify account capability for ban.
     const admits = await admitsCapability(deps.admin, accountId, "ban");
     if (!admits) {
@@ -1051,14 +1299,11 @@ export async function handleStage4(
     if (!tok.ok) {
       return refusal(deps, 401, tok.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
-    const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, h.co);
-    if (cres.kind !== "success") {
-      return refusal(deps, cres.kind === "refused" ? 404 : 502, cres.kind === "refused" ? "target_not_verified" : "upstream", requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: cres.kind === "refused" ? "http_4xx" : cres.providerClass });
+    const target = await verifyWriteTarget(deps, account, tok.token, h);
+    if (!target.ok) {
+      return refusal(deps, target.status, target.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: target.providerClass });
     }
-    const citem = ((cres.body as any)?.items ?? [])[0];
-    if (!citem || citem.id !== h.co) {
-      return refusal(deps, 404, "target_not_verified", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
-    }
+    const citem = target.citem;
     const author = citem?.snippet?.authorChannelId?.value ? String(citem.snippet.authorChannelId.value) : null;
     if (!author || author === "" || author === account.platform_user_id) {
       return refusal(deps, 400, "target_missing_author", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
@@ -1080,12 +1325,14 @@ export async function handleStage4(
   // ---- youtube_moderate_comment --------------------------------------
   if (action === "youtube_moderate_comment") {
     const inp = input as Extract<Stage4Request, { action: "youtube_moderate_comment" }>;
-    const h = await unsealHandle(inp.target_handle, { signingSecret: deps.signingSecret, now: deps.now() });
-    if (!h || h.o !== userId || h.a !== accountId || h.g !== account.binding_generation) {
-      return refusal(deps, 400, "invalid_handle", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+    const verified = await verifyTargetHandle(inp.target_handle, deps, account, userId);
+    if (!verified.ok) {
+      return refusal(deps, 400, verified.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
+    const h = verified.payload;
     // Ban token verification (only when present).
     let banAuthor = false;
+    let banAuthorToken: { au: string } | null = null;
     if (inp.ban_confirmation) {
       const bnc = await unsealBanConfirmation(inp.ban_confirmation, { signingSecret: deps.signingSecret, now: deps.now() });
       if (!bnc) {
@@ -1097,62 +1344,38 @@ export async function handleStage4(
       if (bnc.o !== userId || bnc.a !== accountId || bnc.g !== account.binding_generation || bnc.vi !== h.vi || bnc.co !== h.co || bnc.op !== inp.operation_id) {
         return refusal(deps, 400, "ban_confirmation_mismatch", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
       }
-      // Re-verify the author by a fresh read.
-      const tok = await prepareToken(account, deps);
-      if (!tok.ok) {
-        return refusal(deps, 401, tok.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
-      }
-      const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, h.co);
-      if (cres.kind !== "success") {
-        return refusal(deps, 404, "target_not_verified", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
-      }
-      const citem = ((cres.body as any)?.items ?? [])[0];
-      const author = citem?.snippet?.authorChannelId?.value ? String(citem.snippet.authorChannelId.value) : null;
-      if (!author || author !== bnc.au || author === account.platform_user_id) {
-        return refusal(deps, 400, "ban_confirmation_mismatch", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
-      }
-      // Capability check for ban.
+      // The ban capability is checked BEFORE any provider read, and again at
+      // claim and at mark_dispatched in SQL (the receipt carries ban_author).
       const admits = await admitsCapability(deps.admin, accountId, "ban");
       if (!admits) {
         const status = await readCapabilities(deps.admin, accountId);
         const reason = (status.capabilities.ban.reason ?? "capability_off") as Stage4Reason;
-        return refusal(deps, 403, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+        return refusal(deps, 403, reason, requestId, headers, { action, userId, accountId, operationId: null });
       }
+      banAuthorToken = bnc;
       banAuthor = true;
     } else if (inp.status === "rejected") {
-      // Plain reject: no ban. (banAuthor stays false.)
+      // Plain reject: no ban. `banAuthor` stays false, so the provider call
+      // omits the key entirely (spec 10.2 point 5).
     }
 
-    // Reject with ban requires the token. Reject without ban is fine.
-    if (inp.status === "rejected" && inp.ban_confirmation && !banAuthor) {
-      // token present but not verified → already refused above.
-    }
-    if (inp.status === "rejected" && banAuthor === false && inp.ban_confirmation) {
-      return refusal(deps, 400, "ban_confirmation_invalid", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
-    }
-
-    // Verify video ownership (the handle carries the video).
     const tok = await prepareToken(account, deps);
     if (!tok.ok) {
       return refusal(deps, 401, tok.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
-    const vres = await provider.readVideo({ fetcher: deps.fetcher }, tok.token, h.vi);
-    if (vres.kind !== "success") {
-      return refusal(deps, vres.kind === "refused" ? 404 : 502, vres.kind === "refused" ? "target_not_verified" : "upstream", requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: vres.kind === "refused" ? "http_4xx" : vres.providerClass });
+    // ONE last target read for every path, the ban author match included: the
+    // author compared with the token is the author of the very read that
+    // authorises the write, not of a separate earlier read.
+    const target = await verifyWriteTarget(deps, account, tok.token, h);
+    if (!target.ok) {
+      return refusal(deps, target.status, target.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: target.providerClass });
     }
-    const videoItem = ((vres.body as any)?.items ?? [])[0];
-    if (!videoItem || videoItem.id !== h.vi || videoItem?.snippet?.channelId !== account.platform_user_id) {
-      return refusal(deps, 403, "video_not_owned", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
-    }
-
-    // Fresh target read.
-    const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, h.co);
-    if (cres.kind !== "success") {
-      return refusal(deps, cres.kind === "refused" ? 404 : 502, cres.kind === "refused" ? "target_not_verified" : "upstream", requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: cres.kind === "refused" ? "http_4xx" : cres.providerClass });
-    }
-    const citem = ((cres.body as any)?.items ?? [])[0];
-    if (!citem || citem.id !== h.co) {
-      return refusal(deps, 404, "target_not_verified", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+    const citem = target.citem;
+    if (banAuthorToken) {
+      const author = citem?.snippet?.authorChannelId?.value ? String(citem.snippet.authorChannelId.value) : null;
+      if (!author || author !== banAuthorToken.au || author === account.platform_user_id) {
+        return refusal(deps, 400, "ban_confirmation_mismatch", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+      }
     }
 
     const digestKeys = await loadDigestKeys(deps.admin);
@@ -1189,7 +1412,12 @@ export async function handleStage4(
     if (claim.error || !claim.data?.ok) {
       const reason = (claim.data?.reason ?? "upstream") as Stage4Reason;
       if (reason === "already_recorded") {
-        return ok({ ok: true, request_id: requestId, data: { operation_id: inp.operation_id, action: "moderate", state: claim.data.state, result_comment_id: h.co } as Stage4ReceiptPayload }, headers);
+        const recorded = recordedPayload(inp, claim.data, account, "moderate");
+        return ok({
+          ok: true,
+          request_id: requestId,
+          data: { ...recorded, moderation_status: inp.status, ban_requested: banAuthor },
+        }, headers);
       }
       return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
@@ -1204,7 +1432,7 @@ export async function handleStage4(
     });
     if (mark.error || !mark.data?.ok) {
       const reason = (mark.data?.reason ?? "upstream") as Stage4Reason;
-      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, operationVerified: true });
     }
 
     const write = await provider.setModerationStatus({ fetcher: deps.fetcher }, tok.token, {
@@ -1232,37 +1460,10 @@ export async function handleStage4(
       providerClass = write.providerClass;
     }
 
-    await deps.admin.rpc("youtube_comment_op_settle", {
-      p_owner_id: userId,
-      p_operation_id: inp.operation_id,
-      p_attempt_token: attemptToken,
-      p_outcome: outcome,
-      p_reason: reason2,
-      p_provider_class: providerClass,
-      p_result_thread_id: null,
-      p_result_comment_id: h.co,
-    });
-
-    if (outcome === "confirmed") {
-      const payload: Stage4ReceiptPayload = {
-        operation_id: inp.operation_id,
-        action: "moderate",
-        state: "confirmed",
-        reason: null,
-        provider_class: null,
-        moderation_status: inp.status,
-        ban_requested: banAuthor,
-        result_thread_id: null,
-        result_comment_id: h.co,
-        binding_generation: account.binding_generation,
-        channel_id: account.platform_user_id,
-      };
-      return ok({ ok: true, request_id: requestId, data: payload }, headers);
-    }
-    if (outcome === "refused") {
-      return refusal(deps, 403, reason2 as Stage4Reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: "http_4xx" });
-    }
-    return ok({ ok: true, request_id: requestId, data: { operation_id: inp.operation_id, action: "moderate", state: "indeterminate", reason: "indeterminate", provider_class: providerClass, moderation_status: inp.status, ban_requested: banAuthor, result_thread_id: null, result_comment_id: h.co, binding_generation: account.binding_generation, channel_id: account.platform_user_id } as Stage4ReceiptPayload }, headers);
+    return await settleAndRespond(deps, {
+      userId, accountId, account, action, receiptAction: "moderate", operationId: inp.operation_id,
+      attemptToken, requestId, headers, moderationStatus: inp.status, banRequested: banAuthor,
+    }, { outcome, reason: reason2, providerClass, resultThreadId: null, resultCommentId: h.co });
   }
 
   // ---- youtube_operation_status --------------------------------------
@@ -1273,11 +1474,19 @@ export async function handleStage4(
       p_account_id: accountId,
       p_operation_id: inp.operation_id,
     });
-    if (error || !data?.ok) {
-      const reason = (data?.reason ?? "not_found") as Stage4Reason;
-      return refusal(deps, 404, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+    if (error || !data) {
+      // The read itself failed: that is a temporary condition, NOT "no
+      // receipt". Answering not_found here would tell the browser to drop the
+      // identity of an operation whose outcome is merely unread.
+      return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
     }
-    // Edit observation (read-only, only with read capability).
+    if (!data.ok) {
+      const reason = (data.reason ?? "not_found") as Stage4Reason;
+      return refusal(deps, 404, reason, requestId, headers, { action, userId, accountId, operationId: null });
+    }
+    // Edit observation (read-only, only with read capability). The requested
+    // text comes from the caller's draft when it still has one; the receipt
+    // never stores text, so without a draft the observation is unavailable.
     let observation: Stage4OperationStatusPayload["observation"] = null;
     let observedText: string | null = null;
     if (data.action === "edit" && data.result_comment_id) {
@@ -1286,19 +1495,20 @@ export async function handleStage4(
         const tok = await prepareToken(account, deps);
         if (tok.ok) {
           const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(data.result_comment_id));
-          if (cres.kind === "success") {
-            const citem = ((cres.body as any)?.items ?? [])[0];
-            const text = citem?.snippet?.textOriginal ? String(citem.snippet.textOriginal) : null;
-            if (text !== null) {
-              // We don't have the requested text here (it's in the receipt's
-              // intent, which we don't store). Report presence only.
-              observedText = text;
-              observation = "different_text_observed";
-            } else {
-              observation = "unavailable";
-            }
-          } else {
+          const citem = cres.kind === "success" ? ((cres.body as any)?.items ?? [])[0] : null;
+          const text = citem?.snippet?.textOriginal ? String(citem.snippet.textOriginal) : null;
+          if (text === null) {
             observation = "unavailable";
+          } else if (inp.text === undefined) {
+            observation = "unavailable";
+            // Observed text is not returned without a comparison basis: the
+            // caller already lost the draft, so echoing provider text would
+            // claim more knowledge than the observation has.
+          } else {
+            observedText = text;
+            observation = normaliseText(text) === normaliseText(inp.text)
+              ? "requested_text_observed"
+              : "different_text_observed";
           }
         } else {
           observation = "unavailable";
@@ -1326,4 +1536,3 @@ export async function handleStage4(
   // Should never reach here (discriminated union covers all actions).
   return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId, operationId: null });
 }
-

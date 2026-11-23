@@ -119,7 +119,7 @@ export interface NativeToken {
 export async function nativeAccessToken(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; healthNeutral?: boolean } = {},
 ): Promise<YouTubeResult<NativeToken>> {
   return nativeTokenImpl(account, deps, options);
 }
@@ -127,7 +127,7 @@ export async function nativeAccessToken(
 async function nativeTokenImpl(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; healthNeutral?: boolean } = {},
 ): Promise<YouTubeResult<NativeToken>> {
   const outcome = await refreshYouTubeAccountToken({
     accountId: account.id,
@@ -138,6 +138,7 @@ async function nativeTokenImpl(
       needs_reauth: account.needs_reauth ?? false,
     },
     force: options.force ?? false,
+    healthNeutral: options.healthNeutral ?? false,
     recordTransientFailure: false,
     refreshWindowMs: REFRESH_WINDOW_MS,
     store: deps.refreshStore ?? createSupabaseYouTubeRefreshStore(deps.admin),

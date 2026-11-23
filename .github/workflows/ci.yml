@@ -468,6 +468,22 @@ jobs:
           deno check --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-resources/index.ts
           deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-resources/
 
+      - name: Typecheck and test comment-manager
+        run: |
+          set -euo pipefail
+          map=".github/deno/process-post-import-map.json"
+          deno check --node-modules-dir=none --import-map="${map}" \
+            supabase/functions/comment-manager/index.ts \
+            supabase/functions/comment-manager/stage4/handler.ts \
+            supabase/functions/comment-manager/stage4/handler.test.ts \
+            supabase/functions/comment-manager/stage4/provider.test.ts \
+            supabase/functions/comment-manager/stage4/route.test.ts
+          deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}" \
+            supabase/functions/comment-manager/stage4/provider.test.ts \
+            supabase/functions/comment-manager/stage4/handler.test.ts \
+            supabase/functions/comment-manager/stage4/route.test.ts \
+            supabase/functions/comment-manager/youtubeCommentsView.test.ts
+
       - name: Typecheck process-scheduled-posts
         run: deno check --node-modules-dir=none supabase/functions/process-scheduled-posts/index.ts
 

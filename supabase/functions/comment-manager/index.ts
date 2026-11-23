@@ -119,7 +119,18 @@ function json400(message: string): Response {
   });
 }
 
-Deno.serve(async (req) => {
+/**
+ * The one request handler. Exported so the real route — including auth, the
+ * Stage 4 dispatch and the legacy switch — is testable without a network;
+ * `Deno.serve` below is a one-line wrapper over it.
+ *
+ * `inject` exists for tests alone: production passes nothing and the client
+ * and fetcher come from the environment as deployed.
+ */
+export async function serveCommentManager(
+  req: Request,
+  inject?: { supabase?: any; fetcher?: typeof fetch },
+): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -127,15 +138,45 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabase = inject?.supabase ?? createClient(supabaseUrl, supabaseServiceKey);
+    const fetcher = inject?.fetcher ?? fetch;
+
+    // A Request body can be read exactly once, so it is read once, here, and
+    // handed to whichever path serves the action (and to the audit of an
+    // unauthenticated Stage 4 refusal below). An unparseable body cannot name
+    // an action at all, and the Stage 4 handler refuses it with an audited
+    // invalid_request (its strict schema fails on anything non-object).
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      body = undefined;
+    }
+    const isStage4Call = body === undefined
+      || (typeof (body as { action?: unknown } | null)?.action === "string"
+        && (STAGE4_ACTIONS as readonly string[]).includes((body as { action: string }).action));
+    const stage4Deps = {
+      admin: supabase,
+      fetcher,
+      now: () => Date.now(),
+      newRequestId: () => crypto.randomUUID(),
+      signingSecret: supabaseServiceKey,
+    };
+    /** A 401 for a Stage 4 action is a Stage 4 refusal: audited, rate-bounded, no user id. */
+    const unauthorized = async (legacyMessage: string): Promise<Response> => {
+      if (isStage4Call) {
+        return await handleStage4({ deps: stage4Deps, corsHeaders, userId: "", isServiceRole: false, body });
+      }
+      return new Response(JSON.stringify({ error: legacyMessage }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    };
 
     // Verify auth
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: "No authorization header" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return await unauthorized("No authorization header");
     }
 
     const token = authHeader.replace("Bearer ", "");
@@ -143,10 +184,7 @@ Deno.serve(async (req) => {
     try {
       serviceUserId = await serviceRoleCallerUserId(req);
     } catch {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return await unauthorized("Unauthorized");
     }
     let user: { id: string };
     if (serviceUserId) {
@@ -154,39 +192,41 @@ Deno.serve(async (req) => {
     } else {
       const { data: { user: authUser }, error: authError } = await supabase.auth.getUser(token);
       if (authError || !authUser) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return await unauthorized("Unauthorized");
       }
       user = authUser;
     }
 
-    const body = await req.json();
-    const { action, social_account_id, comment_id, message, page_id, ig_user_id } = body;
+    // The legacy switch below was written against an untyped body and passes
+    // these fields straight into helpers that expect their JSON types; the
+    // Stage 4 path above never reads from here (its own strict schema is the
+    // authority), so this seam keeps the baseline's `any` shape (ARCHITECTURE
+    // 31: a documented legacy seam, not new untyped code).
+    // deno-lint-ignore no-explicit-any
+    const legacyBody = (body ?? {}) as any;
+    const { action, social_account_id, comment_id, message, page_id, ig_user_id } = legacyBody;
+
+    // Stage 4 private actions are handled by a separate module, BEFORE the
+    // legacy service-role gate and the legacy account lookup (which checks
+    // neither is_active nor platform). The handler refuses service-role
+    // callers itself, with an audited refusal, so the legacy allow-list keeps
+    // governing only the legacy actions. An unparseable body lands here too:
+    // no action can be named, and the strict schema refuses it.
+    if (isStage4Call) {
+      return await handleStage4({
+        deps: stage4Deps,
+        corsHeaders,
+        userId: user.id,
+        isServiceRole: !!serviceUserId,
+        body,
+      });
+    }
 
     if (serviceUserId && !SERVICE_ROLE_ACTIONS.has(action)) {
       return new Response(JSON.stringify({ error: "This action is not available to service-role callers" }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
-    }
-
-    // Stage 4 private actions are handled by a separate module, BEFORE the
-    // legacy account lookup (which checks neither is_active nor platform).
-    if (typeof action === "string" && (STAGE4_ACTIONS as readonly string[]).includes(action)) {
-      const stage4Deps = {
-        admin: supabase,
-        fetcher: fetch,
-        now: () => Date.now(),
-        newRequestId: () => crypto.randomUUID(),
-        auth: async (_req: Request) => {
-          if (serviceUserId) return { userId: serviceUserId, isServiceRole: true };
-          return { userId: user.id, isServiceRole: false };
-        },
-        signingSecret: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-      };
-      return await handleStage4(req, stage4Deps, corsHeaders);
     }
 
     // Get access token for the social account
@@ -302,7 +342,7 @@ Deno.serve(async (req) => {
         const deps = defaultYouTubeDeps();
         const threads = await listThreads(socialAccount, deps, {
           channelId: socialAccount.platform_user_id!,
-          pageToken: body.page_token || undefined,
+          pageToken: legacyBody.page_token || undefined,
         });
         if (!threads.ok) {
           result = {
@@ -375,7 +415,7 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const hideResult = await hideComment(socialAccount!, comment_id, body.is_hidden !== undefined ? body.is_hidden : true);
+        const hideResult = await hideComment(socialAccount!, comment_id, legacyBody.is_hidden !== undefined ? legacyBody.is_hidden : true);
         result = hideResult.success ? { success: true } : { error: { message: hideResult.error } };
         break;
       }
@@ -409,4 +449,6 @@ Deno.serve(async (req) => {
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-});
+}
+
+Deno.serve((req) => serveCommentManager(req));

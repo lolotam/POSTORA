@@ -1,15 +1,13 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const FEATURE_ROOT = "src/features/youtube-comments";
 
-function allFiles(dir: string): string[] {
-  const fs = require("node:fs");
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+function allFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...allFiles(full));
+    if (statSync(full).isDirectory()) allFiles(full, out);
     else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) out.push(full);
   }
   return out;

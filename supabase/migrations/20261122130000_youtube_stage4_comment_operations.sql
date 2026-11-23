@@ -222,7 +222,13 @@ REVOKE CREATE ON SCHEMA public FROM youtube_stage4_refresh;
 -- USAGE on the public schema is needed so the function bodies can resolve
 -- `public.social_accounts%ROWTYPE` and the qualified table names.
 GRANT USAGE ON SCHEMA public TO youtube_stage4_refresh;
-GRANT SELECT, UPDATE ON public.social_accounts TO youtube_stage4_refresh;
+-- UPDATE is limited to the columns the two bodies actually write; the
+-- identity columns (platform_user_id, auth_provider, connection_id, is_active,
+-- user_id, ...) are not writable by this role at all.
+GRANT SELECT ON public.social_accounts TO youtube_stage4_refresh;
+GRANT UPDATE (access_token, refresh_token, token_expires_at, needs_reauth,
+              failure_count, last_refresh_error, account_metadata, updated_at)
+  ON public.social_accounts TO youtube_stage4_refresh;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.youtube_token_refresh_leases
   TO youtube_stage4_refresh;
 
@@ -1044,13 +1050,16 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
   END IF;
 
-  IF p_action IN ('reply', 'edit', 'moderate')
+  IF p_action IN ('edit', 'moderate')
      AND (v_comment IS NULL OR btrim(v_comment) = '') THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
   END IF;
 
+  -- A reply acts on its canonical parent, never on a stored comment id: the
+  -- receipt CHECK constraint requires comment_id to stay NULL for a reply,
+  -- because the comment being replied to is not the comment being created.
   IF p_action = 'reply'
-     AND (v_parent IS NULL OR btrim(v_parent) = '') THEN
+      AND (v_parent IS NULL OR btrim(v_parent) = '') THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
   END IF;
 
@@ -1093,7 +1102,11 @@ BEGIN
   END IF;
 
   -- --- 3. the rollout -----------------------------------------------------
-  IF NOT public.youtube_comments_stage4_admits(p_account_id, p_capability) THEN
+  -- The required capability is DERIVED from the intent (ban_author), never
+  -- taken from the caller: a Reject-and-ban needs 'ban', everything else
+  -- 'write'. p_capability is kept for signature compatibility only.
+  IF NOT public.youtube_comments_stage4_admits(
+       p_account_id, CASE WHEN v_ban THEN 'ban' ELSE 'write' END) THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'capability_denied');
   END IF;
 
@@ -1172,7 +1185,11 @@ BEGIN
 
     -- The advisory lock serialises two concurrent claims of the SAME logical
     -- operation. It is transaction-scoped, so it is released when the claim
-    -- commits or rolls back.
+    -- commits or rolls back. It is NOT the only serialisation: every claim
+    -- first holds FOR UPDATE on its own owner-scoped account row, and
+    -- social_accounts is unique on (user_id, platform, platform_user_id), so
+    -- two claims for one owner and channel always contend on the SAME account
+    -- row, whichever digest key version each one picked during a rotation.
     v_lock_key := hashtextextended(
       p_owner_id::text || ':' || v_account.platform_user_id || ':' || v_logical, 0);
     PERFORM pg_advisory_xact_lock(v_lock_key);
@@ -1291,18 +1308,23 @@ DECLARE
   v_account  public.social_accounts%ROWTYPE;
   v_op       public.youtube_comment_operations%ROWTYPE;
   v_reason   text;
+  v_account_found boolean := false;
 BEGIN
   IF p_owner_id IS NULL OR p_operation_id IS NULL OR p_attempt_token IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
   END IF;
 
   -- The account row first, then the receipt: the same order the claim uses.
+  -- A deleted account (the receipt's social_account_id went NULL, or the row
+  -- belongs to another owner) selects nothing, and v_account_found records
+  -- that BEFORE the receipt select overwrites FOUND.
   SELECT * INTO v_account
     FROM public.social_accounts
    WHERE id = (SELECT o.social_account_id FROM public.youtube_comment_operations AS o
                 WHERE o.owner_id = p_owner_id AND o.operation_id = p_operation_id)
      AND user_id = p_owner_id
    FOR UPDATE;
+  v_account_found := FOUND;
 
   SELECT * INTO v_op
     FROM public.youtube_comment_operations
@@ -1331,11 +1353,13 @@ BEGIN
 
   -- The same predicate as the claim. A disconnect, a reconnect, a gate
   -- change or a capability change between the claim and the mark stops the
-  -- operation here, BEFORE anything is sent.
+  -- operation here, BEFORE anything is sent. A hard-deleted account is the
+  -- ultimate disconnect: the v_account record is all-NULL then, every
+  -- comparison below reads as NULL, so the explicit found flag must refuse.
   v_reason := NULL;
 
-  IF NOT FOUND THEN
-    v_reason := 'account_not_found';
+  IF NOT v_account_found THEN
+    v_reason := 'binding_changed';
   ELSIF v_account.platform <> 'youtube'
      OR NOT COALESCE(v_account.is_active, false)
      OR v_account.auth_provider IS DISTINCT FROM 'native'
@@ -1345,14 +1369,15 @@ BEGIN
     v_reason := 'binding_changed';
   ELSIF v_account.binding_generation IS DISTINCT FROM p_expected_generation THEN
     v_reason := 'binding_changed';
+  -- The values stored on the receipt are authoritative too: the live row must
+  -- still be the very binding the claim recorded.
+  ELSIF v_account.platform_user_id IS DISTINCT FROM v_op.channel_id
+     OR v_account.binding_generation IS DISTINCT FROM v_op.binding_generation
+     OR v_account.id IS DISTINCT FROM v_op.account_ref THEN
+    v_reason := 'binding_changed';
   ELSIF NOT public.youtube_comments_stage4_admits(
          v_account.id,
-         CASE v_op.action
-           WHEN 'create_thread' THEN 'write'
-           WHEN 'reply' THEN 'write'
-           WHEN 'edit' THEN 'write'
-           ELSE 'write'
-         END) THEN
+         CASE WHEN v_op.ban_author THEN 'ban' ELSE 'write' END) THEN
     v_reason := 'capability_denied';
   END IF;
 
@@ -1553,8 +1578,16 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'reason', 'not_found');
   END IF;
 
+  -- Same generation NUMBER on another account is not the same binding: the
+  -- receipt is bound to its own account row (social_account_id goes NULL when
+  -- that row is deleted), channel, generation and provider.
   IF v_account.platform <> 'youtube'
      OR NOT COALESCE(v_account.is_active, false)
+     OR v_op.social_account_id IS NULL
+     OR v_op.social_account_id IS DISTINCT FROM v_account.id
+     OR v_op.account_ref IS DISTINCT FROM v_account.id
+     OR v_account.platform_user_id IS DISTINCT FROM v_op.channel_id
+     OR v_account.auth_provider IS DISTINCT FROM v_op.auth_provider
      OR v_account.binding_generation IS DISTINCT FROM v_op.binding_generation THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'not_found');
   END IF;

@@ -197,6 +197,13 @@ export const operationStatusSchema = z
     action: z.literal("youtube_operation_status"),
     social_account_id: accountId,
     operation_id: operationId,
+    /**
+     * The draft text the browser still holds, when it holds one. With it the
+     * edit observation can distinguish `requested_text_observed` from
+     * `different_text_observed`; without it the observation is
+     * `unavailable`. Never stored, never logged.
+     */
+    text: text.optional(),
   })
   .strict();
 
