@@ -1909,6 +1909,64 @@ BEGIN
 END
 $r14$;
 
+-- R15. A rotation between the caller computing its digests and the claim: the
+-- caller's digests cover version 1 only, version 2 is active when the claim
+-- runs. The claim must not store a version-1 digest labelled version 2; it is
+-- refused as temporary, with no receipt and nothing dispatched.
+DO $r15$
+DECLARE
+  v_a uuid := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct uuid := '6e9b0001-0000-4000-8000-000000000001';
+  v_gen bigint;
+  v_old jsonb := jsonb_build_object('1', repeat('1', 64));
+  v_both jsonb := jsonb_build_object('1', repeat('1', 64), '2', repeat('2', 64));
+  v_op uuid;
+  r jsonb;
+  v_case record;
+BEGIN
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct;
+  INSERT INTO public.youtube_comment_digest_keys (version, key)
+  VALUES (2, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+
+  FOR v_case IN SELECT * FROM (VALUES
+    ('edit', '{"video_id":"vid-r15","comment_id":"cmt-r15"}', '00000000-0000-4000-8000-00000000c301'),
+    ('moderate', '{"video_id":"vid-r15","comment_id":"cmt-r15m","moderation_status":"published"}', '00000000-0000-4000-8000-00000000c302')
+  ) AS c(action, targets, op) LOOP
+    v_op := v_case.op::uuid;
+
+    -- digests prepared under version 1 only, version 2 active: refused, temporary.
+    r := public.youtube_comment_op_claim(
+      v_a, v_acct, 'UC-s4-race', v_gen, v_op, v_case.action, v_case.targets::jsonb,
+      repeat('1', 64), '{}'::jsonb, 'write', 'r15a', v_old);
+    ASSERT NOT (r ->> 'ok')::boolean AND r ->> 'reason' = 'upstream' AND (r ->> 'attempt_token') IS NULL,
+      format('R15 %s: a claim without a digest for the locked version is a temporary refusal: %s', v_case.action, r);
+    ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_op),
+      format('R15 %s: no receipt row was stored', v_case.action);
+    ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_operations WHERE owner_id = v_a AND dispatched_at IS NOT NULL AND operation_id = v_op),
+      format('R15 %s: nothing was dispatched', v_case.action);
+
+    -- digests for both versions: the VERSION-2 digest is stored, labelled 2.
+    r := public.youtube_comment_op_claim(
+      v_a, v_acct, 'UC-s4-race', v_gen, v_op, v_case.action, v_case.targets::jsonb,
+      repeat('1', 64), '{}'::jsonb, 'write', 'r15b', v_both);
+    ASSERT (r ->> 'ok')::boolean, format('R15 %s: the claim with both versions lands: %s', v_case.action, r);
+    ASSERT (SELECT intent_digest || ':' || intent_key_version FROM public.youtube_comment_operations
+             WHERE owner_id = v_a AND operation_id = v_op) = repeat('2', 64) || ':2',
+      format('R15 %s: the stored digest is the one for the key version it is labelled with', v_case.action);
+
+    -- a retry of the same key and intent is answered from the receipt.
+    r := public.youtube_comment_op_claim(
+      v_a, v_acct, 'UC-s4-race', v_gen, v_op, v_case.action, v_case.targets::jsonb,
+      repeat('2', 64), '{}'::jsonb, 'write', 'r15c', v_both);
+    ASSERT r ->> 'reason' = 'already_recorded', format('R15 %s: the retry is already_recorded, not conflict: %s', v_case.action, r);
+  END LOOP;
+
+  DELETE FROM public.youtube_comment_operations
+   WHERE owner_id = v_a AND operation_id IN ('00000000-0000-4000-8000-00000000c301', '00000000-0000-4000-8000-00000000c302');
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
+END
+$r15$;
+
 SELECT extensions.dblink_disconnect('s4_a');
 SELECT extensions.dblink_disconnect('s4_b');
 

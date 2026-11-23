@@ -1110,6 +1110,7 @@ AS $function$
 DECLARE
   v_account   public.social_accounts%ROWTYPE;
   v_intent_cmp text;
+  v_intent_new text;
   v_existing  public.youtube_comment_operations%ROWTYPE;
   v_confirmed public.youtube_comment_operations%ROWTYPE;
   v_new       public.youtube_comment_operations%ROWTYPE;
@@ -1363,6 +1364,23 @@ BEGIN
   END IF;
 
   -- --- 7. the receipt ------------------------------------------------------
+  -- The stored intent digest is the one for the key version this claim LOCKED
+  -- (v_active), never p_intent_digest blindly: a rotation between the caller
+  -- computing its digests and this claim would otherwise store a digest of one
+  -- version labelled with another, and a retry would read as a false conflict.
+  -- A caller that sent a digest map without the locked version is refused
+  -- before anything is stored; the answer is the existing temporary
+  -- 'upstream', the caller keeps its key, and a retry recomputes under the
+  -- new version. (A caller that sends no map keeps the single-digest form.)
+  IF p_intent_digests IS NULL THEN
+    v_intent_new := p_intent_digest;
+  ELSE
+    v_intent_new := p_intent_digests ->> v_active::text;
+    IF v_intent_new IS NULL OR btrim(v_intent_new) = '' THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'upstream');
+    END IF;
+  END IF;
+
   INSERT INTO public.youtube_comment_operations (
     owner_id, operation_id, social_account_id, account_ref, channel_id,
     binding_generation, auth_provider, action, video_id, thread_id,
@@ -1374,7 +1392,7 @@ BEGIN
     p_owner_id, p_operation_id, p_account_id, p_account_id,
     v_account.platform_user_id, v_account.binding_generation, 'native',
     p_action, v_video, v_thread, v_parent, v_comment, v_author, v_status,
-    v_ban, p_intent_digest, v_active,
+    v_ban, v_intent_new, v_active,
     CASE WHEN p_action IN ('create_thread', 'reply') THEN v_logical ELSE NULL END,
     CASE WHEN p_action IN ('create_thread', 'reply') THEN v_active ELSE 0 END,
     'claimed', gen_random_uuid(), left(COALESCE(p_request_id, ''), 200),

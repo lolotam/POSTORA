@@ -75,6 +75,8 @@ export interface WorldOptions {
   accountReadError?: boolean;
   /** Loading the digest keys fails. */
   digestKeysError?: boolean;
+  /** A rotation made this key version active in SQL AFTER the handler read the keys. */
+  sqlActiveKeyVersion?: number;
   /** Runs right after a claim committed, before the mark (to change the world between them). */
   onClaim?: () => void;
   rateLimited?: boolean;
@@ -349,6 +351,11 @@ export function createWorld(options: WorldOptions = {}): World {
           return { data: { ok: false, reason: "recently_posted" }, error: null };
         }
       }
+    }
+    // Mirrors the claim: a digest map without the locked (active) version is a temporary refusal.
+    const lockedVersion = options.sqlActiveKeyVersion ?? digestKey.version;
+    if (p.p_intent_digests && !p.p_intent_digests[String(lockedVersion)]) {
+      return { data: { ok: false, reason: "upstream" }, error: null };
     }
     const targets = p.p_targets ?? {};
     const row: ReceiptRow = {
@@ -1641,4 +1648,28 @@ Deno.test("a failed suppression-counter insert is reported", async () => {
     console.warn = nativeWarn;
   }
   assertEquals(warnings.some((w) => w.includes("counter insert failed")), true);
+});
+
+Deno.test("a key rotation between the digests and the claim is a retryable 503 for edit and moderate, with nothing sent or stored", async () => {
+  const world = createWorld({
+    // The handler read key version 1; SQL already runs version 2.
+    sqlActiveKeyVersion: 2,
+    provider: ownTopProvider((c) =>
+      c.path === "comments" && c.method === "GET" && c.query.get("id") === "comment-7"
+        ? { status: 200, body: { items: [commentFixture("comment-7", { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "mine" } })] } }
+        : undefined),
+  });
+  const handle = await firstHandle(world);
+  world.writes.length = 0;
+  for (const [action, extra] of [
+    ["youtube_edit_comment", { text: "edited" }],
+    ["youtube_moderate_comment", { status: "published" }],
+  ] as const) {
+    const res = await world.calls(action, { target_handle: handle, operation_id: crypto.randomUUID(), ...extra });
+    assertEquals(res.status, 503, action);
+    assertEquals((await jsonOf(res)).reason, "upstream", action);
+  }
+  assertEquals(world.writes.length, 0, "nothing reached the provider");
+  assertEquals(world.receipts.size, 0, "no receipt was stored");
+  assertEquals(world.rpcLog.some((c) => c.fn === "youtube_comment_op_mark_dispatched"), false, "nothing was marked dispatched");
 });

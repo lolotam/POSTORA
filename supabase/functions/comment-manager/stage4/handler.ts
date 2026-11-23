@@ -1052,7 +1052,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       if (reason === "already_recorded") {
         return ok({ ok: true, request_id: requestId, data: recordedPayload(inp, claim.data, account, "create_thread") }, headers);
       }
-      const status = reason === "possible_duplicate" || reason === "recently_posted" ? 409 : 400;
+      const status = reason === "upstream" ? 503 : reason === "possible_duplicate" || reason === "recently_posted" ? 409 : 400;
       return refusal(deps, status, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
     const attemptToken = claim.data.attempt_token;
@@ -1175,7 +1175,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       if (reason === "already_recorded") {
         return ok({ ok: true, request_id: requestId, data: recordedPayload(inp, claim.data, account, "reply") }, headers);
       }
-      const status = reason === "possible_duplicate" || reason === "recently_posted" ? 409 : 400;
+      const status = reason === "upstream" ? 503 : reason === "possible_duplicate" || reason === "recently_posted" ? 409 : 400;
       return refusal(deps, status, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
     const attemptToken = claim.data.attempt_token;
@@ -1289,7 +1289,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       if (reason === "already_recorded") {
         return ok({ ok: true, request_id: requestId, data: recordedPayload(inp, claim.data, account, "edit") }, headers);
       }
-      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+      return refusal(deps, reason === "upstream" ? 503 : 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
     const attemptToken = claim.data.attempt_token;
 
@@ -1473,7 +1473,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
           data: { ...recorded, moderation_status: inp.status, ban_requested: banAuthor },
         }, headers);
       }
-      return refusal(deps, 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+      return refusal(deps, reason === "upstream" ? 503 : 409, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
     const attemptToken = claim.data.attempt_token;
 
