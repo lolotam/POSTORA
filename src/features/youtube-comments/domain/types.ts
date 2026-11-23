@@ -17,3 +17,4 @@ export type {
   Stage4OperationStatusPayload,
   Stage4BanConfirmationPayload,
 } from "../../../../supabase/functions/comment-manager/stage4/contractTypes";
+export { STAGE4_HOLD_FROM_PUBLISHED } from "../../../../supabase/functions/comment-manager/stage4/contractTypes";

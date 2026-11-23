@@ -158,6 +158,18 @@ Deno.test("a 4xx whose error list is empty or holds no error object is indetermi
   }
 });
 
+Deno.test("a write refused with an error item that names no reason is indeterminate, never a final refusal", async () => {
+  for (const errors of [[{}], [{ message: "something" }], [{ reason: "" }], [{ reason: 7 }]]) {
+    const { fetcher } = fakeFetch(() => ({ status: 403, body: { error: { errors, message: "x" } } }));
+    const res = await insertThread({ fetcher }, "tok", { channelId: "UC", videoId: "v", text: "hello" });
+    assertEquals(res.kind, "indeterminate", JSON.stringify(errors));
+  }
+  // The refusal is classified from the item that names a reason, wherever it sits.
+  const { fetcher } = fakeFetch(() => ({ status: 403, body: { error: { errors: [{}, { reason: "quotaExceeded" }], message: "x" } } }));
+  const res = await insertThread({ fetcher }, "tok", { channelId: "UC", videoId: "v", text: "hello" });
+  assertEquals(res.kind === "refused" && res.reason, "quota");
+});
+
 Deno.test("one call is one request: redirects are not followed and a 3xx is indeterminate", async () => {
   let redirectOption: RequestRedirect | undefined;
   let requests = 0;

@@ -26,6 +26,12 @@ export type SubmissionOutcome =
   | { kind: "refused"; reason: string; draftKept: true; operationId: string }
   | { kind: "indeterminate"; receipt: Stage4ReceiptPayload; operationId: string }
   | { kind: "pending"; operationId: string }
+  /**
+   * The pre-submit check found that an EARLIER submit of the owner's has since
+   * settled. Its result is shown first; what was typed now was not sent, and a
+   * new key is minted only by the next deliberate submit (spec 9.1).
+   */
+  | { kind: "earlier"; state: "confirmed" | "refused"; reason: string | null; operationId: string }
   /** A failure with no receipt (a lost response): the operation id is what a status check needs. */
   | { kind: "error"; reason: string; draftKept: true; operationId: string };
 
@@ -255,6 +261,19 @@ export function useYouTubeStage4(params: {
       for (const earlier of findPendingOperations(userId, { accountId, videoId: input.videoId, action, targetCommentId })) {
         const recovery = await recoverOperation(gateway, accountId, earlier);
         if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
+        if (recovery.settled && recovery.status) {
+          // A result the owner never saw: show it, and keep its identity until
+          // the surface that shows it acknowledges it. Nothing new is sent in
+          // the same click.
+          if (recovery.status.state === "confirmed") void threads.reload();
+          return {
+            kind: "earlier",
+            state: recovery.status.state as "confirmed" | "refused",
+            reason: recovery.status.reason,
+            operationId: earlier.operationId,
+          };
+        }
+        // Unreadable for good (the binding changed): there is nothing to show.
         if (recovery.settled) clearPendingOperation(userId, earlier.operationId);
       }
 

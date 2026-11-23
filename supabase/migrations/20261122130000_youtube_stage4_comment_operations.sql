@@ -63,13 +63,14 @@
 --
 --   So this migration uses an EXCLUSIVE, NARROWLY PRIVILEGED AUTHORITY
 --   instead: a dedicated NOLOGIN role, `youtube_stage4_refresh`, which owns
---   EXACTLY the two trusted refresh functions and nothing else. Inside those
---   two functions `current_user` is that role; everywhere else it is
+--   EXACTLY three trusted refresh functions (the two named in the spec and the
+--   health-neutral store) and nothing else. Inside those
+--   functions `current_user` is that role; everywhere else it is
 --   `authenticated`, `anon`, `service_role`, `supabase_admin` or a caller.
 --   The role cannot log in, is a member of no role, and holds no role that
 --   is a member of it, so no other statement can ever execute as it.
 --
---   The two functions keep their bodies. What changes is their OWNER, so
+--   The functions keep their bodies. What changes is their OWNER, so
 --   their effective role becomes the narrow authority instead of the
 --   superuser that owns everything else on this stack. Their grants are
 --   restated below, and the existing `youtube_token_refresh.sql` and
@@ -186,7 +187,7 @@ ALTER ROLE youtube_stage4_refresh BYPASSRLS;
 
 -- ALTER FUNCTION ... OWNER TO requires the new owner to hold CREATE on the
 -- containing schema. The grant is taken for the ALTER and withdrawn again
--- immediately, so the role ends up owning two functions and nothing else.
+-- immediately, so the role ends up owning three functions and nothing else.
 -- The health-neutral lease store (spec 11: a Stage 4 read must not change
 -- stored health). store_youtube_refreshed_token_with_lease, applied by an
 -- earlier migration that is not edited here, resets needs_reauth,
@@ -310,13 +311,13 @@ $reown$;
 
 REVOKE CREATE ON SCHEMA public FROM youtube_stage4_refresh;
 
--- The narrow role now holds exactly what the two trusted bodies need:
+-- The narrow role now holds exactly what the three trusted bodies need:
 -- the account row they read and write, and the lease row the lease variant
 -- reads, updates and closes. It cannot log in, and it is granted to nobody.
 -- USAGE on the public schema is needed so the function bodies can resolve
 -- `public.social_accounts%ROWTYPE` and the qualified table names.
 GRANT USAGE ON SCHEMA public TO youtube_stage4_refresh;
--- UPDATE is limited to the columns the two bodies actually write; the
+-- UPDATE is limited to the columns the three bodies actually write; the
 -- identity columns (platform_user_id, auth_provider, connection_id, is_active,
 -- user_id, ...) are not writable by this role at all.
 GRANT SELECT ON public.social_accounts TO youtube_stage4_refresh;
@@ -349,7 +350,7 @@ COMMENT ON ROLE youtube_stage4_refresh IS
   'public.store_youtube_refreshed_token_with_lease, so the binding-generation '
   'trigger can identify the trusted refresh writer positively by current_user '
   'instead of by a shared owner role. NOLOGIN, member of no role, granted to '
-  'no role: no statement other than those two function bodies can ever '
+  'no role: no statement other than those three function bodies can ever '
   'execute as it.';
 
 -- ===========================================================================
@@ -416,7 +417,7 @@ BEGIN
 
   IF v_credential_changed THEN
     -- The ONLY writer that may preserve the generation is the exclusive
-    -- narrow authority that owns the two trusted refresh functions. A
+    -- narrow authority that owns the three trusted refresh functions. A
     -- browser write, a direct service-role write and any other function
     -- advance the generation.
     v_trusted_refresh := (current_user = 'youtube_stage4_refresh');
@@ -440,7 +441,7 @@ COMMENT ON FUNCTION public.youtube_stage4_assign_binding_generation() IS
   'only positive identification of the trusted refresh writer. An identity '
   'change always advances the generation; a credential change advances it '
   'unless current_user is youtube_stage4_refresh, the exclusive narrow '
-  'authority that owns exactly the two trusted refresh functions. Reads no '
+  'authority that owns exactly the three trusted refresh functions. Reads no '
   'other relation.';
 
 DROP TRIGGER IF EXISTS trg_social_accounts_youtube_binding_generation
@@ -1342,6 +1343,19 @@ BEGIN
       RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
     END IF;
 
+    -- The duplicate fence must see EVERY retained key version. A caller whose
+    -- digests miss one (it read the keys before a version was added, and a
+    -- rotation was later rolled back so that an older version is active
+    -- again) cannot be compared against a receipt recorded under that
+    -- version: the same text could then be sent twice. It is the temporary
+    -- refusal; the caller keeps its key and recomputes over all versions.
+    IF EXISTS (
+      SELECT 1 FROM public.youtube_comment_digest_keys AS k
+       WHERE btrim(COALESCE(p_logical_digests ->> k.version::text, '')) = ''
+    ) THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'upstream');
+    END IF;
+
     -- The advisory lock serialises two concurrent claims of the SAME logical
     -- operation. It is transaction-scoped, so it is released when the claim
     -- commits or rolls back. It is NOT the only serialisation: every claim
@@ -1353,10 +1367,13 @@ BEGIN
       p_owner_id::text || ':' || v_account.platform_user_id || ':' || v_logical, 0);
     PERFORM pg_advisory_xact_lock(v_lock_key);
 
-    -- The fence compares version to version, so evidence written under an
-    -- older key still blocks.
+    -- The fence compares version to version over every RETAINED key version
+    -- (not over whatever the caller chose to send), so evidence written under
+    -- any key, active or not, still blocks.
     FOR v_version, v_digest IN
-      SELECT e.key, e.value FROM jsonb_each_text(p_logical_digests) AS e(key, value)
+      SELECT k.version::text, p_logical_digests ->> k.version::text
+        FROM public.youtube_comment_digest_keys AS k
+       ORDER BY k.version
     LOOP
       SELECT * INTO v_confirmed
         FROM public.youtube_comment_operations
@@ -1485,6 +1502,7 @@ DECLARE
   v_op       public.youtube_comment_operations%ROWTYPE;
   v_reason   text;
   v_account_found boolean := false;
+  v_settings_locked integer;
 BEGIN
   IF p_owner_id IS NULL OR p_operation_id IS NULL OR p_attempt_token IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
@@ -1542,11 +1560,22 @@ BEGIN
   -- committed visible to the evaluator that runs next (each statement of a
   -- volatile function takes a fresh snapshot). Only the mark takes it; the
   -- claim and the status keep the plain read.
-  PERFORM 1
-     FROM public.app_settings AS s
-    WHERE s.key IN ('feature_youtube_comments', 'youtube_comments_stage4_rollout')
-    ORDER BY s.key
-      FOR SHARE;
+  --
+  -- Both rows must actually be locked. A row that is missing (deleted after
+  -- the claim and possibly re-added before the evaluation) is not locked by
+  -- this statement, so the evaluation could allow from a newer snapshot while
+  -- the new row stays unlocked: the operation is closed as never sent. The two
+  -- locks are always taken in this one key order, whatever order another
+  -- transaction updates the rows in (the database resolves an opposite-order
+  -- deadlock by aborting one side, and an aborted mark sends nothing).
+  SELECT count(*) INTO v_settings_locked
+    FROM (
+      SELECT 1
+        FROM public.app_settings AS s
+       WHERE s.key IN ('feature_youtube_comments', 'youtube_comments_stage4_rollout')
+       ORDER BY s.key
+         FOR SHARE
+    ) AS locked_settings;
 
   IF NOT v_account_found THEN
     v_reason := 'binding_changed';
@@ -1565,6 +1594,8 @@ BEGIN
      OR v_account.binding_generation IS DISTINCT FROM v_op.binding_generation
      OR v_account.id IS DISTINCT FROM v_op.account_ref THEN
     v_reason := 'binding_changed';
+  ELSIF v_settings_locked IS DISTINCT FROM 2 THEN
+    v_reason := 'capability_denied';
   ELSIF NOT public.youtube_comments_stage4_admits(
          v_account.id,
          CASE WHEN v_op.ban_author THEN 'ban' ELSE 'write' END) THEN
@@ -1976,7 +2007,7 @@ BEGIN
   -- activation, the trusted refresh). The binding-generation authority is
   -- NOT "which function writes the column" but "which role runs the write":
   -- only `youtube_stage4_refresh` preserves the generation, and that role is
-  -- NOLOGIN, a member of nothing, and the owner of exactly the two trusted
+  -- NOLOGIN, a member of nothing, and the owner of exactly the three trusted
   -- refresh functions. A catalog scan cannot be the authority and is not
   -- used as one. The proof lives in the trigger body and in the role's
   -- membership, both checked above and below.

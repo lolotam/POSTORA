@@ -48,6 +48,7 @@ import * as provider from "./provider.ts";
 import type { Stage4ProviderClass } from "./provider.ts";
 import { writeRefusalAudit, sanitiseAction } from "./audit.ts";
 import { readCapabilities, admitsCapability } from "./rollout.ts";
+import { STAGE4_HOLD_FROM_PUBLISHED } from "./contractTypes.ts";
 import { stage4RateLimit, STAGE4_RATE_LIMITS } from "./rateLimit.ts";
 
 export interface Stage4Deps {
@@ -1530,6 +1531,14 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       return refusal(deps, target.status, target.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: target.providerClass });
     }
     const citem = target.citem;
+    // A published or rejected comment cannot return to held (Google's
+    // implementation guide), and a 204 would be recorded as confirmed while
+    // nothing changed. Refused before the claim, with no provider write.
+    const currentStatus = citem?.snippet?.moderationStatus ?? h.s;
+    if (inp.status === "heldForReview" && !STAGE4_HOLD_FROM_PUBLISHED
+      && (currentStatus === "published" || currentStatus === "rejected")) {
+      return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     if (banAuthorToken) {
       const author = citem?.snippet?.authorChannelId?.value ? String(citem.snippet.authorChannelId.value) : null;
       if (!author || author !== banAuthorToken.au || author === account.platform_user_id) {
@@ -1661,11 +1670,18 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       if (admits) {
         // The account snapshot was read before the status call: a reconnect in
         // between must not let the provider read use the superseded binding's
-        // credential.
+        // credential, and no field of the old receipt may cross it. A failed
+        // read is temporary (503); a missing account or a changed binding is
+        // the same not_found as everywhere else, with no payload.
         const fresh = await readAccount(deps.admin, accountId, userId);
-        const sameBinding = fresh.kind === "found" && fresh.account.binding_generation === account.binding_generation;
-        const tok = sameBinding ? await prepareToken(account, deps) : null;
-        if (tok && tok.ok) {
+        if (fresh.kind === "failed") {
+          return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+        }
+        if (fresh.kind === "absent" || fresh.account.binding_generation !== data.binding_generation) {
+          return refusal(deps, 404, "not_found", requestId, headers, { action, userId, accountId, operationId: null });
+        }
+        const tok = await prepareToken(fresh.account, deps);
+        if (tok.ok) {
           const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
           const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
           const text = citem?.snippet?.textOriginal ? String(citem.snippet.textOriginal) : null;

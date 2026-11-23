@@ -234,8 +234,9 @@ describe("YouTubeCommentsScreen", () => {
       ],
     });
     await screen.findByText("published row");
-    // published -> Hold + Reject; heldForReview -> Publish + Reject; null -> none.
-    expect(screen.getAllByRole("button", { name: "Hold" }).length).toBe(1);
+    // published -> Reject only (a published comment cannot return to held:
+    // Hold is not offered); heldForReview -> Publish + Reject; null -> none.
+    expect(screen.queryByRole("button", { name: "Hold" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Publish" }).length).toBe(1);
     expect(screen.getAllByRole("button", { name: "Reject" }).length).toBe(2);
     expect(screen.getByText("Read-only")).toBeInTheDocument();
@@ -391,6 +392,123 @@ describe("YouTubeCommentsScreen", () => {
     expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toHaveLength(1);
     fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
     expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toEqual([]);
+  });
+
+  it("pressing submit after a lost response that became confirmed shows that result first and sends nothing new", async () => {
+    const { calls, gateway } = renderScreen({
+      threads: [row()],
+      createResult: () => Promise.reject(new Error("Failed to fetch")),
+    });
+    await screen.findByTestId("yt-stage4-composer");
+    const input = screen.getByLabelText(/Post a comment as your channel/);
+    fireEvent.change(input, { target: { value: "first text" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    // The owner types something else and presses submit: the earlier result (confirmed by now) is shown, nothing is sent.
+    fireEvent.change(input, { target: { value: "second text" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(screen.getByText(/Your earlier action was accepted by YouTube/)).toBeInTheDocument());
+    expect(calls.create).toBe(1);
+    expect((input as HTMLTextAreaElement).value).toBe("second text");
+    // Only the next deliberate submit sends the new text, under a new key.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(calls.create).toBe(2));
+    const keys = (gateway.createThread as ReturnType<typeof vi.fn>).mock.calls.map((call) => (call[0] as { operationId: string }).operationId);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("a status check of an old receipt never clears text that was typed after it", async () => {
+    const { gateway } = renderScreen({
+      threads: [row()],
+      createResult: () => Promise.reject(new Error("Failed to fetch")),
+    });
+    await screen.findByTestId("yt-stage4-composer");
+    const input = screen.getByLabelText(/Post a comment as your channel/);
+    fireEvent.change(input, { target: { value: "sent text" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    fireEvent.change(input, { target: { value: "typed after the failure" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+    });
+    await waitFor(() => expect(gateway.operationStatus).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByRole("status").some((el) => /Accepted by YouTube/.test(el.textContent ?? ""))).toBe(true));
+    expect((input as HTMLTextAreaElement).value).toBe("typed after the failure");
+  });
+
+  it("a late status result never overwrites newer composer work", async () => {
+    let releaseStatus!: () => void;
+    const { gateway, calls } = renderScreen({
+      threads: [row()],
+      createResult: () => Promise.reject(new Error("Failed to fetch")),
+    });
+    let statusCalls = 0;
+    (gateway.operationStatus as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      statusCalls += 1;
+      // The first read (the check) stays pending; the pre-submit read of the next submit answers at once, unresolved.
+      if (statusCalls === 1) await new Promise<void>((resolve) => { releaseStatus = resolve; });
+      return {
+        operation_id: "op-x", action: "create_thread", state: statusCalls === 1 ? "refused" : "indeterminate", reason: statusCalls === 1 ? "possible_duplicate" : null, provider_class: null,
+        moderation_status: null, ban_requested: false, result_thread_id: null, result_comment_id: null,
+        binding_generation: 1, channel_id: "UC-x", observation: null, observed_text: null,
+      };
+    });
+    await screen.findByTestId("yt-stage4-composer");
+    const input = screen.getByLabelText(/Post a comment as your channel/);
+    fireEvent.change(input, { target: { value: "one" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    // A check starts and is still pending...
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+    });
+    // ...the owner submits again meanwhile: its own answer is what the composer shows.
+    (gateway.createThread as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      calls.create += 1;
+      return receipt();
+    });
+    fireEvent.change(input, { target: { value: "two" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    await waitFor(() => expect(screen.getAllByRole("status").some((el) => /Accepted by YouTube/.test(el.textContent ?? ""))).toBe(true));
+    await act(async () => { releaseStatus(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    expect(screen.queryByText(/may already be on its way/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("status").some((el) => /Accepted by YouTube/.test(el.textContent ?? ""))).toBe(true);
+  });
+
+  it("a moderation that finishes after its dialog was cancelled and reopened leaves the reopened dialog open", async () => {
+    let releaseModerate!: () => void;
+    const { gateway } = renderScreen({ caps: capabilities({ ban: true }), threads: [row()] });
+    (gateway.moderate as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      await new Promise<void>((resolve) => { releaseModerate = resolve; });
+      return receipt({ action: "moderate", moderation_status: "rejected" });
+    });
+    await screen.findByText("a top-level comment");
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await screen.findByRole("checkbox", { name: "Also ban this author" });
+    // The plain Reject is in flight; the dialog is cancelled and opened again.
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Reject" }).find((button) => button.closest("[role=dialog]")) as HTMLElement);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Also ban this author" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await screen.findByRole("checkbox", { name: "Also ban this author" });
+    await act(async () => { releaseModerate(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    expect(screen.getByRole("checkbox", { name: "Also ban this author" })).toBeInTheDocument();
   });
 
   it("each thread in the Held list says so when none of ITS rows is held", async () => {

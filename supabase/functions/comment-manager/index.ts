@@ -179,6 +179,9 @@ export async function serveCommentManager(
     return new Response("ok", { headers: corsHeaders });
   }
 
+  // Set when the request body could not be read as JSON: the parser's own
+  // message is not logged for that audited case, only a fixed one.
+  let bodyUnreadable = false;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -246,6 +249,7 @@ export async function serveCommentManager(
     try {
       body = await req.json();
     } catch (error) {
+      bodyUnreadable = true;
       await handleStage4({ deps: stage4Deps, corsHeaders, userId: user.id, isServiceRole: !!serviceUserId, body: undefined });
       throw error;
     }
@@ -487,7 +491,7 @@ export async function serveCommentManager(
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Comment manager error:", error);
+    console.error("Comment manager error:", bodyUnreadable ? "the request body was not valid JSON" : error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

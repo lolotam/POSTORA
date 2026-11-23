@@ -11,7 +11,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2, RefreshCw, Youtube, AlertTriangle, CheckCircle2, HelpCircle } from "lucide-react";
-import type { Stage4CommentRow, Stage4Reason } from "../domain/types";
+import { STAGE4_HOLD_FROM_PUBLISHED, type Stage4CommentRow, type Stage4Reason } from "../domain/types";
 import type { SubmissionOutcome } from "../application/useYouTubeStage4";
 import { useStage4Replies, useYouTubeStage4 } from "../application/useYouTubeStage4";
 import { useStage4Recovery } from "../application/useStage4Recovery";
@@ -418,7 +418,9 @@ function CommentCard(params: {
   const status = row.moderation_status;
   const canModerate = stage4.canWrite && (status === "published" || status === "heldForReview");
   const showPublish = canModerate && status === "heldForReview";
-  const showHold = canModerate && status === "published";
+  // Hold is offered on a published row only while the shared switch allows it
+  // (a published comment cannot return to held, see STAGE4_HOLD_FROM_PUBLISHED).
+  const showHold = canModerate && status === "published" && STAGE4_HOLD_FROM_PUBLISHED;
   const showReject = canModerate;
 
   return (
@@ -566,6 +568,13 @@ async function runModerate(
     onNotice(t("youtubeStage4.notice.pending", "An earlier attempt for this comment is still being checked."));
     return;
   }
+  if (outcome.kind === "earlier") {
+    if (isCurrent()) stage4.acknowledge(outcome.operationId);
+    onNotice(outcome.state === "confirmed"
+      ? t("youtubeStage4.outcome.earlierConfirmed", "Your earlier action was accepted by YouTube. What you typed now was not sent — submit again to send it.")
+      : t("youtubeStage4.outcome.earlierRefused", "Your earlier action was not applied. What you typed now was not sent — submit again to send it."));
+    return;
+  }
   onNotice(reasonText(t, outcome.reason));
 }
 
@@ -701,17 +710,31 @@ function Composer(params: {
       mounted.current = false;
     };
   }, []);
+  // A status check that finishes after newer composer work (a newer submit, or
+  // another check) must not overwrite what that work shows, and the text most
+  // recently SENT is what a check's confirmation may clear.
+  const submitSeq = useRef(0);
+  const checkSeq = useRef(0);
+  const sentText = useRef<string | null>(null);
 
   useEffect(() => {
     if (localOutcome) inputRef.current?.focus();
   }, [localOutcome]);
 
-  const show = (outcome: SubmissionOutcome) => {
+  const show = (outcome: SubmissionOutcome, fromCheck = false) => {
     if (!mounted.current) return;
     setLocalOutcome(outcome);
+    if (outcome.kind === "earlier") {
+      // The result of an earlier send, shown. What is typed now was never sent,
+      // so it stays exactly as it is.
+      params.onAcknowledge?.(outcome.operationId);
+      return;
+    }
     if (outcome.kind === "confirmed") {
       params.onAcknowledge?.(outcome.operationId);
-      setText("");
+      // A check reads the receipt of the text that WAS sent: the box is emptied
+      // only while it still holds that text, so newer typing is never lost.
+      setText((current) => (fromCheck && current !== sentText.current ? current : ""));
       params.onNotice?.(t("youtubeStage4.notice.posted", "Posted. Refresh the thread to see it."));
     } else if (outcome.kind === "refused") {
       params.onAcknowledge?.(outcome.operationId);
@@ -722,6 +745,8 @@ function Composer(params: {
     if (!text.trim() || busy) return;
     setBusy(true);
     setLocalOutcome(null);
+    submitSeq.current += 1;
+    sentText.current = text;
     const outcome = await params.onSubmit(text);
     if (mounted.current) setBusy(false);
     show(outcome);
@@ -730,9 +755,13 @@ function Composer(params: {
   const checkStatus = async (operationId: string) => {
     if (!params.onCheckStatus || checking) return;
     setChecking(true);
+    const submitAtStart = submitSeq.current;
+    checkSeq.current += 1;
+    const checkAtStart = checkSeq.current;
     const outcome = await params.onCheckStatus(operationId);
     if (mounted.current) setChecking(false);
-    show(outcome);
+    if (submitSeq.current !== submitAtStart || checkSeq.current !== checkAtStart) return;
+    show(outcome, true);
   };
 
   return (
@@ -809,6 +838,15 @@ function OutcomeLine({ outcome, checking, onCheckStatus }: {
       <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         {t("youtubeStage4.outcome.pending", "An earlier attempt for this comment is still being checked. Reload to see its status.")}
         {checkButton}
+      </p>
+    );
+  }
+  if (outcome.kind === "earlier") {
+    return (
+      <p role="status" className="text-xs text-muted-foreground">
+        {outcome.state === "confirmed"
+          ? t("youtubeStage4.outcome.earlierConfirmed", "Your earlier action was accepted by YouTube. What you typed now was not sent — submit again to send it.")
+          : t("youtubeStage4.outcome.earlierRefused", "Your earlier action was not applied. What you typed now was not sent — submit again to send it.")}
       </p>
     );
   }
@@ -925,12 +963,15 @@ function RejectDialog(params: {
 
   /** A plain Reject: no ban is requested and none is implied. */
   const confirmPlainReject = async () => {
+    const generation = generationRef.current;
     setBusy(true);
     try {
       await runModerate(stage4, row, videoId, "rejected", onNotice, t, undefined, undefined, isCurrent);
-      onOpenChange(false);
+      // Only the opening that started this request closes: a dialog that was
+      // cancelled and reopened meanwhile belongs to the owner's newer work.
+      if (generation === generationRef.current) onOpenChange(false);
     } finally {
-      setBusy(false);
+      if (generation === generationRef.current) setBusy(false);
     }
   };
 
@@ -941,14 +982,15 @@ function RejectDialog(params: {
    */
   const confirmRejectAndBan = async () => {
     if (!banInfo) return;
+    const generation = generationRef.current;
     setBusy(true);
     try {
       // The server bound the confirmation to this operation key, so the submit
       // must use that same key (a fresh one would be refused).
       await runModerate(stage4, row, videoId, "rejected", onNotice, t, banInfo.confirmation, banInfo.operationId, isCurrent);
-      onOpenChange(false);
+      if (generation === generationRef.current) onOpenChange(false);
     } finally {
-      setBusy(false);
+      if (generation === generationRef.current) setBusy(false);
     }
   };
 

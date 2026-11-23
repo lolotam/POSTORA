@@ -34,6 +34,16 @@ export const STAGE4_MODERATION_STATUSES = [
 export type Stage4ModerationStatus = (typeof STAGE4_MODERATION_STATUSES)[number];
 
 /**
+ * Whether Hold is offered, and accepted, for a comment that is already
+ * published. Google's implementation guide says a comment that is `published`
+ * or `rejected` cannot return to `heldForReview`, and a 204 would still be
+ * recorded as confirmed while the comment stays public. Off until a rehearsal
+ * on a real channel shows YouTube applies the transition; flipping this one
+ * constant restores both the control and the handler's acceptance.
+ */
+export const STAGE4_HOLD_FROM_PUBLISHED = false;
+
+/**
  * The stable refusal reasons. The interface owns the English and Arabic copy
  * for each of them; the server never returns provider text, SQL text or a
  * raw provider object.

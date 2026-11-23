@@ -30,6 +30,10 @@ export function useYouTubeStage4Admission(
   });
   if (!enabled || !accountId) return "legacy";
   if (query.isLoading) return "loading";
-  if (query.isError) return "legacy";
-  return query.data?.capabilities?.read?.allowed === true ? "admitted" : "legacy";
+  // The data decides when there is any. A background refetch that fails keeps
+  // the earlier data AND sets the error state, so reading the error first would
+  // unmount an admitted screen mid-use (possibly while the owner is typing).
+  // Only an error with no data at all means the baseline inbox.
+  if (query.data !== undefined) return query.data.capabilities?.read?.allowed === true ? "admitted" : "legacy";
+  return "legacy";
 }

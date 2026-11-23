@@ -2307,6 +2307,246 @@ BEGIN
 END
 $r20$;
 
+-- R21. The logical fence across a key rotation that is ROLLED BACK. Request A
+-- computes its digests under version 1 only and stalls. Version 2 is added and
+-- request B (the same text and target) records its receipt under version 2.
+-- The operator then makes version 1 active again and retires version 2. A's
+-- digest set is complete for the ACTIVE key but misses a retained version, so
+-- the duplicate check could never see B's receipt and both would be sent.
+-- A must be refused (temporary) until its digests cover every retained
+-- version, and then the fence must hold. Once with B unresolved, once with B
+-- recently confirmed.
+DO $r21$
+DECLARE
+  v_a uuid := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct uuid := '6e9b0001-0000-4000-8000-000000000001';
+  v_gen bigint;
+  v_case record;
+  r jsonb;
+BEGIN
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct;
+  INSERT INTO public.youtube_comment_digest_keys (version, key)
+  VALUES (2, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+
+  FOR v_case IN SELECT * FROM (VALUES
+    ('unresolved', 'r21-u', '00000000-0000-4000-8000-00000000c801', '00000000-0000-4000-8000-00000000c802'),
+    ('confirmed',  'r21-c', '00000000-0000-4000-8000-00000000c811', '00000000-0000-4000-8000-00000000c812')
+  ) AS c(kind, tag, op_b, op_a) LOOP
+    -- B, with both versions' digests, claims under the active version 2.
+    r := public.youtube_comment_op_claim(
+      v_a, v_acct, 'UC-s4-race', v_gen, v_case.op_b::uuid, 'create_thread', '{"video_id":"vid-r21"}'::jsonb,
+      repeat('b', 64), jsonb_build_object('1', v_case.tag || '-v1', '2', v_case.tag || '-v2'), 'write', 'r21b', NULL);
+    ASSERT (r ->> 'ok')::boolean, format('R21 %s: B claimed: %s', v_case.kind, r);
+    ASSERT (SELECT digest_key_version FROM public.youtube_comment_operations
+             WHERE owner_id = v_a AND operation_id = v_case.op_b::uuid) = 2,
+      format('R21 %s: B is recorded under version 2', v_case.kind);
+    IF v_case.kind = 'confirmed' THEN
+      r := public.youtube_comment_op_mark_dispatched(v_a, v_case.op_b::uuid, (r ->> 'attempt_token')::uuid, 'UC-s4-race', v_gen);
+      ASSERT (r ->> 'ok')::boolean, format('R21 confirmed: B marked: %s', r);
+      r := public.youtube_comment_op_settle(
+        v_a, v_case.op_b::uuid,
+        (SELECT attempt_token FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_case.op_b::uuid),
+        'confirmed', NULL, 'none', 'thr-r21', 'cmt-r21');
+      ASSERT (r ->> 'ok')::boolean, format('R21 confirmed: B settled: %s', r);
+    END IF;
+
+    -- The rotation is rolled back: version 2 retires, version 1 is active again.
+    UPDATE public.youtube_comment_digest_keys SET retired_at = now() WHERE version = 2;
+
+    r := public.youtube_comment_op_claim(
+      v_a, v_acct, 'UC-s4-race', v_gen, v_case.op_a::uuid, 'create_thread', '{"video_id":"vid-r21"}'::jsonb,
+      repeat('a', 64), jsonb_build_object('1', v_case.tag || '-v1'), 'write', 'r21a', NULL);
+    ASSERT NOT (r ->> 'ok')::boolean AND r ->> 'reason' = 'upstream' AND (r ->> 'attempt_token') IS NULL,
+      format('R21 %s: digests that miss a retained version are a temporary refusal: %s', v_case.kind, r);
+    ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_case.op_a::uuid),
+      format('R21 %s: nothing was stored for A', v_case.kind);
+
+    -- Recomputed over every retained version, A meets B's receipt.
+    r := public.youtube_comment_op_claim(
+      v_a, v_acct, 'UC-s4-race', v_gen, v_case.op_a::uuid, 'create_thread', '{"video_id":"vid-r21"}'::jsonb,
+      repeat('a', 64), jsonb_build_object('1', v_case.tag || '-v1', '2', v_case.tag || '-v2'), 'write', 'r21a', NULL);
+    ASSERT NOT (r ->> 'ok')::boolean
+       AND r ->> 'reason' = CASE v_case.kind WHEN 'unresolved' THEN 'possible_duplicate' ELSE 'recently_posted' END,
+      format('R21 %s: the fence holds across the rolled-back rotation: %s', v_case.kind, r);
+    ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_case.op_a::uuid),
+      format('R21 %s: still nothing stored or dispatched for A', v_case.kind);
+
+    UPDATE public.youtube_comment_digest_keys SET retired_at = NULL WHERE version = 2;
+  END LOOP;
+
+  DELETE FROM public.youtube_comment_operations
+   WHERE owner_id = v_a
+     AND operation_id IN ('00000000-0000-4000-8000-00000000c801', '00000000-0000-4000-8000-00000000c811');
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
+END
+$r21$;
+
+-- Fresh connections for the lock tests: the earlier blocks left session B and
+-- A with results of their own.
+SELECT extensions.dblink_disconnect('s4_a');
+SELECT extensions.dblink_disconnect('s4_b');
+SELECT extensions.dblink_connect(
+  's4_a', format('dbname=%s user=%s application_name=s4_race_a', current_database(), current_user));
+SELECT extensions.dblink_connect(
+  's4_b', format('dbname=%s user=%s application_name=s4_race_b', current_database(), current_user));
+SELECT extensions.dblink_connect(
+  's4_c', format('dbname=%s user=%s application_name=s4_race_c', current_database(), current_user));
+
+-- R17b. The settings lock only counts when BOTH rows are locked. Session B
+-- holds the tile row; the rollout row is deleted (committed) and A's mark starts
+-- its lock statement, which cannot see that row and parks on the tile row. While
+-- A is parked the rollout row is re-added (committed) and B commits. Without the
+-- count, A's evaluation would then read the NEW, unlocked row and allow the send;
+-- with it, A saw only one row locked and closes the claim as never sent.
+DO $r17b$
+DECLARE
+  v_a text := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct text := '6e9b0001-0000-4000-8000-000000000001';
+  v_op text := '00000000-0000-4000-8000-00000000c504';
+  v_gen bigint;
+  v_policy jsonb;
+  v_description text;
+  r jsonb;
+  r_a text;
+  v_token text;
+  v_pid_a int;
+BEGIN
+  SELECT value, description INTO v_policy, v_description
+    FROM public.app_settings WHERE key = 'youtube_comments_stage4_rollout';
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
+  SELECT res::jsonb INTO r FROM extensions.dblink('s4_b', format(
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)',
+    v_a, v_acct, 'UC-s4-race', v_gen, v_op, 'edit', '{"video_id":"vid-r17b","comment_id":"cmt-r17b"}',
+    repeat('p', 64), '{}', 'write', 'r17b')) AS t(res text);
+  ASSERT (r ->> 'ok')::boolean, format('R17b claimed: %s', r);
+  v_token := r ->> 'attempt_token';
+
+  PERFORM extensions.dblink_exec('s4_b', 'BEGIN');
+  PERFORM extensions.dblink_exec('s4_b',
+    'UPDATE public.app_settings SET value = value WHERE key = ' || quote_literal('feature_youtube_comments'));
+  PERFORM extensions.dblink_exec('s4_c',
+    'DELETE FROM public.app_settings WHERE key = ' || quote_literal('youtube_comments_stage4_rollout'));
+
+  SELECT pid INTO v_pid_a FROM extensions.dblink('s4_a', 'SELECT pg_backend_pid()') AS t(pid int);
+  PERFORM extensions.dblink_send_query('s4_a', format(
+    'SELECT public.youtube_comment_op_mark_dispatched(%L::uuid, %L::uuid, %L::uuid, %L, %s)',
+    v_a, v_op, v_token, 'UC-s4-race', v_gen));
+  PERFORM extensions.dblink_exec('s4_c', format(
+    'DO $$ BEGIN
+       FOR i IN 1..100 LOOP
+         EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ');
+         PERFORM pg_sleep(0.05);
+       END LOOP;
+       IF NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ') THEN
+         RAISE EXCEPTION ''R17b the mark did not park on the tile row'';
+       END IF;
+     END $$;', v_pid_a, v_pid_a));
+
+  PERFORM extensions.dblink_exec('s4_c', format(
+    'INSERT INTO public.app_settings(key, value, description) VALUES (%L, %L::jsonb, %L)',
+    'youtube_comments_stage4_rollout', v_policy::text, v_description));
+  PERFORM extensions.dblink_exec('s4_b', 'COMMIT');
+
+  SELECT res INTO r_a FROM extensions.dblink_get_result('s4_a') AS t(res text);
+  PERFORM * FROM extensions.dblink_get_result('s4_a') AS t(res text);
+  ASSERT NOT (r_a::jsonb ->> 'ok')::boolean AND r_a::jsonb ->> 'reason' = 'capability_denied',
+    format('R17b a mark that could not lock both settings rows refuses: %s', r_a);
+  ASSERT (SELECT state FROM public.youtube_comment_operations
+           WHERE owner_id = v_a::uuid AND operation_id = v_op::uuid) = 'refused'
+     AND (SELECT dispatched_at FROM public.youtube_comment_operations
+           WHERE owner_id = v_a::uuid AND operation_id = v_op::uuid) IS NULL,
+    'R17b the claim is closed as never sent';
+END
+$r17b$;
+
+-- R17c. The two settings rows are always locked in one key order. A
+-- transaction that updates them in the OPPOSITE order can deadlock with a mark;
+-- the database aborts one side. Whichever side loses, a mark that did not
+-- complete sends nothing (its claim stays claimed), and a mark that completed
+-- did so against a policy that still allowed it.
+DO $r17c$
+DECLARE
+  v_a text := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct text := '6e9b0001-0000-4000-8000-000000000001';
+  v_op text := '00000000-0000-4000-8000-00000000c505';
+  v_gen bigint;
+  r jsonb;
+  r_a text;
+  v_token text;
+  v_pid_a int;
+  v_b_aborted boolean := false;
+  v_a_aborted boolean := false;
+  v_state text;
+BEGIN
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
+  SELECT res::jsonb INTO r FROM extensions.dblink('s4_c', format(
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)',
+    v_a, v_acct, 'UC-s4-race', v_gen, v_op, 'edit', '{"video_id":"vid-r17c","comment_id":"cmt-r17c"}',
+    repeat('q', 64), '{}', 'write', 'r17c')) AS t(res text);
+  ASSERT (r ->> 'ok')::boolean, format('R17c claimed: %s', r);
+  v_token := r ->> 'attempt_token';
+
+  -- B holds the ROLLOUT row first (the key order a mark takes it second).
+  PERFORM extensions.dblink_exec('s4_b', 'BEGIN');
+  PERFORM extensions.dblink_exec('s4_b',
+    'UPDATE public.app_settings SET value = value WHERE key = ' || quote_literal('youtube_comments_stage4_rollout'));
+
+  SELECT pid INTO v_pid_a FROM extensions.dblink('s4_a', 'SELECT pg_backend_pid()') AS t(pid int);
+  PERFORM extensions.dblink_send_query('s4_a', format(
+    'SELECT public.youtube_comment_op_mark_dispatched(%L::uuid, %L::uuid, %L::uuid, %L, %s)',
+    v_a, v_op, v_token, 'UC-s4-race', v_gen));
+  PERFORM extensions.dblink_exec('s4_c', format(
+    'DO $$ BEGIN
+       FOR i IN 1..100 LOOP
+         EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ');
+         PERFORM pg_sleep(0.05);
+       END LOOP;
+     END $$;', v_pid_a));
+
+  -- B now reaches for the TILE row, which the parked mark already holds: a deadlock.
+  BEGIN
+    PERFORM extensions.dblink_exec('s4_b',
+      'UPDATE public.app_settings SET value = value WHERE key = ' || quote_literal('feature_youtube_comments'));
+  EXCEPTION WHEN OTHERS THEN
+    v_b_aborted := SQLERRM LIKE '%deadlock detected%';
+    IF NOT v_b_aborted THEN RAISE; END IF;
+  END;
+
+  IF v_b_aborted THEN
+    PERFORM extensions.dblink_exec('s4_b', 'ROLLBACK');
+  ELSE
+    PERFORM extensions.dblink_exec('s4_b', 'COMMIT');
+  END IF;
+
+  BEGIN
+    SELECT res INTO r_a FROM extensions.dblink_get_result('s4_a') AS t(res text);
+    PERFORM * FROM extensions.dblink_get_result('s4_a') AS t(res text);
+  EXCEPTION WHEN OTHERS THEN
+    v_a_aborted := SQLERRM LIKE '%deadlock detected%';
+    IF NOT v_a_aborted THEN RAISE; END IF;
+  END;
+
+  SELECT state INTO v_state FROM public.youtube_comment_operations
+   WHERE owner_id = v_a::uuid AND operation_id = v_op::uuid;
+  ASSERT v_b_aborted OR v_a_aborted, 'R17c the opposite-order update deadlocked and the database aborted one side';
+  IF v_a_aborted THEN
+    ASSERT v_state = 'claimed', format('R17c an aborted mark sends nothing: the claim stays claimed (%s)', v_state);
+  ELSE
+    ASSERT (r_a::jsonb ->> 'ok')::boolean AND v_state = 'dispatched',
+      format('R17c a mark that completed was authorised by a policy that still allowed it: %s / %s', r_a, v_state);
+  END IF;
+END
+$r17c$;
+
+SELECT extensions.dblink_disconnect('s4_c');
+-- Back to fresh connections for whatever follows.
+SELECT extensions.dblink_disconnect('s4_a');
+SELECT extensions.dblink_disconnect('s4_b');
+SELECT extensions.dblink_connect(
+  's4_a', format('dbname=%s user=%s application_name=s4_race_a', current_database(), current_user));
+SELECT extensions.dblink_connect(
+  's4_b', format('dbname=%s user=%s application_name=s4_race_b', current_database(), current_user));
+
 SELECT extensions.dblink_disconnect('s4_a');
 SELECT extensions.dblink_disconnect('s4_b');
 

@@ -179,7 +179,7 @@ for (const locale of ["en", "ar"] as const) {
       expect((await providerState()).writes).toBe(0);
     });
 
-    test("hold then publish, held list, reject and reject-with-ban", async ({ page }) => {
+    test("publish from the held list, no Hold on a published row, reject and reject-with-ban", async ({ page }) => {
       await page.getByRole("option", { name: "Journey video" }).click();
       await page.getByRole("tab", { name: /(Held for review|بانتظار المراجعة)/ }).click();
       await expect(page.getByText("held by the moderator")).toBeVisible({ timeout: 10_000 });
@@ -189,18 +189,18 @@ for (const locale of ["en", "ar"] as const) {
       await expect(page.getByTestId("yt-stage4-notice")).toContainText(/Done|تم/);
       await expect.poll(async () => (await providerState()).writes, { timeout: 10_000 }).toBe(1);
 
-      // Back on Published: hold, then reject with confirmation.
+      // Back on Published: a published comment cannot return to held, so no
+      // row offers Hold; then reject with confirmation.
       await page.getByRole("tab", { name: /^(Published|منشورة)/ }).click();
       await expect(page.getByText("the channel's own comment")).toBeVisible({ timeout: 10_000 });
-      await page.getByRole("button", { name: /^(Hold|حجز)$/ }).first().click();
-      await expect.poll(async () => (await providerState()).writes, { timeout: 10_000 }).toBe(2);
+      await expect(page.getByRole("button", { name: /^(Hold|حجز)$/ })).toHaveCount(0);
 
       await page.getByRole("button", { name: /^(Reject|رفض)$/ }).first().click();
       const dialog = page.getByRole("dialog");
       await expect(dialog).toContainText(/cannot be published again|لا يمكن نشر/);
       await dialog.getByRole("button", { name: /^(Cancel|إلغاء)/ }).click();
       await expect(page.getByRole("dialog")).toBeHidden();
-      expect((await providerState()).writes).toBe(2);
+      expect((await providerState()).writes).toBe(1);
 
       // Reject and ban through both dialogs, on a VIEWER's comment: a ban is
       // refused for the channel's own comment (no other author to ban).
@@ -211,18 +211,18 @@ for (const locale of ["en", "ar"] as const) {
       await page.getByRole("dialog").getByRole("button", { name: /(Continue|متابعة)/ }).click();
       await expect(page.getByRole("dialog")).toContainText(/cannot show whether an author is banned|لا تستطيع بوستورا إظهار/);
       await page.getByRole("dialog").getByRole("button", { name: /(Reject and ban|رفض وحظر)/ }).click();
-      // The notice from the earlier Hold is still on screen, so wait on the
-      // provider's own count for the third write before reading its path.
-      await expect.poll(async () => (await providerState()).writes, { timeout: 15_000 }).toBe(3);
+      // The notice from the earlier Publish is still on screen, so wait on the
+      // provider's own count for the second write before reading its path.
+      await expect.poll(async () => (await providerState()).writes, { timeout: 15_000 }).toBe(2);
       await expect(page.getByTestId("yt-stage4-notice")).toContainText(/Done|تم/);
       const paths = (await providerState()).writePaths;
-      expect(paths.length).toBe(3);
-      expect(paths[2]).toContain("setModerationStatus");
-      expect(paths[2]).toContain("banAuthor=true");
+      expect(paths.length).toBe(2);
+      expect(paths[1]).toContain("setModerationStatus");
+      expect(paths[1]).toContain("banAuthor=true");
       // The one request carried the viewer's comment id and the rejected status.
-      expect(paths[2]).toContain("id=cmt-journey-viewer");
-      expect(paths[2]).toContain("moderationStatus=rejected");
-      // The plain Reject earlier never sent banAuthor, and nothing else did.
+      expect(paths[1]).toContain("id=cmt-journey-viewer");
+      expect(paths[1]).toContain("moderationStatus=rejected");
+      // The cancelled Reject never sent anything, and exactly one request carried banAuthor.
       expect(paths.filter((p) => p.includes("banAuthor")).length).toBe(1);
     });
   });
@@ -275,10 +275,16 @@ test.describe("Stage 4 fences across tabs and reloads (en)", () => {
       tab.getByTestId("yt-stage4-composer").getByRole("button", { name: /^Comment$/ }).click()));
     // Both tabs settle on an answer: one is accepted, the other is refused or
     // reported as already recorded. Each composer shows its own outcome line.
+    const lines: string[] = [];
     for (const tab of [pageA, pageB]) {
-      await expect(tab.getByTestId("yt-stage4-composer").locator("[role=status], [role=alert]").first())
-        .toBeVisible({ timeout: 20_000 });
+      const line = tab.getByTestId("yt-stage4-composer").locator("[role=status], [role=alert]").first();
+      await expect(line).toBeVisible({ timeout: 20_000 });
+      lines.push(await line.innerText());
     }
+    // Exactly one tab was accepted; the other got the fence's reason (an
+    // unresolved twin, or one that was just posted).
+    expect(lines.filter((line) => /Accepted by YouTube/.test(line))).toHaveLength(1);
+    expect(lines.filter((line) => /may already be on its way|was just posted|already recorded/.test(line))).toHaveLength(1);
     expect((await providerState()).writes).toBe(1);
     await context.close();
   });

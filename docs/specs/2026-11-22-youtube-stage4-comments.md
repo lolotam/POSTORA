@@ -343,7 +343,7 @@ Nothing here writes to YouTube. Any reconciliation step that calls Google is a r
 ### 10.1 Moderation
 
 - One comment per call; the `id` parameter accepts up to 50 IDs, so the server builds it from the handle's single strict ID.
-- Controls follow the visible row's own status: `published` → Hold, Reject; `heldForReview` → Publish, Reject; anything else → none.
+- Controls follow the visible row's own status: `published` → Reject; `heldForReview` → Publish, Reject; anything else → none. **Hold is not offered on a published row**: Google's implementation guide says a comment that is `published` or `rejected` cannot return to `heldForReview`, and a `204` for that call would be recorded as confirmed while the comment stays public. The handler refuses the transition (`invalid_request`) after its fresh target read and before the claim, with no provider write. Both sides read one constant, `STAGE4_HOLD_FROM_PUBLISHED` in `contractTypes.ts`; once a rehearsal on a real channel shows YouTube applies the transition, setting it to `true` restores the control and the acceptance (and this line).
 - Reject is confirmed in a dialog stating both documented consequences: replies are hidden with it, and it cannot be published again through the API. No undo is offered.
 
 ### 10.2 Ban-author

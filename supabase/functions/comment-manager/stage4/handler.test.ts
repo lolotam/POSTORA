@@ -923,10 +923,10 @@ Deno.test("a foreign author on edit is refused with zero provider writes", async
   assertEquals(world.writes.length, 0);
 });
 
-Deno.test("hold, publish and reject address the selected comment only; plain reject sends no banAuthor", async () => {
+Deno.test("publish and reject address the selected comment only; plain reject sends no banAuthor", async () => {
   const world = createWorld();
   const handle = await firstHandle(world);
-  for (const status of ["heldForReview", "published", "rejected"] as const) {
+  for (const status of ["published", "rejected"] as const) {
     const body = await jsonOf(await world.calls("youtube_moderate_comment", {
       target_handle: handle,
       status,
@@ -1918,4 +1918,71 @@ Deno.test("a throwing audit insert logs a fixed cause, never the exception text"
   assertEquals(warnings.length, 1);
   assertEquals(warnings[0].includes("secret-host"), false, "the exception text is not logged");
   assertEquals(warnings[0].includes("cause=exception"), true);
+});
+
+Deno.test("Hold on a published comment is refused before the claim, with no provider write", async () => {
+  const world = createWorld();
+  const handle = await firstHandle(world);
+  world.reads.length = 0;
+  world.writes.length = 0;
+  world.rpcLog.length = 0;
+  const res = await world.calls("youtube_moderate_comment", { target_handle: handle, status: "heldForReview", operation_id: crypto.randomUUID() });
+  assertEquals(res.status, 400);
+  assertEquals((await jsonOf(res)).reason, "invalid_request");
+  assertEquals(world.writes.length, 0, "nothing was sent");
+  assertEquals(world.rpcLog.some((c) => c.fn === "youtube_comment_op_claim"), false, "nothing was claimed");
+  assertEquals(world.receipts.size, 0, "no receipt");
+});
+
+Deno.test("an edit status read after a reconnect returns nothing of the old receipt", async () => {
+  const world = createWorld({
+    provider: ownTopProvider((call) => {
+      if (call.path === "comments" && call.method === "GET" && call.query.get("id")) {
+        return { status: 200, body: { items: [commentFixture(call.query.get("id")!, { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "edited" } })] } };
+      }
+      if (call.path === "comments" && call.method === "PUT") return { status: 200, body: { id: (call.body as { id?: string }).id, snippet: {} } };
+      return undefined;
+    }),
+  });
+  const handle = await firstHandle(world);
+  const op = crypto.randomUUID();
+  await world.calls("youtube_edit_comment", { target_handle: handle, text: "edited", operation_id: op });
+  // The channel is reconnected between the status read and the observation.
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  fake.rpc = async (fn: string, params: Record<string, unknown>) => {
+    const out = await original(fn, params);
+    if (fn === "youtube_comment_op_status") world.accounts.get(nativeAccount().id)!.binding_generation += 1;
+    return out;
+  };
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  const body = await res.json();
+  assertEquals(res.status, 404);
+  assertEquals(body.reason, "not_found");
+  assertEquals("data" in body, false, "no field of the old receipt crosses the reconnect");
+});
+
+Deno.test("an edit status read whose account re-read fails is a temporary upstream error with no receipt", async () => {
+  const world = createWorld({
+    provider: ownTopProvider((call) => call.path === "comments" && call.method === "PUT"
+      ? { status: 200, body: { id: (call.body as { id?: string }).id, snippet: {} } }
+      : (call.path === "comments" && call.method === "GET" && call.query.get("id")
+        ? { status: 200, body: { items: [commentFixture(call.query.get("id")!, { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "edited" } })] } }
+        : undefined)),
+  });
+  const handle = await firstHandle(world);
+  const op = crypto.randomUUID();
+  await world.calls("youtube_edit_comment", { target_handle: handle, text: "edited", operation_id: op });
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.from.bind(fake);
+  let accountReads = 0;
+  fake.from = (table: string) => {
+    if (table === "social_accounts" && ++accountReads >= 2) throw new Error("database unavailable");
+    return original(table);
+  };
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  const body = await res.json();
+  assertEquals(res.status, 503);
+  assertEquals(body.reason, "upstream");
+  assertEquals("data" in body, false);
 });

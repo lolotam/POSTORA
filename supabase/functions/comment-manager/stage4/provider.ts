@@ -84,16 +84,23 @@ async function singleRequest(
   // A 4xx without a Google error envelope is indeterminate, not a refusal.
   if (status >= 400 && status < 500) {
     const reason = (parsed as { error?: { message?: string } } | null)?.error?.message;
-    // A parseable Google envelope names at least one error object: an empty or
-    // malformed list proves nothing about whether the write was applied.
+    // A parseable Google envelope carries an error item that NAMES a reason: an
+    // empty list, a list of non-objects or an item with no reason proves
+    // nothing about whether the write was applied. The refusal is classified
+    // from that item.
     const errors = (parsed as { error?: { errors?: unknown[] } } | null)?.error?.errors;
-    const hasEnvelope = Array.isArray(errors)
-      && errors.some((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry));
-    if (!hasEnvelope) {
+    const item = Array.isArray(errors)
+      ? errors.find((entry): entry is { reason: string } =>
+        typeof entry === "object" && entry !== null && !Array.isArray(entry)
+        && typeof (entry as { reason?: unknown }).reason === "string"
+        && (entry as { reason: string }).reason.trim() !== "")
+      : undefined;
+    if (!item) {
       return { kind: "indeterminate", providerClass: "http_4xx", status };
     }
-    const kind = classifyGoogleError(status, parsed);
-    const reasonCode = mapReason(kind, parsed);
+    const named = { ...(parsed as { error: Record<string, unknown> }), error: { ...(parsed as { error: Record<string, unknown> }).error, errors: [item] } };
+    const kind = classifyGoogleError(status, named);
+    const reasonCode = mapReason(kind, named);
     return { kind: "refused", status, providerClass: "http_4xx", reason: reasonCode, body: parsed };
   }
 
