@@ -19,7 +19,7 @@ import type {
   Stage4ReceiptPayload,
 } from "../domain/types";
 import { youtubeCommentsKey, YOUTUBE_COMMENTS_STALE_MS } from "./queryKeys";
-import { recoverOperation } from "./recoverOperation";
+import { clearSettled, recoverOperation } from "./recoverOperation";
 /** The outcome of one deliberate submit, as the composer must show it. */
 export type SubmissionOutcome =
   | { kind: "confirmed"; receipt: Stage4ReceiptPayload }
@@ -348,9 +348,14 @@ export function useYouTubeStage4(params: {
       for (const operation of pending) {
         // Only a definite answer clears the identity; a temporary failure
         // keeps it and is shown as "status unavailable", never as "reconnect".
-        results.push(await recoverOperation(gateway, userId, accountId, operation));
+        results.push(await recoverOperation(gateway, accountId, operation));
       }
-      if (!cancelled) setRecovered(results);
+      // Cleared only once the result is in this view's state: a view torn
+      // down mid-read keeps the identity for the next one.
+      if (!cancelled) {
+        setRecovered(results);
+        clearSettled(userId, results);
+      }
     })();
     return () => {
       cancelled = true;
@@ -397,8 +402,9 @@ export function useYouTubeStage4(params: {
     recheckRecovered: async (operationId: string) => {
       const current = recovered.find((r) => r.operation.operationId === operationId);
       if (!current) return;
-      const next = await recoverOperation(gateway, userId, accountId, current.operation);
+      const next = await recoverOperation(gateway, accountId, current.operation);
       setRecovered((prev) => prev.map((r) => (r.operation.operationId === operationId ? next : r)));
+      clearSettled(userId, [next]);
     },
     discardAccountContext: () => clearPendingOperationsForAccount(userId, accountId),
   };

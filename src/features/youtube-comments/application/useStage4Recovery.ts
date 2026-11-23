@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { YouTubeCommentsGateway } from "./ports";
 import { listPendingOperations, type PendingStage4Operation } from "../domain/operationIdentity";
 import type { Stage4OperationStatusPayload } from "../domain/types";
-import { recoverOperation } from "./recoverOperation";
+import { clearSettled, recoverOperation, type RecoveryResult } from "./recoverOperation";
 
 export interface StandaloneRecoveredOperation {
   operation: PendingStage4Operation;
@@ -37,12 +37,15 @@ export function useStage4Recovery(params: {
     const pending = listPendingOperations(userId, accountId);
     if (pending.length === 0) return;
     void (async () => {
-      const results: StandaloneRecoveredOperation[] = [];
+      const results: RecoveryResult[] = [];
       for (const operation of pending) {
-        const result = await recoverOperation(gateway, userId, accountId, operation);
-        results.push({ operation, status: result.status, unavailable: result.unavailable });
+        results.push(await recoverOperation(gateway, accountId, operation));
       }
-      if (!cancelled) setRecovered(results);
+      // Cleared only once the result is in this view's state (see recoverOperation).
+      if (!cancelled) {
+        setRecovered(results.map((r) => ({ operation: r.operation, status: r.status, unavailable: r.unavailable })));
+        clearSettled(userId, results);
+      }
     })();
     return () => {
       cancelled = true;
@@ -55,10 +58,11 @@ export function useStage4Recovery(params: {
     recheck: async (operationId: string) => {
       const current = recovered.find((r) => r.operation.operationId === operationId);
       if (!current) return;
-      const next = await recoverOperation(gateway, userId, accountId, current.operation);
+      const next = await recoverOperation(gateway, accountId, current.operation);
       setRecovered((prev) => prev.map((r) => (
         r.operation.operationId === operationId ? { operation: next.operation, status: next.status, unavailable: next.unavailable } : r
       )));
+      clearSettled(userId, [next]);
     },
   };
 }

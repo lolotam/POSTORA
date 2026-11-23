@@ -113,13 +113,50 @@ Deno.test("an authenticated Stage 4 call reaches the handler through the route (
   assertEquals((auditRows[0].metadata as Record<string, unknown>).account_id, undefined, "the unverified account id is not logged");
 });
 
-Deno.test("an unparseable body at the route is an audited invalid_request, not a legacy error", async () => {
+Deno.test("legacy behaviour is exactly the baseline's: malformed JSON after auth is a 500 for every action", async () => {
   const serve = await loadRoute();
   const { supabase, auditRows } = fakeSupabase();
-  const res = await serve(post("{not json", "good-token"), { supabase });
-  assertEquals(res.status, 400);
-  assertEquals((await res.json()).reason, "invalid_request");
+  const nativeError = console.error;
+  console.error = () => undefined;
+  try {
+    for (const raw of ["{not json", "null"]) {
+      const res = await serve(post(raw, "good-token"), { supabase });
+      assertEquals(res.status, 500, raw);
+      assertEquals(typeof (await res.json()).error, "string", raw);
+    }
+  } finally {
+    console.error = nativeError;
+  }
   await settle();
-  assertEquals(auditRows.length, 1);
-  assertEquals(auditRows[0].user_id, USER);
+  assertEquals(auditRows.length, 0, "a body that names no action is not a Stage 4 refusal");
+});
+
+Deno.test("authentication comes first: a request that never finishes its body is answered 401 within the bound", async () => {
+  const serve = await loadRoute();
+  const { supabase, auditRows } = fakeSupabase();
+  const stalled = new Request("http://localhost/functions/v1/comment-manager", {
+    method: "POST",
+    headers: { Authorization: "Bearer bad-token", "Content-Type": "application/json" },
+    // A body that starts and never ends. @ts-expect-error duplex is required by the platform for stream bodies
+    body: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{"action":')); } }),
+    duplex: "half",
+  } as RequestInit);
+  const started = Date.now();
+  const res = await serve(stalled, { supabase });
+  assertEquals(res.status, 401);
+  assertEquals(await res.json(), { error: "Unauthorized" }, "the legacy answer, not a Stage 4 refusal");
+  assertEquals(Date.now() - started < 3000, true, "bounded by the one second peek, not by the client");
+  await settle();
+  assertEquals(auditRows.length, 0);
+});
+
+Deno.test("an unauthenticated body larger than the peek bound is not classified: it gets the legacy 401", async () => {
+  const serve = await loadRoute();
+  const { supabase, auditRows } = fakeSupabase();
+  const big = JSON.stringify({ action: "youtube_reply", pad: "x".repeat(64 * 1024) });
+  const res = await serve(post(big, "bad-token"), { supabase });
+  assertEquals(res.status, 401);
+  assertEquals(await res.json(), { error: "Unauthorized" });
+  await settle();
+  assertEquals(auditRows.length, 0);
 });

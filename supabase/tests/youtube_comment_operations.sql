@@ -380,8 +380,8 @@ BEGIN
     SELECT array_agg(p.proname::text ORDER BY p.proname) FROM pg_proc p
       JOIN pg_roles r ON r.oid = p.proowner
      WHERE r.rolname = 'youtube_stage4_refresh'
-  ) = ARRAY['store_youtube_refreshed_token', 'store_youtube_refreshed_token_with_lease'],
-    'S2 the narrow authority owns EXACTLY the two trusted refresh functions';
+  ) = ARRAY['store_youtube_refreshed_token', 'store_youtube_refreshed_token_with_lease', 'store_youtube_refreshed_token_with_lease_neutral'],
+    'S2 the narrow authority owns EXACTLY the three trusted refresh functions';
 
   ASSERT NOT has_schema_privilege('youtube_stage4_refresh', 'public', 'CREATE'),
     'S2 the narrow authority holds no CREATE on the public schema';
@@ -407,8 +407,8 @@ DO $s3$
 DECLARE
   a_a1 uuid := '6e8b0001-0000-4000-8000-000000000001';
 BEGIN
-  ASSERT NOT has_function_privilege('authenticated', 'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text)', 'EXECUTE')
-     AND NOT has_function_privilege('anon', 'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text)', 'EXECUTE'),
+  ASSERT NOT has_function_privilege('authenticated', 'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text,jsonb)', 'EXECUTE')
+     AND NOT has_function_privilege('anon', 'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text,jsonb)', 'EXECUTE'),
     'S3 browser roles hold no EXECUTE on the claim';
   ASSERT NOT has_function_privilege('authenticated', 'public.youtube_comment_op_status(uuid,uuid,uuid)', 'EXECUTE'),
     'S3 browser roles hold no EXECUTE on the status';
@@ -1714,6 +1714,201 @@ BEGIN
   END LOOP;
 END
 $r11$;
+-- R12. A Stage 4 refresh stores the token and leaves account HEALTH alone. The
+-- normal lease store resets needs_reauth, failure_count and last_refresh_error
+-- on every success (right for the refresh job, wrong for a comment read); the
+-- neutral store must not, and the default store must keep doing so.
+DO $r12$
+DECLARE
+  v_acct uuid := '6e9b0001-0000-4000-8000-000000000001';
+  v_lease jsonb;
+  v_json jsonb;
+  v_gen_before bigint;
+  v_gen_after bigint;
+  v_meta jsonb := '{"granted_scopes":["https://www.googleapis.com/auth/youtube.force-ssl"],"keep":"me"}';
+  r record;
+BEGIN
+  UPDATE public.social_accounts
+     SET account_metadata = v_meta, needs_reauth = false, failure_count = 0, last_refresh_error = NULL
+   WHERE id = v_acct;
+  SELECT binding_generation INTO v_gen_before FROM public.social_accounts WHERE id = v_acct;
+
+  -- (a) failure_count > 0 with an error recorded.
+  v_lease := public.acquire_youtube_refresh_lease(v_acct, 60);
+  ASSERT (v_lease ->> 'ok')::boolean, format('R12 lease acquired: %s', v_lease);
+  UPDATE public.social_accounts SET failure_count = 2, last_refresh_error = 'earlier transient failure' WHERE id = v_acct;
+  v_json := public.store_youtube_refreshed_token_with_lease_neutral(
+    v_acct, (v_lease ->> 'lease_token')::uuid, 'neutral-access-1', clock_timestamp() + interval '2 hours', 'neutral-refresh-1');
+  ASSERT (v_json ->> 'ok')::boolean, format('R12 neutral store ok: %s', v_json);
+  SELECT access_token, refresh_token, failure_count, last_refresh_error, needs_reauth, account_metadata, binding_generation
+    INTO r FROM public.social_accounts WHERE id = v_acct;
+  ASSERT r.access_token = 'neutral-access-1' AND r.refresh_token = 'neutral-refresh-1',
+    'R12 the neutral store wrote the new tokens';
+  ASSERT r.failure_count = 2 AND r.last_refresh_error = 'earlier transient failure' AND r.needs_reauth = false,
+    format('R12 health untouched after a neutral store: %s / %s / %s', r.failure_count, r.last_refresh_error, r.needs_reauth);
+  ASSERT r.account_metadata = v_meta, 'R12 granted scopes and metadata untouched';
+  ASSERT r.binding_generation = v_gen_before, 'R12 a trusted neutral refresh keeps the binding generation (rotated token included)';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_token_refresh_leases WHERE social_account_id = v_acct),
+    'R12 the lease closed';
+
+  -- (b) needs_reauth = true stays true.
+  v_lease := public.acquire_youtube_refresh_lease(v_acct, 60);
+  UPDATE public.social_accounts SET needs_reauth = true WHERE id = v_acct;
+  v_json := public.store_youtube_refreshed_token_with_lease_neutral(
+    v_acct, (v_lease ->> 'lease_token')::uuid, 'neutral-access-2', clock_timestamp() + interval '2 hours', NULL);
+  ASSERT (v_json ->> 'ok')::boolean, format('R12 neutral store ok with needs_reauth: %s', v_json);
+  SELECT access_token, refresh_token, failure_count, needs_reauth INTO r FROM public.social_accounts WHERE id = v_acct;
+  ASSERT r.access_token = 'neutral-access-2' AND r.refresh_token = 'neutral-refresh-1',
+    'R12 new access token written, omitted refresh token preserved';
+  ASSERT r.needs_reauth = true AND r.failure_count = 2, 'R12 needs_reauth and failure_count untouched';
+
+  -- (c) the default store keeps its behaviour for every existing caller.
+  v_lease := public.acquire_youtube_refresh_lease(v_acct, 60);
+  v_json := public.store_youtube_refreshed_token_with_lease(
+    v_acct, (v_lease ->> 'lease_token')::uuid, 'default-access-3', clock_timestamp() + interval '2 hours', NULL, NULL);
+  ASSERT (v_json ->> 'ok')::boolean, format('R12 default store ok: %s', v_json);
+  SELECT failure_count, last_refresh_error, needs_reauth INTO r FROM public.social_accounts WHERE id = v_acct;
+  ASSERT r.failure_count = 0 AND r.last_refresh_error IS NULL AND r.needs_reauth = false,
+    'R12 the default store still resets health (unchanged for existing callers)';
+
+  -- (d) a wrong or stale lease writes nothing.
+  v_lease := public.acquire_youtube_refresh_lease(v_acct, 60);
+  v_json := public.store_youtube_refreshed_token_with_lease_neutral(
+    v_acct, gen_random_uuid(), 'must-not-land', clock_timestamp() + interval '2 hours', NULL);
+  ASSERT NOT (v_json ->> 'ok')::boolean AND v_json ->> 'reason' = 'stale_lease', format('R12 stale lease refused: %s', v_json);
+  ASSERT (SELECT access_token FROM public.social_accounts WHERE id = v_acct) = 'default-access-3', 'R12 nothing written';
+  PERFORM public.release_youtube_refresh_lease(v_acct, (v_lease ->> 'lease_token')::uuid);
+
+  ASSERT NOT has_function_privilege('authenticated', 'public.store_youtube_refreshed_token_with_lease_neutral(uuid,uuid,text,timestamptz,text)', 'EXECUTE')
+     AND NOT has_function_privilege('anon', 'public.store_youtube_refreshed_token_with_lease_neutral(uuid,uuid,text,timestamptz,text)', 'EXECUTE')
+     AND has_function_privilege('service_role', 'public.store_youtube_refreshed_token_with_lease_neutral(uuid,uuid,text,timestamptz,text)', 'EXECUTE'),
+    'R12 only the service role may execute the neutral store';
+END
+$r12$;
+
+-- R13. A digest key version cannot be deleted by a rotation between a claim's
+-- pick of it and the insert of its receipt. Two real sessions: A claims under
+-- version 2 and holds the transaction open; B tries to delete version 2 and
+-- must wait, then be refused because the receipt now references it.
+INSERT INTO public.youtube_comment_digest_keys (version, key)
+VALUES (2, sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'utf8')));
+
+DO $r13$
+DECLARE
+  v_a text := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct text := '6e9b0001-0000-4000-8000-000000000001';
+  v_claim text := format(
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)::text',
+    v_a, v_acct, 'UC-s4-race', v_acct,
+    '00000000-0000-4000-8000-00000000c101',
+    'create_thread', '{"video_id":"vid-r13"}', repeat('q', 64),
+    '{"1":"r13-logical-v1","2":"r13-logical-v2"}', 'write', 'r13', ('{"1":"' || repeat('a', 64) || '","2":"' || repeat('b', 64) || '"}'));
+  r_a text;
+  v_pid_b int;
+  v_blocked boolean;
+  v_refused boolean := false;
+BEGIN
+  PERFORM extensions.dblink_exec('s4_a', 'BEGIN');
+  SELECT res INTO r_a FROM extensions.dblink('s4_a', v_claim) AS t(res text);
+  ASSERT (r_a::jsonb ->> 'ok')::boolean AND (r_a::jsonb ->> 'digest_key_version')::int = 2,
+    format('R13 session A claimed under key version 2: %s', r_a);
+
+  SELECT pid INTO v_pid_b FROM extensions.dblink('s4_b', 'SELECT pg_backend_pid()') AS t(pid int);
+  PERFORM extensions.dblink_send_query('s4_b', 'DELETE FROM public.youtube_comment_digest_keys WHERE version = 2');
+  -- B must PARK on A's lock on the key row (bounded wait; fails loudly).
+  PERFORM extensions.dblink_exec('s4_a', format(
+    'DO $$ BEGIN
+       FOR i IN 1..100 LOOP
+         EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ');
+         PERFORM pg_sleep(0.05);
+       END LOOP;
+       IF NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s AND wait_event_type = ' || quote_literal('Lock') || ') THEN
+         RAISE EXCEPTION ''R13 the delete of an in-use key version did not wait for the claim'';
+       END IF;
+     END $$;', v_pid_b, v_pid_b));
+
+  PERFORM extensions.dblink_exec('s4_a', 'COMMIT');
+
+  BEGIN
+    PERFORM * FROM extensions.dblink_get_result('s4_b') AS t(res text);
+  EXCEPTION WHEN OTHERS THEN
+    v_refused := SQLERRM LIKE '%still referenced by a receipt%';
+  END;
+  ASSERT v_refused, 'R13 the delete was refused once the claim committed (the receipt references the version)';
+  ASSERT EXISTS (SELECT 1 FROM public.youtube_comment_digest_keys WHERE version = 2), 'R13 version 2 still exists';
+  ASSERT (SELECT digest_key_version FROM public.youtube_comment_operations
+           WHERE owner_id = v_a::uuid AND operation_id = '00000000-0000-4000-8000-00000000c101') = 2,
+    'R13 the receipt references the surviving version';
+END
+$r13$;
+
+-- R14. A retry of the same key and the same intent AFTER a rotation is answered
+-- from the receipt; it is not a conflict. The comparison uses the digest under
+-- the key version the receipt was signed with. A different intent still conflicts.
+DO $r14$
+DECLARE
+  v_a uuid := '6e9a0001-0000-4000-8000-000000000001';
+  v_acct uuid := '6e9b0001-0000-4000-8000-000000000001';
+  v_gen bigint;
+  v_op uuid := '00000000-0000-4000-8000-00000000c201';
+  v_v1 text := repeat('1', 64);
+  v_v2 text := repeat('2', 64);
+  r jsonb;
+BEGIN
+  SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct;
+  -- version 2 is already active (R13). The receipt is written under it.
+  r := public.youtube_comment_op_claim(
+    v_a, v_acct, 'UC-s4-race', v_gen, v_op,
+    'edit', '{"video_id":"vid-r14","comment_id":"cmt-r14"}'::jsonb,
+    v_v2, '{}'::jsonb, 'write', 'r14a',
+    jsonb_build_object('1', v_v1, '2', v_v2));
+  ASSERT (r ->> 'ok')::boolean, format('R14 first claim: %s', r);
+  ASSERT (SELECT intent_key_version FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_op) = 2,
+    'R14 the receipt records the key version its intent digest was signed with';
+
+  -- Rotation: version 3 becomes active; the SAME key and intent are retried.
+  INSERT INTO public.youtube_comment_digest_keys (version, key)
+  VALUES (3, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+  r := public.youtube_comment_op_claim(
+    v_a, v_acct, 'UC-s4-race', v_gen, v_op,
+    'edit', '{"video_id":"vid-r14","comment_id":"cmt-r14"}'::jsonb,
+    repeat('3', 64), '{}'::jsonb, 'write', 'r14b',
+    jsonb_build_object('1', v_v1, '2', v_v2, '3', repeat('3', 64)));
+  ASSERT r ->> 'reason' = 'already_recorded' AND (r ->> 'attempt_token') IS NULL,
+    format('R14 the same key and intent after a rotation is answered from the receipt, with no token: %s', r);
+
+  -- A different intent under the same key is still a conflict.
+  r := public.youtube_comment_op_claim(
+    v_a, v_acct, 'UC-s4-race', v_gen, v_op,
+    'edit', '{"video_id":"vid-r14","comment_id":"cmt-r14"}'::jsonb,
+    repeat('9', 64), '{}'::jsonb, 'write', 'r14c',
+    jsonb_build_object('1', repeat('7', 64), '2', repeat('8', 64), '3', repeat('9', 64)));
+  ASSERT r ->> 'reason' = 'conflict', format('R14 a different intent is a conflict: %s', r);
+
+  -- A caller that sends no digest for the receipt's version cannot verify it: conflict, never a pass.
+  r := public.youtube_comment_op_claim(
+    v_a, v_acct, 'UC-s4-race', v_gen, v_op,
+    'edit', '{"video_id":"vid-r14","comment_id":"cmt-r14"}'::jsonb,
+    repeat('3', 64), '{}'::jsonb, 'write', 'r14d',
+    jsonb_build_object('3', repeat('3', 64)));
+  ASSERT r ->> 'reason' = 'conflict', format('R14 an unverifiable version is a conflict: %s', r);
+
+  -- Version 2 is referenced by a receipt (its intent, and R13's logical digest) and cannot be removed.
+  BEGIN
+    DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
+    RAISE EXCEPTION 'R14 a key version used by a receipt was deleted';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE '%still referenced by a receipt%' THEN RAISE; END IF;
+  END;
+
+  -- clean up: receipts first, then the extra versions.
+  DELETE FROM public.youtube_comment_operations
+   WHERE owner_id = v_a AND operation_id IN ('00000000-0000-4000-8000-00000000c101', v_op);
+  DELETE FROM public.youtube_comment_digest_keys WHERE version IN (3, 2);
+  ASSERT (SELECT count(*) FROM public.youtube_comment_digest_keys) >= 1, 'R14 version 1 remains';
+END
+$r14$;
+
 SELECT extensions.dblink_disconnect('s4_a');
 SELECT extensions.dblink_disconnect('s4_b');
 

@@ -119,6 +119,50 @@ function json400(message: string): Response {
   });
 }
 
+const PEEK_MAX_BYTES = 16 * 1024;
+const PEEK_TIMEOUT_MS = 1000;
+
+/**
+ * Whether an UNAUTHENTICATED request names a Stage 4 action, decided from a
+ * bounded read of a CLONE of the request: at most 16 KiB and one second. Past
+ * either bound, or on anything that is not JSON, the answer is "no" and the
+ * caller gets the legacy 401. It only ever runs for a request that is about
+ * to be refused, so no authenticated request waits on it.
+ */
+async function peekIsStage4Action(req: Request): Promise<boolean> {
+  const reader = req.clone().body?.getReader();
+  if (!reader) return false;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), PEEK_TIMEOUT_MS);
+  });
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), deadline]);
+      if (next === "timeout") return false;
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > PEEK_MAX_BYTES) return false;
+      chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { action?: unknown } | null;
+    return typeof parsed?.action === "string" && (STAGE4_ACTIONS as readonly string[]).includes(parsed.action);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    reader.cancel().catch(() => undefined);
+  }
+}
+
 /**
  * The one request handler. Exported so the real route — including auth, the
  * Stage 4 dispatch and the legacy switch — is testable without a network;
@@ -141,20 +185,6 @@ export async function serveCommentManager(
     const supabase = inject?.supabase ?? createClient(supabaseUrl, supabaseServiceKey);
     const fetcher = inject?.fetcher ?? fetch;
 
-    // A Request body can be read exactly once, so it is read once, here, and
-    // handed to whichever path serves the action (and to the audit of an
-    // unauthenticated Stage 4 refusal below). An unparseable body cannot name
-    // an action at all, and the Stage 4 handler refuses it with an audited
-    // invalid_request (its strict schema fails on anything non-object).
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      body = undefined;
-    }
-    const isStage4Call = body === undefined
-      || (typeof (body as { action?: unknown } | null)?.action === "string"
-        && (STAGE4_ACTIONS as readonly string[]).includes((body as { action: string }).action));
     const stage4Deps = {
       admin: supabase,
       fetcher,
@@ -162,10 +192,16 @@ export async function serveCommentManager(
       newRequestId: () => crypto.randomUUID(),
       signingSecret: supabaseServiceKey,
     };
-    /** A 401 for a Stage 4 action is a Stage 4 refusal: audited, rate-bounded, no user id. */
+    /**
+     * Every request is authenticated BEFORE its body is read, exactly as the
+     * legacy route always did. A 401 for a request that turns out (by a
+     * size- and time-bounded peek, see peekIsStage4Action) to name a Stage 4
+     * action is a Stage 4 refusal: audited and rate-bounded, no user id. Any
+     * other 401 is the legacy answer, byte for byte.
+     */
     const unauthorized = async (legacyMessage: string): Promise<Response> => {
-      if (isStage4Call) {
-        return await handleStage4({ deps: stage4Deps, corsHeaders, userId: "", isServiceRole: false, body });
+      if (await peekIsStage4Action(req)) {
+        return await handleStage4({ deps: stage4Deps, corsHeaders, userId: "", isServiceRole: false, body: undefined });
       }
       return new Response(JSON.stringify({ error: legacyMessage }), {
         status: 401,
@@ -197,22 +233,23 @@ export async function serveCommentManager(
       user = authUser;
     }
 
-    // The legacy switch below was written against an untyped body and passes
-    // these fields straight into helpers that expect their JSON types; the
-    // Stage 4 path above never reads from here (its own strict schema is the
+    // Read once, after authentication, as before: a body that is not valid
+    // JSON throws into the catch below (a 500), for every action, as it always
+    // has. The legacy switch below was written against an untyped body and
+    // passes these fields straight into helpers that expect their JSON types;
+    // the Stage 4 path never reads from here (its own strict schema is the
     // authority), so this seam keeps the baseline's `any` shape (ARCHITECTURE
     // 31: a documented legacy seam, not new untyped code).
     // deno-lint-ignore no-explicit-any
-    const legacyBody = (body ?? {}) as any;
-    const { action, social_account_id, comment_id, message, page_id, ig_user_id } = legacyBody;
+    const body = await req.json() as any;
+    const { action, social_account_id, comment_id, message, page_id, ig_user_id } = body;
 
     // Stage 4 private actions are handled by a separate module, BEFORE the
     // legacy service-role gate and the legacy account lookup (which checks
     // neither is_active nor platform). The handler refuses service-role
     // callers itself, with an audited refusal, so the legacy allow-list keeps
-    // governing only the legacy actions. An unparseable body lands here too:
-    // no action can be named, and the strict schema refuses it.
-    if (isStage4Call) {
+    // governing only the legacy actions.
+    if (typeof action === "string" && (STAGE4_ACTIONS as readonly string[]).includes(action)) {
       return await handleStage4({
         deps: stage4Deps,
         corsHeaders,
@@ -342,7 +379,7 @@ export async function serveCommentManager(
         const deps = defaultYouTubeDeps();
         const threads = await listThreads(socialAccount, deps, {
           channelId: socialAccount.platform_user_id!,
-          pageToken: legacyBody.page_token || undefined,
+          pageToken: body.page_token || undefined,
         });
         if (!threads.ok) {
           result = {
@@ -415,7 +452,7 @@ export async function serveCommentManager(
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const hideResult = await hideComment(socialAccount!, comment_id, legacyBody.is_hidden !== undefined ? legacyBody.is_hidden : true);
+        const hideResult = await hideComment(socialAccount!, comment_id, body.is_hidden !== undefined ? body.is_hidden : true);
         result = hideResult.success ? { success: true } : { error: { message: hideResult.error } };
         break;
       }

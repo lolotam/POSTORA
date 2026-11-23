@@ -187,6 +187,98 @@ ALTER ROLE youtube_stage4_refresh BYPASSRLS;
 -- ALTER FUNCTION ... OWNER TO requires the new owner to hold CREATE on the
 -- containing schema. The grant is taken for the ALTER and withdrawn again
 -- immediately, so the role ends up owning two functions and nothing else.
+-- The health-neutral lease store (spec 11: a Stage 4 read must not change
+-- stored health). store_youtube_refreshed_token_with_lease, applied by an
+-- earlier migration that is not edited here, resets needs_reauth,
+-- failure_count and last_refresh_error on EVERY successful store, which is
+-- right for the refresh job and wrong for a comment read. This variant takes
+-- the same lease, writes ONLY the credential columns and leaves the health
+-- columns and granted scopes exactly as they were. Existing callers keep the
+-- old function unchanged. It is owned by the same narrow authority below, so
+-- the generation trigger still sees a trusted refresh and preserves the
+-- binding generation.
+CREATE OR REPLACE FUNCTION public.store_youtube_refreshed_token_with_lease_neutral(
+  p_account_id           uuid,
+  p_lease_token          uuid,
+  p_new_access_token     text,
+  p_new_token_expires_at timestamptz,
+  p_new_refresh_token    text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_account_id uuid;
+  v_lease      public.youtube_token_refresh_leases%ROWTYPE;
+BEGIN
+  IF p_account_id IS NULL
+     OR p_lease_token IS NULL
+     OR p_new_access_token IS NULL
+     OR btrim(p_new_access_token) = ''
+     OR p_new_token_expires_at IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
+  END IF;
+
+  -- Account row first, then the lease: the order every other writer uses.
+  SELECT sa.id
+    INTO v_account_id
+    FROM public.social_accounts AS sa
+   WHERE sa.id = p_account_id
+     AND sa.platform = 'youtube'
+     AND COALESCE(sa.auth_provider, 'native') <> 'composio'
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'account_not_found');
+  END IF;
+
+  SELECT l.*
+    INTO v_lease
+    FROM public.youtube_token_refresh_leases AS l
+   WHERE l.social_account_id = p_account_id
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'lease_not_held');
+  END IF;
+
+  IF v_lease.lease_token <> p_lease_token THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'stale_lease');
+  END IF;
+
+  IF v_lease.expires_at <= clock_timestamp() THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'lease_expired');
+  END IF;
+
+  UPDATE public.social_accounts
+     SET access_token     = p_new_access_token,
+         token_expires_at = p_new_token_expires_at,
+         refresh_token    = COALESCE(NULLIF(p_new_refresh_token, ''), refresh_token),
+         updated_at       = clock_timestamp()
+   WHERE id = p_account_id
+     AND platform = 'youtube'
+     AND COALESCE(auth_provider, 'native') <> 'composio';
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'account_not_found');
+  END IF;
+
+  DELETE FROM public.youtube_token_refresh_leases
+   WHERE social_account_id = p_account_id
+     AND lease_token = p_lease_token;
+
+  RETURN jsonb_build_object('ok', true);
+END
+$function$;
+
+COMMENT ON FUNCTION public.store_youtube_refreshed_token_with_lease_neutral(uuid, uuid, text, timestamptz, text) IS
+  'Lease-protected token store for Stage 4 reads and writes. Writes only '
+  'access_token, token_expires_at and (when given) refresh_token. It never '
+  'touches needs_reauth, failure_count, last_refresh_error or account_metadata.';
+
 GRANT CREATE ON SCHEMA public TO youtube_stage4_refresh;
 
 DO $reown$
@@ -200,7 +292,8 @@ BEGIN
     INTO v_missing
     FROM unnest(ARRAY[
       'store_youtube_refreshed_token(uuid,text,text,timestamptz,text,timestamptz)',
-      'store_youtube_refreshed_token_with_lease(uuid,uuid,text,timestamptz,text,text[])'
+      'store_youtube_refreshed_token_with_lease(uuid,uuid,text,timestamptz,text,text[])',
+      'store_youtube_refreshed_token_with_lease_neutral(uuid,uuid,text,timestamptz,text)'
     ]) AS name
    WHERE to_regprocedure('public.' || name) IS NULL;
 
@@ -211,6 +304,7 @@ BEGIN
 
   EXECUTE 'ALTER FUNCTION public.store_youtube_refreshed_token(uuid, text, text, timestamptz, text, timestamptz) OWNER TO youtube_stage4_refresh';
   EXECUTE 'ALTER FUNCTION public.store_youtube_refreshed_token_with_lease(uuid, uuid, text, timestamptz, text, text[]) OWNER TO youtube_stage4_refresh';
+  EXECUTE 'ALTER FUNCTION public.store_youtube_refreshed_token_with_lease_neutral(uuid, uuid, text, timestamptz, text) OWNER TO youtube_stage4_refresh';
 END
 $reown$;
 
@@ -242,6 +336,11 @@ GRANT EXECUTE ON FUNCTION public.store_youtube_refreshed_token(uuid, text, text,
 REVOKE ALL ON FUNCTION public.store_youtube_refreshed_token_with_lease(uuid, uuid, text, timestamptz, text, text[])
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.store_youtube_refreshed_token_with_lease(uuid, uuid, text, timestamptz, text, text[])
+  TO service_role;
+
+REVOKE ALL ON FUNCTION public.store_youtube_refreshed_token_with_lease_neutral(uuid, uuid, text, timestamptz, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.store_youtube_refreshed_token_with_lease_neutral(uuid, uuid, text, timestamptz, text)
   TO service_role;
 
 COMMENT ON ROLE youtube_stage4_refresh IS
@@ -400,6 +499,7 @@ BEGIN
     IF EXISTS (
       SELECT 1 FROM public.youtube_comment_operations
        WHERE digest_key_version = OLD.version
+          OR intent_key_version = OLD.version
     ) THEN
       RAISE EXCEPTION
         'youtube_stage4_guard_digest_keys: digest key version % is still referenced by a receipt',
@@ -459,6 +559,9 @@ CREATE TABLE IF NOT EXISTS public.youtube_comment_operations (
   moderation_status  text,
   ban_author         boolean NOT NULL DEFAULT false,
   intent_digest      text NOT NULL,
+  -- The key version the stored intent digest was computed under. A retry after
+  -- a rotation compares against THAT version's digest, never the new active one.
+  intent_key_version integer NOT NULL DEFAULT 1,
   logical_digest     text,
   digest_key_version integer NOT NULL,
   state              text NOT NULL,
@@ -995,7 +1098,8 @@ CREATE OR REPLACE FUNCTION public.youtube_comment_op_claim(
   p_intent_digest       text,
   p_logical_digests     jsonb,
   p_capability          text,
-  p_request_id          text
+  p_request_id          text,
+  p_intent_digests      jsonb DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -1005,6 +1109,7 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_account   public.social_accounts%ROWTYPE;
+  v_intent_cmp text;
   v_existing  public.youtube_comment_operations%ROWTYPE;
   v_confirmed public.youtube_comment_operations%ROWTYPE;
   v_new       public.youtube_comment_operations%ROWTYPE;
@@ -1137,6 +1242,21 @@ BEGIN
    );
 
   -- --- 5. the per-key fence ------------------------------------------------
+  -- The active key version, locked FOR SHARE until this claim commits: a
+  -- rotation cannot delete it (a delete takes the row lock and then sees the
+  -- receipt this claim inserts, so the guard refuses it) between the pick and
+  -- the insert. Every claim takes this, whatever its action.
+  SELECT k.version INTO v_active
+    FROM public.youtube_comment_digest_keys AS k
+   WHERE k.retired_at IS NULL
+   ORDER BY k.version DESC
+   LIMIT 1
+   FOR SHARE OF k;
+
+  IF v_active IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
+  END IF;
+
   SELECT * INTO v_existing
     FROM public.youtube_comment_operations
    WHERE owner_id = p_owner_id
@@ -1144,7 +1264,14 @@ BEGIN
    FOR UPDATE;
 
   IF FOUND THEN
-    IF v_existing.intent_digest IS DISTINCT FROM p_intent_digest THEN
+    -- The intent digest is compared under the key version the RECEIPT used,
+    -- so a retry of the same key and intent after a rotation is not a
+    -- conflict. A version the caller sent no digest for cannot be verified.
+    v_intent_cmp := COALESCE(
+      p_intent_digests ->> v_existing.intent_key_version::text,
+      CASE WHEN v_existing.intent_key_version = v_active THEN p_intent_digest END);
+
+    IF v_intent_cmp IS DISTINCT FROM v_existing.intent_digest THEN
       -- One key, a different intent.
       RETURN jsonb_build_object(
         'ok', false, 'reason', 'conflict', 'state', v_existing.state);
@@ -1167,16 +1294,6 @@ BEGIN
 
   -- --- 6. the logical fence ------------------------------------------------
   IF p_action IN ('create_thread', 'reply') THEN
-    SELECT k.version INTO v_active
-      FROM public.youtube_comment_digest_keys AS k
-     WHERE k.retired_at IS NULL
-     ORDER BY k.version DESC
-     LIMIT 1;
-
-    IF v_active IS NULL THEN
-      RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
-    END IF;
-
     v_logical := p_logical_digests ->> v_active::text;
 
     IF v_logical IS NULL OR btrim(v_logical) = '' THEN
@@ -1250,14 +1367,14 @@ BEGIN
     owner_id, operation_id, social_account_id, account_ref, channel_id,
     binding_generation, auth_provider, action, video_id, thread_id,
     parent_comment_id, comment_id, author_channel_id, moderation_status,
-    ban_author, intent_digest, logical_digest, digest_key_version, state,
+    ban_author, intent_digest, intent_key_version, logical_digest, digest_key_version, state,
     attempt_token, request_id, claimed_at
   )
   VALUES (
     p_owner_id, p_operation_id, p_account_id, p_account_id,
     v_account.platform_user_id, v_account.binding_generation, 'native',
     p_action, v_video, v_thread, v_parent, v_comment, v_author, v_status,
-    v_ban, p_intent_digest,
+    v_ban, p_intent_digest, v_active,
     CASE WHEN p_action IN ('create_thread', 'reply') THEN v_logical ELSE NULL END,
     CASE WHEN p_action IN ('create_thread', 'reply') THEN v_active ELSE 0 END,
     'claimed', gen_random_uuid(), left(COALESCE(p_request_id, ''), 200),
@@ -1278,7 +1395,7 @@ BEGIN
 END;
 $function$;
 
-COMMENT ON FUNCTION public.youtube_comment_op_claim(uuid, uuid, text, bigint, uuid, text, jsonb, text, jsonb, text, text) IS
+COMMENT ON FUNCTION public.youtube_comment_op_claim(uuid, uuid, text, bigint, uuid, text, jsonb, text, jsonb, text, text, jsonb) IS
   'Records the durable intent of one deliberate write, in ONE transaction, '
   'under a FOR UPDATE lock on the owner-scoped account row. It requires the '
   'account to be owned, active, stored-native, on the expected channel and on '
@@ -1660,9 +1777,9 @@ REVOKE ALL ON FUNCTION public.youtube_comment_digest_keys()
 GRANT EXECUTE ON FUNCTION public.youtube_comment_digest_keys()
   TO service_role;
 
-REVOKE ALL ON FUNCTION public.youtube_comment_op_claim(uuid, uuid, text, bigint, uuid, text, jsonb, text, jsonb, text, text)
+REVOKE ALL ON FUNCTION public.youtube_comment_op_claim(uuid, uuid, text, bigint, uuid, text, jsonb, text, jsonb, text, text, jsonb)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.youtube_comment_op_claim(uuid, uuid, text, bigint, uuid, text, jsonb, text, jsonb, text, text)
+GRANT EXECUTE ON FUNCTION public.youtube_comment_op_claim(uuid, uuid, text, bigint, uuid, text, jsonb, text, jsonb, text, text, jsonb)
   TO service_role;
 
 REVOKE ALL ON FUNCTION public.youtube_comment_op_mark_dispatched(uuid, uuid, uuid, text, bigint)
@@ -1730,17 +1847,18 @@ BEGIN
     RAISE EXCEPTION 'youtube_stage4_refresh must be a member of no role and have no member role';
   END IF;
 
-  -- Exactly the two trusted refresh functions are owned by the narrow
-  -- authority. A third one would be a new trusted writer.
+  -- Exactly the three trusted refresh functions are owned by the narrow
+  -- authority. A fourth one would be a new trusted writer.
   SELECT array_agg(p.proname ORDER BY p.proname) INTO v_writers
     FROM pg_proc AS p
     JOIN pg_roles AS r ON r.oid = p.proowner
    WHERE r.rolname = 'youtube_stage4_refresh';
 
   IF v_writers IS DISTINCT FROM
-     ARRAY['store_youtube_refreshed_token', 'store_youtube_refreshed_token_with_lease'] THEN
+     ARRAY['store_youtube_refreshed_token', 'store_youtube_refreshed_token_with_lease',
+           'store_youtube_refreshed_token_with_lease_neutral'] THEN
     RAISE EXCEPTION
-      'youtube_stage4_refresh must own EXACTLY the two trusted refresh functions, found: %',
+      'youtube_stage4_refresh must own EXACTLY the three trusted refresh functions, found: %',
       coalesce(v_writers::text, 'none');
   END IF;
 
@@ -1766,7 +1884,8 @@ BEGIN
       JOIN pg_roles AS r ON r.oid = p.proowner
      WHERE p.oid IN (
        'public.store_youtube_refreshed_token(uuid,text,text,timestamptz,text,timestamptz)'::regprocedure,
-       'public.store_youtube_refreshed_token_with_lease(uuid,uuid,text,timestamptz,text,text[])'::regprocedure)
+       'public.store_youtube_refreshed_token_with_lease(uuid,uuid,text,timestamptz,text,text[])'::regprocedure,
+       'public.store_youtube_refreshed_token_with_lease_neutral(uuid,uuid,text,timestamptz,text)'::regprocedure)
   LOOP
     IF v_owner_name <> 'youtube_stage4_refresh' THEN
       RAISE EXCEPTION 'the trusted refresh functions must be owned by youtube_stage4_refresh, found %', v_owner_name;
@@ -1777,7 +1896,8 @@ BEGIN
     SELECT 1 FROM pg_proc AS p, aclexplode(p.proacl) AS x
      WHERE p.oid IN (
        'public.store_youtube_refreshed_token(uuid,text,text,timestamptz,text,timestamptz)'::regprocedure,
-       'public.store_youtube_refreshed_token_with_lease(uuid,uuid,text,timestamptz,text,text[])'::regprocedure)
+       'public.store_youtube_refreshed_token_with_lease(uuid,uuid,text,timestamptz,text,text[])'::regprocedure,
+       'public.store_youtube_refreshed_token_with_lease_neutral(uuid,uuid,text,timestamptz,text)'::regprocedure)
        AND x.grantee IN (0,
          (SELECT oid FROM pg_roles WHERE rolname = 'anon'),
          (SELECT oid FROM pg_roles WHERE rolname = 'authenticated'))
@@ -1853,7 +1973,7 @@ BEGIN
              'public.youtube_comments_stage4_capability_status(uuid)'::regprocedure,
              'public.youtube_comments_stage4_admits(uuid,text)'::regprocedure,
              'public.youtube_comment_digest_keys()'::regprocedure,
-             'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text)'::regprocedure,
+             'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text,jsonb)'::regprocedure,
              'public.youtube_comment_op_mark_dispatched(uuid,uuid,uuid,text,bigint)'::regprocedure,
              'public.youtube_comment_op_settle(uuid,uuid,uuid,text,text,text,text,text)'::regprocedure,
              'public.youtube_comment_op_status(uuid,uuid,uuid)'::regprocedure)) THEN
@@ -1867,7 +1987,7 @@ BEGIN
        'public.youtube_comments_stage4_capability_status(uuid)'::regprocedure,
        'public.youtube_comments_stage4_admits(uuid,text)'::regprocedure,
        'public.youtube_comment_digest_keys()'::regprocedure,
-       'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text)'::regprocedure,
+       'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text,jsonb)'::regprocedure,
        'public.youtube_comment_op_mark_dispatched(uuid,uuid,uuid,text,bigint)'::regprocedure,
        'public.youtube_comment_op_settle(uuid,uuid,uuid,text,text,text,text,text)'::regprocedure,
        'public.youtube_comment_op_status(uuid,uuid,uuid)'::regprocedure)

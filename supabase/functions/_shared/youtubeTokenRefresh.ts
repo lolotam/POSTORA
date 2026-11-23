@@ -68,6 +68,12 @@ export interface YouTubeRefreshStore {
     tokenExpiresAt: string;
     refreshToken: string | null;
     grantedScopes: string[] | null;
+    /**
+     * Store through the health-neutral RPC: the token is written under the
+     * lease and needs_reauth, failure_count, last_refresh_error and granted
+     * scopes are left exactly as they were. Default false (the refresh job).
+     */
+    healthNeutral?: boolean;
   }): Promise<StoreTokenWithLeaseResult>;
   recordFailureWithLease(input: {
     accountId: string;
@@ -465,17 +471,19 @@ export function createSupabaseYouTubeRefreshStore(admin: unknown): YouTubeRefres
     },
 
     async storeTokenWithLease(input) {
-      const { data: raw, error } = await supabase.rpc(
-        "store_youtube_refreshed_token_with_lease",
-        {
-          p_account_id: input.accountId,
-          p_lease_token: input.leaseToken,
-          p_new_access_token: input.accessToken,
-          p_new_token_expires_at: input.tokenExpiresAt,
-          p_new_refresh_token: input.refreshToken,
+      const common = {
+        p_account_id: input.accountId,
+        p_lease_token: input.leaseToken,
+        p_new_access_token: input.accessToken,
+        p_new_token_expires_at: input.tokenExpiresAt,
+        p_new_refresh_token: input.refreshToken,
+      };
+      const { data: raw, error } = input.healthNeutral === true
+        ? await supabase.rpc("store_youtube_refreshed_token_with_lease_neutral", common)
+        : await supabase.rpc("store_youtube_refreshed_token_with_lease", {
+          ...common,
           p_granted_scopes: input.grantedScopes,
-        },
-      );
+        });
       const data = asRecord(raw);
       if (error || !data) {
         return { ok: false, reason: "store_failed" };
@@ -904,6 +912,7 @@ export async function refreshYouTubeAccountToken(
       tokenExpiresAt: expiresAt,
       refreshToken: exchangeResult.refreshToken,
       grantedScopes,
+      healthNeutral,
     });
 
     if (stored.ok) {

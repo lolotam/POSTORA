@@ -521,17 +521,75 @@ describe("YouTubeCommentsScreen", () => {
     await waitFor(() => expect(screen.queryByTestId("yt-stage4-notice")).not.toBeInTheDocument());
   });
 
-  it("drops responses that arrive for a previous account selection", async () => {
+  it("a late response for the previous account never reaches the new account's view", async () => {
+    const ACCOUNT_B = "55555555-5555-4555-8555-555555555555";
     const { gateway } = makeGateway({});
-    // The gateway answers for another account after the switch.
-    (gateway.threadPage as ReturnType<typeof vi.fn>).mockResolvedValue({
-      account_id: "another-account",
-      channel_id: "UC-x",
-      video_id: "vid-1",
-      list: "published",
-      items: [row({ text: "stale row" })],
-      next_cursor: null,
-      inconsistent_count: 0,
+    let releaseA!: () => void;
+    const lateA = new Promise<void>((resolve) => { releaseA = resolve; });
+    const listFor = (accountId: string, text: string) => ({
+      account_id: accountId, channel_id: "UC-x", video_id: "vid-1", list: "published" as const,
+      items: [row({ text })], next_cursor: null, inconsistent_count: 0,
+    });
+    (gateway.capabilities as ReturnType<typeof vi.fn>).mockImplementation(async (accountId: string) => ({ ...capabilities(), account_id: accountId }));
+    (gateway.videoPage as ReturnType<typeof vi.fn>).mockImplementation(async (accountId: string) => ({
+      account_id: accountId, channel_id: "UC-x", items: [{ id: "vid-1", title: "First upload", published_at: null, thumbnail_url: null }], next_cursor: null,
+    }));
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async (params: { accountId: string }) => {
+      if (params.accountId === ACCOUNT) {
+        await lateA; // account A's answer arrives only AFTER the switch
+        return listFor(ACCOUNT, "row of account A");
+      }
+      return listFor(ACCOUNT_B, "row of account B");
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (accountId: string) => (
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={accountId} gateway={gateway} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree(ACCOUNT));
+    await waitFor(() => expect(gateway.threadPage).toHaveBeenCalledWith(expect.objectContaining({ accountId: ACCOUNT })));
+
+    rerender(tree(ACCOUNT_B));
+    expect(await screen.findByText("row of account B")).toBeInTheDocument();
+
+    releaseA();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    expect(screen.queryByText("row of account A")).not.toBeInTheDocument();
+    expect(screen.getByText("row of account B")).toBeInTheDocument();
+  });
+
+  it("a result that lands after the video changed is never shown as a notice on the new video", async () => {
+    let resolveCreate!: (value: Stage4ReceiptPayload) => void;
+    renderScreen({
+      videos: [{ id: "vid-1", title: "First upload" }, { id: "vid-2", title: "Second upload" }],
+      threads: [row()],
+      createResult: () => new Promise<Stage4ReceiptPayload>((resolve) => { resolveCreate = resolve; }),
+    });
+    await screen.findByTestId("yt-stage4-composer");
+    fireEvent.change(screen.getByLabelText(/Post a comment as your channel/), { target: { value: "late one" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+    });
+    fireEvent.click(screen.getByRole("option", { name: "Second upload" }));
+    await waitFor(() => expect(screen.getByRole("option", { name: "Second upload" })).toHaveAttribute("aria-selected", "true"));
+
+    await act(async () => { resolveCreate(receipt()); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    expect(screen.queryByTestId("yt-stage4-notice")).not.toBeInTheDocument();
+  });
+
+  it("after a confirmed write the list returns to and refetches page ONE, not the last page", async () => {
+    const { gateway } = makeGateway({});
+    const requestedCursors: Array<string | null | undefined> = [];
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async (params: { cursor?: string | null }) => {
+      requestedCursors.push(params.cursor);
+      const first = !params.cursor;
+      return {
+        account_id: ACCOUNT, channel_id: "UC-x", video_id: "vid-1", list: "published" as const,
+        items: [row({ text: first ? "page one row" : "page two row" })],
+        next_cursor: first ? "cursor-2" : null, inconsistent_count: 0,
+      };
     });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -539,10 +597,39 @@ describe("YouTubeCommentsScreen", () => {
         <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(gateway.threadPage).toHaveBeenCalled());
-    await waitFor(() => {
-      expect(screen.queryByText("stale row")).not.toBeInTheDocument();
+    expect(await screen.findByText("page one row")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load more comments" }));
+    expect(await screen.findByText("page two row")).toBeInTheDocument();
+    expect(requestedCursors.at(-1)).toBe("cursor-2");
+
+    fireEvent.change(screen.getByLabelText(/Post a comment as your channel/), { target: { value: "reload me" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
     });
+    await waitFor(() => expect(requestedCursors.length).toBeGreaterThanOrEqual(3));
+    // The refetch is of page one (no cursor), never a repeat of page two.
+    expect(requestedCursors.at(-1)).toBeUndefined();
+    expect(await screen.findByText("page one row")).toBeInTheDocument();
+  });
+
+  it("a recovery view torn down before its status read finishes leaves the identity for the next view", async () => {
+    localStorage.setItem(`postora:yt-stage4:ops:${USER}`, JSON.stringify([{
+      operationId: "op-torn", accountId: ACCOUNT, videoId: "vid-1", action: "create_thread",
+      targetCommentId: "", createdAt: Date.now(),
+    }]));
+    let release!: (value: { state: string; reason: string | null }) => void;
+    const { gateway } = makeGateway({ statusResult: new Promise((resolve) => { release = resolve; }) });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { unmount } = render(
+      <QueryClientProvider client={client}>
+        <Stage4RecoveredOperations userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(gateway.operationStatus).toHaveBeenCalledTimes(1));
+    unmount(); // an account or mode switch tears the view down mid-read
+    await act(async () => { release({ state: "confirmed", reason: null }); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toHaveLength(1);
   });
 
   it("keeps the not-admitted card but still recovers a pending receipt with reads off", async () => {

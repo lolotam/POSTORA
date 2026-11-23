@@ -71,6 +71,10 @@ export interface WorldOptions {
   failSettleOnce?: boolean;
   /** The status RPC itself fails (a transport/database error, not "no receipt"). */
   statusRpcError?: boolean;
+  /** Reading social_accounts fails (a database error, not "no such row"). */
+  accountReadError?: boolean;
+  /** Loading the digest keys fails. */
+  digestKeysError?: boolean;
   /** Runs right after a claim committed, before the mark (to change the world between them). */
   onClaim?: () => void;
   rateLimited?: boolean;
@@ -239,6 +243,9 @@ export function createWorld(options: WorldOptions = {}): World {
             return builder;
           },
           maybeSingle() {
+            if (options.accountReadError) {
+              return Promise.resolve({ data: null, error: { message: "database unavailable" } });
+            }
             const rows = [...accounts.values()].filter((a) =>
               (!filter.id || a.id === filter.id) && (!filter.user_id || a.user_id === filter.user_id)
             );
@@ -274,6 +281,7 @@ export function createWorld(options: WorldOptions = {}): World {
         return { data: out, error: null };
       }
       if (fn === "youtube_comment_digest_keys") {
+        if (options.digestKeysError) return { data: null, error: { message: "keys unavailable" } };
         return { data: { active_version: digestKey.version, keys: [digestKey] }, error: null };
       }
       if (fn === "youtube_comment_op_claim") return claim(params);
@@ -1140,6 +1148,10 @@ Deno.test("a failed settlement is answered indeterminate, never confirmed, and s
   assertEquals(world.writes.length, 1, "the same key never causes a second provider write");
   await world.calls("youtube_create_thread", { video_id: "vid-1", text: "settled", operation_id: op });
   assertEquals(world.writes.length, 1, "resubmitting the same key still sends nothing");
+  // The same key stays queryable: status reads the unsettled receipt (it converts to indeterminate after 90 s).
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op }));
+  assertEquals(status.data.state, "dispatched");
+  assertEquals(status.data.operation_id, op);
 });
 
 Deno.test("an incomplete 2xx evidence set is indeterminate, never confirmed (spec 9.2)", async () => {
@@ -1542,4 +1554,91 @@ Deno.test("only writes and the ban confirmation are held to the low caps; capabi
   assertEquals(maxFor("youtube_operation_status"), 120);
   assertEquals(maxFor("stage4:read"), 120);
   assertEquals(maxFor("youtube_create_thread"), 20);
+});
+
+Deno.test("a failed account READ is a temporary 503 upstream for every action, never not_found", async () => {
+  const world = createWorld({ accountReadError: true });
+  for (const action of ["youtube_operation_status", "youtube_stage4_capabilities", "youtube_video_page"]) {
+    const res = await world.calls(action, action === "youtube_operation_status" ? { operation_id: crypto.randomUUID() } : {});
+    assertEquals(res.status, 503, action);
+    assertEquals((await jsonOf(res)).reason, "upstream", action);
+  }
+  assertEquals(world.writes.length + world.reads.length, 0, "no provider call on a failed read");
+
+  // An absent row is still the identical not_found.
+  const healthy = createWorld();
+  const absent = await healthy.calls("youtube_operation_status", { operation_id: crypto.randomUUID(), social_account_id: "88888888-8888-4888-8888-888888888888" });
+  assertEquals(absent.status, 404);
+  assertEquals((await jsonOf(absent)).reason, "not_found");
+});
+
+Deno.test("a 2xx whose ids are not non-empty strings is indeterminate, never coerced into a confirmation", async () => {
+  const malformed: Array<{ label: string; action: string; extra: () => Promise<Record<string, unknown>>; answer: (c: ProviderCall) => { status: number; body: unknown } | undefined }> = [];
+  const post = (path: string, method: string, body: unknown) => (c: ProviderCall) =>
+    c.path === path && c.method === method ? { status: 200, body } : undefined;
+  malformed.push(
+    { label: "create: numeric thread id", action: "youtube_create_thread", extra: () => Promise.resolve({ video_id: "vid-1", text: "a" }),
+      answer: post("commentThreads", "POST", { id: 123, snippet: { videoId: "vid-1", channelId: "UC-handler-test", topLevelComment: { id: "c-1" } } }) },
+    { label: "create: object top-level id", action: "youtube_create_thread", extra: () => Promise.resolve({ video_id: "vid-1", text: "b" }),
+      answer: post("commentThreads", "POST", { id: "t-1", snippet: { videoId: "vid-1", channelId: "UC-handler-test", topLevelComment: { id: { v: 1 } } } }) },
+    { label: "create: array video id", action: "youtube_create_thread", extra: () => Promise.resolve({ video_id: "vid-1", text: "c" }),
+      answer: post("commentThreads", "POST", { id: "t-1", snippet: { videoId: ["vid-1"], channelId: "UC-handler-test", topLevelComment: { id: "c-1" } } }) },
+    { label: "create: blank thread id", action: "youtube_create_thread", extra: () => Promise.resolve({ video_id: "vid-1", text: "d" }),
+      answer: post("commentThreads", "POST", { id: "  ", snippet: { videoId: "vid-1", channelId: "UC-handler-test", topLevelComment: { id: "c-1" } } }) },
+  );
+  for (const item of malformed) {
+    const world = createWorld({ provider: item.answer });
+    const body = await jsonOf(await world.calls(item.action, { ...(await item.extra()), operation_id: crypto.randomUUID() }));
+    assertEquals(body.data.state, "indeterminate", item.label);
+    assertEquals(world.writes.length, 1, item.label);
+  }
+
+  // reply: a non-string comment id; edit: an array that would stringify to the target id.
+  const replyWorld = createWorld({ provider: post("comments", "POST", { id: 42, snippet: { parentId: "comment-7" } }) });
+  const reply = await jsonOf(await replyWorld.calls("youtube_reply", { target_handle: await firstHandle(replyWorld), text: "r", operation_id: crypto.randomUUID() }));
+  assertEquals(reply.data.state, "indeterminate", "reply: numeric id");
+
+  const editWorld = createWorld({
+    provider: ownTopProvider((c) =>
+      c.path === "comments" && c.method === "GET" && c.query.get("id") === "comment-7"
+        ? { status: 200, body: { items: [commentFixture("comment-7", { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "mine" } })] } }
+        : post("comments", "PUT", { id: ["comment-7"], snippet: {} })(c)),
+  });
+  const edit = await jsonOf(await editWorld.calls("youtube_edit_comment", { target_handle: await firstHandle(editWorld), text: "e", operation_id: crypto.randomUUID() }));
+  assertEquals(edit.data.state, "indeterminate", "edit: an array is not the target id");
+});
+
+Deno.test("a digest key load failure is an audited 503, not an uncaught throw", async () => {
+  const world = createWorld({ digestKeysError: true });
+  const handle = await firstHandle(world);
+  world.writes.length = 0;
+  const res = await world.calls("youtube_reply", { target_handle: handle, text: "hi", operation_id: crypto.randomUUID() });
+  assertEquals(res.status, 503);
+  assertEquals((await jsonOf(res)).reason, "upstream");
+  assertEquals(world.writes.length, 0);
+  assertEquals(world.auditRows.length, 1, "the refusal reached the audit path");
+});
+
+Deno.test("the refusal audit is finished before the answer is returned (it is part of the request)", async () => {
+  const world = createWorld();
+  await world.calls("youtube_stage4_capabilities", { social_account_id: "77777777-7777-4777-8777-777777777777" });
+  assertEquals(world.auditRows.length, 1, "no timer was needed: the audit write was awaited");
+});
+
+Deno.test("a failed suppression-counter insert is reported", async () => {
+  const world = createWorld();
+  const warnings: string[] = [];
+  const nativeWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+  try {
+    (world.deps.admin as { from: (t: string) => unknown }).from = ((original) => (table: string) =>
+      table === "system_logs" ? { insert: () => Promise.resolve({ error: { message: "insert failed" } }) } : original(table)
+    )((world.deps.admin as { from: (t: string) => unknown }).from.bind(world.deps.admin));
+    for (let i = 0; i < 32; i++) {
+      await handleStage4({ deps: world.deps, corsHeaders: {}, userId: "", isServiceRole: false, body: undefined });
+    }
+  } finally {
+    console.warn = nativeWarn;
+  }
+  assertEquals(warnings.some((w) => w.includes("counter insert failed")), true);
 });

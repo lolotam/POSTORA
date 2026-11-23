@@ -16,7 +16,7 @@ import {
   setModerationStatus,
   updateComment,
 } from "./provider.ts";
-import { normaliseText, computeIntentDigest, computeLogicalDigests } from "./digests.ts";
+import { normaliseText, computeIntentDigests, computeLogicalDigests } from "./digests.ts";
 import {
   BAN_CONFIRMATION_PREFIX,
   CURSOR_PREFIX,
@@ -218,9 +218,9 @@ Deno.test("the intent digest covers the whole intent and moves with any part", a
     banAuthor: false,
     text: "Hello",
   };
-  const a = await computeIntentDigest(KEYS, base);
-  const b = await computeIntentDigest(KEYS, { ...base, bindingGeneration: 4 });
-  const c = await computeIntentDigest(KEYS, base);
+  const a = await computeIntentDigests(KEYS, base);
+  const b = await computeIntentDigests(KEYS, { ...base, bindingGeneration: 4 });
+  const c = await computeIntentDigests(KEYS, base);
   assertEquals(a.version, 2, "the digest is computed under the active version");
   assertEquals(a.digest, c.digest, "the same intent digests identically");
   assertEquals(a.digest !== b.digest, true, "a changed binding changes the intent digest");

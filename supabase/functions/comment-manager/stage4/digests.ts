@@ -38,20 +38,34 @@ export interface DigestKeys {
   keys: Array<{ version: number; key: string }>;
 }
 
-export async function computeIntentDigest(
+export interface IntentParts {
+  action: string;
+  accountId: string;
+  bindingGeneration: number;
+  videoId: string;
+  targetIds: string[];
+  moderationStatus: string | null;
+  banAuthor: boolean;
+  text: string;
+}
+
+/**
+ * The intent digest under the ACTIVE key (stored on a new receipt) and under
+ * EVERY retained key version (so a retry of the same key and intent after a
+ * rotation is compared under the version the receipt was signed with).
+ */
+export async function computeIntentDigests(
   keys: DigestKeys,
-  parts: {
-    action: string;
-    accountId: string;
-    bindingGeneration: number;
-    videoId: string;
-    targetIds: string[];
-    moderationStatus: string | null;
-    banAuthor: boolean;
-    text: string;
-  },
-): Promise<{ digest: string; version: number }> {
-  const canonical = [
+  parts: IntentParts,
+): Promise<{ digest: string; version: number; digests: Record<string, string> }> {
+  const canonical = intentCanonical(parts);
+  const digests: Record<string, string> = {};
+  for (const k of keys.keys) digests[String(k.version)] = await hmacHex(k.key, canonical);
+  return { digest: digests[String(keys.activeVersion)], version: keys.activeVersion, digests };
+}
+
+function intentCanonical(parts: IntentParts): string {
+  return [
     "intent",
     TEXT_NORMALISATION_VERSION,
     parts.action,
@@ -63,7 +77,6 @@ export async function computeIntentDigest(
     parts.banAuthor ? "1" : "0",
     normaliseText(parts.text),
   ].join("\u0000");
-  return { digest: await hmacHex(keys.keys.find((k) => k.version === keys.activeVersion)!.key, canonical), version: keys.activeVersion };
 }
 
 export async function computeLogicalDigests(

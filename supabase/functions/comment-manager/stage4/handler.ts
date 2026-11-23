@@ -41,7 +41,7 @@ import {
   BAN_CONFIRMATION_TTL_MS,
   MAX_CURSOR_HOPS,
 } from "./sealing.ts";
-import { normaliseText, computeIntentDigest, computeLogicalDigests, type DigestKeys } from "./digests.ts";
+import { normaliseText, computeIntentDigests, computeLogicalDigests, type DigestKeys } from "./digests.ts";
 import * as provider from "./provider.ts";
 import type { Stage4ProviderClass } from "./provider.ts";
 import { writeRefusalAudit, sanitiseAction } from "./audit.ts";
@@ -85,16 +85,18 @@ const ANON_AUDIT_MAX_PER_MINUTE = 30;
 
 let anonAuditSuppressedSinceCounter = 0;
 
-function refusal(
+async function refusal(
   deps: Stage4Deps,
   status: number,
   reason: Stage4Reason,
   requestId: string,
   headers: Record<string, string>,
   audit: { action: string; userId: string | null; accountId: string | null; operationId: string | null; providerClass?: string | null; operationVerified?: boolean },
-): Response {
-  // Fire and forget the audit; never let it change the response.
-  void writeRefusalAudit(deps.admin, {
+): Promise<Response> {
+  // The audit write belongs to the request (awaited, so it cannot outlive an
+  // edge worker that has already answered), and it never changes the answer:
+  // writeRefusalAudit swallows and logs its own failures.
+  await writeRefusalAudit(deps.admin, {
     action: audit.action,
     reason,
     providerClass: audit.providerClass ?? null,
@@ -120,7 +122,7 @@ function refusal(
       const counter = await stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60);
       if (!counter.allowed) return;
       try {
-        await deps.admin.from("system_logs").insert({
+        const inserted = await deps.admin.from("system_logs").insert({
           level: "warn",
           category: "edge",
           source: "comment-manager",
@@ -134,8 +136,12 @@ function refusal(
             suppressed: suppressed,
           },
         });
+        if (inserted && inserted.error) {
+          console.warn("comment-manager stage4 audit counter insert failed: cause=insert_error");
+        }
       } catch {
         // A failed counter insert must not change the response either.
+        console.warn("comment-manager stage4 audit counter insert failed: cause=exception");
       }
     },
   });
@@ -163,15 +169,29 @@ interface AccountRow {
   account_metadata: unknown;
 }
 
-async function readAccount(admin: any, accountId: string, userId: string): Promise<AccountRow | null> {
-  const { data, error } = await admin
-    .from("social_accounts")
-    .select("id,user_id,platform,platform_user_id,auth_provider,is_active,needs_reauth,binding_generation,access_token,refresh_token,token_expires_at,account_metadata")
-    .eq("id", accountId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (error || !data) return null;
-  return data as AccountRow;
+/**
+ * The owner-scoped account read. "The read failed" and "there is no such row"
+ * are different answers: the first is temporary (503 upstream) and must never
+ * be reported as not_found, which tells a browser that a pending operation's
+ * receipt is gone for good.
+ */
+async function readAccount(
+  admin: any,
+  accountId: string,
+  userId: string,
+): Promise<{ kind: "found"; account: AccountRow } | { kind: "absent" } | { kind: "failed" }> {
+  try {
+    const { data, error } = await admin
+      .from("social_accounts")
+      .select("id,user_id,platform,platform_user_id,auth_provider,is_active,needs_reauth,binding_generation,access_token,refresh_token,token_expires_at,account_metadata")
+      .eq("id", accountId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error) return { kind: "failed" };
+    return data ? { kind: "found", account: data as AccountRow } : { kind: "absent" };
+  } catch {
+    return { kind: "failed" };
+  }
 }
 
 // ---- token preparation (shared helper) ------------------------------------
@@ -208,14 +228,19 @@ async function prepareToken(
 
 // ---- digest keys ----------------------------------------------------------
 
-async function loadDigestKeys(admin: any): Promise<DigestKeys> {
-  const { data, error } = await admin.rpc("youtube_comment_digest_keys");
-  if (error || !data) throw new Error("digest_keys_unavailable");
-  const keys = (data.keys ?? []).map((k: { version: number; key: string }) => ({
-    version: k.version,
-    key: k.key,
-  }));
-  return { activeVersion: data.active_version, keys };
+/** The SQL-held digest keys, or null when they cannot be read (a temporary 503, never a throw). */
+async function loadDigestKeys(admin: any): Promise<DigestKeys | null> {
+  try {
+    const { data, error } = await admin.rpc("youtube_comment_digest_keys");
+    if (error || !data) return null;
+    const keys = (data.keys ?? []).map((k: { version: number; key: string }) => ({
+      version: k.version,
+      key: k.key,
+    }));
+    return { activeVersion: data.active_version, keys };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -333,6 +358,11 @@ async function settleAndRespond(
     result_thread_id: null, result_comment_id: result.resultCommentId,
   };
   return ok({ ok: true, request_id: ctx.requestId, data: payload }, ctx.headers);
+}
+
+/** A provider id is evidence only when it is a non-empty string. */
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
 type WriteTargetCheck =
@@ -639,12 +669,18 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
 
   // Account read (verified). A miss is not_found, identical for a foreign, an
   // absent and a re-bound row; the audit never carries the unverified id.
-  const account = await readAccount(deps.admin, accountId, userId);
-  if (!account) {
-    return refusal(deps, 404, "not_found", requestId, headers, {
-      action, userId, accountId: null, operationId: (input as { operation_id?: string }).operation_id ?? null,
+  const accountRead = await readAccount(deps.admin, accountId, userId);
+  if (accountRead.kind === "failed") {
+    return refusal(deps, 503, "upstream", requestId, headers, {
+      action, userId, accountId: null, operationId: null,
     });
   }
+  if (accountRead.kind === "absent") {
+    return refusal(deps, 404, "not_found", requestId, headers, {
+      action, userId, accountId: null, operationId: null,
+    });
+  }
+  const account = accountRead.account;
   if (account.platform !== "youtube") {
     return refusal(deps, 404, "not_found", requestId, headers, {
       action, userId, accountId, operationId: (input as { operation_id?: string }).operation_id ?? null,
@@ -976,7 +1012,10 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       return refusal(deps, 403, "video_not_owned", requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
     const digestKeys = await loadDigestKeys(deps.admin);
-    const intent = await computeIntentDigest(digestKeys, {
+    if (!digestKeys) {
+      return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
+    const intent = await computeIntentDigests(digestKeys, {
       action: "create_thread",
       accountId: account.id,
       bindingGeneration: account.binding_generation,
@@ -1003,6 +1042,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       p_action: "create_thread",
       p_targets: { video_id: inp.video_id },
       p_intent_digest: intent.digest,
+      p_intent_digests: intent.digests,
       p_logical_digests: logical,
       p_capability: "write",
       p_request_id: requestId,
@@ -1047,10 +1087,12 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       // the thread id, the top-level comment id (its own field, never the
       // thread id standing in for it), and the request's video and channel.
       const body = write.body as any;
-      const threadId = body?.id ? String(body.id) : null;
-      const topId = body?.snippet?.topLevelComment?.id ? String(body.snippet.topLevelComment.id) : null;
-      const videoIdOk = !!body?.snippet?.videoId && String(body.snippet.videoId) === inp.video_id;
-      const channelOk = !!body?.snippet?.channelId && String(body.snippet.channelId) === account.platform_user_id;
+      // Evidence is a non-empty STRING id; a number, object or array is
+      // malformed and is never coerced into one.
+      const threadId = nonEmptyString(body?.id);
+      const topId = nonEmptyString(body?.snippet?.topLevelComment?.id);
+      const videoIdOk = body?.snippet?.videoId === inp.video_id;
+      const channelOk = body?.snippet?.channelId === account.platform_user_id;
       if (threadId && topId && videoIdOk && channelOk) {
         outcome = "confirmed";
         resultThreadId = threadId;
@@ -1094,7 +1136,10 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     }
 
     const digestKeys = await loadDigestKeys(deps.admin);
-    const intent = await computeIntentDigest(digestKeys, {
+    if (!digestKeys) {
+      return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
+    const intent = await computeIntentDigests(digestKeys, {
       action: "reply",
       accountId: account.id,
       bindingGeneration: account.binding_generation,
@@ -1120,6 +1165,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       p_action: "reply",
       p_targets: { video_id: h.vi, parent_comment_id: canonicalParent },
       p_intent_digest: intent.digest,
+      p_intent_digests: intent.digests,
       p_logical_digests: logical,
       p_capability: "write",
       p_request_id: requestId,
@@ -1156,10 +1202,10 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     let resultCommentId: string | null = null;
     if (write.kind === "success") {
       const body = write.body as any;
-      const id = body?.id ? String(body.id) : null;
+      const id = nonEmptyString(body?.id);
       // Spec 9.2: reply evidence is the comment id AND a parentId equal to the
       // canonical parent; a missing parentId is incomplete, not a pass.
-      const parentOk = !!body?.snippet?.parentId && String(body.snippet.parentId) === canonicalParent;
+      const parentOk = body?.snippet?.parentId === canonicalParent;
       if (id && parentOk) {
         outcome = "confirmed";
         resultCommentId = id;
@@ -1211,7 +1257,10 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
 
     // Claim (edit has no logical fence).
     const digestKeys = await loadDigestKeys(deps.admin);
-    const intent = await computeIntentDigest(digestKeys, {
+    if (!digestKeys) {
+      return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
+    const intent = await computeIntentDigests(digestKeys, {
       action: "edit",
       accountId: account.id,
       bindingGeneration: account.binding_generation,
@@ -1230,6 +1279,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       p_action: "edit",
       p_targets: { video_id: h.vi, comment_id: h.co },
       p_intent_digest: intent.digest,
+      p_intent_digests: intent.digests,
       p_logical_digests: {},
       p_capability: "write",
       p_request_id: requestId,
@@ -1261,7 +1311,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     let reason2: string | null = null;
     if (write.kind === "success") {
       const body = write.body as any;
-      if (body?.id && String(body.id) === h.co) {
+      if (nonEmptyString(body?.id) === h.co) {
         outcome = "confirmed";
       }
     } else if (write.kind === "refused") {
@@ -1379,7 +1429,10 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     }
 
     const digestKeys = await loadDigestKeys(deps.admin);
-    const intent = await computeIntentDigest(digestKeys, {
+    if (!digestKeys) {
+      return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
+    const intent = await computeIntentDigests(digestKeys, {
       action: "moderate",
       accountId: account.id,
       bindingGeneration: account.binding_generation,
@@ -1405,6 +1458,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
         author_channel_id: citem?.snippet?.authorChannelId?.value ? String(citem.snippet.authorChannelId.value) : null,
       },
       p_intent_digest: intent.digest,
+      p_intent_digests: intent.digests,
       p_logical_digests: {},
       p_capability: banAuthor ? "ban" : "write",
       p_request_id: requestId,

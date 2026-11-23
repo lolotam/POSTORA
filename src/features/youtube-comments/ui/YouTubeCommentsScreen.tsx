@@ -101,14 +101,13 @@ export function YouTubeCommentsScreen(props: YouTubeCommentsScreenProps): JSX.El
     accountId: props.accountId,
     gateway: props.gateway ?? defaultYouTubeCommentsGateway,
   });
-  const [notice, setNotice] = useState<string | null>(null);
-
-  // A notice belongs to one user, account and video: switching any of them
-  // drops it, so a result is never shown against another channel's comments.
+  // A notice belongs to the user, account and video that produced it. It is
+  // stored WITH its context and shown only while that context is current, so
+  // a late response from the previous video (or account) that lands after a
+  // switch is simply never displayed.
+  const [notice, setNotice] = useState<{ text: string; context: string } | null>(null);
   const contextKey = `${props.userId}:${props.accountId}:${stage4.effectiveVideoId ?? "-"}`;
-  useEffect(() => {
-    setNotice(null);
-  }, [contextKey]);
+  const noticeForThisContext = (text: string | null) => setNotice(text === null ? null : { text, context: contextKey });
 
   if (stage4.capabilitiesQuery.isLoading) {
     return (
@@ -137,15 +136,15 @@ export function YouTubeCommentsScreen(props: YouTubeCommentsScreenProps): JSX.El
 
   return (
     <div className="space-y-4">
-      {notice && (
-        <p role="status" className="text-xs text-muted-foreground" data-testid="yt-stage4-notice">{notice}</p>
+      {notice && notice.context === contextKey && (
+        <p role="status" className="text-xs text-muted-foreground" data-testid="yt-stage4-notice">{notice.text}</p>
       )}
       <RecoveredBanners stage4={stage4} />
       <VideoPicker stage4={stage4} />
       <ListTabs stage4={stage4} />
       {/* Composer drafts, open editors and reply panels live below this key,
           so they are discarded with the user, account or video they belong to. */}
-      <ThreadList key={contextKey} stage4={stage4} onNotice={setNotice} />
+      <ThreadList key={contextKey} stage4={stage4} onNotice={noticeForThisContext} />
     </div>
   );
 }
