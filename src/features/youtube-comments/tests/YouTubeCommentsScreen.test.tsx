@@ -511,6 +511,39 @@ describe("YouTubeCommentsScreen", () => {
     expect(screen.getByRole("checkbox", { name: "Also ban this author" })).toBeInTheDocument();
   });
 
+  it("a list reload that lands while replies are open keeps them open (handles are re-sealed on every load)", async () => {
+    const { gateway } = makeGateway({
+      replies: [row({ kind: "reply", comment_id: "c-reply-1", handle: "hdl-reply-1", canonical_parent_id: "c-stable", text: "reply page one" })],
+    });
+    let loads = 0;
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      loads += 1;
+      return {
+        account_id: ACCOUNT, channel_id: "UC-x", video_id: "vid-1", list: "published" as const,
+        // The same comment on every load, under a NEW sealed handle each time.
+        items: [row({ comment_id: "c-stable", handle: `hdl-load-${loads}`, text: "stable thread" })],
+        next_cursor: null, inconsistent_count: 0,
+      };
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("stable thread");
+    fireEvent.click(screen.getByRole("button", { name: "Load replies" }));
+    expect(await screen.findByText("reply page one")).toBeInTheDocument();
+    // A reload (what a confirmed write triggers) completes: the owner sees the replies they opened, not a collapsed thread.
+    const before = loads;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
+    await waitFor(() => expect(loads).toBeGreaterThan(before));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    expect(screen.getByTestId("yt-stage4-replies")).toBeInTheDocument();
+    expect(await screen.findByText("reply page one")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load replies" })).not.toBeInTheDocument();
+  });
+
   it("each thread in the Held list says so when none of ITS rows is held", async () => {
     renderScreen({
       threads: [

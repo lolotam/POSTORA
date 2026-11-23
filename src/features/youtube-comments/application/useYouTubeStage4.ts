@@ -210,14 +210,18 @@ export function useYouTubeStage4(params: {
   // its own paged list through useStage4Replies below, so a failure in one
   // thread's replies never touches another's rows.
 
+  // A parent is identified by its comment id, which is stable. Its sealed
+  // handle is issued again, new, on every list load, so a handle-keyed entry
+  // would silently close a thread the owner opened whenever a reload (every
+  // confirmed write triggers one) lands.
   const [replyTargetsOpen, setReplyTargetsOpen] = useState<Record<string, boolean>>({});
-  const openReplies = useCallback((parentHandle: string) => {
-    setReplyTargetsOpen((prev) => ({ ...prev, [parentHandle]: true }));
+  const openReplies = useCallback((parentCommentId: string) => {
+    setReplyTargetsOpen((prev) => ({ ...prev, [parentCommentId]: true }));
   }, []);
-  const closeReplies = useCallback((parentHandle: string) => {
+  const closeReplies = useCallback((parentCommentId: string) => {
     setReplyTargetsOpen((prev) => {
       const next = { ...prev };
-      delete next[parentHandle];
+      delete next[parentCommentId];
       return next;
     });
   }, []);

@@ -589,7 +589,7 @@ function ReplyBlock(params: {
 }): JSX.Element | null {
   const { stage4, parent, videoId, onNotice, inlineReplies = [] } = params;
   const { t } = useTranslation("automation");
-  const open = stage4.replyTargetsOpen[parent.handle] === true;
+  const open = stage4.replyTargetsOpen[parent.comment_id] === true;
   const replies = useStage4Replies({
     userId: stage4.userId,
     accountId: stage4.accountId,
@@ -621,7 +621,7 @@ function ReplyBlock(params: {
     return (
       <>
         {heldHiddenNotice}
-        <Button size="sm" variant="ghost" onClick={() => stage4.openReplies(parent.handle)}>
+        <Button size="sm" variant="ghost" onClick={() => stage4.openReplies(parent.comment_id)}>
           {t("youtubeStage4.replies.load", "Load replies")}
         </Button>
       </>
@@ -632,7 +632,7 @@ function ReplyBlock(params: {
       {heldHiddenNotice}
       <div className="flex items-center gap-2">
         <p className="text-xs font-medium text-muted-foreground">{t("youtubeStage4.replies.title", "Replies")}</p>
-        <Button size="sm" variant="ghost" onClick={() => stage4.closeReplies(parent.handle)}>
+        <Button size="sm" variant="ghost" onClick={() => stage4.closeReplies(parent.comment_id)}>
           {t("youtubeStage4.replies.hide", "Hide")}
         </Button>
       </div>

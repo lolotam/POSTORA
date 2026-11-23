@@ -281,12 +281,54 @@ test.describe("Stage 4 fences across tabs and reloads (en)", () => {
       await expect(line).toBeVisible({ timeout: 20_000 });
       lines.push(await line.innerText());
     }
-    // Exactly one tab was accepted; the other got the fence's reason (an
-    // unresolved twin, or one that was just posted).
-    expect(lines.filter((line) => /Accepted by YouTube/.test(line))).toHaveLength(1);
-    expect(lines.filter((line) => /may already be on its way|was just posted|already recorded/.test(line))).toHaveLength(1);
+    // The two tabs share one browser storage, so which answer the losing tab
+    // shows depends on timing: the server fence's reason (an unresolved twin,
+    // or one that was just posted), or the winning tab's own operation, which
+    // it found in the shared storage before sending anything: shown as
+    // accepted once it settled, or as still being checked while it is in
+    // flight. Every one of those is a correct outcome. What must hold is that
+    // each tab reports a known outcome, at least one reports success, and the
+    // provider was written to exactly once.
+    // The sources are joined into one pattern below, so no flag may be relied
+    // on: "Posted" and "Accepted by YouTube" are spelled out as they appear.
+    const success = /Posted|Accepted by YouTube|accepted by YouTube/;
+    const fenced = /may already be on its way|was just posted|already recorded/;
+    const inFlight = /still being checked/;
+    for (const line of lines) {
+      expect(line).toMatch(new RegExp(`${success.source}|${fenced.source}|${inFlight.source}`));
+    }
+    expect(lines.filter((line) => success.test(line)).length).toBeGreaterThanOrEqual(1);
     expect((await providerState()).writes).toBe(1);
     await context.close();
+  });
+
+  test("two browsers with separate storage send the same text at the same time: the server fence leaves one write", async ({ browser }) => {
+    // Separate contexts share nothing in the browser, so neither tab can find
+    // the other's operation: the only thing between them and a second public
+    // comment is the server's logical fence, and the outcome is deterministic.
+    const pages: Page[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      const page = await (await browser.newContext()).newPage();
+      await signIn(page, "en");
+      await openInbox(page);
+      pages.push(page);
+    }
+    const racing = uniqueText("fenced comment");
+    for (const tab of pages) {
+      await tab.getByTestId("yt-stage4-composer").locator("textarea").fill(racing);
+    }
+    await Promise.all(pages.map((tab) =>
+      tab.getByTestId("yt-stage4-composer").getByRole("button", { name: /^Comment$/ }).click()));
+    const lines: string[] = [];
+    for (const tab of pages) {
+      const line = tab.getByTestId("yt-stage4-composer").locator("[role=status], [role=alert]").first();
+      await expect(line).toBeVisible({ timeout: 20_000 });
+      lines.push(await line.innerText());
+    }
+    expect(lines.filter((line) => /Accepted by YouTube/.test(line))).toHaveLength(1);
+    expect(lines.filter((line) => /may already be on its way|was just posted/.test(line))).toHaveLength(1);
+    expect((await providerState()).writes).toBe(1);
+    await Promise.all(pages.map((tab) => tab.context().close()));
   });
 
   test("a lost response after settlement recovers by status with no replay", async ({ page }) => {
