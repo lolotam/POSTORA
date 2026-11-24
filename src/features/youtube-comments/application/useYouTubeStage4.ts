@@ -307,7 +307,9 @@ export function useYouTubeStage4(params: {
   // quota); a status check must still know what the operation was. Removed
   // when a surface acknowledges the outcome, and when the account is discarded.
   const liveOperations = useRef(new Map<string, PendingStage4Operation>());
-  const submitsInFlight = useRef(new Set<string>());
+  // One entry per target while a submit for it runs: the operation that submit
+  // is waiting on (an earlier one it is recovering, then its own).
+  const submitsInFlight = useRef(new Map<string, string>());
   const aliveRef = useRef(true);
   const contextRef = useRef(`${userId}:${accountId}`);
   contextRef.current = `${userId}:${accountId}`;
@@ -347,21 +349,8 @@ export function useYouTubeStage4(params: {
       };
       // One submit per target at a time: a second click while the first is
       // still recovering or sending is answered as pending and sends nothing.
-      if (submitsInFlight.current.has(guardKey)) {
-        // The `pending` variant needs an operationId string, so name the
-        // operation this click would have waited for instead of inventing one.
-        const inFlightOperationId = pendingForTarget()[0]?.operationId
-          ?? [...liveOperations.current.values()].find((op) =>
-            op.accountId === accountId
-            && op.videoId === input.videoId
-            && op.action === action
-            && op.targetCommentId === targetCommentId)?.operationId;
-        // Unreachable: the key is added before the first await, and the new
-        // identity is stored before the next one. No id is fabricated here.
-        if (!inFlightOperationId) throw new Error("no operation identity for an in-flight submit");
-        return { kind: "pending", operationId: inFlightOperationId };
-      }
-      submitsInFlight.current.add(guardKey);
+      const inFlightOperationId = submitsInFlight.current.get(guardKey);
+      if (inFlightOperationId !== undefined) return { kind: "pending", operationId: inFlightOperationId };
       try {
         // An earlier submit for this target blocks a new one only while it may
         // still land (claimed or dispatched) or cannot be read right now. An
@@ -370,6 +359,7 @@ export function useYouTubeStage4(params: {
         // unresolved), so a different text, a deliberate new edit or a new
         // reject is a new intent and gets its own key (spec 9.1 and 9.3).
         for (const earlier of pendingForTarget()) {
+          submitsInFlight.current.set(guardKey, earlier.operationId);
           const recovery = await recoverOperation(gateway, accountId, earlier);
           if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
           if (recovery.settled && recovery.status) {
@@ -402,6 +392,7 @@ export function useYouTubeStage4(params: {
         };
         liveOperations.current.set(operationId, identity);
         savePendingOperation(userId, identity);
+        submitsInFlight.current.set(guardKey, operationId);
 
         let receipt: Stage4ReceiptPayload;
         try {
