@@ -25,7 +25,7 @@ The debater should attack these first.
 - **A3. No handler change in this PR depends on the new migration, and no migration change needs a handler change.** The handler already sends `p_intent_digests` at all four claim sites (`handler.ts:1248`, `:1371`, `:1485`, `:1665`). The two halves can be rolled back independently.
 - **A4. Key versions stay deletable, and become monotonic.** A version number, once issued, is never issued again, and a new version must be above every version ever issued. The alternative (forbid `DELETE` on the key table) is simpler but makes every key permanent; the owner's wording for item 14 ("in place of the delete guard") implies deletion stays. This is a technical choice for the debate, not an owner question.
 - **A5. `digest_key_version` cannot carry a foreign key**, because edit and moderate receipts store `0` there (`migration:1455`). The foreign key goes on `intent_key_version` only, and a CHECK ties the two columns so the foreign key covers both.
-- **A6. The status read takes `FOR SHARE` on the account row, account first and receipt second**, the order the claim and the mark already use. This makes a rebind wait for an in-flight status read. The alternative (no lock; re-read the account after the winning receipt is read back and apply the binding predicate again) narrows the window without closing it.
+- **A6. The status read takes `FOR SHARE` on the account row, account first and receipt second**, the order the claim and the mark already use. This makes a rebind wait for an in-flight status read. The alternative (no lock; re-read the account after the winning receipt is read back and apply the binding predicate again) narrows the window without closing it. **This is the one SQL change reachable while Stage 4 is dark:** the status read is not behind the rollout, and the recovery banner calls it for any stored operation. The lock is therefore taken only after a plain read has found the receipt, so a call for an unknown operation locks nothing, and with no receipts in production (A8) no call takes it before go-live.
 - **A7. Reply drafts are kept in memory only.** The spec says comment text is never stored in the browser, so a reload still loses them, as today.
 - **A8. Production has no Stage 4 receipts** (the rollout key is absent, so no claim can pass the rollout check). The migration verifies this instead of trusting it: it refuses to add the constraints if a row would violate them.
 - **A9. The window between a capability answer and a provider read cannot be zero.** SQL and an HTTP call share no transaction. "At the send boundary" below means: the capability and binding answers are the last awaited work before the provider request starts, they are asked again after it returns, and the observation is discarded if either changed.
@@ -82,7 +82,7 @@ Acceptance: a short "baseline and facts" section in the PR body.
 
 ### T1. The anonymous refusal gate (B1), live
 
-Files: `supabase/functions/comment-manager/stage4/handler.ts`, `stage4/audit.ts`, `stage4/rateLimit.ts`, `supabase/functions/comment-manager/index.ts`, `stage4/handler.test.ts`.
+Files: `supabase/functions/comment-manager/stage4/handler.ts`, `stage4/audit.ts`, `stage4/rateLimit.ts`, `supabase/functions/comment-manager/index.ts`, `stage4/handler.test.ts`, and any other place that builds a `Stage4Deps` (a search at `93acd4be` finds `index.ts:205` and the test files only; the implementer repeats the search).
 
 Design:
 
@@ -112,6 +112,8 @@ Design:
 
 Deploy skew (A11): an old edge function answers `503 upstream`, which the new frontend reads as `legacy`; the new edge function answers `settings_unavailable`, which the old frontend also reads as `legacy` (its test is `code === "upstream"`). Both orders show the baseline inbox, never a wrong admission.
 
+Known consequence, accepted: after go-live, a transport failure on the very first admission read mounts the baseline inbox for a channel that would have been admitted, and its legacy read runs (`CommentManagerPanel.tsx:81-85` explains why that read is otherwise held back). This is the behaviour before PR #477 and what the reviewers asked to restore; a later successful admission read replaces the inbox with the Stage 4 screen.
+
 Tests first:
 
 1. Vitest, with the **production gateway class** and a mocked `supabase.functions.invoke`: a transport error with no response body gives `legacy` and the baseline inbox loads; an HTTP error whose body carries `settings_unavailable` gives the retry card; an HTTP error whose body carries `upstream` gives `legacy`. This replaces the plain-`Error` case at `CommentManagerPanelAdmission.test.tsx:73`.
@@ -125,6 +127,8 @@ Acceptance: with the rollout key absent, a first-load network failure shows the 
 Files: new `supabase/migrations/20261124120000_youtube_stage4_key_integrity.sql`; new `supabase/tests/youtube_stage4_key_integrity.sql`; `supabase/tests/youtube_comment_operations.sql`; `scripts/db-harness.sh` (the `SUITES` list); new `docs/runbooks/youtube-stage4-pr2-migration.md` and `docs/runbooks/sql/20261124120000_youtube_stage4_key_integrity_rollback.sql`. The rollback script must **not** live under `supabase/migrations/`: the harness applies every file there.
 
 `20261122130000` is not edited (§23). The new file is one transaction, sets a local `lock_timeout`, and can be applied twice without error.
+
+No generated-types change is needed (§23): the Stage 4 tables are private and absent from `src/integrations/supabase/types.ts`, and the new table follows them.
 
 Not touched, and asserted unchanged by the self-check: the role `youtube_stage4_refresh`, the three token store functions and their owners, `app_settings`, the rollout functions, `youtube_comment_op_mark_dispatched`, `youtube_comment_op_settle`. No row is inserted for the rollout key.
 
@@ -143,7 +147,7 @@ Not touched, and asserted unchanged by the self-check: the role `youtube_stage4_
 
 **K3, the status read.**
 
-- `youtube_comment_op_status` reads the account row first, owner-scoped, `FOR SHARE`, then the receipt, then applies the unchanged binding predicate, the two conversions and the read-back. The account lock is held to the end of the call, so the receipt returned after a lost conversion belongs to a binding that is still current.
+- `youtube_comment_op_status` first does a plain, unlocked read that only answers whether the receipt exists; absent is `not_found` with no lock taken (A6). It then reads the account row, owner-scoped, `FOR SHARE`, reads the receipt again, and applies the unchanged binding predicate, the two conversions and the read-back. Nothing from the first read is used after the lock. The account lock is held to the end of the call, so the receipt returned after a lost conversion belongs to a binding that is still current.
 - Lock order across the receipt functions stays account, then receipt. `settle` takes the receipt only. No cycle exists: a rebind or an account delete waits on the account row and holds no receipt lock while it waits.
 
 **K4, the digest map.**
@@ -153,14 +157,14 @@ Not touched, and asserted unchanged by the self-check: the role `youtube_stage4_
 - New receipt: the stored digest is `p_intent_digests ->> v_active`; missing or blank is `upstream`, as today.
 - `p_intent_digest` stays in the signature and decides nothing, like `p_capability` (`migration:1246-1248`). The function comment says so.
 
-**Self-check**, a final `DO` block that raises on any miss: the foreign key exists and is validated; the CHECK exists; the trigger fires on `INSERT`; the watermark equals the highest issued version; the three replaced functions are `SECURITY DEFINER` with `search_path = public, pg_temp`; `EXECUTE` on the claim and the status is granted to `service_role` only; the new table has RLS on and no grant to a client role; the three token store functions are still owned by `youtube_stage4_refresh`.
+**Self-check**, a final `DO` block that raises on any miss: the foreign key exists and is validated; the CHECK exists; the trigger fires on `INSERT`; the watermark is at or above the highest version in the key table and in the receipts (not equal: after a delete it is legitimately higher, and the second apply must pass); the three replaced functions are `SECURITY DEFINER` with `search_path = public, pg_temp`; `EXECUTE` on the claim and the status is granted to `service_role` only; the new table has RLS on and no grant to a client role; the three token store functions are still owned by `youtube_stage4_refresh`.
 
-**Tests first.** The new suite `youtube_stage4_key_integrity.sql` is registered in `SUITES` after `youtube_comment_operations.sql`. It follows that suite's conventions: its own fixture id prefix, a self-healing clean-up at the top, real second and third sessions over `dblink` with a fixed interleaving, and assertions on state read after commit. Each case below must fail when the suite is run against `20261122130000` alone, and the PR body shows that run.
+**Tests first.** The new suite `youtube_stage4_key_integrity.sql` is registered in `SUITES` after `youtube_comment_operations.sql`. It follows that suite's conventions: its own fixture id prefix, a self-healing clean-up at the top, real second and third sessions over `dblink` with a fixed interleaving, and assertions on state read after commit. Every case that asserts new behaviour must fail when the suite is run against `20261122130000` alone, and the PR body shows that run. Cases marked *control* pass on both and prove the fix did not move existing behaviour.
 
-1. **K1.** Session B opens `REPEATABLE READ` and takes its snapshot. Session A claims under version N and commits. B deletes version N: the delete fails, the key row remains and the receipt still resolves. A control in `READ COMMITTED` fails the same way. A direct insert of a receipt with an unknown `intent_key_version` fails. A direct insert breaking the CHECK fails, one case per action family.
+1. **K1.** Session B opens `REPEATABLE READ` and takes its snapshot. Session A claims under version N and commits. B deletes version N: the delete fails, the key row remains and the receipt still resolves. *Control:* the same delete in `READ COMMITTED` is refused before and after. A direct insert of a receipt with an unknown `intent_key_version` fails. A direct insert breaking the CHECK fails, one case per action family.
 2. **K2.** Delete an unreferenced version N, insert N again: refused. Insert N+1: allowed. Insert an unused number below the watermark: refused. An insert rolled back does not move the watermark. Two sessions inserting the same new version: exactly one succeeds.
-3. **K3.** A receipt dispatched more than 90 seconds ago. Session A settles `confirmed` and does not commit. Session B calls status and blocks on the receipt. Session C starts a rebind: **it is blocked while B is in flight** (asserted from `pg_locks`, the way R17 orders the mark and a revocation). A commits, B answers `confirmed`, C completes, and a status read after C answers `not_found` with no result ids. A control without a rebind still answers `confirmed` (R18 stays green). An account delete in place of the rebind behaves the same.
-4. **K4.** `NULL` map: `invalid_request`, no receipt row. Non-object map: the same. A map without the active version: `upstream`, no row. A retry whose map lacks the receipt's version: `upstream`, state unchanged. A retry with the same intent after a rotation: still `already_recorded` (R14). A different intent under the receipt's version: still `conflict`.
+3. **K3.** A receipt dispatched more than 90 seconds ago. Session A settles `confirmed` and does not commit. Session B calls status and blocks on the receipt. Session C starts a rebind: **it is blocked while B is in flight** (asserted by polling `pg_stat_activity` for `wait_event_type = 'Lock'` on C's backend pid, the technique R17 uses at `youtube_comment_operations.sql:2136-2147`). A commits, B answers `confirmed`, C completes, and a status read after C answers `not_found` with no result ids. *Control:* without a rebind the answer is `confirmed` (R18 stays green). *Control:* a status read for an operation id that has no receipt answers `not_found` and leaves no lock on the account row. An account delete in place of the rebind behaves the same.
+4. **K4.** `NULL` map: `invalid_request`, no receipt row. Non-object map: the same. A map without the active version: `upstream`, no row. A retry whose map lacks the receipt's version: `upstream`, state unchanged. *Controls:* a retry with the same intent after a rotation is still `already_recorded` (R14); a different intent under the receipt's version is still `conflict`.
 5. **Idempotency.** The harness run applies the migration, then applies it a second time by hand, then runs both suites.
 
 **The existing suite.** `youtube_comment_operations.sql` has 69 claim calls and none passes `p_intent_digests`; it also deletes and re-inserts key versions 2 and 7 (`:810`, `:1832`, `:1909`, `:1967`, `:2012`, `:2055`, `:2350`). Both stop working by design. The changes allowed there are:
@@ -270,10 +274,11 @@ A merge to `main` syncs the edge functions to production within about two minute
 3. **Database snapshot** on the Contabo host, the same way as `postora-pre-stage4-20261124T021823Z.dump`: path, byte size and SHA-256 recorded in #470.
 4. **Owner approval by card.** The card names the migration file, its SHA-256, the snapshot receipt and the pre-flight answers.
 5. **Apply the migration to production**, read from the PR head with `git show <sha>:<path>`, with the role and command recorded for `20261122130000`, `ON_ERROR_STOP` on. It is one transaction; the self-check inside it aborts the whole apply on any miss.
-6. **Post-apply verification, read-only:** the foreign key is validated; the CHECK exists; the trigger fires on `INSERT`; the watermark is 1; `EXECUTE` on the claim and the status is `service_role` only; the three store functions keep their owner; the rollout key is still absent; each of the six channels still answers `rollout_missing`; a claim called with a `NULL` map inside a transaction that is rolled back answers `invalid_request`.
+6. **Post-apply verification, read-only:** the foreign key is validated; the CHECK exists; the trigger fires on `INSERT`; the watermark is 1 (production has only version 1); `EXECUTE` on the claim and the status is `service_role` only; the three store functions keep their owner; the rollout key is still absent; each of the six channels still answers `rollout_missing`; a claim called with a `NULL` map inside a transaction that is rolled back answers `invalid_request`.
 7. **Merge.** Between steps 5 and 7 the edge code of `93acd4be` runs on the new SQL; A2 and A3 are why that is safe. Keep the gap short.
 8. **After the merge:** the edge sync verified by SHA-256 per changed file (`docs/runbooks/deploy-edge-function.md`); the frontend deploy finished; the baseline YouTube inbox loads for a native channel; an anonymous refusal still answers `401` and writes at most its audit row.
-9. **Stage 4 stays dark.** Nothing in this release writes the rollout key. Switching a channel on remains a separate owner decision.
+9. **Staging.** The Heavy rule asks for a staging deploy alone right after the merge. No Postora staging environment is documented in the repository, and PR #471 was released straight to production. This plan assumes the same: the harness database and the three journey runs are the pre-production proof, and step 8 is the post-merge check. See §9.
+10. **Stage 4 stays dark.** Nothing in this release writes the rollout key. Switching a channel on remains a separate owner decision.
 
 ## 8. Rollback
 
@@ -285,15 +290,18 @@ The three parts roll back independently (A3).
   2. recreate the trigger as `BEFORE UPDATE OR DELETE`;
   3. drop the foreign key, the CHECK and the index;
   4. drop the watermark table.
-  The script loses no data: receipts and keys are untouched, and the watermark is derivable. It is rehearsed on the harness database in T3.
+  The script changes no receipt and no key. It does drop the record of deleted version numbers: a later re-apply seeds the watermark from the versions that still exist, which is only a lower bound. With one version in production and no deletion so far, nothing is lost today; the runbook says to note the watermark value before a rollback. It is rehearsed on the harness database in T3.
 - **Snapshot restore** is the last resort and is not expected: the migration changes no existing row.
 - **Not part of this rollback:** the ownership of the token store functions. #470 records that they were owned by `supabase_admin` before `20261122130000`; this migration does not touch them.
 - **After go-live** the same script stays safe: rolling back the foreign key only returns the delete guard to its trigger form.
 
 ## 9. Open questions
 
-None blocks implementation. For the owner, one item to know rather than to decide:
+None blocks implementation.
 
-- The release needs one card approval for the production migration (§7 step 4), as the tier rule already requires.
+For the owner:
 
-For the debate, the choices most worth challenging: A4 (monotonic versions against forbidding deletes), A6 (a share lock on the account row inside the status read against a lock-free re-check), the `conflict` to `upstream` change for a retry whose map lacks the receipt's version (T3, K4), and the stricter action-tied CHECK (T3, K1), which fails the pre-check if any fixture or row was written outside the claim.
+- **Staging.** Is there a staging environment this release should go to first? The plan assumes there is none (§7 step 9), as for PR #471. If there is one, steps 2 to 6 run there before production.
+- To know, not to decide: the release needs one card approval for the production migration (§7 step 4), as the tier rule already requires.
+
+For the debate, the choices most worth challenging: A4 (monotonic versions against forbidding deletes), A6 (a share lock on the account row inside the status read against a lock-free re-check), the `conflict` to `upstream` change for a retry whose map lacks the receipt's version (T3, K4), and the stricter action-tied CHECK (T3, K1), which fails the pre-check if any fixture or row was written outside the claim. One more, on evidence: M5's worst case (whether a refresh started from a superseded snapshot can store its result) was not proven in this plan; the implementer settles it in T4 and reports it, and the severity stands at P2 unless that answer is yes.
