@@ -2080,8 +2080,9 @@ $r15$;
 
 -- R15b. The same rotation for create_thread and reply: digests computed under
 -- version 1 only while version 2 is active are a TEMPORARY refusal, nothing is
--- stored, and a caller that sends no intent map is refused as malformed
--- (invalid_request), whatever else is missing.
+-- stored, and a caller with a VALID intent map whose logical digests omit the
+-- active version is refused (invalid_request) by the logical-digest check, not
+-- by the required-map check.
 SELECT set_config('s4.r15b', pg_temp.s4_next_version()::text, false);
 INSERT INTO public.youtube_comment_digest_keys (version, key)
 VALUES (current_setting('s4.r15b')::int, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
@@ -2111,9 +2112,10 @@ BEGIN
 
     r := public.youtube_comment_op_claim(
       v_a, v_acct, 'UC-s4-race', v_gen, v_case.op::uuid, v_case.action, v_case.targets::jsonb,
-      repeat('1', 64), jsonb_build_object('1', 'r15b-logical-v1'), 'write', 'r15b', NULL);
+      repeat('1', 64), jsonb_build_object('1', 'r15b-logical-v1'), 'write', 'r15b',
+      jsonb_build_object(v_ver::text, repeat('1', 64)));
     ASSERT NOT (r ->> 'ok')::boolean AND r ->> 'reason' = 'invalid_request',
-      format('R15b %s: with no intent map the claim is malformed (invalid_request): %s', v_case.action, r);
+      format('R15b %s: a valid intent map without the active logical digest is invalid_request: %s', v_case.action, r);
   END LOOP;
   DELETE FROM public.youtube_comment_digest_keys WHERE version = v_ver;
 END

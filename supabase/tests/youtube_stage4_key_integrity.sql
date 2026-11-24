@@ -617,7 +617,7 @@ BEGIN
   v_pid_c := pg_temp.s4k_pid('s4k_c');
   PERFORM extensions.dblink_send_query('s4k_c', format('DELETE FROM public.social_accounts WHERE id = %L::uuid', v_acct));
   BEGIN
-    PERFORM pg_temp.s4k_wait_blocked(v_pid_c, 'K3.2 the account delete while the settlement is in flight');
+    PERFORM pg_temp.s4k_wait_blocked_by(v_pid_c, v_pid_b, 'K3.2 the account delete while the status read holds the account');
   EXCEPTION WHEN OTHERS THEN
     BEGIN PERFORM extensions.dblink_exec('s4k_a', 'ROLLBACK'); EXCEPTION WHEN OTHERS THEN NULL; END;
     RAISE;
