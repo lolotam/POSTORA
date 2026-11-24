@@ -782,12 +782,14 @@ function Composer(params: {
   onAcknowledge?: (operationId: string) => void;
   /** Called with the text on every change, so a draft store can keep it outside this component. */
   onTextChange?: (text: string) => void;
-  /** Called once a confirmed outcome was shown: what was typed was sent, the draft is no longer one. */
+  /** Called only when a confirmed outcome also empties the composer; newer unsent text keeps its stored draft. */
   onConfirmed?: () => void;
 }): JSX.Element {
   const { t } = useTranslation("automation");
   const inputId = useId();
   const [text, setText] = useState(params.initialText ?? "");
+  const textRef = useRef(text);
+  textRef.current = text;
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [localOutcome, setLocalOutcome] = useState<SubmissionOutcome | null>(null);
@@ -825,13 +827,16 @@ function Composer(params: {
       return;
     }
     if (outcome.kind === "confirmed") {
-      params.onAcknowledge?.(outcome.operationId);
-      params.onConfirmed?.();
       // A check reads the receipt of the operation that WAS sent: the box is
       // emptied only when this is that operation AND the box still holds the
       // text it sent, so newer typing, or a draft that was never sent, is kept.
       const confirmedSent = sent.current?.operationId === outcome.operationId ? sent.current.text : null;
-      setText((current) => (fromCheck && current !== confirmedSent ? current : ""));
+      const keepsNewer = fromCheck && textRef.current !== confirmedSent;
+      params.onAcknowledge?.(outcome.operationId);
+      if (!keepsNewer) {
+        params.onConfirmed?.();
+        setText("");
+      }
       params.onNotice?.(t("youtubeStage4.notice.posted", "Posted. Refresh the thread to see it."));
     } else if (outcome.kind === "refused") {
       params.onAcknowledge?.(outcome.operationId);

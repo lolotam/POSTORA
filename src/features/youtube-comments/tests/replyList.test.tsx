@@ -7,7 +7,7 @@
 //       request carries the NEW handle instead of the one that was refused;
 //   M3  for one comment id the row of the later successful read wins.
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { YouTubeCommentsScreen } from "../ui/YouTubeCommentsScreen";
@@ -177,6 +177,32 @@ describe("T6 B3: drafts outlive the row that shows them", () => {
     await screen.findByText("text r3");
     expect((within(cardOf("text r2")).getByLabelText("Write a reply") as HTMLTextAreaElement).value).toBe("draft for r2");
     expect((within(cardOf("text r3")).getByLabelText("Edit your comment") as HTMLTextAreaElement).value).toBe("edited r3");
+  });
+
+  it("a confirmed check keeps the newer edit draft typed after a lost response", async () => {
+    const gateway = makeGateway({ replyPage: twoPages });
+    (gateway.edit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Failed to fetch"));
+    (gateway.operationStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ ...receipt(), observation: null, observed_text: null });
+    renderScreen(gateway);
+    await openReplyPageTwo();
+    fireEvent.click(within(cardOf("text r3")).getByRole("button", { name: "Edit" }));
+    const editor = () => within(cardOf("text r3")).getByLabelText("Edit your comment") as HTMLTextAreaElement;
+    fireEvent.change(editor(), { target: { value: "sent text" } });
+    await act(async () => {
+      fireEvent.click(within(cardOf("text r3")).getByRole("button", { name: "Save" }));
+    });
+    await waitFor(() => expect(screen.getByText(/did not get YouTube's answer/)).toBeInTheDocument());
+    fireEvent.change(editor(), { target: { value: "newer text" } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+    });
+    // The confirmed receipt reloads the chain and unmounts the page-two row.
+    await waitFor(() => expect(screen.queryByText("text r3")).not.toBeInTheDocument());
+    expect(screen.getByTestId("yt-stage4-draft-waiting")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "More replies" }));
+    await screen.findByText("text r3");
+    expect(editor().value).toBe("newer text");
   });
 
   it("Cancel removes the draft: after a Refresh the editor stays closed", async () => {
