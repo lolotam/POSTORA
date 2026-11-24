@@ -140,18 +140,6 @@ ALTER TABLE public.youtube_comment_digest_key_watermark ENABLE ROW LEVEL SECURIT
 REVOKE ALL ON public.youtube_comment_digest_key_watermark
   FROM PUBLIC, anon, authenticated, service_role;
 
--- Seeded with the greatest of the key versions and of the two version columns
--- of the receipts; a second application can only raise it.
-INSERT INTO public.youtube_comment_digest_key_watermark (singleton, last_version)
-SELECT true,
-       GREATEST(
-         COALESCE((SELECT max(version) FROM public.youtube_comment_digest_keys), 0),
-         COALESCE((SELECT max(intent_key_version) FROM public.youtube_comment_operations), 0),
-         COALESCE((SELECT max(digest_key_version) FROM public.youtube_comment_operations), 0))
-ON CONFLICT (singleton) DO UPDATE
-  SET last_version = GREATEST(
-        public.youtube_comment_digest_key_watermark.last_version, EXCLUDED.last_version);
-
 CREATE OR REPLACE FUNCTION public.youtube_stage4_guard_digest_keys()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -164,6 +152,12 @@ BEGIN
   -- Key maintenance is serialised: two sessions that each remove a different
   -- active key would otherwise each see the other one still standing.
   PERFORM pg_advisory_xact_lock(hashtextextended('youtube_stage4_digest_keys', 0));
+
+  -- Under REPEATABLE READ two retirements serialised by the advisory lock
+  -- could each still see the other key active and leave no active key at all.
+  IF TG_OP IN ('UPDATE', 'DELETE') AND current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'youtube_stage4_guard_digest_keys: digest key maintenance must run under READ COMMITTED (the last-active-key check reads the current state)';
+  END IF;
 
   IF TG_OP = 'INSERT' THEN
     -- A version number, once issued, is never issued again: a new version must
@@ -253,10 +247,26 @@ COMMENT ON FUNCTION public.youtube_stage4_guard_digest_keys() IS
   'retired, a version cannot be renumbered, its key bytes never change, and an '
   'inserted version must be above every version ever issued '
   '(youtube_comment_digest_key_watermark). Maintenance is serialised by an '
-  'advisory lock.';
+  'advisory lock, and UPDATE/DELETE key maintenance is refused outside READ '
+  'COMMITTED.';
 
 DROP TRIGGER IF EXISTS trg_youtube_comment_digest_keys_guard
   ON public.youtube_comment_digest_keys;
+
+-- The key table is locked before the watermark row so a concurrent key insert waits at the table and the seed reads maxima no insert can change.
+LOCK TABLE public.youtube_comment_digest_keys IN SHARE ROW EXCLUSIVE MODE;
+
+-- Seeded with the greatest of the key versions and of the two version columns
+-- of the receipts; a second application can only raise it.
+INSERT INTO public.youtube_comment_digest_key_watermark (singleton, last_version)
+SELECT true,
+       GREATEST(
+         COALESCE((SELECT max(version) FROM public.youtube_comment_digest_keys), 0),
+         COALESCE((SELECT max(intent_key_version) FROM public.youtube_comment_operations), 0),
+         COALESCE((SELECT max(digest_key_version) FROM public.youtube_comment_operations), 0))
+ON CONFLICT (singleton) DO UPDATE
+  SET last_version = GREATEST(
+        public.youtube_comment_digest_key_watermark.last_version, EXCLUDED.last_version);
 
 CREATE TRIGGER trg_youtube_comment_digest_keys_guard
   BEFORE INSERT OR UPDATE OR DELETE ON public.youtube_comment_digest_keys
@@ -327,9 +337,14 @@ BEGIN
   -- retained key version, and it alone decides what is stored and what is
   -- compared; the single p_intent_digest argument stays in the signature (the
   -- function keeps its identity, its owner and its grants) and decides
-  -- nothing beyond being present. A missing or non-object map is a malformed
-  -- request, answered before the account is read.
-  IF p_intent_digests IS NULL OR jsonb_typeof(p_intent_digests) <> 'object' THEN
+  -- nothing beyond being present. A missing or non-object map is malformed,
+  -- and so is a map with a non-string entry; the logical map is optional (edit
+  -- and moderate omit it), but its entries must be strings too. All of it is
+  -- answered before the account is read.
+  IF p_intent_digests IS NULL OR jsonb_typeof(p_intent_digests) <> 'object'
+     OR EXISTS (SELECT 1 FROM jsonb_each(p_intent_digests) AS e WHERE jsonb_typeof(e.value) <> 'string')
+     OR (p_logical_digests IS NOT NULL AND jsonb_typeof(p_logical_digests) = 'object'
+         AND EXISTS (SELECT 1 FROM jsonb_each(p_logical_digests) AS e WHERE jsonb_typeof(e.value) <> 'string')) THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
   END IF;
 
@@ -906,14 +921,19 @@ BEGIN
   END IF;
 
   IF EXISTS (
-    SELECT 1 FROM pg_proc AS p, aclexplode(p.proacl) AS x
+    SELECT 1 FROM pg_proc AS p
      WHERE p.oid IN (
        'public.youtube_comment_op_claim(uuid,uuid,text,bigint,uuid,text,jsonb,text,jsonb,text,text,jsonb)'::regprocedure,
        'public.youtube_comment_op_status(uuid,uuid,uuid)'::regprocedure,
        'public.youtube_stage4_guard_digest_keys()'::regprocedure)
-       AND x.grantee IN (0,
-         (SELECT oid FROM pg_roles WHERE rolname = 'anon'),
-         (SELECT oid FROM pg_roles WHERE rolname = 'authenticated'))
+       AND (
+         has_function_privilege('anon', p.oid, 'EXECUTE')
+         OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
+         OR EXISTS (
+           SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS x
+            WHERE x.grantee = 0 AND x.privilege_type = 'EXECUTE'
+         )
+       )
   ) THEN
     RAISE EXCEPTION 'PUBLIC, anon and authenticated must hold no EXECUTE on the replaced Stage 4 functions';
   END IF;

@@ -25,6 +25,7 @@
 -- Run it as the migration owner (supabase_admin).
 
 \set ON_ERROR_STOP on
+SET plpgsql.check_asserts = on;
 
 CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA extensions;
 
@@ -37,7 +38,15 @@ CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA extensions;
 -- ---------------------------------------------------------------------------
 SELECT to_regclass('public.youtube_comment_digest_key_watermark') IS NOT NULL AS s4k_migrated \gset
 \if :s4k_migrated
+SELECT set_config('s4k.mark_before', last_version::text, false) FROM public.youtube_comment_digest_key_watermark;
 \ir ../migrations/20261124120000_youtube_stage4_key_integrity.sql
+DO $s4k_idem$
+BEGIN
+  ASSERT (SELECT last_version FROM public.youtube_comment_digest_key_watermark) = current_setting('s4k.mark_before')::int,
+    format('the watermark must be unchanged (not lowered) by a second application: %s -> %s',
+           current_setting('s4k.mark_before'), (SELECT last_version FROM public.youtube_comment_digest_key_watermark));
+END
+$s4k_idem$;
 \endif
 
 -- ---------------------------------------------------------------------------
@@ -241,9 +250,10 @@ SELECT pg_temp.s4k_sessions();
 -- ===========================================================================
 
 -- K1.1 (new) A rotation session whose snapshot predates a committed claim
--- cannot delete the key version that claim's receipt references. The delete
--- guard's EXISTS runs in the stale snapshot and misses the receipt; only the
--- foreign key, which checks with a fresh snapshot, refuses it.
+-- cannot delete the key version that claim's receipt references. Since this
+-- migration's guard refuses key maintenance outside READ COMMITTED, a stale
+-- REPEATABLE READ snapshot can no longer reach the delete at all; the foreign
+-- key remains the backstop for any path that bypasses the guard.
 SELECT set_config('s4k.n', pg_temp.s4k_next_version()::text, false);
 SELECT pg_temp.s4k_add_key(current_setting('s4k.n')::int);
 
@@ -284,7 +294,9 @@ BEGIN
 
   RAISE NOTICE 'K1.1 stale-snapshot delete: refused=% sqlstate=% message=%', v_refused, v_state, v_msg;
   ASSERT v_refused, 'K1.1 (new) the stale-snapshot delete of a referenced key version was refused';
-  ASSERT v_state = '23503', format('K1.1 (new) it was refused by the foreign key (23503), got %s: %s', v_state, v_msg);
+  ASSERT v_state = 'P0001', format('K1.1 (new) it was refused by the READ COMMITTED guard (P0001), got %s: %s', v_state, v_msg);
+  ASSERT v_msg = 'youtube_stage4_guard_digest_keys: digest key maintenance must run under READ COMMITTED (the last-active-key check reads the current state)',
+    format('K1.1 (new) the refusal is the exact READ COMMITTED message: %s', v_msg);
   ASSERT EXISTS (SELECT 1 FROM public.youtube_comment_digest_keys WHERE version = v_n), 'K1.1 the key row remains';
   v_r := public.youtube_comment_op_status(pg_temp.s4k_owner(), pg_temp.s4k_acct1(), v_op);
   ASSERT (v_r ->> 'ok')::boolean AND v_r ->> 'state' = 'claimed', format('K1.1 the receipt still resolves: %s', v_r);
@@ -460,6 +472,32 @@ BEGIN
   ASSERT (SELECT count(*) FROM public.youtube_comment_digest_keys WHERE version = v_n) = 1, 'K2.3 exactly one row won';
 END
 $k2_3$;
+
+-- K2.4 (new) key maintenance under REPEATABLE READ is refused: the last-active-key
+-- check reads the current state, which a snapshot cannot provide.
+SELECT pg_temp.s4k_sessions();
+SELECT set_config('s4k.n', pg_temp.s4k_next_version()::text, false);
+SELECT pg_temp.s4k_add_key(current_setting('s4k.n')::int);
+DO $k2_4$
+DECLARE
+  v_n       int := current_setting('s4k.n')::int;
+  v_refused boolean := false;
+  v_msg     text;
+BEGIN
+  PERFORM extensions.dblink_exec('s4k_a', 'BEGIN ISOLATION LEVEL REPEATABLE READ');
+  BEGIN
+    PERFORM extensions.dblink_exec('s4k_a', format(
+      'UPDATE public.youtube_comment_digest_keys SET retired_at = clock_timestamp() WHERE version = %s', v_n));
+  EXCEPTION WHEN OTHERS THEN
+    v_refused := true; v_msg := SQLERRM;
+  END;
+  BEGIN PERFORM extensions.dblink_exec('s4k_a', 'ROLLBACK'); EXCEPTION WHEN OTHERS THEN NULL; END;
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = v_n;
+  ASSERT v_refused, format('K2.4 (new) retiring a key under REPEATABLE READ was refused: %s', v_msg);
+  ASSERT v_msg LIKE '%digest key maintenance must run under READ COMMITTED%',
+    format('K2.4 (new) the refusal names the isolation rule: %s', v_msg);
+END
+$k2_4$;
 
 SELECT pg_temp.s4k_reset();
 
@@ -830,6 +868,47 @@ BEGIN
     'K4.6 the stored digest is the map entry of the locked active version, never the single digest argument';
 END
 $k4_6$;
+
+-- A claim with an explicit logical map, for the non-string-entry case below.
+CREATE FUNCTION pg_temp.s4k_k4_claim_logical(p_op int, p_comment text, p_digest text, p_map jsonb, p_logical jsonb)
+RETURNS jsonb LANGUAGE sql AS
+  $$ SELECT public.youtube_comment_op_claim(
+       pg_temp.s4k_owner(), pg_temp.s4k_acct1(), 'UC-s4-key',
+       (SELECT binding_generation FROM public.social_accounts WHERE id = pg_temp.s4k_acct1()),
+       pg_temp.s4k_op(p_op), 'edit', jsonb_build_object('video_id', 'vid-k4', 'comment_id', p_comment),
+       p_digest, p_logical, 'write', 'k4-' || p_op, p_map) $$;
+
+-- K4.7 (new) a non-string entry under the ACTIVE version is invalid_request:
+-- the map is not coerced to text and no receipt is inserted.
+DO $k4_7_new$
+DECLARE
+  v_active int   := (SELECT max(version) FROM public.youtube_comment_digest_keys WHERE retired_at IS NULL);
+  v_map    jsonb := pg_temp.s4k_map(repeat('s', 64));
+  v_r      jsonb;
+  v_rows   bigint;
+BEGIN
+  v_map := jsonb_set(v_map, ARRAY[v_active::text], '123'::jsonb);
+  v_r := pg_temp.s4k_k4_claim(407, 'cmt-k4-7-num', repeat('s', 64), v_map);
+  v_rows := pg_temp.s4k_receipts(407);
+  DELETE FROM public.youtube_comment_operations WHERE owner_id = pg_temp.s4k_owner() AND operation_id = pg_temp.s4k_op(407);
+  ASSERT v_r ->> 'reason' = 'invalid_request' AND v_rows = 0,
+    format('K4.7 (new) a NUMBER under the active version is invalid_request with no receipt: %s rows=%s', v_r, v_rows);
+END
+$k4_7_new$;
+
+-- K4.8 (new) a logical map with a non-string entry is invalid_request too,
+-- even for an edit where the logical map is otherwise not consumed.
+DO $k4_8_new$
+DECLARE
+  v_r    jsonb := pg_temp.s4k_k4_claim_logical(408, 'cmt-k4-8-num', repeat('t', 64),
+                   pg_temp.s4k_map(repeat('t', 64)), jsonb_build_object('1', 456));
+  v_rows bigint := pg_temp.s4k_receipts(408);
+BEGIN
+  DELETE FROM public.youtube_comment_operations WHERE owner_id = pg_temp.s4k_owner() AND operation_id = pg_temp.s4k_op(408);
+  ASSERT v_r ->> 'reason' = 'invalid_request' AND v_rows = 0,
+    format('K4.8 (new) a non-string logical entry is invalid_request with no receipt: %s rows=%s', v_r, v_rows);
+END
+$k4_8_new$;
 
 SELECT pg_temp.s4k_reset();
 
