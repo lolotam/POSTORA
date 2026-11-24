@@ -150,6 +150,8 @@ Not touched, and asserted unchanged by the self-check: the role `youtube_stage4_
 - `youtube_comment_op_status` first does a plain, unlocked read that only answers whether the receipt exists; absent is `not_found` with no lock taken (A6). It then reads the account row, owner-scoped, `FOR SHARE`, reads the receipt again, and applies the unchanged binding predicate, the two conversions and the read-back. Nothing from the first read is used after the lock. The account lock is held to the end of the call, so the receipt returned after a lost conversion belongs to a binding that is still current.
 - Lock order across the receipt functions stays account, then receipt. `settle` takes the receipt only. No cycle exists: a rebind or an account delete waits on the account row and holds no receipt lock while it waits.
 
+Contention: A status call that finds a settlement in progress waits for it while holding the account row `FOR SHARE`, so a token refresh, a disconnect or a dispatch mark on that account waits for the same settlement. Settlement transactions are one short statement each; this wait is bounded by them, not by the migration's `lock_timeout`, which applies only to the apply itself.
+
 **K4, the digest map.**
 
 - `p_intent_digests` `NULL` or not a JSON object is `invalid_request`, before the account is read. The parameter keeps its position and its `DEFAULT NULL`, so the signature is unchanged (A2).

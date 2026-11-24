@@ -10,8 +10,8 @@
 -- no receipt and no key. It restores the three function bodies of
 -- 20261122130000 (copied verbatim, byte for byte, from that file), recreates
 -- the guard trigger as BEFORE UPDATE OR DELETE, drops the foreign key, the
--- CHECK and the index, and drops the watermark table (the record of deleted
--- version numbers goes with it: note last_version BEFORE rolling back).
+-- CHECK and the index, and keeps the watermark table: it is the only record
+-- of key versions that were issued and later deleted.
 -- ===========================================================================
 
 BEGIN;
@@ -588,7 +588,10 @@ ALTER TABLE public.youtube_comment_operations
   DROP CONSTRAINT IF EXISTS youtube_comment_operations_key_versions_check;
 DROP INDEX IF EXISTS public.youtube_comment_operations_intent_key_version_idx;
 
--- 4. The watermark table.
-DROP TABLE IF EXISTS public.youtube_comment_digest_key_watermark;
+-- 4. The watermark table is kept on purpose: it is the only record of key
+-- versions that were issued and later deleted. It is private (RLS on, no
+-- grants) and nothing in the old functions reads it, so keeping it changes no
+-- behaviour; a re-apply of the forward migration keeps it because its seed
+-- takes GREATEST(existing, recomputed).
 
 COMMIT;

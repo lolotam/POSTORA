@@ -13,9 +13,11 @@ This runbook is for whoever applies the migration to production. It does not aut
 | K3 | `youtube_comment_op_status` locks the account row `FOR SHARE` before it reads the receipt for the answer. |
 | K4 | `youtube_comment_op_claim` requires the digest map. |
 
+A status call that finds a settlement in progress waits for it while holding the account row `FOR SHARE`, so a token refresh, a disconnect or a dispatch mark on that account waits for the same settlement. Settlement transactions are one short statement each; this wait is bounded by them, not by the migration's `lock_timeout`, which applies only to the apply itself.
+
 It is one transaction with a local `lock_timeout` of 5 s, applies twice without error, keeps the signature of every function (`CREATE OR REPLACE`, owner and grants kept) and ends with a self-check that aborts the whole apply on any miss. It does not touch the rollout key, `app_settings`, `youtube_stage4_refresh` or the three token store functions, and it inserts no row for the rollout key: Stage 4 stays dark.
 
-**Apply as `supabase_admin`** with `ON_ERROR_STOP` on. `postgres` is not a superuser on this stack, and a `CREATE OR REPLACE` by a non-owner would change the function owner.
+**Apply as `supabase_admin`** with `ON_ERROR_STOP` on. `postgres` is not a superuser on this stack. `CREATE OR REPLACE FUNCTION` keeps the existing owner and grants; a role that does not own the function (and is not a member of its owner role) gets an error and nothing changes, so a failed apply with `must be owner of function` means the wrong role.
 
 ## Order of the release
 
@@ -69,11 +71,13 @@ The pre-check inside the migration refuses a violating row with a message of its
 
 Edge and frontend: revert the merge commit on `main`; the sync and the deploy follow on their own. The three parts roll back independently.
 
-Database: apply `docs/runbooks/sql/20261124120000_youtube_stage4_key_integrity_rollback.sql` as `supabase_admin` with `ON_ERROR_STOP` on. It is one transaction that restores the three function bodies of `20261122130000` (copied verbatim), recreates the guard trigger as `BEFORE UPDATE OR DELETE`, drops the foreign key, the CHECK and the index, and drops the watermark table. It changes no receipt and no key. The rollback script is rehearsed in CI-style on the harness database: after it, `md5(pg_get_functiondef(...))` of the claim, the status and the guard equals the value before the migration, and the forward migration applies again.
+**Drain live claims first.** Turn the rollout off (remove the rollout key per the Stage 4 runbook) and wait at least 2 minutes, then check `select count(*) from public.youtube_comment_operations where state = 'claimed' and dispatched_at is null and claimed_at > now() - interval '2 minutes'` is 0. A live claim holds locks the rollback's `ALTER TABLE` would queue behind.
 
-**Note the watermark before a rollback**: `select last_version from public.youtube_comment_digest_key_watermark`. Dropping the table forgets which version numbers were issued and deleted; a later re-apply seeds the watermark from the versions that still exist, which is only a lower bound. With one key version in production and no deletion so far, nothing is lost today.
+Database: apply `docs/runbooks/sql/20261124120000_youtube_stage4_key_integrity_rollback.sql` as `supabase_admin` with `ON_ERROR_STOP` on. It is one transaction that restores the three function bodies of `20261122130000` (copied verbatim), recreates the guard trigger as `BEFORE UPDATE OR DELETE`, drops the foreign key, the CHECK and the index, and keeps the watermark table (the only record of deleted key versions). It changes no receipt and no key. The rollback script is rehearsed in CI-style on the harness database: after it, `md5(pg_get_functiondef(...))` of the claim, the status and the guard equals the value before the migration, and the forward migration applies again.
 
-After go-live the same script stays safe: rolling the foreign key back only returns the delete guard to its trigger form. The ownership of the token store functions (`youtube_stage4_refresh`, recorded in #470 as `supabase_admin` before `20261122130000`) is not part of this rollback.
+**While rolled back, do no key maintenance.** Insert, retire or delete no digest key version until the forward migration is applied again: the old trigger neither updates the watermark nor is backed by the foreign key, so a deletion of a referenced version or a reused number would not be refused. Record `select last_version from public.youtube_comment_digest_key_watermark` before and after the rollback in the receipt; the re-apply keeps the larger value.
+
+After go-live, a rollback also returns the status RPC to its old form, without the account `FOR SHARE` lock (K3), so a status read can again race a rebind. Status recovery stays callable with the rollout off, so roll back only when the forward migration itself is the problem, and re-apply it as soon as possible. The ownership of the token store functions (`youtube_stage4_refresh`, recorded in #470 as `supabase_admin` before `20261122130000`) is not part of this rollback.
 
 ## Behaviour worth knowing
 
