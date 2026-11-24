@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { YouTubeCommentsGateway } from "../application/ports";
 import { YouTubeCommentsError } from "../domain/errors";
 import {
@@ -117,34 +117,24 @@ export function useYouTubeStage4(params: {
         const result = await listOptions.fetchPage(cursor);
         return guard(result) ? { page: result.page, next: result.next, stale: false } : { page: [], next: null, stale: true };
       },
+      // Only the live tail fetches. Every earlier page still has an OBSERVER
+      // (a disabled one), which is what keeps its cache entry alive for as
+      // long as the list is mounted: an unobserved entry is garbage-collected
+      // after ten minutes and a long list would lose rows (spec 8.3).
       enabled: listOptions.enabled && index === cursors.length - 1,
       staleTime: YOUTUBE_COMMENTS_STALE_MS,
       retry: false,
     }));
-    // One query for the live tail page; earlier pages come from the cache via
-    // getQueryData, so a failed later page keeps earlier rows (spec 8.3).
-    const tail = pages[pages.length - 1];
-    const tailQuery = useQuery({
-      queryKey: tail.queryKey,
-      queryFn: tail.queryFn,
-      enabled: tail.enabled,
-      staleTime: YOUTUBE_COMMENTS_STALE_MS,
-      retry: false,
-    });
+    const pageQueries = useQueries({ queries: pages });
+    const tailQuery = pageQueries[pageQueries.length - 1];
 
     const items = useMemo(() => {
       const byKey = new Map<string, Item>();
-      for (let i = 0; i < cursors.length; i++) {
-        // The live page is the tail; earlier pages are cached snapshots.
-        const entry = i === cursors.length - 1
-          ? tailQuery.data
-          : listQueryClient.getQueryData<{ page: Item[] } | undefined>(
-            youtubeCommentsKey(listOptions.userId, listOptions.accountId, listOptions.resource, cursors[i] ?? `page-${i}`),
-          );
-        for (const item of entry?.page ?? []) byKey.set(item.key, item);
+      for (const query of pageQueries) {
+        for (const item of query.data?.page ?? []) byKey.set(item.key, item);
       }
       return [...byKey.values()];
-    }, [cursors, tailQuery.data, listQueryClient, listOptions.userId, listOptions.accountId, listOptions.resource]);
+    }, [pageQueries]);
 
     return {
       items,
@@ -233,6 +223,10 @@ export function useYouTubeStage4(params: {
   // the draft; an indeterminate one is never re-sent (spec 9.1, 14).
 
   const [recovered, setRecovered] = useState<RecoveredOperation[]>([]);
+  // What the owner can see right now, read after an await: a re-check that
+  // finishes for a banner the owner has since dismissed has shown nothing.
+  const recoveredRef = useRef(recovered);
+  recoveredRef.current = recovered;
   const aliveRef = useRef(true);
   const contextRef = useRef(`${userId}:${accountId}`);
   contextRef.current = `${userId}:${accountId}`;
@@ -393,22 +387,30 @@ export function useYouTubeStage4(params: {
    * a submit so the composer shows it the same way.
    */
   const checkStatus = useCallback(
-    async (operationId: string): Promise<SubmissionOutcome> => {
-      try {
-        const status = await gateway.operationStatus({ accountId, operationId });
-        if (status.state === "confirmed") {
-          void threads.reload();
-          return { kind: "confirmed", receipt: status as Stage4ReceiptPayload, operationId };
-        }
-        if (status.state === "refused") return { kind: "refused", reason: status.reason ?? "upstream", draftKept: true, operationId };
-        if (status.state === "indeterminate") return { kind: "indeterminate", receipt: status as Stage4ReceiptPayload, operationId };
-        return { kind: "pending", operationId };
-      } catch (error) {
-        const reason = error instanceof YouTubeCommentsError ? error.code : "upstream";
-        return { kind: "error", reason, draftKept: true, operationId };
+    async (operationId: string, draftText?: string): Promise<SubmissionOutcome> => {
+      // The same rules as the automatic recovery: it is the same read, through
+      // the same function. A `not_found` right after the submit is still inside
+      // the pre-claim grace window and keeps the identity; a settled answer is
+      // definite. The local identity says what the operation was, which decides
+      // whether the draft is sent along for the edit comparison.
+      const operation: PendingStage4Operation = listPendingOperations(userId, accountId)
+        .find((op) => op.operationId === operationId)
+        ?? { operationId, accountId, videoId: "", action: "create_thread", targetCommentId: "", createdAt: 0 };
+      const result = await recoverOperation(gateway, accountId, operation, operation.action === "edit" ? draftText : undefined);
+      const status = result.status;
+      if (!status) {
+        // Unreadable for good (the binding changed) or not readable yet.
+        return { kind: "error", reason: result.unavailable ? "upstream" : "not_found", draftKept: true, operationId };
       }
+      if (status.state === "confirmed") {
+        void threads.reload();
+        return { kind: "confirmed", receipt: status as Stage4ReceiptPayload, operationId };
+      }
+      if (status.state === "refused") return { kind: "refused", reason: status.reason ?? "upstream", draftKept: true, operationId };
+      if (status.state === "indeterminate") return { kind: "indeterminate", receipt: status as Stage4ReceiptPayload, operationId };
+      return { kind: "pending", operationId };
     },
-    [gateway, accountId, threads],
+    [gateway, accountId, userId, threads],
   );
 
   // ---- recovery on mount and account change ------------------------------------
@@ -493,6 +495,9 @@ export function useYouTubeStage4(params: {
       // A view that is gone, or an account that is no longer current, never
       // acknowledges: the identity stays for the view that can show it.
       if (!aliveRef.current || contextRef.current !== context) return;
+      // Dismissed while the re-check was in flight: its outcome was never shown,
+      // so it is not acknowledged either, and the identity stays for the next view.
+      if (!recoveredRef.current.some((r) => r.operation.operationId === operationId)) return;
       setRecovered((prev) => prev.map((r) => (r.operation.operationId === operationId ? next : r)));
       clearSettled(userId, [next]);
     },
@@ -530,14 +535,20 @@ export function useStage4Replies(params: {
   userId: string;
   accountId: string;
   gateway: YouTubeCommentsGateway;
+  /**
+   * The parent's comment id: stable. The query, its cursor chain and the rows
+   * are keyed by it. Its sealed handle is re-issued on every list load, so a
+   * handle-keyed entry would restart the replies from page one after a reload.
+   */
+  parentCommentId: string;
+  /** The parent's CURRENT sealed handle: request data only, never part of a key. */
   parentHandle: string;
   enabled: boolean;
 }) {
-  const { userId, accountId, gateway, parentHandle, enabled } = params;
-  const queryClient = useQueryClient();
+  const { userId, accountId, gateway, parentCommentId, parentHandle, enabled } = params;
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   // A cursor belongs to one user, account and parent: reset the chain when any changes.
-  const repliesIdentity = `${userId}:${accountId}:${parentHandle}`;
+  const repliesIdentity = `${userId}:${accountId}:${parentCommentId}`;
   const lastRepliesIdentity = useRef(repliesIdentity);
   if (lastRepliesIdentity.current !== repliesIdentity) {
     lastRepliesIdentity.current = repliesIdentity;
@@ -545,33 +556,35 @@ export function useStage4Replies(params: {
   }
 
   const tailIndex = cursors.length - 1;
-  const tailQuery = useQuery({
-    queryKey: youtubeCommentsKey(userId, accountId, `replies:${parentHandle}`, cursors[tailIndex] ?? `page-${tailIndex}`),
-    queryFn: async () => {
-      const page = await gateway.replyPage({ accountId, parentHandle, cursor: cursors[tailIndex] });
-      if (page.account_id !== accountId) return { page: [], next: null, stale: true };
-      return {
-        page: page.items.map((row) => ({ key: row.comment_id, row })),
-        next: page.next_cursor,
-        stale: false,
-      };
-    },
-    enabled,
-    staleTime: YOUTUBE_COMMENTS_STALE_MS,
-    retry: false,
+  type ReplyPage = { page: { key: string; row: Stage4CommentRow }[]; next: string | null; stale: boolean };
+  // Every page keeps an observer (only the tail may fetch), so a page that is
+  // not the live tail is not garbage-collected while the thread is open.
+  const pageQueries = useQueries({
+    queries: cursors.map((cursor, index) => ({
+      queryKey: youtubeCommentsKey(userId, accountId, `replies:${parentCommentId}`, cursor ?? `page-${index}`),
+      queryFn: async (): Promise<ReplyPage> => {
+        const page = await gateway.replyPage({ accountId, parentHandle, cursor });
+        if (page.account_id !== accountId) return { page: [], next: null, stale: true };
+        return {
+          page: page.items.map((row) => ({ key: row.comment_id, row })),
+          next: page.next_cursor,
+          stale: false,
+        };
+      },
+      enabled: enabled && index === tailIndex,
+      staleTime: YOUTUBE_COMMENTS_STALE_MS,
+      retry: false,
+    })),
   });
+  const tailQuery = pageQueries[tailIndex];
 
   const items = useMemo(() => {
     const byKey = new Map<string, { key: string; row: Stage4CommentRow }>();
-    for (let i = 0; i < tailIndex; i++) {
-      const entry = queryClient.getQueryData<{ page: { key: string; row: Stage4CommentRow }[] } | undefined>(
-        youtubeCommentsKey(userId, accountId, `replies:${parentHandle}`, cursors[i] ?? `page-${i}`),
-      );
-      for (const item of entry?.page ?? []) byKey.set(item.key, item);
+    for (const query of pageQueries) {
+      for (const item of query.data?.page ?? []) byKey.set(item.key, item);
     }
-    for (const item of tailQuery.data?.page ?? []) byKey.set(item.key, item);
     return [...byKey.values()];
-  }, [cursors, tailIndex, tailQuery.data, queryClient, userId, accountId, parentHandle]);
+  }, [pageQueries]);
 
   return {
     items,

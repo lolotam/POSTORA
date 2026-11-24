@@ -116,6 +116,10 @@ export function YouTubeCommentsScreen(props: YouTubeCommentsScreenProps): JSX.El
       </div>
     );
   }
+  // A failed settings read is an ERROR, never a denial: it is offered again
+  // (retry), and it never reads as "not enabled" (spec 13).
+  const settingsError = stage4.capabilitiesQuery.isError;
+  const retrySettings = () => void stage4.capabilitiesQuery.refetch();
   if (!stage4.canRead) {
     const reason = stage4.capabilities?.capabilities.read.reason ?? "settings_unavailable";
     return (
@@ -126,8 +130,20 @@ export function YouTubeCommentsScreen(props: YouTubeCommentsScreenProps): JSX.El
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
             <Youtube className="h-10 w-10 mx-auto mb-3 opacity-40" />
-            <p className="font-medium">{t("youtubeStage4.notAdmittedTitle", "The new YouTube comments view is not enabled for this channel")}</p>
-            <p className="text-sm mt-1">{reasonText(t, reason)}</p>
+            {settingsError ? (
+              <>
+                <p className="font-medium">{t("youtubeStage4.settings.unavailableTitle", "Postora could not read its settings")}</p>
+                <p className="text-sm mt-1">{reasonText(t, "settings_unavailable")}</p>
+                <Button size="sm" variant="outline" className="mt-3" onClick={retrySettings} disabled={stage4.capabilitiesQuery.isFetching}>
+                  {t("youtubeStage4.settings.retry", "Try again")}
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="font-medium">{t("youtubeStage4.notAdmittedTitle", "The new YouTube comments view is not enabled for this channel")}</p>
+                <p className="text-sm mt-1">{reasonText(t, reason)}</p>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -136,6 +152,17 @@ export function YouTubeCommentsScreen(props: YouTubeCommentsScreenProps): JSX.El
 
   return (
     <div className="space-y-4">
+      {settingsError && (
+        // The screen stays: a failed refresh of the settings never takes away
+        // what the owner was already admitted to (and may be typing in).
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400" data-testid="yt-stage4-settings-error">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          <span>{t("youtubeStage4.settings.refreshFailed", "Postora could not refresh its settings. Your work here is kept.")}</span>
+          <Button size="sm" variant="outline" onClick={retrySettings} disabled={stage4.capabilitiesQuery.isFetching}>
+            {t("youtubeStage4.settings.retry", "Try again")}
+          </Button>
+        </div>
+      )}
       {notice && notice.context === contextKey && (
         <p role="status" className="text-xs text-muted-foreground" data-testid="yt-stage4-notice">{notice.text}</p>
       )}
@@ -594,6 +621,7 @@ function ReplyBlock(params: {
     userId: stage4.userId,
     accountId: stage4.accountId,
     gateway: stage4.gateway,
+    parentCommentId: parent.comment_id,
     parentHandle: parent.handle,
     enabled: open,
   });
@@ -690,7 +718,7 @@ function Composer(params: {
   onCancel?: () => void;
   onNotice?: (text: string | null) => void;
   /** Reads one operation's receipt again; never resends. Offered after a lost response or an unknown outcome. */
-  onCheckStatus?: (operationId: string) => Promise<SubmissionOutcome>;
+  onCheckStatus?: (operationId: string, draftText?: string) => Promise<SubmissionOutcome>;
   /** Called once this composer has shown a definite outcome, so its identity can be forgotten. */
   onAcknowledge?: (operationId: string) => void;
 }): JSX.Element {
@@ -711,11 +739,14 @@ function Composer(params: {
     };
   }, []);
   // A status check that finishes after newer composer work (a newer submit, or
-  // another check) must not overwrite what that work shows, and the text most
-  // recently SENT is what a check's confirmation may clear.
+  // another check) must not overwrite what that work shows. The text a check's
+  // confirmation may clear is the text of the operation that was ACTUALLY SENT,
+  // so it is remembered together with that operation's id: a submit the
+  // pre-submit check blocked (an earlier operation still pending) sent nothing,
+  // and what was typed for it must never be mistaken for the sent text.
   const submitSeq = useRef(0);
   const checkSeq = useRef(0);
-  const sentText = useRef<string | null>(null);
+  const sent = useRef<{ operationId: string; text: string } | null>(null);
 
   useEffect(() => {
     if (localOutcome) inputRef.current?.focus();
@@ -732,9 +763,11 @@ function Composer(params: {
     }
     if (outcome.kind === "confirmed") {
       params.onAcknowledge?.(outcome.operationId);
-      // A check reads the receipt of the text that WAS sent: the box is emptied
-      // only while it still holds that text, so newer typing is never lost.
-      setText((current) => (fromCheck && current !== sentText.current ? current : ""));
+      // A check reads the receipt of the operation that WAS sent: the box is
+      // emptied only when this is that operation AND the box still holds the
+      // text it sent, so newer typing, or a draft that was never sent, is kept.
+      const confirmedSent = sent.current?.operationId === outcome.operationId ? sent.current.text : null;
+      setText((current) => (fromCheck && current !== confirmedSent ? current : ""));
       params.onNotice?.(t("youtubeStage4.notice.posted", "Posted. Refresh the thread to see it."));
     } else if (outcome.kind === "refused") {
       params.onAcknowledge?.(outcome.operationId);
@@ -746,8 +779,13 @@ function Composer(params: {
     setBusy(true);
     setLocalOutcome(null);
     submitSeq.current += 1;
-    sentText.current = text;
-    const outcome = await params.onSubmit(text);
+    const submittedText = text;
+    const outcome = await params.onSubmit(submittedText);
+    // Only an outcome of THIS submit names the operation it sent. "pending" and
+    // "earlier" carry the id of an EARLIER operation and nothing was sent now.
+    if (outcome.kind !== "pending" && outcome.kind !== "earlier") {
+      sent.current = { operationId: outcome.operationId, text: submittedText };
+    }
     if (mounted.current) setBusy(false);
     show(outcome);
   };
@@ -758,7 +796,8 @@ function Composer(params: {
     const submitAtStart = submitSeq.current;
     checkSeq.current += 1;
     const checkAtStart = checkSeq.current;
-    const outcome = await params.onCheckStatus(operationId);
+    const draft = sent.current?.operationId === operationId ? sent.current.text : undefined;
+    const outcome = await params.onCheckStatus(operationId, draft);
     if (mounted.current) setChecking(false);
     if (submitSeq.current !== submitAtStart || checkSeq.current !== checkAtStart) return;
     show(outcome, true);

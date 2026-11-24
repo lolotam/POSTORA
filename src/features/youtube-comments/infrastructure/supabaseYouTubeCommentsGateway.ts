@@ -51,7 +51,15 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
 
 export class SupabaseYouTubeCommentsGateway implements YouTubeCommentsGateway {
   async capabilities(accountId: string) {
-    return call<Stage4CapabilitiesPayload>({ action: "youtube_stage4_capabilities", social_account_id: accountId });
+    const payload = await call<Stage4CapabilitiesPayload>({ action: "youtube_stage4_capabilities", social_account_id: accountId });
+    // A payload that says the settings could not be read is an ERROR, not a
+    // denial: an older server answered a failed settings read as data, and a
+    // denial would unmount a screen the owner is using. Failed reads are
+    // `upstream`, which keeps whatever was admitted and offers a retry.
+    if (Object.values(payload?.capabilities ?? {}).some((entry) => entry?.reason === "settings_unavailable")) {
+      throw new YouTubeCommentsError("upstream", "rollout settings unreadable");
+    }
+    return payload;
   }
   async videoPage(accountId: string, cursor?: string | null) {
     return call<Stage4VideoPagePayload>({ action: "youtube_video_page", social_account_id: accountId, cursor: cursor ?? undefined });
@@ -89,8 +97,8 @@ export class SupabaseYouTubeCommentsGateway implements YouTubeCommentsGateway {
     }
   }
 
-  async operationStatus(params: { accountId: string; operationId: string }) {
-    return call<Stage4OperationStatusPayload>({ action: "youtube_operation_status", social_account_id: params.accountId, operation_id: params.operationId });
+  async operationStatus(params: { accountId: string; operationId: string; text?: string }) {
+    return call<Stage4OperationStatusPayload>({ action: "youtube_operation_status", social_account_id: params.accountId, operation_id: params.operationId, text: params.text });
   }
 }
 
