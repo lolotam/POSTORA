@@ -45,9 +45,15 @@ export async function recoverOperation(
   gateway: YouTubeCommentsGateway,
   accountId: string,
   operation: PendingStage4Operation,
+  /**
+   * The draft of an EDIT that a live composer still holds, so the server can
+   * compare it with what YouTube shows. Comment text is never stored, so a
+   * recovery after a reload has none and the observation stays unavailable.
+   */
+  draftText?: string,
 ): Promise<RecoveryResult> {
   try {
-    const status = await gateway.operationStatus({ accountId, operationId: operation.operationId });
+    const status = await gateway.operationStatus({ accountId, operationId: operation.operationId, text: draftText });
     const settled = status.state === "confirmed" || status.state === "refused";
     const inFlight = status.state === "claimed" || status.state === "dispatched";
     return { operation, status, settled, unavailable: false, inFlight };

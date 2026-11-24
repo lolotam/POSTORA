@@ -29,6 +29,10 @@ export function useStage4Recovery(params: {
   const { userId, accountId, enabled } = params;
   const gateway = params.gateway;
   const [recovered, setRecovered] = useState<StandaloneRecoveredOperation[]>([]);
+  // What the owner can see right now, read after an await: a re-check that
+  // finishes for a banner the owner has since dismissed has shown nothing.
+  const recoveredRef = useRef(recovered);
+  recoveredRef.current = recovered;
   // The view's lifetime and context, read after an await: a manual re-check
   // that completes for a view that is gone (or an account that is no longer
   // current) must not clear an identity nobody has seen the outcome of.
@@ -80,6 +84,9 @@ export function useStage4Recovery(params: {
       const context = `${userId}:${accountId}`;
       const next = await recoverOperation(gateway, accountId, current.operation);
       if (!alive.current || currentContext.current !== context) return;
+      // Dismissed while the re-check was in flight: its outcome was never shown,
+      // so it is not acknowledged either and the identity stays.
+      if (!recoveredRef.current.some((r) => r.operation.operationId === operationId)) return;
       setRecovered((prev) => prev.map((r) => (
         r.operation.operationId === operationId ? { operation: next.operation, status: next.status, unavailable: next.unavailable } : r
       )));

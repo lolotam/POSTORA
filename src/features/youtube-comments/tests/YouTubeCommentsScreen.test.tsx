@@ -6,6 +6,7 @@ import type { YouTubeCommentsGateway } from "../application/ports";
 import type {
   Stage4CapabilitiesPayload,
   Stage4CommentRow,
+  Stage4OperationStatusPayload,
   Stage4ReceiptPayload,
 } from "../domain/types";
 import { YouTubeCommentsError } from "../domain/errors";
@@ -105,6 +106,7 @@ function makeGateway(script: GatewayScript) {
       return {
         account_id: ACCOUNT,
         channel_id: "UC-x",
+        binding_generation: 1,
         video_id: "vid-1",
         list: "published" as const,
         items: script.threads ?? [row(), row({ kind: "reply", comment_id: "c-reply", canonical_parent_id: "c-1", handle: "hdl-reply" })],
@@ -115,6 +117,7 @@ function makeGateway(script: GatewayScript) {
     replyPage: vi.fn(async () => ({
       account_id: ACCOUNT,
       channel_id: "UC-x",
+      binding_generation: 1,
       parent_handle: "hdl-any",
       items: script.replies ?? [],
       next_cursor: null,
@@ -521,7 +524,7 @@ describe("YouTubeCommentsScreen", () => {
       return {
         account_id: ACCOUNT, channel_id: "UC-x", video_id: "vid-1", list: "published" as const,
         // The same comment on every load, under a NEW sealed handle each time.
-        items: [row({ comment_id: "c-stable", handle: `hdl-load-${loads}`, text: "stable thread" })],
+        items: [row({ comment_id: "c-stable", handle: `hdl-load-${loads}`, text: `stable thread (load ${loads})` })],
         next_cursor: null, inconsistent_count: 0,
       };
     });
@@ -531,15 +534,22 @@ describe("YouTubeCommentsScreen", () => {
         <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
       </QueryClientProvider>,
     );
-    await screen.findByText("stable thread");
+    await screen.findByText("stable thread (load 1)");
     fireEvent.click(screen.getByRole("button", { name: "Load replies" }));
     expect(await screen.findByText("reply page one")).toBeInTheDocument();
     // A reload (what a confirmed write triggers) completes: the owner sees the replies they opened, not a collapsed thread.
-    const before = loads;
+    const replyPage = gateway.replyPage as ReturnType<typeof vi.fn>;
+    const replyCallsBefore = replyPage.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
-    await waitFor(() => expect(loads).toBeGreaterThan(before));
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    // The replacement row is what proves the reload COMMITTED: the load counter alone moves when the mock merely starts.
+    await screen.findByText("stable thread (load 2)");
+    expect(screen.queryByText("stable thread (load 1)")).not.toBeInTheDocument();
     expect(screen.getByTestId("yt-stage4-replies")).toBeInTheDocument();
+    // The reply page was read again EXACTLY once (a handle-keyed entry would have restarted it, and an
+    // unrefreshed cache would not have read at all), with the new handle as request data, from page one.
+    await waitFor(() => expect(replyPage.mock.calls.length).toBe(replyCallsBefore + 1));
+    expect(replyPage.mock.calls.at(-1)?.[0]).toMatchObject({ parentHandle: "hdl-load-2" });
+    expect((replyPage.mock.calls.at(-1)?.[0] as { cursor?: string | null }).cursor ?? null).toBeNull();
     expect(await screen.findByText("reply page one")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load replies" })).not.toBeInTheDocument();
   });
@@ -982,5 +992,393 @@ describe("YouTubeCommentsScreen", () => {
     await waitFor(() => {
       expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toEqual([]);
     });
+  });
+});
+
+describe("YouTubeCommentsScreen follow-up (Stage 4 issue 470)", () => {
+  const storedOps = () => JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]") as Array<{ operationId: string }>;
+
+  it("a blocked submit never lets a later confirmation clear the unsent draft", async () => {
+    // Submit A loses its response; the owner types B and submits (blocked: A is still pending); the
+    // status check then confirms A. B was never sent, so it must stay in the box.
+    const { gateway, calls } = renderScreen({ threads: [row()], createResult: () => Promise.reject(new Error("Failed to fetch")) });
+    const status = gateway.operationStatus as ReturnType<typeof vi.fn>;
+    const answer = (state: "dispatched" | "confirmed") => ({
+      operation_id: "op-x", action: "create_thread", state, reason: null, provider_class: null, moderation_status: null,
+      ban_requested: false, result_thread_id: null, result_comment_id: null, binding_generation: 1, channel_id: "UC-x",
+      observation: null, observed_text: null,
+    });
+    await screen.findByTestId("yt-stage4-composer");
+    const input = screen.getByLabelText(/Post a comment as your channel/) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "text A" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Comment$/ })); });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    // The pre-submit check finds A still pending.
+    status.mockResolvedValueOnce(answer("dispatched"));
+    fireEvent.change(input, { target: { value: "text B" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Comment$/ })); });
+    await waitFor(() => expect(screen.getByText(/still being checked/)).toBeInTheDocument());
+    expect(calls.create).toBe(1);
+    expect(input.value).toBe("text B");
+    // Confirming A through "Check status" must not clear B.
+    status.mockResolvedValueOnce(answer("confirmed"));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Check status" })); });
+    await waitFor(() => expect(screen.getAllByRole("status").some((el) => /Accepted by YouTube/.test(el.textContent ?? ""))).toBe(true));
+    expect(input.value).toBe("text B");
+  });
+
+  it("confirming the operation that WAS sent still clears the box when it holds that text", async () => {
+    const { gateway } = renderScreen({ threads: [row()], createResult: () => Promise.reject(new Error("Failed to fetch")) });
+    await screen.findByTestId("yt-stage4-composer");
+    const input = screen.getByLabelText(/Post a comment as your channel/) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "text A" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Comment$/ })); });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Check status" })); });
+    await waitFor(() => expect(input.value).toBe(""));
+    expect(gateway.operationStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Refresh reads the open reply page again with the CURRENT handle, and keeps the rows and the reply draft", async () => {
+    // Changed from "nothing is refetched": the first reply page is now read again on every Refresh, because
+    // a cached page can be older than the thread. What must NOT change: the thread stays open, the
+    // composer inside it keeps its draft, and the new handle is request data only.
+    const { gateway } = makeGateway({});
+    let loads = 0;
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      loads += 1;
+      return {
+        account_id: ACCOUNT, channel_id: "UC-x", binding_generation: 1, video_id: "vid-1", list: "published" as const,
+        items: [row({ comment_id: "c-stable", handle: `hdl-load-${loads}`, text: `stable thread load ${loads}` })],
+        next_cursor: null, inconsistent_count: 0,
+      };
+    });
+    (gateway.replyPage as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      account_id: ACCOUNT, channel_id: "UC-x", binding_generation: 1, parent_handle: "hdl-any",
+      items: [row({ kind: "reply", comment_id: "c-reply-1", handle: "hdl-reply-1", canonical_parent_id: "c-stable", text: "reply page one" })],
+      next_cursor: null, inconsistent_count: 0,
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("stable thread load 1");
+    fireEvent.click(screen.getByRole("button", { name: "Load replies" }));
+    await screen.findByText("reply page one");
+    fireEvent.click(within(screen.getByTestId("yt-stage4-replies")).getByRole("button", { name: "Reply" }));
+    fireEvent.change(within(screen.getByTestId("yt-stage4-replies")).getByLabelText("Write a reply"), { target: { value: "half-written reply" } });
+    const replyPage = gateway.replyPage as ReturnType<typeof vi.fn>;
+    const before = replyPage.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
+    await screen.findByText("stable thread load 2");
+    await waitFor(() => expect(replyPage.mock.calls.length).toBe(before + 1));
+
+    const last = replyPage.mock.calls.at(-1)?.[0] as { parentHandle: string; cursor?: string | null };
+    expect(last.parentHandle).toBe("hdl-load-2");
+    expect(last.cursor ?? null).toBeNull();
+    expect(screen.getByText("reply page one")).toBeInTheDocument();
+    expect((within(screen.getByTestId("yt-stage4-replies")).getByLabelText("Write a reply") as HTMLTextAreaElement).value).toBe("half-written reply");
+  });
+
+  it("a confirmed edit of a reply shows the new text even when an older reply page is cached", async () => {
+    const { gateway } = makeGateway({});
+    let edited = false;
+    const reply = (text: string) => row({ kind: "reply", comment_id: "c-mine-reply", handle: `hdl-r-${text}`, canonical_parent_id: "c-parent", text, is_own: true });
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      account_id: ACCOUNT, channel_id: "UC-x", binding_generation: 1, video_id: "vid-1", list: "published" as const,
+      items: [row({ comment_id: "c-parent", handle: "hdl-parent", text: "the parent" }), reply(edited ? "reply AFTER edit" : "reply BEFORE edit")],
+      next_cursor: null, inconsistent_count: 0,
+    }));
+    // The reply page answers the old text until the edit has happened, then the new text.
+    (gateway.replyPage as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      account_id: ACCOUNT, channel_id: "UC-x", binding_generation: 1, parent_handle: "hdl-parent",
+      items: [reply(edited ? "reply AFTER edit" : "reply BEFORE edit")], next_cursor: null, inconsistent_count: 0,
+    }));
+    (gateway.edit as ReturnType<typeof vi.fn>).mockImplementation(async () => { edited = true; return receipt({ action: "edit" }); });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("the parent");
+    fireEvent.click(screen.getByRole("button", { name: "Load replies" }));
+    await waitFor(() => expect(within(screen.getByTestId("yt-stage4-replies")).getByText("reply BEFORE edit")).toBeInTheDocument());
+    const replies = within(screen.getByTestId("yt-stage4-replies"));
+    fireEvent.click(replies.getByRole("button", { name: "Edit" }));
+    fireEvent.change(replies.getByLabelText("Edit your comment"), { target: { value: "reply AFTER edit" } });
+    await act(async () => { fireEvent.click(replies.getByRole("button", { name: "Save" })); });
+    await waitFor(() => expect(screen.getAllByText("reply AFTER edit").length).toBeGreaterThan(0));
+    expect(screen.queryByText("reply BEFORE edit")).not.toBeInTheDocument();
+  });
+
+  it("the thread page's own copy of a reply wins over an older cached reply page", async () => {
+    const { gateway } = makeGateway({});
+    let loads = 0;
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      loads += 1;
+      return {
+        account_id: ACCOUNT, channel_id: "UC-x", binding_generation: 1, video_id: "vid-1", list: "published" as const,
+        items: [
+          row({ comment_id: "c-parent", handle: "hdl-parent", text: "the parent" }),
+          row({ kind: "reply", comment_id: "c-r", handle: "hdl-r", canonical_parent_id: "c-parent", text: loads === 1 ? "inline OLD" : "inline NEW" }),
+        ],
+        next_cursor: null, inconsistent_count: 0,
+      };
+    });
+    // The reply page is stuck on the OLD text for the whole test.
+    (gateway.replyPage as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      account_id: ACCOUNT, channel_id: "UC-x", binding_generation: 1, parent_handle: "hdl-parent",
+      items: [row({ kind: "reply", comment_id: "c-r", handle: "hdl-r", canonical_parent_id: "c-parent", text: "inline OLD" })],
+      next_cursor: null, inconsistent_count: 0,
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("the parent");
+    fireEvent.click(screen.getByRole("button", { name: "Load replies" }));
+    await screen.findByText("inline OLD");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
+    await screen.findByText("inline NEW");
+    expect(screen.queryByText("inline OLD")).not.toBeInTheDocument();
+  });
+
+  it("a change of the binding generation drops the old reply chain and starts again from page one", async () => {
+    const { gateway } = makeGateway({});
+    let generation = 1;
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      account_id: ACCOUNT, channel_id: "UC-x", binding_generation: generation, video_id: "vid-1", list: "published" as const,
+      items: [row({ comment_id: "c-parent", handle: `hdl-parent-g${generation}`, text: `parent g${generation}` })],
+      next_cursor: null, inconsistent_count: 0,
+    }));
+    (gateway.replyPage as ReturnType<typeof vi.fn>).mockImplementation(async (params: { cursor?: string | null }) => ({
+      account_id: ACCOUNT, channel_id: "UC-x", binding_generation: generation, parent_handle: "hdl-any",
+      items: [row({ kind: "reply", comment_id: params.cursor ? "c-r2" : "c-r1", handle: "h", canonical_parent_id: "c-parent", text: params.cursor ? "second page reply" : "first page reply" })],
+      next_cursor: params.cursor ? null : "cursor-g1", inconsistent_count: 0,
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("parent g1");
+    fireEvent.click(screen.getByRole("button", { name: "Load replies" }));
+    fireEvent.click(await screen.findByRole("button", { name: "More replies" }));
+    await screen.findByText("second page reply");
+    // The channel is reconnected: the next list load carries a new generation.
+    generation = 2;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
+    await screen.findByText("parent g2");
+    await screen.findByText("first page reply");
+    await waitFor(() => expect(screen.queryByText("second page reply")).not.toBeInTheDocument());
+    const replyPage = gateway.replyPage as ReturnType<typeof vi.fn>;
+    // The cursor of generation 1 was never sent again.
+    expect(replyPage.mock.calls.filter((call) => (call[0] as { cursor?: string | null }).cursor === "cursor-g1")).toHaveLength(1);
+    expect(client.getQueryCache().find({ queryKey: ["youtube-comments", USER, ACCOUNT, "replies:c-parent:g2", "page-0"] })).toBeDefined();
+  });
+
+  it("a refused stale cursor offers a reload from page one, not the same request again, and keeps the draft", async () => {
+    const { gateway } = makeGateway({});
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      account_id: ACCOUNT, channel_id: "UC-x", binding_generation: 1, video_id: "vid-1", list: "published" as const,
+      items: [row({ comment_id: "c-parent", handle: "hdl-parent", text: "the parent" })],
+      next_cursor: null, inconsistent_count: 0,
+    }));
+    (gateway.replyPage as ReturnType<typeof vi.fn>).mockImplementation(async (params: { cursor?: string | null }) => {
+      if (params.cursor) throw new YouTubeCommentsError("invalid_handle");
+      return {
+        account_id: ACCOUNT, channel_id: "UC-x", binding_generation: 1, parent_handle: "hdl-parent",
+        items: [row({ kind: "reply", comment_id: "c-r1", handle: "h1", canonical_parent_id: "c-parent", text: "first page reply" })],
+        next_cursor: "cursor-old", inconsistent_count: 0,
+      };
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("the parent");
+    fireEvent.click(screen.getByRole("button", { name: "Load replies" }));
+    await screen.findByText("first page reply");
+    fireEvent.click(within(screen.getByTestId("yt-stage4-replies")).getByRole("button", { name: "Reply" }));
+    fireEvent.change(within(screen.getByTestId("yt-stage4-replies")).getByLabelText("Write a reply"), { target: { value: "draft survives" } });
+    fireEvent.click(screen.getByRole("button", { name: "More replies" }));
+    const reload = await screen.findByRole("button", { name: "Reload from the start" });
+    expect(screen.queryByRole("button", { name: "Retry this page" })).not.toBeInTheDocument();
+    const replyPage = gateway.replyPage as ReturnType<typeof vi.fn>;
+    const before = replyPage.mock.calls.length;
+    fireEvent.click(reload);
+    await waitFor(() => expect(replyPage.mock.calls.length).toBe(before + 1));
+    expect((replyPage.mock.calls.at(-1)?.[0] as { cursor?: string | null }).cursor ?? null).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Reload from the start" })).not.toBeInTheDocument());
+    expect((within(screen.getByTestId("yt-stage4-replies")).getByLabelText("Write a reply") as HTMLTextAreaElement).value).toBe("draft survives");
+  });
+
+  it("a status check that compared the edit text shows that result apart from the receipt state", async () => {
+    const { gateway } = renderScreen({
+      threads: [row({ comment_id: "c-mine", handle: "hdl-mine", text: "my comment", is_own: true })],
+    });
+    (gateway.edit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Failed to fetch"));
+    (gateway.operationStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      operation_id: "op-x", action: "edit", state: "indeterminate", reason: "no_settlement", provider_class: null, moderation_status: null,
+      ban_requested: false, result_thread_id: null, result_comment_id: null, binding_generation: 1, channel_id: "UC-x",
+      observation: "requested_text_observed", observed_text: "my edited comment",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Edit your comment"), { target: { value: "my edited comment" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save" })); });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Check status" })); });
+    expect(await screen.findByTestId("yt-stage4-observation")).toHaveTextContent("YouTube currently shows the text you asked for.");
+    expect(screen.getByRole("alert")).toHaveTextContent(/may or may not have been applied/);
+  });
+
+  it("earlier pages of a list keep an observer for as long as the list is mounted", async () => {
+    const { gateway } = makeGateway({});
+    (gateway.threadPage as ReturnType<typeof vi.fn>).mockImplementation(async (params: { cursor?: string | null }) => ({
+      account_id: ACCOUNT, channel_id: "UC-x", video_id: "vid-1", list: "published" as const,
+      items: [params.cursor ? row({ comment_id: "c-p2", text: "second page row" }) : row({ comment_id: "c-p1", text: "first page row" })],
+      next_cursor: params.cursor ? null : "cursor-2", inconsistent_count: 0,
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("first page row");
+    fireEvent.click(await screen.findByRole("button", { name: "Load more comments" }));
+    await screen.findByText("second page row");
+    const firstPage = client.getQueryCache().find({ queryKey: ["youtube-comments", USER, ACCOUNT, "threads:vid-1:published", "page-0"] });
+    expect(firstPage).toBeDefined();
+    // An entry nobody observes is garbage-collected after ten minutes and the list would lose its first rows.
+    expect(firstPage!.getObserversCount()).toBeGreaterThan(0);
+    expect(screen.getByText("first page row")).toBeInTheDocument();
+  });
+
+  it("a failed settings refresh keeps the admitted screen and offers a retry", async () => {
+    const { gateway } = makeGateway({ threads: [row()] });
+    const caps = gateway.capabilities as ReturnType<typeof vi.fn>;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("a top-level comment");
+    caps.mockRejectedValueOnce(new YouTubeCommentsError("upstream"));
+    await act(async () => { await client.invalidateQueries({ queryKey: ["youtube-comments", USER, ACCOUNT, "capabilities", null] }); });
+    const banner = await screen.findByTestId("yt-stage4-settings-error");
+    expect(screen.getByText("a top-level comment")).toBeInTheDocument();
+    fireEvent.click(within(banner).getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.queryByTestId("yt-stage4-settings-error")).not.toBeInTheDocument());
+    expect(screen.getByText("a top-level comment")).toBeInTheDocument();
+  });
+
+  it("a first load that fails to read the settings says so and offers a retry, never 'not enabled'", async () => {
+    const { gateway } = makeGateway({ threads: [row()] });
+    (gateway.capabilities as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new YouTubeCommentsError("upstream"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("Postora could not read its settings")).toBeInTheDocument();
+    expect(screen.queryByText(/not enabled for this channel/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("a top-level comment")).toBeInTheDocument();
+  });
+
+  it("the manual status check sends the draft of an edit for reconciliation", async () => {
+    const { gateway } = renderScreen({
+      threads: [row({ comment_id: "c-mine", handle: "hdl-mine", text: "my comment", is_own: true })],
+    });
+    (gateway.edit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Failed to fetch"));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const input = screen.getByLabelText("Edit your comment") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "my edited comment" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save" })); });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Check status" })); });
+    const lastCall = (gateway.operationStatus as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as { text?: string };
+    expect(lastCall.text).toBe("my edited comment");
+  });
+
+  it("a manual status check right after a submit keeps the identity when the receipt is not there yet (pre-claim grace)", async () => {
+    const { gateway } = renderScreen({ threads: [row()], createResult: () => Promise.reject(new Error("Failed to fetch")) });
+    (gateway.operationStatus as ReturnType<typeof vi.fn>).mockRejectedValue(new YouTubeCommentsError("not_found"));
+    await screen.findByTestId("yt-stage4-composer");
+    fireEvent.change(screen.getByLabelText(/Post a comment as your channel/), { target: { value: "fresh" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Comment$/ })); });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Check status" })); });
+    // Still the "lost answer" line with its check button, not "reconnected": the receipt may simply not exist yet.
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/reconnected/);
+    expect(storedOps()).toHaveLength(1);
+  });
+
+  it("dismissing a banner while its re-check is in flight does not acknowledge the receipt", async () => {
+    localStorage.setItem(`postora:yt-stage4:ops:${USER}`, JSON.stringify([{
+      operationId: "op-flight", accountId: ACCOUNT, videoId: "vid-1", action: "create_thread", targetCommentId: "", createdAt: Date.now(),
+    }]));
+    const { gateway } = makeGateway({ threads: [row()], statusResult: Promise.resolve({ state: "dispatched", reason: null }) });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      </QueryClientProvider>,
+    );
+    const banner = await screen.findByTestId("yt-stage4-recovered");
+    // The re-check resolves only when the test lets it, and it will then say "confirmed".
+    let release: (value: Stage4OperationStatusPayload) => void = () => undefined;
+    (gateway.operationStatus as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise<Stage4OperationStatusPayload>((resolve) => { release = resolve; }));
+    fireEvent.click(within(banner).getByRole("button", { name: "Check status" }));
+    await waitFor(() => expect((gateway.operationStatus as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2));
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    await act(async () => {
+      release({
+        operation_id: "op-flight", action: "create_thread", state: "confirmed", reason: null, provider_class: null, moderation_status: null,
+        ban_requested: false, result_thread_id: null, result_comment_id: null, binding_generation: 1, channel_id: "UC-x",
+        observation: null, observed_text: null,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    // The owner dismissed the banner before it showed the outcome, so the identity is still there for the next view.
+    expect(storedOps()).toHaveLength(1);
+  });
+});
+
+describe("Stage4RecoveredOperations (standalone recovery) follow-up", () => {
+  it("dismissing a banner while its re-check is in flight does not acknowledge the receipt", async () => {
+    localStorage.setItem(`postora:yt-stage4:ops:${USER}`, JSON.stringify([{
+      operationId: "op-flight", accountId: ACCOUNT, videoId: "vid-1", action: "create_thread", targetCommentId: "", createdAt: Date.now(),
+    }]));
+    const { gateway } = makeGateway({ statusResult: Promise.resolve({ state: "dispatched", reason: null }) });
+    render(<Stage4RecoveredOperations userId={USER} accountId={ACCOUNT} gateway={gateway} />);
+    const banner = await screen.findByTestId("yt-stage4-recovered-standalone");
+    let release: (value: Stage4OperationStatusPayload) => void = () => undefined;
+    (gateway.operationStatus as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise<Stage4OperationStatusPayload>((resolve) => { release = resolve; }));
+    fireEvent.click(within(banner).getByRole("button", { name: "Check status" }));
+    await waitFor(() => expect((gateway.operationStatus as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2));
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    await act(async () => {
+      release({
+        operation_id: "op-flight", action: "create_thread", state: "confirmed", reason: null, provider_class: null, moderation_status: null,
+        ban_requested: false, result_thread_id: null, result_comment_id: null, binding_generation: 1, channel_id: "UC-x",
+        observation: null, observed_text: null,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(JSON.parse(localStorage.getItem(`postora:yt-stage4:ops:${USER}`) ?? "[]")).toHaveLength(1);
   });
 });

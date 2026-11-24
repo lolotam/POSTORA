@@ -707,8 +707,9 @@ BEGIN
     '00000000-0000-4000-8000-000000000403',
     'create_thread', '{"video_id":"vid-s4-7"}'::jsonb,
     repeat('c', 64), v_logical, 'write', 's7-3');
-  ASSERT r ->> 'reason' = 'recently_posted' AND r ->> 'result_comment_id' = 'cmt-s4-7',
-    format('S7 a recent confirmation under the live binding carries the comment id: %s', r);
+  ASSERT r ->> 'reason' = 'recently_posted' AND r ->> 'result_comment_id' = 'cmt-s4-7'
+    AND r ->> 'result_thread_id' = 'th-s4-7',
+    format('S7 a recent confirmation under the live binding carries the comment id and the thread id: %s', r);
 
   -- after the 10 minute window a deliberate identical comment is allowed
   UPDATE public.youtube_comment_operations
@@ -765,8 +766,9 @@ BEGIN
     '00000000-0000-4000-8000-000000000407',
     'create_thread', '{"video_id":"vid-s4-7"}'::jsonb,
     repeat('g', 64), v_logical, 'write', 's7-7');
-  ASSERT r ->> 'reason' = 'recently_posted' AND r ->> 'result_comment_id' IS NULL,
-    format('S7 across a binding change the fence refusal is the bare recently_posted: %s', r);
+  ASSERT r ->> 'reason' = 'recently_posted' AND r ->> 'result_comment_id' IS NULL
+    AND r ->> 'result_thread_id' IS NULL AND (r - 'ok' - 'reason') = '{}'::jsonb,
+    format('S7 across a binding change the fence refusal is the bare recently_posted, with no id of either kind: %s', r);
 END
 $s7$;
 
@@ -2160,12 +2162,26 @@ BEGIN
            WHERE key = 'youtube_comments_stage4_rollout') = 'false',
     'R17 the revocation applied once the mark committed';
 
-  -- A revocation that committed BEFORE a mark is seen by it.
+  -- A revocation that committed BEFORE a mark is seen by that MARK (not only by
+  -- the next claim): claim while writes are allowed, revoke, then mark with the
+  -- claim's own token. The mark must refuse and close the operation as never sent.
+  UPDATE public.app_settings SET value = v_policy WHERE key = 'youtube_comments_stage4_rollout';
   r := public.youtube_comment_op_claim(
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen, '00000000-0000-4000-8000-00000000c502'::uuid,
     'edit', '{"video_id":"vid-r17","comment_id":"cmt-r17b"}'::jsonb,
     repeat('w', 64), '{}'::jsonb, 'write', 'r17b');
-  ASSERT r ->> 'reason' = 'capability_denied', format('R17 a committed revocation stops the next claim: %s', r);
+  ASSERT (r ->> 'ok')::boolean, format('R17 claimed while writes were allowed: %s', r);
+  v_token := r ->> 'attempt_token';
+  UPDATE public.app_settings
+     SET value = jsonb_set(value, ARRAY['accounts', v_acct, 'write'], 'false'::jsonb)
+   WHERE key = 'youtube_comments_stage4_rollout';
+  r := public.youtube_comment_op_mark_dispatched(
+    v_a::uuid, '00000000-0000-4000-8000-00000000c502'::uuid, v_token::uuid, 'UC-s4-race', v_gen);
+  ASSERT NOT (r ->> 'ok')::boolean AND r ->> 'reason' = 'capability_denied' AND r ->> 'state' = 'refused',
+    format('R17 a committed revocation stops the next MARK: %s', r);
+  ASSERT (SELECT state FROM public.youtube_comment_operations
+           WHERE owner_id = v_a::uuid AND operation_id = '00000000-0000-4000-8000-00000000c502'::uuid) = 'refused',
+    'R17 the refused mark closed the operation as never sent';
 
   UPDATE public.app_settings SET value = v_policy WHERE key = 'youtube_comments_stage4_rollout';
 END
@@ -2277,6 +2293,7 @@ BEGIN
     'edit', '{"video_id":"vid-r20","comment_id":"cmt-r20a"}'::jsonb,
     repeat('y', 64), '{}'::jsonb, 'write', 'r20a');
   ASSERT (r ->> 'ok')::boolean, format('R20 claimed a: %s', r);
+  v_token := r ->> 'attempt_token';
   st := public.youtube_comment_op_status(v_a::uuid, v_acct::uuid, '00000000-0000-4000-8000-00000000c701'::uuid);
   ASSERT st ->> 'state' = 'claimed' AND st ->> 'target_comment_id' = 'cmt-r20a',
     format('R20 a fresh claim stays claimed and names its target: %s', st);
@@ -2286,9 +2303,14 @@ BEGIN
   st := public.youtube_comment_op_status(v_a::uuid, v_acct::uuid, '00000000-0000-4000-8000-00000000c701'::uuid);
   ASSERT st ->> 'state' = 'refused' AND st ->> 'reason' = 'abandoned_before_dispatch',
     format('R20 an abandoned claim closes as refused: %s', st);
+  -- With the claim's OWN token: a made-up token would be refused for being wrong
+  -- and prove nothing about the closed state.
   r := public.youtube_comment_op_mark_dispatched(
-    v_a::uuid, '00000000-0000-4000-8000-00000000c701'::uuid, '00000000-0000-4000-8000-000000000000'::uuid, 'UC-s4-race', v_gen);
-  ASSERT NOT (r ->> 'ok')::boolean, 'R20 a closed claim can never be marked';
+    v_a::uuid, '00000000-0000-4000-8000-00000000c701'::uuid, v_token::uuid, 'UC-s4-race', v_gen);
+  ASSERT NOT (r ->> 'ok')::boolean, format('R20 a closed claim can never be marked, even with its original token: %s', r);
+  ASSERT (SELECT state FROM public.youtube_comment_operations
+           WHERE owner_id = v_a::uuid AND operation_id = '00000000-0000-4000-8000-00000000c701'::uuid) = 'refused',
+    'R20 the closed claim stayed refused after the mark attempt';
 
   r := public.youtube_comment_op_claim(
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen, '00000000-0000-4000-8000-00000000c702'::uuid,
