@@ -148,8 +148,20 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
+            onClick={() => {
+              // While the settings could not be read there is no baseline list
+              // to refetch (its read is held back), so the button asks the
+              // server about the admission again instead of firing a query
+              // whose `enabled` is false.
+              if (platform === "youtube" && stage4Admission === "unavailable") {
+                retryAdmission();
+                return;
+              }
+              refetch();
+            }}
+            // While the admission is still being decided the button waits: it
+            // would otherwise refetch a list that is not read yet.
+            disabled={stage4Admission === "loading" || isFetching}
           >
             {isFetching ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
             {t("common:refresh", "Refresh")}

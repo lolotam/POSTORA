@@ -6,6 +6,7 @@ import { useYouTubeStage4Admission } from "../application/useYouTubeStage4Admiss
 import { youtubeCommentsKey } from "../application/queryKeys";
 import type { YouTubeCommentsGateway } from "../application/ports";
 import type { Stage4CapabilitiesPayload } from "../domain/types";
+import { YouTubeCommentsError } from "../domain/errors";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
@@ -54,6 +55,16 @@ describe("useYouTubeStage4Admission", () => {
 
   it("is legacy when the first load fails: with no data an error means the baseline inbox", async () => {
     const { hook } = setup([() => Promise.reject(new Error("down"))]);
+    await waitFor(() => expect(hook.result.current.admission).toBe("legacy"));
+  });
+
+  it("is unavailable only when the server said the settings could not be read", async () => {
+    const { hook } = setup([() => Promise.reject(new YouTubeCommentsError("settings_unavailable"))]);
+    await waitFor(() => expect(hook.result.current.admission).toBe("unavailable"));
+  });
+
+  it("is legacy for an upstream failure with no data: a transport error or an old backend is not the settings", async () => {
+    const { hook } = setup([() => Promise.reject(new YouTubeCommentsError("upstream"))]);
     await waitFor(() => expect(hook.result.current.admission).toBe("legacy"));
   });
 

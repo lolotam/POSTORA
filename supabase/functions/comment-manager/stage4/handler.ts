@@ -914,7 +914,9 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     } catch (error) {
       if (!(error instanceof SettingsReadError)) throw error;
       // An unreadable setting is an error answer, never a payload of "not allowed".
-      return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+      // It names the settings as the cause so the browser can tell this from a
+      // failed transport or an old backend, which both read as the baseline inbox.
+      return refusal(deps, 503, "settings_unavailable", requestId, headers, { action, userId, accountId, operationId: null });
     }
     const payload: Stage4CapabilitiesPayload = {
       account_id: accountId,

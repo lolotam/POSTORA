@@ -1146,13 +1146,21 @@ Deno.test("the Held list needs the held capability", async () => {
   assertEquals(published.status, 200);
 });
 
-Deno.test("an unreadable rollout is an upstream error, never a payload that looks like off", async () => {
+Deno.test("T2.3 an unreadable rollout is an error, never a payload that looks like off: settings_unavailable on the capabilities action, upstream on every other", async () => {
   const world = createWorld({ admitsError: true });
   const res = await world.calls("youtube_stage4_capabilities");
   const body = await jsonOf(res);
   assertEquals(res.status, 503);
-  assertEquals(body.reason, "upstream");
+  assertEquals(body.reason, "settings_unavailable", "the capabilities answer names the settings as the cause");
   assertEquals("data" in body, false, "no capabilities payload of denials is returned");
+  // The refusal is still audited, with the new reason and the verified owner and account.
+  const audited = world.auditRows.find((row) => (row.metadata as { reason?: string }).reason === "settings_unavailable");
+  assertEquals(audited?.user_id, USER);
+  assertEquals((audited?.metadata as { action?: string }).action, "youtube_stage4_capabilities");
+
+  const list = await world.calls("youtube_thread_page", { video_id: "vid-1", list: "published" });
+  assertEquals(list.status, 503);
+  assertEquals((await jsonOf(list)).reason, "upstream", "a list action keeps the generic 503");
 });
 
 Deno.test("credential preparation failure claims nothing", async () => {
