@@ -793,6 +793,10 @@ function Composer(params: {
       params.onNotice?.(t("youtubeStage4.notice.posted", "Posted. Refresh the thread to see it."));
     } else if (outcome.kind === "refused") {
       params.onAcknowledge?.(outcome.operationId);
+    } else if (outcome.kind === "error" && outcome.terminal) {
+      // The receipt can never be read again and this composer has just said so:
+      // the identity would otherwise come back on the next mount. The draft stays.
+      params.onAcknowledge?.(outcome.operationId);
     }
   };
 

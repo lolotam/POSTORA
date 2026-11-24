@@ -19,7 +19,7 @@ import type {
   Stage4ReceiptPayload,
 } from "../domain/types";
 import { youtubeCommentsKey, YOUTUBE_COMMENTS_STALE_MS } from "./queryKeys";
-import { clearSettled, recoverOperation } from "./recoverOperation";
+import { clearSettled, readOperationStatus, recoverOperation } from "./recoverOperation";
 /** The outcome of one deliberate submit, as the composer must show it. */
 export type SubmissionOutcome =
   | { kind: "confirmed"; receipt: Stage4ReceiptPayload; operationId: string }
@@ -39,7 +39,19 @@ export type SubmissionOutcome =
    */
   | { kind: "earlier"; state: "confirmed" | "refused"; reason: string | null; operationId: string }
   /** A failure with no receipt (a lost response): the operation id is what a status check needs. */
-  | { kind: "error"; reason: string; draftKept: true; operationId: string };
+  | {
+    kind: "error";
+    reason: string;
+    draftKept: true;
+    operationId: string;
+    /**
+     * Set when a status check learned that the receipt can never be read again
+     * (the binding changed). A surface that shows it acknowledges the identity;
+     * an error without it (a lost answer, a miss inside the pre-claim grace)
+     * keeps the identity so the check can be repeated.
+     */
+    terminal?: true;
+  };
 
 /** A restored operation from storage, after its status was read. */
 export interface RecoveredOperation {
@@ -254,11 +266,22 @@ export function useYouTubeStage4(params: {
   // its outcome was shown (or can never be read again). A refused submit keeps
   // the draft; an indeterminate one is never re-sent (spec 9.1, 14).
 
-  const [recovered, setRecovered] = useState<RecoveredOperation[]>([]);
+  const [recovered, setRecoveredState] = useState<RecoveredOperation[]>([]);
   // What the owner can see right now, read after an await: a re-check that
   // finishes for a banner the owner has since dismissed has shown nothing.
+  // The ref is written in the SAME call that queues the state update, never
+  // by a later render: an answer that lands between a dismissal and the next
+  // render would otherwise still find the dismissed entry.
   const recoveredRef = useRef(recovered);
-  recoveredRef.current = recovered;
+  const setRecovered = useCallback((next: RecoveredOperation[]) => {
+    recoveredRef.current = next;
+    setRecoveredState(next);
+  }, []);
+  // The identity of every submission this view started, kept in memory beside
+  // the stored one. Storage can be unavailable (a locked-down profile, a full
+  // quota); a status check must still know what the operation was. Removed
+  // when a surface acknowledges the outcome, and when the account is discarded.
+  const liveOperations = useRef(new Map<string, PendingStage4Operation>());
   const aliveRef = useRef(true);
   const contextRef = useRef(`${userId}:${accountId}`);
   contextRef.current = `${userId}:${accountId}`;
@@ -308,14 +331,16 @@ export function useYouTubeStage4(params: {
       }
 
       const operationId = input.operationId ?? mintOperationId();
-      savePendingOperation(userId, {
+      const identity: PendingStage4Operation = {
         operationId,
         accountId,
         videoId: input.videoId,
         action,
         targetCommentId,
         createdAt: Date.now(),
-      });
+      };
+      liveOperations.current.set(operationId, identity);
+      savePendingOperation(userId, identity);
 
       let receipt: Stage4ReceiptPayload;
       try {
@@ -350,7 +375,10 @@ export function useYouTubeStage4(params: {
 
   /** A surface that has shown this operation's outcome forgets its identity. */
   const acknowledge = useCallback(
-    (operationId: string) => clearPendingOperation(userId, operationId),
+    (operationId: string) => {
+      liveOperations.current.delete(operationId);
+      clearPendingOperation(userId, operationId);
+    },
     [userId],
   );
 
@@ -425,14 +453,20 @@ export function useYouTubeStage4(params: {
       // the pre-claim grace window and keeps the identity; a settled answer is
       // definite. The local identity says what the operation was, which decides
       // whether the draft is sent along for the edit comparison.
-      const operation: PendingStage4Operation = listPendingOperations(userId, accountId)
-        .find((op) => op.operationId === operationId)
-        ?? { operationId, accountId, videoId: "", action: "create_thread", targetCommentId: "", createdAt: 0 };
-      const result = await recoverOperation(gateway, accountId, operation, operation.action === "edit" ? draftText : undefined);
+      // The live submission first, then storage. With neither, nothing is
+      // invented: the status is read with no draft (the action is unknown, so
+      // an edit comparison cannot be asked for) and a miss stays temporary.
+      const operation: PendingStage4Operation | undefined = liveOperations.current.get(operationId)
+        ?? listPendingOperations(userId, accountId).find((op) => op.operationId === operationId);
+      const result = operation
+        ? await recoverOperation(gateway, accountId, operation, operation.action === "edit" ? draftText : undefined)
+        : await readOperationStatus(gateway, accountId, operationId, undefined, false);
       const status = result.status;
       if (!status) {
-        // Unreadable for good (the binding changed) or not readable yet.
-        return { kind: "error", reason: result.unavailable ? "upstream" : "not_found", draftKept: true, operationId };
+        // Not readable yet: the owner can check again. Unreadable for good (the
+        // binding changed): final, and the surface that shows it acknowledges it.
+        if (result.unavailable) return { kind: "error", reason: "upstream", draftKept: true, operationId };
+        return { kind: "error", reason: "not_found", draftKept: true, operationId, terminal: true };
       }
       if (status.state === "confirmed") {
         void threads.reload();
@@ -475,7 +509,7 @@ export function useYouTubeStage4(params: {
     return () => {
       cancelled = true;
     };
-  }, [userId, accountId, gateway]);
+  }, [userId, accountId, gateway, setRecovered]);
 
   // An account switch discards every cached list, draft and open context.
   useEffect(() => {
@@ -515,15 +549,15 @@ export function useYouTubeStage4(params: {
     recovered,
     acknowledge,
     clearRecovered: (operationId: string) => {
-      const entry = recovered.find((r) => r.operation.operationId === operationId);
+      const entry = recoveredRef.current.find((r) => r.operation.operationId === operationId);
       // Dismissing acknowledges a terminal state the owner was shown. A
       // receipt still in flight, or one that could not be read, keeps its identity.
       if (entry && !entry.inFlight && !entry.unavailable) clearPendingOperation(userId, operationId);
-      setRecovered((prev) => prev.filter((r) => r.operation.operationId !== operationId));
+      setRecovered(recoveredRef.current.filter((r) => r.operation.operationId !== operationId));
     },
     /** Check the status of one recovered operation again (after a temporary failure). */
     recheckRecovered: async (operationId: string) => {
-      const current = recovered.find((r) => r.operation.operationId === operationId);
+      const current = recoveredRef.current.find((r) => r.operation.operationId === operationId);
       if (!current) return;
       const context = `${userId}:${accountId}`;
       const next = await recoverOperation(gateway, accountId, current.operation);
@@ -533,10 +567,15 @@ export function useYouTubeStage4(params: {
       // Dismissed while the re-check was in flight: its outcome was never shown,
       // so it is not acknowledged either, and the identity stays for the next view.
       if (!recoveredRef.current.some((r) => r.operation.operationId === operationId)) return;
-      setRecovered((prev) => prev.map((r) => (r.operation.operationId === operationId ? next : r)));
+      setRecovered(recoveredRef.current.map((r) => (r.operation.operationId === operationId ? next : r)));
       clearSettled(userId, [next]);
     },
-    discardAccountContext: () => clearPendingOperationsForAccount(userId, accountId),
+    discardAccountContext: () => {
+      for (const [operationId, operation] of liveOperations.current) {
+        if (operation.accountId === accountId) liveOperations.current.delete(operationId);
+      }
+      clearPendingOperationsForAccount(userId, accountId);
+    },
   };
 }
 

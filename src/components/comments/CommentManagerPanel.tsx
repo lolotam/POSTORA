@@ -207,7 +207,11 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
           admitted screen (which shows the outcome inline) would then find
           nothing left to show. */}
       {platform === "youtube" && stage4Admission !== "admitted" && stage4Admission !== "loading" && (
-        <Stage4RecoveredOperations userId={session?.user?.id ?? ""} accountId={activeAccountId!} />
+        <Stage4RecoveredOperations
+          key={`${session?.user?.id ?? ""}:${activeAccountId}`}
+          userId={session?.user?.id ?? ""}
+          accountId={activeAccountId!}
+        />
       )}
 
       {platformAccounts.length === 0 ? (

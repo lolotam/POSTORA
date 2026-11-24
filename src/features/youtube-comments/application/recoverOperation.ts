@@ -52,21 +52,42 @@ export async function recoverOperation(
    */
   draftText?: string,
 ): Promise<RecoveryResult> {
+  const read = await readOperationStatus(gateway, accountId, operation.operationId, draftText, !isWithinPreClaimGrace(operation));
+  return { operation, ...read };
+}
+
+/**
+ * The read behind recoverOperation, for an operation whose identity may not be
+ * known at all (storage unavailable and the live submission gone). Nothing in
+ * it needs the action or the time of the submit.
+ *
+ * `notFoundIsFinal` says whether a `not_found` proves that the receipt can
+ * never be read (the binding changed) or may still be a pre-claim miss. A
+ * caller that cannot tell passes false: a miss then stays temporary, and the
+ * owner keeps the button that checks again. `binding_changed` is always final.
+ */
+export async function readOperationStatus(
+  gateway: YouTubeCommentsGateway,
+  accountId: string,
+  operationId: string,
+  draftText: string | undefined,
+  notFoundIsFinal: boolean,
+): Promise<Omit<RecoveryResult, "operation">> {
   try {
-    const status = await gateway.operationStatus({ accountId, operationId: operation.operationId, text: draftText });
+    const status = await gateway.operationStatus({ accountId, operationId, text: draftText });
     const settled = status.state === "confirmed" || status.state === "refused";
     const inFlight = status.state === "claimed" || status.state === "dispatched";
-    return { operation, status, settled, unavailable: false, inFlight };
+    return { status, settled, unavailable: false, inFlight };
   } catch (error) {
     if (error instanceof YouTubeCommentsError && isRebindReason(error.code)) {
       // A fresh submit's receipt may simply not exist yet: keep the identity
       // and let the owner check again. Only a binding change is final at once.
-      if (error.code === "not_found" && isWithinPreClaimGrace(operation)) {
-        return { operation, status: null, settled: false, unavailable: true, inFlight: false };
+      if (error.code === "not_found" && !notFoundIsFinal) {
+        return { status: null, settled: false, unavailable: true, inFlight: false };
       }
-      return { operation, status: null, settled: true, unavailable: false, inFlight: false };
+      return { status: null, settled: true, unavailable: false, inFlight: false };
     }
-    return { operation, status: null, settled: false, unavailable: true, inFlight: false };
+    return { status: null, settled: false, unavailable: true, inFlight: false };
   }
 }
 
