@@ -4,7 +4,7 @@
 
 Code baseline: `main` at `5d020ed`. `git diff --stat f7d49921 5d020ed` over code, scripts and workflows is empty (the commits since are documents), so every path and line number below, read with `git show` at `f7d49921` (itself identical in code to the Stage 4 merge `44b426cc`), holds. Stage 5 depends on two things Stage 4 created in `supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql`: the health-neutral token store (`store_youtube_refreshed_token_with_lease_neutral`) and the `social_accounts.binding_generation` counter. The manager confirmed on 2026-11-24 that the migration is applied in production and that a real token refresh succeeded through the new store; this document did not check production.
 
-This is the **third revision**. The owner's decisions are built in and the options he did not choose are gone (§11). The plan debate's seven blocking objections and the third automated review are answered in §14; rounds 1 and 2 are condensed in §13. **Stage 5 carries one database migration** (§5.2): a policy, a nullable column with a trigger on `social_accounts` (decision D11), and a small set of functions. It creates no table.
+This is the **fourth revision**. The owner's decisions are built in and the options he did not choose are gone (§11); the last two, D10 and D11, arrived after the third revision. The plan debate's seven blocking objections and the third automated review are answered in §14; rounds 1 and 2 are condensed in §13. **Stage 5 carries one database migration** (§5.2): a policy, a nullable column with a trigger on `social_accounts`, **one small table that records each owner's acceptance of the analytics purpose** (§7.3), and a small set of functions. It stores no analytics.
 
 Google pages were fetched on 2026-11-23. Each provider fact carries its URL and one of two marks:
 
@@ -23,7 +23,7 @@ Today Postora shows only YouTube's public lifetime counters (total views, subscr
 ### Non-goals
 
 - **No revenue or ad numbers.** They need a different Google permission and a channel in the YouTube Partner Program (§3.1).
-- **No stored YouTube analytics data** (decision D2). No table, no cron job, no history beyond what Google returns on request. The one migration of this stage adds a policy, a nullable identity column with its trigger, and a few functions; it stores no analytics.
+- **No stored YouTube analytics data** (decision D2). No analytics table, no cron job, no history beyond what Google returns on request. The one table this stage adds holds acceptance records, not YouTube data (§7.3).
 - **No numbers Postora computes itself**: no net subscribers, no engagement rate, no "+12% versus the previous period" (§3.6).
 - **No audience breakdowns in the first release**: traffic sources, countries, devices, age and gender are listed as later options (§4.2).
 - **No write to YouTube** and no change to publishing, comments, moderation, the comment poller, the OAuth attempt flow, the refresh lease or disconnect.
@@ -184,7 +184,7 @@ How this API reports a missing scope, an exhausted quota, an expired token or an
 | A client "must require users to agree to a privacy policy before users can access" its services (quote truncated at the source's length limit). | [V] | Developer policies, III.A.2 |
 | Users must re-accept the privacy policy before data is used for a purpose outside the one they originally accepted (reported by the debate as III.E.3.c). | **[S] — unverified**; this document could not reach the passage | Developer policies, III.E.3 |
 
-The design stores nothing and derives nothing, so it complies with the storage and derivation rules. The consent rule is a real open question (§7.3, decision D10).
+The design stores nothing and derives nothing, so it complies with the storage and derivation rules. The consent rule is met inside the product: no analytics is read for a channel before its owner has accepted the purpose in Postora (§7.3, decision D10).
 
 ## 4. Proposed scope
 
@@ -265,32 +265,34 @@ Why the generation alone is not enough (debate objection 2). Stage 4's trigger s
 | Update that turns a row into YouTube | a new `gen_random_uuid()`. |
 | Existing rows | stay `NULL`; the decision reads `NULL` as the all-zero UUID. A re-created row always gets a random value, so it never equals an old row's. |
 
-Adding a nullable column without a default is a catalogue change with no table rewrite. The migration step of the plan repeats Stage 4's inventory for the added column (positional inserts, `%ROWTYPE`, `select("*")` readers, generated types). This is decision **D11**; without it the identity is `(account, channel, generation)` and the residual of §10 R-3 applies.
+Adding a nullable column without a default is a catalogue change with no table rewrite. The migration step of the plan repeats Stage 4's inventory for the added column (positional inserts, `%ROWTYPE`, `select("*")` readers, generated types). The owner decided to add it (D11).
 
-**The migration** (decision D6, plus D11) creates exactly these objects, following `20261122130000_youtube_stage4_comment_operations.sql`: the policy at `:728-741`, `SECURITY DEFINER` functions with a pinned `search_path` and service-role-only grants as at `:1895-1907`, and the closing assertions as at `:2103-2150`. It creates no table and changes no existing function, trigger or policy.
+**The migration** (decisions D6, D10 and D11) creates exactly these objects, following `20261122130000_youtube_stage4_comment_operations.sql`: the policy at `:728-741`, `SECURITY DEFINER` functions with a pinned `search_path` and service-role-only grants as at `:1895-1907`, and the closing assertions as at `:2103-2150`. It creates **one table**, the acceptance record of §7.3, and changes no existing function, trigger or policy.
 
 | Object | Purpose |
 |---|---|
-| Policy `app_settings_youtube_stage5_rollout_private` | RESTRICTIVE, `FOR ALL`, `TO anon, authenticated`: a row whose key is `youtube_analytics_stage5_rollout` or `youtube_analytics_stage5_consent` is visible and writable only to an admin (`public.has_role(auth.uid(), 'admin')`). Both `USING` and `WITH CHECK`, so a non-admin cannot rename another row into or out of the two keys. The service role bypasses RLS. |
+| Policy `app_settings_youtube_stage5_rollout_private` | RESTRICTIVE, `FOR ALL`, `TO anon, authenticated`: a row whose key is `youtube_analytics_stage5_rollout` or `youtube_analytics_stage5_scope_gate` (branch B only, §7.4) is visible and writable only to an admin (`public.has_role(auth.uid(), 'admin')`). Both `USING` and `WITH CHECK`, so a non-admin cannot rename another row into or out of the two keys. The service role bypasses RLS. |
 | Column `social_accounts.binding_incarnation` and its trigger | Above (D11). |
+| Table `youtube_analytics_purpose_consents` and `youtube_analytics_stage5_record_consent(...)` | The acceptance record and its only writer (§7.3, D10). |
 | `youtube_analytics_stage5_parse_policy(policy jsonb, account uuid)` | Pure, reads no table, executable by nobody but the functions below. Returns `ok`, `missing`, `invalid`, `off` or `not_listed`. |
 | **`youtube_analytics_stage5_decide(...)`** | The one decision (below). |
 | `youtube_analytics_stage5_acquire_lease(...)`, `youtube_analytics_stage5_store_token(...)` | Bound wrappers around the existing lease functions (§5.3). |
 
 Policy document, unchanged: `{ "version": 1, "mode": "off" | "allowlist" | "all", "account_ids": ["<uuid>", …] }`. Not an object, unknown version or mode, `account_ids` not an array, a non-UUID entry, or more than 200 entries → `invalid`. Absent → `missing`. Both deny every account. Admins get no bypass.
 
-**`decide(p_owner, p_account, p_expected_channel, p_expected_generation, p_expected_incarnation, p_required_scopes, p_with_credentials)`** returns one JSON object and is **one SQL statement**:
+**`decide(p_owner, p_account, p_expected_channel, p_expected_generation, p_expected_incarnation, p_required_scopes, p_purpose_version, p_with_credentials)`** returns one JSON object and is **one SQL statement**:
 
 ```text
 { ok, reason, channel_id, binding_generation, binding_incarnation, connection_revision,
-  provider, needs_reauth, granted_scopes, credentials? }
+  provider, needs_reauth, granted_scopes, consent: { state, version }, credentials? }
 ```
 
-- It reads the account row (owner-filtered) and the rollout setting together, by one `SELECT … LEFT JOIN`, and calls the pure parser on the joined value. PostgreSQL gives a `SELECT` "a snapshot of the database as of the instant the query begins to run", and "two successive `SELECT` commands can see different data" ([Read Committed](https://www.postgresql.org/docs/current/transaction-iso.html), [V]). Two statements could therefore disagree; one cannot. The function is declared `VOLATILE` so it takes its own snapshot when a wrapper calls it after taking a row lock.
+- It reads the account row (owner-filtered), the rollout setting and **the owner's latest acceptance event for that channel** together, by one `SELECT` with joins, and calls the pure parser on the joined setting. PostgreSQL gives a `SELECT` "a snapshot of the database as of the instant the query begins to run", and "two successive `SELECT` commands can see different data" ([Read Committed](https://www.postgresql.org/docs/current/transaction-iso.html), [V]). Two statements could therefore disagree; one cannot. The function is declared `VOLATILE` so it takes its own snapshot when a wrapper calls it after taking a row lock.
 - `credentials` (`access_token`, `refresh_token`, `token_expires_at`) is produced **in that same statement**, only when `p_with_credentials` and `ok`. A token can therefore never come from a different snapshot than the decision that released it.
 - **Admission** passes no expected values. **Every later use** passes the three expected values the admission returned, which must be given all together or not at all.
 - `connection_revision` is the first 32 hex characters of `sha256(account || ':' || incarnation || ':' || generation)`. It is computed here, once, and compares equal only for the same incarnation and generation. It is not secret and is not a credential.
 - `p_required_scopes` is the required-scope constant (§7.2). An empty recorded list is "unknown" and passes (Stage 2, D5); a non-empty list that lacks a required scope is `missing_scope`.
+- `p_purpose_version` is the current version of the analytics purpose text (§7.3). `consent.state` is `accepted` (latest event is an acceptance of that version), `outdated` (an acceptance of an older version), `withdrawn`, or `none`.
 
 **One reason, one order.** If several conditions hold, the first in this list wins, so the page never gives a recovery instruction that cannot help:
 
@@ -299,10 +301,13 @@ Policy document, unchanged: `{ "version": 1, "mode": "off" | "allowlist" | "all"
 | 1 | `not_found` | Admission only: no row for this owner and account, or the row is not YouTube, or it is inactive. Identical for foreign, missing, inactive and non-YouTube accounts. |
 | 2 | `connection_changed` | Expected values were given and the row is absent, foreign, inactive, or its channel, generation or incarnation differs. (The caller is the server, not the browser, so this leaks nothing.) |
 | 3 | `provider_unsupported` | `COALESCE(auth_provider, 'native') <> 'native'`. |
-| 4 | `not_enabled` | The policy is `missing`, `invalid`, `off` or `not_listed`. Under branch B, also: the consent predicate (§7.4). |
-| 5 | `reconnect_required` | `needs_reauth`, or no stored access and refresh token. |
-| 6 | `missing_scope` | Recorded scopes non-empty and lacking a required scope. |
+| 4 | `not_enabled` | The policy is `missing`, `invalid`, `off` or `not_listed`. Under branch B, also: the scope-gate rule of §7.4. |
+| 5 | **`consent_required`** | `consent.state` is not `accepted`: the owner has not accepted the current purpose text for this channel, or has withdrawn (§7.3). |
+| 6 | `reconnect_required` | `needs_reauth`, or no stored access and refresh token. |
+| 7 | `missing_scope` | Recorded scopes non-empty and lacking a required scope. |
 | — | `ok` | None of the above. |
+
+`consent_required` comes after `not_enabled` so that nobody is asked to accept a feature that is not switched on for their channel, and before the two connection reasons so that acceptance is the first thing an admitted owner is asked for. Because it is a reason of `decide`, it is checked wherever `decide` runs: at admission, at credential release, before every Google attempt and before every data response (§5.4). **A withdrawal therefore stops reads at the next of those checks.**
 
 A database error is **not** a reason: the adapter reports it as `settings_unavailable`. Stage 4's adapter turns an error into `false` (`supabase/functions/comment-manager/stage4/rollout.ts:61`); Stage 5 must not copy that line.
 
@@ -320,7 +325,7 @@ A database error is **not** a reason: the adapter reports it as `settings_unavai
 - **Lock order** is account row, then lease row, the order every other writer uses (the comment at the top of `acquire_youtube_refresh_lease`, same migration). **No lock is held across Google I/O**: each wrapper is one RPC, one transaction, a few statements.
 - **A browser disconnect cannot interleave with a store.** `UPDATE … SET is_active = false` needs the row lock the wrapper holds, so the update commits either before the wrapper's check (the check sees an inactive row; nothing is written) or after the wrapper's commit (the token was stored while the connection was still active). There is no third case.
 - **No fourth trusted writer.** The neutral store is owned by the narrow role `youtube_stage4_refresh`, so the generation trigger preserves the generation when it writes (`…stage4…sql:374-440`). The wrappers are owned by the normal owner and *call* it; the narrow role's privileges, and the Stage 4 test that it owns exactly three functions (`supabase/tests/youtube_comment_operations.sql:385-389`), are unchanged.
-- **Persistence is conditioned on the binding, not on the rollout.** Withdrawing the rollout stops *use* of analytics (the next attempt is refused). It does not discard a token Google has already issued to the admitted connection: refusing to store it could lose a rotated refresh token and break publishing for that channel. A `needs_reauth` mark set meanwhile does not prevent the store either.
+- **Persistence is conditioned on the binding, not on the rollout or on acceptance.** Withdrawing the rollout, or the owner withdrawing acceptance, stops *use* of analytics (the next attempt is refused). It does not discard a token Google has already issued to the admitted connection: refusing to store it could lose a rotated refresh token and break publishing for that channel. A `needs_reauth` mark set meanwhile does not prevent the store either.
 - **Other callers.** Publishing, comments, the refresh cron and `youtube-resources` keep calling the shared functions exactly as before. They can still interleave with Stage 5 on the lease: when one holds it, Stage 5's acquire answers `lease_held` and the helper re-reads through the bound read (`resolveFromFreshRead`, `youtubeTokenRefresh.ts:545-587`), reusing the other caller's fresh token.
 
 **The adapter** (`supabase/functions/youtube-analytics/credentials.ts`) is `createSupabaseYouTubeRefreshStore(admin)` with four methods replaced, passed to `refreshYouTubeAccountToken` with `healthNeutral: true`:
@@ -348,6 +353,7 @@ One new function, `supabase/functions/youtube-analytics/`. It is not added to `y
 | `credentials.ts` | The bound refresh store of §5.3. |
 | `limits.ts` | The three limiters and the budget of §5.6, on `check_rate_limit`, all failing closed. |
 | `analyticsReadClient.ts` | Typed calls to `youtubeanalytics.googleapis.com` and the two `videos.list` uses. Timeout, per-report row validation, error mapping. No database access. |
+| `consent.ts` | Adapter over `record_consent` for the two acceptance operations (§7.3). |
 | `audit.ts` | Bounded audit (§6, rule 7). |
 | `handler.ts`, `index.ts` | `createYouTubeAnalyticsHandler(ports)`; `index.ts` only builds ports (ARCHITECTURE §12). |
 
@@ -355,7 +361,9 @@ One new function, `supabase/functions/youtube-analytics/`. It is not added to `y
 
 | Operation | Input | Success |
 |---|---|---|
-| `status` | `account_id` | Availability or one reason; `connection_revision`; `reporting_end_date`; periods and limits. No provider call. |
+| `status` | `account_id` | Availability or one reason; `connection_revision`; `reporting_end_date`; `consent` state and the current purpose version; periods and limits. No provider call. |
+| `consent_accept` | `account_id`, `purpose_version`, `locale` | Records an acceptance (§7.3). No provider call, no credential read. |
+| `consent_withdraw` | `account_id` | Records a withdrawal (§7.3). No provider call, no credential read. |
 | `summary` | `account_id`, `period_days` (7, 14, 30, 90), `window_end`, optional `video_id` | One value per metric. |
 | `daily` | same | One row per day Google returned, four metrics, plus observed coverage (§5.8). |
 | `top_videos` | `account_id`, `period_days`, `window_end` | Up to ten rows: video ID, title, link, four metrics (§5.5). |
@@ -389,13 +397,15 @@ interface YouTubeAnalyticsDaily {
 1. **Caller.** User JWT, as in `youtube-resources`; a service-role bearer is refused.
 2. **Admission limiter** (§5.6), every operation. A refusal is a cheap terminal path (§6, rule 7).
 3. **Validation.** Strict schema; unknown keys, `user_id`, `channel_id`, a malformed `video_id`, an unsupported period or a malformed `window_end` fail.
-4. **Admission.** `decide(owner, account, no expected values, required scopes, no credentials)`. Not `ok` → the reason of §5.2 (`not_found`, `provider_unsupported`, `not_enabled`, `reconnect_required`, `missing_scope`). An RPC error → `settings_unavailable`. Its channel, generation, incarnation and `connection_revision` are the **admitted binding** for the rest of the request. `status` ends here, and `window_stale` is checked here for data operations.
+4. **Admission.** `decide(owner, account, no expected values, required scopes, purpose version, no credentials)`. Not `ok` → the reason of §5.2 (`not_found`, `provider_unsupported`, `not_enabled`, `consent_required`, `reconnect_required`, `missing_scope`). An RPC error → `settings_unavailable`. Its channel, generation, incarnation and `connection_revision` are the **admitted binding** for the rest of the request. `status` ends here, and `window_stale` is checked here for data operations.
 5. **Per-user data limiter.**
 6. **Credentials.** `decide(… expected binding …, with credentials)`. Refused → typed reason; no Google call.
 7. **Token.** `refreshYouTubeAccountToken` with the bound store. A token that is still valid is used as it is. The step-6 `needs_reauth` value is in the snapshot.
 8. **Each Google attempt** — ownership lookup, Analytics call, title lookup, and any repeat — is exactly: **debit one budget unit → `decide(expected binding, no credentials)` → send**. A refused debit ends the attempt (`capacity_reached`). A refused decision ends it with that reason (`connection_changed`, `not_enabled`, `reconnect_required`, `missing_scope`, …) and **nothing is sent**; the debit already made is not refunded. The send follows the decision with no awaited call in between.
 9. **Validate** the answer by report (below).
 10. **Final decision.** `decide(expected binding, no credentials)` again, as the last awaited step. If it is not `ok`, the provider result is discarded and the typed reason is returned. If it is `ok`, the response is written. The success audit row is written **after** the response, not awaited.
+
+The two acceptance operations stop after step 3: they call `record_consent`, which does its own owner and rollout check in one statement, and return. They never reach credentials, a token or Google.
 
 **The `401` rule.** It applies to the ownership lookup and the Analytics call only; **the title lookup is exempt** (§5.5).
 
@@ -424,7 +434,9 @@ Fixed HTTP status and fixed English and Arabic copy; never Google's text. **Page
 | `invalid_request` | 400 | Not JSON, fails the schema, malformed `video_id` or `window_end`, unsupported period. | Block |
 | `window_stale` | 409 | `window_end` is not an accepted end date. | Block (Refresh) |
 | `unauthorized` | 401 | Missing, invalid or service-role bearer. | Session |
-| `not_enabled` | 403 | Rollout (or, under branch B, consent) does not admit the account. | **Account** |
+| `not_enabled` | 403 | Rollout (or, under branch B, the scope gate) does not admit the account. | **Account** |
+| `consent_required` | 403 | The owner has not accepted the current purpose text for this channel, or has withdrawn. | **Account** (shows the acceptance panel) |
+| `consent_version_stale` | 409 | `consent_accept` named a purpose version that is not the current one. | Block (the panel reloads the text) |
 | `missing_scope` | 403 | Recorded scopes lack a required one, or Google refuses for permission. Carries `detail: "grant_not_effective"` when the recorded list *includes* the scope but Google still refuses (§7.4). | **Account** (provider-confirmed: latch) |
 | `not_found` | 404 | Account not owned, not YouTube, inactive or absent. | **Account** |
 | `video_not_found` | 404 | A successful ownership lookup found no owned video. | **This video only** |
@@ -445,7 +457,7 @@ Fixed HTTP status and fixed English and Arabic copy; never Google's text. **Page
 
 | # | Case (token state at the start) | Token | Data | Analytics | Outcome |
 |---|---|---|---|---|---|
-| 1 | Any refusal at steps 1–7 (incl. credentials and a refused bound acquire), any token state; `status` | 0 | 0 | 0 | the reason |
+| 1 | Any refusal at steps 1–7 (incl. `consent_required`, credentials and a refused bound acquire), any token state; `status`; `consent_accept`; `consent_withdraw` | 0 | 0 | 0 | the reason |
 | 2 | `summary`/`daily`, valid | 0 | 0 | 1 | data |
 | 3 | same, expired, refresh succeeds | 1 | 0 | 1 | data |
 | 4 | same, expired, Google refuses the refresh | 1 | 0 | 0 | `reconnect_required` or `upstream_unavailable` |
@@ -562,7 +574,7 @@ Data queries use `staleTime: Infinity`, `refetchOnMount: false`, `refetchOnWindo
 | A response in flight at the withdrawal | Discarded if the server's final decision sees the withdrawal (§5.4, step 10). |
 | **Not guaranteed** | A response whose final decision passed a few milliseconds before the switch is delivered; so is a `status` decided before the switch and answered after it (its lease starts at issue, so it extends nothing beyond 90 seconds from then). Numbers already read cannot be taken back (plan §6). |
 
-States, each distinct, none rendered as an empty report: loading (skeletons per block; blocks independent); checking access; no YouTube channel (link to Profiles); not enabled ("not switched on for this channel yet", no reconnect prompt); managed connection; reconnect needed (link to `/profiles`); permission missing, and, with `detail: "grant_not_effective"`, "Google did not keep this permission. Disconnect the channel on Profiles and connect it again"; connection changed ("reload"); video not found (in the video panel only); empty ("YouTube has no numbers for this period yet"); days not returned (§5.8); Google quota; Postora capacity; rate limited ("try again in N minutes"); period moved on (`window_stale`: "Refresh to load the latest period"); temporary failure (retry control and request reference); video unavailable (a top-video row). None repeats a request by itself.
+States, each distinct, none rendered as an empty report: loading (skeletons per block; blocks independent); checking access; no YouTube channel (link to Profiles); not enabled ("not switched on for this channel yet", no reconnect prompt); **acceptance needed** (the panel of §7.3, in place of the reports); managed connection; reconnect needed (link to `/profiles`); permission missing, and, with `detail: "grant_not_effective"`, "Google did not keep this permission. Disconnect the channel on Profiles and connect it again"; connection changed ("reload"); video not found (in the video panel only); empty ("YouTube has no numbers for this period yet"); days not returned (§5.8); Google quota; Postora capacity; rate limited ("try again in N minutes"); period moved on (`window_stale`: "Refresh to load the latest period"); temporary failure (retry control and request reference); video unavailable (a top-video row). None repeats a request by itself.
 
 English is inline; Arabic is added under a `youtube` group in `src/i18n/locales/ar/analytics.json` and the sidebar label in `src/i18n/locales/ar/nav.json`. The page works right-to-left; numbers, dates and durations render left-to-right inside it (`src/features/competitor-tracking/ui/LtrValue.tsx`). Every control is keyboard reachable and the chart has a table alternative. YouTube Channel page counters stay labelled as such and are never mixed with this page.
 
@@ -582,8 +594,9 @@ Google says "The response for a query with the `day` dimension will not contain 
 2. **Ownership, rollout and the connection are decided in SQL, in one statement,** at admission, at credential release, before every Google attempt and before every data response (§5.2, §5.4). The same reasons, in the same order, every time.
 3. **The browser cannot name a channel.** `ids=channel==…` is built from the admitted binding. A browser-supplied video ID is format-checked, then ownership-checked.
 4. **Credentials are released, and tokens are stored, only for the admitted connection** (§5.3): bound lease acquisition, bound store under the account row lock, no lock across Google I/O.
-5. **The rollout and consent keys are private by policy**, hidden from every non-admin session; the functions that read them are executable by the service role only.
-6. **Nothing new is stored.** No analytics value, video title or provider body reaches the database or a log. The **only permitted token write** is the existing health-neutral store saving a refreshed access token (and a rotated refresh token) to the account row, through the bound wrapper (§5.3). No token is written anywhere else, logged, or returned. Every response is `Cache-Control: no-store`.
+5. **The rollout key and the branch B scope-gate key are private by policy**, hidden from every non-admin session; the functions that read them are executable by the service role only.
+6. **No YouTube data is stored.** No analytics value, video title or provider body reaches the database or a log. The **only permitted token write** is the existing health-neutral store saving a refreshed access token (and a rotated refresh token) to the account row, through the bound wrapper (§5.3). No token is written anywhere else, logged, or returned. Every response is `Cache-Control: no-store`. The one new table holds acceptance events only (§7.3): who, which channel, which text version, when, in which language; no IP address, no user agent, no analytics.
+   **No read before acceptance.** `consent_required` is a reason of the one decision, so no credential is released and no Google request is sent for a channel whose owner has not accepted the current purpose text, pilot channels and the owner's own included; a withdrawal stops reads at the next check.
 7. **Audit work is bounded, and every refusal that refuses work is recorded** (`AGENTS.md`, "Reviewing a pull request", rule 4: "Every early return that refuses work must write a log row").
    - Rows go to `system_logs` (`category` edge, `source` youtube-analytics): `operation` (known name or `unknown`), `code`, `request_id`, and `account_id` only once verified as the caller's. No tokens, provider text, numbers or unverified identifiers.
    - `unauthorized` and `method_not_allowed` write nothing; an anonymous caller writes nothing.
@@ -597,7 +610,9 @@ Google says "The response for a query with the `day` dimension will not contain 
 11. **One channel at a time.** No number from two channels is added or shown side by side (§3.6).
 12. **Disconnect.** Nothing is stored, so nothing is deleted. Browser memory is cleared on sign-out, account switch, revision change and withdrawn access (§5.7).
 
-## 7. OAuth: which permission, and consent to the new purpose
+## 7. Google's permission, and the owner's acceptance of the purpose
+
+Two different things are called "consent" and must not be confused. **Google's permission** is what the owner grants on Google's OAuth screen: scopes on a token (§7.1, §7.2, §7.4). **Acceptance of the purpose** is what the owner agrees to inside Postora: that Postora may read their channel's analytics and show it to them (§7.3). A read needs both.
 
 ### 7.1 Two branches
 
@@ -633,42 +648,126 @@ A part is `ok` only if all four are `ok`. Each is classified from the fixed list
 
 | Part | Where | Token (effective scopes) | Result and what it establishes |
 |---|---|---|---|
-| **P1-a** | Production, one of the owner's own channels | A token whose scopes are a subset of the three existing ones and exclude `yt-analytics.readonly` | All four `ok` → **branch A is sufficient for exactly that set** (a proper subset is a narrower proof). `insufficient_permission` with a token that carries **all three** → candidate branch B → P1-c. A refusal with a proper subset → **inconclusive** (the owner may have declined a scope); repeat with a token that carries all three. Anything else → inconclusive. |
+| **P1-i** (recommended first) | Isolated (below) | The three existing scopes, on the test client | All four `ok` → an early signal for branch A; build for branch A. `insufficient_permission` → run P1-c (ii) at once; branch B is decided before any code. **Limited evidence**: it is not Postora's client. |
+| **P1-a** | Production, one of Waleed's own channels, **after the Stage 5 code is deployed and he has accepted the purpose for that channel in Postora** | A token whose scopes are a subset of the three existing ones and exclude `yt-analytics.readonly`, obtained through the bound path, which `decide` releases only after acceptance | All four `ok` → **branch A is sufficient for exactly that set** (a proper subset is a narrower proof). `insufficient_permission` with a token that carries **all three** → branch B → P1-c. A refusal with a proper subset → **inconclusive**; repeat with a token that carries all three. Anything else → inconclusive. |
 | **P1-b** (optional) | Isolated (below) | `youtube.readonly` only | All four `ok` → the required set narrows to `youtube.readonly`, which also covers an owner who unticked the other permissions. Otherwise it stays at the P1-a set. |
-| **P1-c** | Isolated (below), the same channel, OAuth client and requests throughout | (i) the three existing scopes; then (ii) those three plus `yt-analytics.readonly` | (i) must be `insufficient_permission`, replicating P1-a; if it is `ok`, the two results conflict and the probe stops. (ii) all four `ok` → **branch B is necessary and sufficient**. (ii) refused → neither branch is established; stop. |
+| **P1-c** | Isolated (below), the same channel, OAuth client and requests throughout | (i) the three existing scopes (this is P1-i); then (ii) those three plus `yt-analytics.readonly` | (i) must be `insufficient_permission`; if it is `ok` while P1-a refused, the two results conflict and the probe stops. (ii) all four `ok` → **branch B is necessary and sufficient**. (ii) refused → neither branch is established; stop. |
 
-**The isolated procedure (decision D12)** does not depend on any Postora change and does not use Postora's connect flow, so it has no circular dependency on the branch B gate:
+**The isolated procedure (decision D12)** serves P1-i, P1-b and P1-c. It does not depend on any Postora change and does not use Postora's connect flow, so it has no circular dependency on the branch B gate:
 
 - **Recommended: a separate test OAuth client.** A Google Cloud project owned by Waleed with its own OAuth client, the YouTube Analytics and Data APIs enabled, its consent screen in Testing with himself as test user, and tokens obtained in Google's OAuth 2.0 Playground with that client's own credentials, for a channel he owns that is not a customer's. It touches nothing in Postora and nothing in Postora's Google project. **Its evidence is limited**: it shows what Google accepts for these requests and scopes, not what Postora's own project, verification state or stored refresh tokens do. That is enough for P1-b and P1-c, which ask about sufficiency; the durable-grant question is answered per connection (§7.4).
 - **Alternative:** Postora's production client in the same Playground, which needs the Playground redirect URI registered on that client. It would add the analytics grant to that account's grants for Postora's client, which later Postora reconnects by that account would pick up through incremental authorization. Not recommended unless the limited evidence above is judged insufficient.
 - In both, the client secret is entered only by Waleed, in his own browser, and is never shared with an agent or recorded.
 
-**What P1 writes.** Isolated parts write nothing to Postora. P1-a on production uses the owner's own channel, attended: if it runs after the Stage 5 code exists it uses the bound path of §5.3; if before, it uses the existing health-neutral helper, whose possible writes are the lease row, taken and released, and, when a refresh was needed, the token columns through the neutral store. No health column and no recorded grant, on success or refusal. The attended probe on a connection the owner is not touching has no concurrent reconnect to fence against; that is the stated reason the unbound helper is acceptable for this one use.
+**P1 and the rule "no read before acceptance".** The isolated parts are Waleed's own requests through his own test client; they are not Postora reading anyone's data and they write nothing to Postora. **P1-a is a Postora read and obeys D10 like any other**: it runs only after the code is deployed, the rollout policy lists Waleed's channel, and he has accepted the purpose for it in the product. It uses the bound path of §5.3, so its possible writes are the lease row, taken and released, and, when a refresh was needed, the token columns through the neutral store; no health column and no recorded grant. There is no production probe before the acceptance mechanism exists.
 
 **What is recorded**, in the PR and in `mem0`, and nothing else: the part and date, the HTTP status of each request, the token's effective scope list, the classification, and on success the column header names and the row count. **No Google message text, no response body, no channel name, no token, no numbers.** Fixtures are written by hand.
 
-**Gate G-P1.** No channel is added to the rollout policy until P1 has a recorded conclusion **and** the required-scope constant on the deployed head equals it (plan §5). Code may be built beforehand with a provisional set of all three existing scopes; the constant is changed by a reviewed PR if the conclusion differs.
+**Gate G-P1.** The first channel in the rollout policy is the probe channel, Waleed's own. **No other channel is added until** P1-a has a recorded conclusion **and** the required-scope constant on the deployed head equals it (plan §5). The code is built with the set P1-i indicates, or, if no isolated part has run, with a provisional set of all three existing scopes; the constant is changed by a reviewed PR if P1-a concludes otherwise.
 
-### 7.3 Consent to the new purpose (decision D10)
+### 7.3 The owner's acceptance of the analytics purpose (decision D10)
 
-Updating the public disclosure does not by itself tell an existing user that their data will be used for a purpose they did not agree to. The facts:
+**The rule.** No analytics is read for a channel — pilot channels and Waleed's own included — before the owner of that channel has accepted the analytics purpose inside Postora. Acceptance is given by the owner, in the product, for one channel; nobody gives it on their behalf, and listing a channel in the rollout policy only *offers* the feature.
 
-- What users accepted: Postora uses YouTube data "solely to" upload and publish videos and "display your YouTube channel information" (`src/pages/Privacy.tsx:92-98`); the disclosure page says Postora does not read YouTube Analytics (`src/pages/GoogleApiDisclosure.tsx:97-98`, `:107`).
-- Google: an API client "must not use user data for secondary purposes that are not clearly disclosed to users" ([Developer policies](https://developers.google.com/youtube/terms/developer-policies), III.D.2 item 3, [V]) and "must require users to agree to a privacy policy before users can access" its services (III.A.2, [V], quote truncated). The plan debate reports that III.E.3 requires users to re-accept the policy before use for a purpose outside the one they accepted; **this document could not reach that passage and marks it [S]**; plan step 1 reads it word for word.
-- **No acceptance record exists to build on.** The repository holds consent records for a partner risk flow only (`supabase/migrations/20260910100000_partner_platform_tier.sql:268-270`), none for the privacy policy. An in-app acceptance gate would need new storage and a screen: a table or column, outside D6 and D2.
+**Why it is needed.** Users accepted a privacy text that says YouTube data is used "solely to" upload and publish videos and "display your YouTube channel information" (`src/pages/Privacy.tsx:92-98`), and the disclosure page says Postora does not read YouTube Analytics (`src/pages/GoogleApiDisclosure.tsx:97-98`, `:107`). Google requires that a client "must not use user data for secondary purposes that are not clearly disclosed to users" ([Developer policies](https://developers.google.com/youtube/terms/developer-policies), III.D.2 item 3, [V]) and "must require users to agree to a privacy policy before users can access" its services (III.A.2, [V], quote truncated). The plan debate reports that III.E.3 requires re-acceptance before a use outside the accepted purpose; this document could not reach that passage (**[S]**), and plan step 1 reads it. Changing the text alone does not make an existing user agree to it.
 
-Options for the owner (D10): **A.** Enable only channels whose owners have agreed, in writing, to the new purpose, after the updated policy and disclosure are live; Waleed keeps the record and the allowlist is the enablement record. The first pilot is Waleed's own channels. Broad enablement (`mode: "all"`) is **not** covered by this delivery and needs an in-app acceptance mechanism specified separately. **B.** Build the in-app acceptance record and gate in this delivery. **C.** Treat the updated text as sufficient notice for everyone. **Recommendation: A.** Gate **G-consent** (plan §5): before P1 on a channel that is not Waleed's own, and before each channel is enabled, the agreement exists and the policy text it refers to is the one live on `/privacy`. Before P1 and enablement the manager also records which version of the privacy text each pilot owner accepted when they connected.
+#### What is recorded, and where
 
-### 7.4 Branch B only: the consent gate and per-connection grant checks (decision D7, still open)
+**A table is needed, and this is the one table of Stage 5.** The owner chose "no table" for the rollout switch (D6), and that still holds for the switch. An acceptance is a different kind of fact: a durable record that one person agreed to one text at one time, which must survive a reconnect, must not be writable by the browser, and must keep its history when it is withdrawn. Nothing existing can hold it:
 
-Applies only if P1-c concludes branch B. D7 has not been put to the owner because it may never arise.
+| Candidate | Why not |
+|---|---|
+| `social_accounts.account_metadata` | The owner's browser can update any column of an owned row (the update policy, `supabase/tests/baseline_schema.sql:18206`), so the record would not be server-written; the column is rewritten read-modify-write by other code (`supabase/functions/_shared/youtubeGrantedScopes.ts:19-32`); it dies with the row. |
+| `app_settings` | Operator configuration, admin-written. An acceptance must be written by the owner's own action. |
+| `system_logs` | A log, not a source of truth: a failed insert is dropped by design (§6, rule 7). |
+| The partner risk-consent fields (`supabase/migrations/20260910100000_partner_platform_tier.sql:268-270`) | Tied to partner WhatsApp registration. |
+
+**`public.youtube_analytics_purpose_consents`**, append-only: one row per event, never updated.
+
+| Column | Meaning |
+|---|---|
+| `id uuid` primary key | |
+| `owner_id uuid NOT NULL` → `auth.users` ON DELETE CASCADE | Who accepted or withdrew. From the JWT, never from the request body. |
+| `channel_id text NOT NULL` | The YouTube channel, copied from the owned account row by the server. |
+| `social_account_id uuid` → `social_accounts(id)` ON DELETE SET NULL | The connection it was given under; for reference only. |
+| `event text NOT NULL` | `accepted` or `withdrawn`. |
+| `purpose_version integer NOT NULL` | Which version of the purpose text was on screen. |
+| `locale text NOT NULL` | `en` or `ar`: the language it was shown in. |
+| `method text NOT NULL` | How it was given. One value in this release: `in_app_panel`. |
+| `request_id text NOT NULL`, `created_at timestamptz NOT NULL` | The request that recorded it, and when (server clock). |
+
+**Not recorded:** the text itself (it lives in the repository, keyed by version), IP address, user agent, any analytics value.
+
+- **Current state** for an owner and a channel is their latest event. It is valid only if that event is `accepted` **and** its `purpose_version` equals the current one.
+- **Keyed by owner and channel**, not by the account row, so it survives a reconnect and a delete and re-insert of the row, and is never shared between two owners of the same channel ID. Disconnecting a channel is not withdrawing (open decision D13).
+- **Row security:** enabled, **no policies**; `REVOKE ALL` from `PUBLIC`, `anon`, `authenticated` and `service_role`. Nothing reads or writes the table except two `SECURITY DEFINER` functions with a pinned `search_path`, executable by the service role only: `decide` reads it, `record_consent` inserts into it. No function updates or deletes a row.
+- **Retention:** for the life of the user account. Rows are removed only when the user is deleted (the cascade). A withdrawal does not delete the earlier acceptance; it is itself a row. There is no clean-up job; the volume is a few rows per channel.
+
+**`youtube_analytics_stage5_record_consent(p_owner, p_account, p_event, p_purpose_version, p_locale, p_request_id)`** is one statement, `INSERT … SELECT` from the owner-filtered account row joined to the rollout setting:
+
+- `accepted` requires an owned, active, native YouTube account that the rollout policy admits. Otherwise `not_found`, `provider_unsupported` or `not_enabled`, and nothing is inserted: Postora does not collect acceptances for a feature it is not offering.
+- `withdrawn` requires only an owned YouTube account row, active or not, so an owner can always withdraw.
+- It is idempotent: if the latest event already has the same meaning and version, nothing is inserted.
+
+#### Where it is enforced
+
+Inside the one decision, as its own typed reason (§5.2): **`consent_required`**, fifth in the order, after `not_enabled`. Because every use of a connection goes through `decide`, acceptance is checked at admission, **at credential release, before every outbound Google attempt and before every data response** (§5.4). A withdrawal recorded while a request is running is seen at that request's next check: the attempt is not sent, or the result is discarded. A refresh already in flight may still store the token it was issued (§5.3); nothing is read with it.
+
+The two operations that record events, `consent_accept` and `consent_withdraw` (§5.4), read no credential and call no provider. The edge function compares the submitted `purpose_version` with the current constant and answers `consent_version_stale` if they differ, so an owner cannot accept a text they were not shown.
+
+#### The screen
+
+**Where.** On `/analytics/youtube`, for the selected channel, **in place of the reports** whenever `status` answers `consent_required`. It is a panel in the page, not a dialog over it and not a notification. Nothing is fetched while it is shown. An owner with several channels is asked once per channel.
+
+**What the text must say**, in English and in Arabic, the two carrying the same meaning (the strings are written at implementation and approved by Waleed on the merge card):
+
+1. Which channel it is about, by name.
+2. What Postora will read: views, watch time, average view duration, subscribers gained and lost, likes, comments and shares, for the channel and for each video, from YouTube Analytics.
+3. Why: to show those numbers to the owner inside Postora. No other use.
+4. Who sees them: only the owner, when signed in.
+5. That the numbers are read when the owner opens the page and are **not stored** by Postora.
+6. That this is separate from, and in addition to, the permissions granted to Postora at Google, and does not change them.
+7. How to stop: the control on this page, at any time, with immediate effect.
+8. The version and date of the text, and links to the privacy policy and the Google disclosure page.
+
+**Controls.** Two buttons of equal weight: "Allow analytics for this channel" and "Not now". Nothing is pre-selected and there is no "accept for all my channels".
+
+**"Not now" records nothing.** No event is written and nothing is read. The page shows "Analytics is off for this channel until you allow it" with the same button. The owner is not asked again by a pop-up, an email or a banner elsewhere; the panel is simply there when they open the page.
+
+**Withdrawing.** While analytics is allowed, the page carries a quiet "Analytics permission" line with "Stop using analytics for this channel". It asks for one confirmation that states the effect: the reports disappear now; the channel stays connected; publishing and comments are unaffected; the permissions at Google are unchanged; analytics can be allowed again later. Confirming calls `consent_withdraw`, removes that account's reports from memory, and shows the panel again.
+
+**Accessibility.** Keyboard reachable, focus moved to the panel heading when it appears and back to the triggering control after the confirmation, the result announced; right-to-left in Arabic.
+
+#### The purpose text, its version, and the public pages
+
+- `ANALYTICS_PURPOSE_VERSION` is one integer in `supabase/functions/youtube-analytics/contracts.ts`, starting at 1. The panel's strings, in both languages, belong to that version.
+- **The disclosure page and the privacy text are corrected in the same delivery** (plan step 6), and their analytics clause is the long form of what the panel says in short. The panel may never say more, or less, than that clause. Both pages name the clause's version and date, and the panel links to them.
+- **A material change to the purpose** — what is read, why, who sees it, whether it is stored — changes the clause, the panel strings and the version together, in one change. Every existing acceptance then reads as `outdated`, `decide` answers `consent_required`, and **no report loads until the owner accepts the new text**. A correction of wording that changes no meaning does not raise the version; that judgement is Waleed's.
+- A test fails if any panel string changes, in either language, without the version constant changing (§9.3).
+- Order of release: the corrected pages and the panel ship in the same deploy, with the rollout policy absent, so no owner can be shown the panel before the pages it links to are live.
+
+#### With the pilot, the rollout modes and branch B
+
+| Situation | What happens |
+|---|---|
+| Rollout policy absent or the channel not listed | `not_enabled`. The panel is not shown and no acceptance can be recorded. |
+| Channel listed (`allowlist`) or `mode: "all"` | The owner sees the panel. Until they allow, nothing is read. Listing is the operator offering; allowing is the owner agreeing. |
+| The pilot, and Waleed's own channels | The same. There is no exception and no way to mark a channel as accepted from the admin side. The production probe P1-a runs after he has accepted for that channel (§7.2). |
+| `mode: "all"` | No longer waits for a separate mechanism: acceptance is already per owner and per channel. It still needs its own approval and the ceilings review (§8). |
+| Rollout switched off | Reads stop. Acceptances stay recorded, so switching it on again does not ask owners twice. |
+| Branch B | Independent of the scope gate (§7.4), which concerns Google's permission. An owner needs both: this acceptance, and the Google scope. The page asks for the acceptance first. |
+| The owner disconnects, then reconnects the same channel | The acceptance stands (D13). A different owner connecting that channel is asked on their own account. |
+
+### 7.4 Branch B only: the scope gate and per-connection grant checks (decision D7, still open)
+
+Applies only if P1 concludes branch B. This section is about **Google's permission**, not about the owner's acceptance of the purpose (§7.3); the two are independent and a read needs both. Under branch B an admitted owner is asked in this order: accept the purpose in Postora (`consent_required`), then reconnect to grant the Google scope (`missing_scope`). D7 has not been put to the owner because it may never arise.
 
 An unconditional scope added to `handler.ts` would reach every new connection and reconnect about two minutes after the merge, ahead of Google's verification, with nothing switched off by the analytics policy. **Recommended design:**
 
-- A second private key, `youtube_analytics_stage5_consent`, absent by default and already covered by the policy of §5.2: `{ "version": 1, "mode": "off" | "users" | "all", "user_ids": [...] }`. Absent, unreadable or malformed → no, and the connect flow asks for today's three scopes. A failure to read it never blocks a connection.
+- A second private key, `youtube_analytics_stage5_scope_gate`, absent by default and already covered by the policy of §5.2: `{ "version": 1, "mode": "off" | "users" | "all", "user_ids": [...] }`. Absent, unreadable or malformed → no, and the connect flow asks for today's three scopes. A failure to read it never blocks a connection.
 - The authorise action adds the analytics scope only when the gate admits the signed-in user; everyone else gets today's request byte for byte.
-- **The consent predicate lives in `decide`** (a second small migration replaces that one function, `CREATE OR REPLACE`). Because every use of a connection goes through `decide` (§5.2), consent is checked in the same statement, at admission, at credential release, before every Google attempt and before every response: an owner removed from the gate between two of them is refused at the next. In `allowlist` mode an allow-listed account whose owner the gate does not admit is `not_enabled`; `mode: "all"` of the rollout with consent not `all` is `not_enabled` for everyone.
-- **Data may not run ahead of consent**: rollout `all` is refused by the decision until consent is `all`, and consent `all` waits for Google's approval (or for the Console to show the scope needs none).
+- **The scope-gate rule lives in `decide`** (a second small migration replaces that one function, `CREATE OR REPLACE`). Because every use of a connection goes through `decide` (§5.2), the gate is checked in the same statement, at admission, at credential release, before every Google attempt and before every response: an owner removed from the gate between two of them is refused at the next. In `allowlist` mode an allow-listed account whose owner the gate does not admit is `not_enabled`; `mode: "all"` of the rollout with the scope gate not `all` is `not_enabled` for everyone.
+- **Data may not run ahead of the Google permission**: rollout `all` is refused by the decision until the scope gate is `all`, and the scope gate `all` waits for Google's approval (or for the Console to show the scope needs none).
 - **A grant is verified per connection, not once.** A re-consent can record the new scopes while the save keeps the old refresh token (`supabase/functions/youtube-oauth/index.ts:126-128`, `:156`), and Google's page says "The `refresh_token` is only returned on the first authorization" ([web-server flow](https://developers.google.com/identity/protocols/oauth2/web-server), [V]); whether `prompt=consent` changes that is **unverified**. So: before each pilot account is added to the rollout, a token minted from **that account's stored refresh token** is checked with the token information endpoint, under approval (the procedure of P1-a, steps for effective scopes). Under `all`, the same fact is caught at run time: if the recorded scopes include the scope and Google still refuses for permission, the answer is `missing_scope` with `detail: "grant_not_effective"`, and the owner is told to disconnect the channel on Profiles and connect it again (the disconnect revokes the stored token, so the next consent starts clean). Each occurrence is audited; several of them stop the `all` step.
 - **Closing the gate does not undo a grant.** Setting it to `off` restores today's *request*. A user who already granted the scope keeps the grant until they disconnect or revoke it, and because the flow sets `include_granted_scopes=true` Google can include that earlier grant in later authorizations. The public disclosure therefore keeps describing the fourth scope for as long as any such grant can exist.
 
@@ -683,9 +782,10 @@ The options the owner would be offered (D7): **A.** gated, as above (recommended
 | **Rollout policy `youtube_analytics_stage5_rollout`** | **Access.** Whether the endpoint will call Google for a channel. | `app_settings`, hidden from non-admin sessions by the policy of §5.2, evaluated by `decide`. | **Absent = off for every channel.** The migration does not seed it and asserts it is absent. | Waleed only |
 | Flag `feature_analytics_youtube` | **Visibility.** Whether the page and links appear. | `app_settings`, browser-readable like every `feature_*` key (`supabase/migrations/20261029170000_media_upload_limits.sql:17-39`) | Off | Waleed, in Admin → Feature Flags |
 | Native connection with the required scopes | Whether a channel qualifies | The account row | — | The owner, by connecting |
-| *Branch B only:* consent gate | Whether the consent screen asks for the analytics scope | `app_settings`, private by the same policy | Absent = off | Waleed only |
+| **The owner's acceptance of the purpose** | Whether Postora may read analytics for that owner's channel at all | The acceptance record (§7.3), written only by the owner in the product | **None = no read** | The channel's owner, in the product; nobody on their behalf |
+| *Branch B only:* scope gate | Whether Google's consent screen asks for the analytics scope | `app_settings`, private by the same policy | Absent = off | Waleed only |
 
-**The policy is the access switch.** The flag is read by the browser and enforced nowhere on the server. The moment the policy lists a channel, the endpoint serves that channel's owner whether or not the flag is on. Approving a policy change **is** the go-live approval for that channel; turning the flag off hides the page and stops nothing. The flag-off, policy-on state is tested.
+**The policy is the operator's access switch; acceptance is the owner's.** The flag is read by the browser and enforced nowhere on the server. The moment the policy lists a channel **and its owner has accepted the purpose**, the endpoint serves that owner whether or not the flag is on; listing a channel by itself reads nothing. Approving a policy change **is** the go-live approval for that channel; turning the flag off hides the page and stops nothing. The flag-off, policy-on state is tested.
 
 `decide` is evaluated at the start of every request, before credentials are released, **before every Google attempt**, and as the last step before a data response. Nothing is cached across requests. A change therefore takes effect at the next attempt, in running instances too. An attempt already authorized when the switch is thrown is in flight and cannot be recalled; a response whose final decision passed a moment earlier is delivered. Those are the stated residuals.
 
@@ -693,15 +793,15 @@ The options the owner would be offered (D7): **A.** gated, as above (recommended
 
 | # | Step | Evidence required |
 |---|---|---|
-| 0 | Preconditions: Console readings, consent text check, `check_rate_limit` and Stage 4 objects confirmed read-only in production. | Recorded in the PR |
-| 1 | P1 (§7.2), each part when approved. | Recorded classification and scope lists |
-| 2 | Implementation, guards, review, CI green on the exact head. | CI links |
-| 3 | The owner's card: merge, migration hash and object list, disclosure wording, D10 and D11. | Approval |
-| 4 | Production snapshot; apply the migration; verify it. | Snapshot receipt; verification output |
-| 5 | Merge. **Deployment checkpoint:** the frontend deployed; the Edge Functions Sync schedule ran **for the merge commit and did not park it** (`docs/runbooks/deploy-edge-function.md`, "Automatic deploy" and the parked-commit notes); SHA-256 of the synced `youtube-analytics` files equals `git show <merge>:<path>`; a smoke test on the deployed route: `status` for a random account ID answers `not_found` with `Cache-Control: no-store`, and for an owned channel `not_enabled`. | Schedule log, hashes, smoke output |
-| 6 | Dark verification: other features and every other setting unchanged; connect flow asks for the same three scopes; disclosure live; page not visible. | Checklist |
-| **G-P1**, **G-consent** | The scope question is closed and deployed; every enabled owner has agreed (§7.3). Under branch B also **G-B**: the per-connection grant check (§7.4). | Recorded conclusions |
-| 7 | (a) Policy `allowlist` with one named channel — **go-live**; (b) flag on; (c) rehearsal R1; (d) further pilot channels; (e) `mode: "all"` — **not part of this delivery's approval** (D10): it needs a separate approval after the Console readings, the ceilings review (§5.6) and an in-app acceptance mechanism. | Per step |
+| 0 | Preconditions: Console readings, `check_rate_limit` and Stage 4 objects confirmed read-only in production; the isolated P1 parts, if approved. | Recorded in the PR |
+| 1 | Implementation, guards, review, CI green on the exact head. | CI links |
+| 2 | The owner's card: merge, migration hash and object list (including the new table), disclosure and purpose wording. | Approval |
+| 3 | Production snapshot; apply the migration; verify it. | Snapshot receipt; verification output |
+| 4 | Merge, then the **deployment checkpoint** (plan §5): frontend deployed; the Edge Functions Sync schedule ran for the merge commit and did not park it (`docs/runbooks/deploy-edge-function.md`); synced files match by SHA-256; smoke test on the deployed route. | Schedule log, hashes, smoke output |
+| 5 | Dark verification: other features and every other setting unchanged; connect flow asks for the same three scopes; disclosure and privacy text live; page not visible; no acceptance rows. | Checklist |
+| 6 | Rollout policy `allowlist` with **Waleed's own channel only**; flag on; he accepts the purpose in the product; **P1-a**; rehearsal R1. | Recorded classification and scope lists |
+| **G-P1** | The scope question is closed and the deployed constant equals the conclusion. Under branch B also **G-B**: the per-connection grant check (§7.4). | Recorded conclusions |
+| 7 | (a) Further pilot channels, one approval each: listing a channel only *offers* analytics; its owner then accepts or declines in the product. (b) `mode: "all"`: a separate approval after both Google limits and the existing features' peak have been read and the ceilings reviewed (§5.6). No further consent mechanism is needed: acceptance is already per owner and per channel. | Per step |
 
 ## 9. Testing
 
@@ -716,6 +816,7 @@ All automated evidence is offline: fake provider, synthetic accounts, disposable
 | `limits` | Each limiter refuses when its counter cannot be read. The budget key contains the Pacific date; the window is 48 hours; **a result with `allowed: true` and `count: 0` is refused**; a debit just before and just after a Pacific midnight lands in two buckets; ceiling `N` allows `N` debits and refuses `N+1`; a repeat after `401` and a title lookup each debit; a decision that refuses after the debit does not refund it. |
 | `analyticsReadClient` | URL and parameters built structurally; `ids` from the admitted binding. **Per-report validation:** a non-empty top-videos answer with string IDs is accepted; a bad or duplicate ID, a non-numeric or negative metric, a wrong width, a header mismatch → `upstream_unavailable`; explicit `null` → `value: null`; a daily answer missing its latest day, and one missing a middle day, are accepted with the right coverage and no filled-in rows; an out-of-window day is rejected; missing `rows` → empty. Ownership: `200` owned, `200` without it, `404 videoNotFound` → `video_not_found`; any other `404` → `upstream_unavailable`. |
 | `handler` (fake ports) | Unauthenticated; service role; unknown keys; malformed `video_id`/`window_end`; each admission reason; Composio; the order of checks. **Every row of the requests table of §5.4 with the token, Data, Analytics and debit counters asserted and the token state pinned**, including rows 5, 7, 8, 9, 11, 17, 20, 21 and 23. A failed ownership lookup is never `video_not_found`. A title `401` causes no token request and no repeat. `Cache-Control: no-store` on every response. No token in any response. A refusal decided after a debit does not send. |
+| Acceptance | `consent_required` at admission, at credential release, before an attempt and at the final decision, each with **zero** token and Google requests after it; `consent_accept` and `consent_withdraw` never read credentials or call Google; a stale version is `consent_version_stale`; accepting twice is one event; a foreign or not-enabled account cannot accept; acceptance and withdrawal each write one audit row; the owner's identity comes only from the JWT. |
 | `credentials` (bound store) | `readAccount`, `acquireLease`, `storeTokenWithLease` call the bound RPCs with the admitted binding; a refusal sets `lastDenial` and the handler prefers it to the helper's outcome; `recordFailureWithLease` is never called; `needs_reauth` in the bound read reaches the helper's refusal path. |
 | Binding races (fake store, then real SQL in the journey) | Change injected: (a) after admission, before credentials; (b) after credentials, before a needed refresh; (c) during a token exchange, **by the browser path (`is_active = false` only)** and, separately, by a reconnect that changes a token; (d) at a forced refresh; (e) while a debit is pending; (f) after the Analytics answer. Expected: (a), (b), (d), (e) → no Google request after the change; (c) → the exchange completes, the bound store **refuses** and writes nothing, in both disconnect paths; (f) → result discarded. Withdrawal of the **rollout** at (c) is different by design: the token **is** stored (§5.3), the next attempt is refused. |
 | Audit | Two handler instances sharing the buckets: 30 refusals by one user in a minute write 20 rows; 500 admission-limiter refusals write one row and cost 1,000 counter calls, no other database call, one console line per worker; anonymous refusals write none; a success writes its `info` row after the response and never before it; no row holds a token, provider text or numbers; a failed insert changes nothing. |
@@ -732,6 +833,7 @@ New suite `supabase/tests/youtube_analytics_stage5_rollout.sql`, registered in `
 | Privacy | With either key present, `anon` and a non-admin `authenticated` session read zero rows for it and cannot insert, update, delete or rename into it; an admin can; `service_role` can. The read allow-list is unchanged. |
 | Privileges | Browser roles cannot execute the new functions; `service_role` can execute `decide`, `acquire_lease`, `store_token`; the parser is executable by none. Each is `SECURITY DEFINER` with the pinned `search_path`; the closing assertions of the migration hold. The narrow role still owns exactly the three Stage 4 functions. |
 | Incarnation | An insert ignores a client-supplied value; an update cannot change it; a platform switch to YouTube assigns one; **delete and re-insert with the same `id`, owner and channel yields a different incarnation and a different `connection_revision`**; existing rows read as the all-zero value. |
+| Acceptance record | Browser roles and the service role hold no privilege on the table; only `record_consent` and `decide` touch it; no function updates or deletes a row. `record_consent` takes the channel from the owned row, never from its arguments; refuses a foreign, missing or non-YouTube account, and for acceptance an inactive, non-native or not-admitted one; is idempotent. `decide`: `none`, `accepted`, `outdated` after a version bump, `withdrawn`; the reason order with `consent_required` in fifth place for every pair; **withdrawal committed between admission and credential release, between credential release and an attempt, and before the final decision refuses at each**; acceptance survives a reconnect and a delete and re-insert of the row (it is keyed by owner and channel); a second owner of the same channel ID has their own record; rows go when the user is deleted and not when the account row is. |
 | `decide` | Policy parsing (`missing`, `invalid`, `off`, `not_listed`, `ok`, 200 vs 201 entries, non-UUID); the reason order of §5.2 for every pair of simultaneous conditions; tenant isolation (two owners, one owner with two accounts, crossed IDs; identical `not_found`); `needs_reauth`; scopes (empty recorded list passes, missing scope refuses); expected values all-or-none; no credential in any refusal; credentials only when `ok` and requested. |
 | Snapshot | **Discriminating:** a test-only two-statement variant with a barrier between its two reads, committed against by session B, returns an incoherent answer; the same barrier technique run against `decide` cannot interleave, and `decide`'s source is asserted to be one statement reading each of the two tables once. The suite fails if the production function is replaced by the variant. |
 | Bound lease and store | Real interleavings: (i) session A holds the account row lock with an uncommitted `is_active = false` while B calls `store_token` → B waits, then refuses `connection_changed`, nothing written; (ii) a reconnect (token change) before `acquire_lease` → refused; (iii) a disconnect without a token change before `acquire_lease` → refused, and the lease table is untouched; (iv) publishing holds the lease → `lease_held`, no second lease; two Stage 5 acquirers → exactly one token; (v) rollout withdrawn between acquire and store → the store **succeeds**; (vi) `needs_reauth` set between → the store succeeds, `decide` refuses afterwards; (vii) no lock is held after either function returns; (viii) the narrow role's generation trigger still preserves the generation on a Stage 5 store. |
@@ -748,6 +850,7 @@ Formatting; the gateway sends each request in a shared fixture and maps each cod
 - **Latch.** After a provider-confirmed `missing_scope` or `reconnect_required`, a same-revision `status` "available" renews the lease, keeps the notice and starts no data request; a new revision, or Retry followed by a success, clears it.
 - **Revision and window.** A reconnect that completes between two polls, with no data request in flight, removes the old revision's reports; a block's response with a different window or revision is dropped; the three blocks of one load share one window across a simulated Pacific midnight; `window_stale` shows the refresh message and sends nothing.
 - **Scope.** `video_not_found` changes the video panel only.
+- **Acceptance panel.** With `consent_required` the reports are not rendered and **no data query is enabled**; the panel names the channel and contains every required element of §7.3 in English and in Arabic (asserted by key, not by wording); "Not now" calls nothing and records nothing; "Allow" sends the displayed version and locale, then `status`, then the reports load; withdrawing asks for confirmation, removes the account's cached reports and shows the panel again; an `outdated` state shows the panel with the new text; **a test fails if any purpose string changes, in either language, without the version constant changing.**
 - **Trend.** One point per requested day, `null` where not returned, line broken, no zero, note reads "did not return".
 
 Also Arabic and right-to-left; route and sidebar follow the flag; layering test; the "View analytics" link only with the flag on; a shared request fixture accepted by the Deno handler and sent by the gateway.
@@ -756,7 +859,7 @@ Also Arabic and right-to-left; route and sidebar follow the flag; layering test;
 
 `scripts/stage5-e2e.mjs`, modelled on `scripts/stage4-e2e.mjs`: the disposable database with the Stage 5 migration applied, a local server (`e2e/fixtures/youtubeStage5Server.ts`) composing the **real** handler, the **real refresh helper with the bound store** and the **real SQL functions**, with a fake provider counting requests separately for the token endpoint, the information endpoint and the two YouTube hosts; the app built with its real query client. `e2e/youtube-stage5.spec.ts`, English and Arabic:
 
-1. policy absent → "not switched on"; every provider count zero;
+1. policy absent → "not switched on"; every provider count zero (steps 2–20 run with the purpose accepted);
 2. admitted channel → overview, trend, top videos; counts 3 Analytics, 1 Data;
 3. period change → new window and numbers; counts +3, +1;
 4. owned video → +2 Analytics, +2 Data; another channel's video ID → "not available on this channel" in the video panel, **channel reports stay**, +0 Analytics, +2 Data;
@@ -775,7 +878,12 @@ Also Arabic and right-to-left; route and sidebar follow the flag; layering test;
 17. a window pinned before Pacific midnight and loaded after → all three blocks cover the same dates;
 18. channel switched mid-load → nothing of the first channel shown;
 19. a second user, channel not in the policy → nothing of the first user's data;
-20. flag off, policy on → a direct call by the owner is served, the page is not reachable.
+20. flag off, policy on, purpose accepted → a direct call by the owner is served, the page is not reachable;
+21. **admitted channel, nothing accepted** → the acceptance panel in place of the reports, in both languages; **every provider count zero**, including for a direct call to `summary`;
+22. "Not now" → no acceptance row, no provider request; the panel is still offered on the next visit and nothing nags in between;
+23. "Allow" → one `accepted` row with the version and the language shown; the reports load;
+24. withdraw with the page open → one `withdrawn` row, reports removed, panel shown, no further provider request; withdraw **during a pending request** → that request's result is discarded;
+25. the purpose version is raised → every owner sees the panel again and no report loads until they accept the new text.
 
 The run fails on any unexpected external request. Playwright is not a CI job here (Stage 4 precedent), so this is local evidence recorded in the PR with command, head SHA and result.
 
@@ -791,7 +899,7 @@ The run fails on any unexpected external request. Playwright is not a CI job her
 | `channel==<ID>` for an account with more than one channel; thresholds for a small channel; how often recent days are missing. | R1, if the pilot allows; otherwise unverified. |
 | The real limits of both APIs and the existing features' peak. | The owner, in the Cloud Console. |
 | That the numbers match YouTube Studio for the same Pacific range. | R1: the owner compares one period by eye. |
-| What users accepted at sign-up and connection. | The manager's read of the shipped text (plan step 0); never inferred from the code alone. |
+| That the purpose text is adequate under Google's policy and the law that applies to Postora's users. | **Not something this document can verify.** Waleed approves the wording on the merge card; plan step 1 reads Google's III.E.3 word for word. |
 
 **Rehearsal R1**: read-only, the pilot channel, after the first enablement, separately approved. It records only what was observed: blocks loaded, requested window, last returned day, provider counts, the owner's yes or no on the Studio comparison. It does not try to cause errors, writes nothing to YouTube, and records no numbers or Google text.
 
@@ -800,12 +908,12 @@ The run fails on any unexpected external request. Playwright is not a CI job her
 | # | Risk or question | Handling |
 |---|---|---|
 | R-1 | The scope question is open until P1, and each part needs approval. | Two branches designed; one constant; **G-P1 blocks the first enablement**. |
-| R-2 | Google's policy on stored and derived data and on consent (III.E.2–4) was not read word for word. | Nothing is stored or derived; plan step 1 reads it; D10 covers consent. |
-| R-3 | Without D11, a deleted and re-inserted row is not distinguishable from the original. | D11 recommends the incarnation column; if declined, the residual is the same owner, the same channel and nothing stored. |
+| R-2 | Google's policy on stored and derived data and on consent (III.E.2–4) was not read word for word. | Nothing from YouTube is stored or derived; acceptance is collected in the product before any read (§7.3); plan step 1 reads the passages and stops if they require more. |
+| R-3 | The acceptance mechanism adds a table, two write operations and a screen to a stage designed as read-only with no table. More to build, review and test in one delivery. | One migration and one PR are kept, because the read path must never exist without the gate (plan §2); the table has no browser access and one writer; scope stated on the owner's card. |
 | R-4 | Both Google APIs' limits are unknown; the ceiling caps analytics but reserves nothing for other features. | Per-attempt, fail-closed, Pacific-day ceilings (§5.6); pilot by allowlist; `all` only after readings and a peak review. |
 | R-5 | The migration adds a RESTRICTIVE policy on `app_settings` and a column and trigger on `social_accounts`, both shared by every feature. | The policy names two keys only; the suite proves other keys unchanged for every role and rename; the column is nullable with no rewrite; the trigger touches YouTube rows only; snapshot first; the Stage 4 shape has been in production since 2026-11-24. |
 | R-6 | The code is useless without the migration, and a merge deploys within two minutes. | Migration before merge. Without the functions every request answers `settings_unavailable` and sends nothing. |
-| R-7 | The disclosure is inaccurate and becomes more so; users have not agreed to the new purpose. | Two separate corrections; D10; G-consent. |
+| R-7 | The disclosure and privacy text are inaccurate today and the purpose text must match them. | Two separate corrections; the purpose text is versioned and tied to the policy clause; a changed text asks every owner again (§7.3). |
 | R-8 | Branch B: verification, consent for everyone, grants that closing the gate cannot undo. | §7.4; D7. |
 | R-9 | Numbers differ from the YouTube Channel page counters and from Studio's local-time view; `views` changed meaning on 30 April 2025 and 16 November 2026. | Source, window, last returned day and time zone stated; one footnote; the sources are never mixed. |
 | R-10 | Residuals that no check can close: an attempt already authorized when access is withdrawn; a response whose final decision passed milliseconds earlier; a status answered just after a withdrawal. | Stated in §5.7 and §8; one-event-loop-turn window, no awaited I/O after the decision; audit rows are best-effort evidence; recovery steps in plan §6. |
@@ -827,9 +935,11 @@ Open question that needs no decision: how many IDs one `videos.list` call accept
 | D3 | First release | **Channel overview cards, daily trend, top ten videos, and the same cards and trend for one video.** |
 | D4 | Periods | **7, 14, 30, 90 days.** |
 | D5 | Where | **Analytics menu at `/analytics/youtube`, plus a "View analytics" link from each video on the YouTube Channel page.** |
-| D6 | Per-channel switch | **As in Stage 4: a small migration with a policy that hides the key and SQL functions that evaluate it; no table.** The migration also carries the bound wrappers (§5.3) and, subject to D11, the incarnation column. |
+| D6 | Per-channel switch | **As in Stage 4: a small migration with a policy that hides the key and SQL functions that evaluate it.** The owner chose this with "no table"; that still holds for the switch. The migration also carries the bound wrappers (§5.3), the incarnation column (D11) and, because of D10, one table for acceptance records. |
 | D8 | Shared allowance | **1,000 Data API units and 2,000 Analytics request attempts per Pacific day for all users together**, reviewed against the real limits and the existing features' peak before opening to everyone. |
 | D9 | CI registration | **Recorded exception:** the test step and the SQL suite are registered in the product PR, with the measurements of plan §4. |
+| D10 | How owners agree to the analytics purpose | **In the product, from the start.** No analytics read for any channel, pilot included, before the owner of that channel has accepted the purpose inside Postora. A written agreement outside the app was not chosen. (§7.3) |
+| D11 | A non-reusable connection identity | **Yes:** the nullable `binding_incarnation` column and its trigger, in the Stage 5 migration. (§5.2) |
 
 Also settled: the merge needs the owner's card; the migration is applied before the merge, after a production snapshot.
 
@@ -837,13 +947,12 @@ Also settled: the merge needs the owner's card; the migration is applied before 
 
 | # | Question | When | Options | Recommendation |
 |---|---|---|---|---|
-| **D10** | Users accepted a policy that says YouTube data is used "solely" for publishing and showing channel information. How do they agree to the analytics purpose? (§7.3) | Before the first enablement of a channel that is not Waleed's own, and before P1 on one. | **A.** Enable only owners who agreed in writing; Waleed keeps the record; `all` needs a separate in-app mechanism. **B.** Build the in-app acceptance record in this delivery. **C.** Treat the updated text as sufficient. | **A** |
-| **D11** | Give every YouTube connection a non-reusable identity: a nullable column on `social_accounts` plus one trigger (§5.2). | Before the migration is written. | **A.** Add it. **B.** Do not; accept that a row deleted and re-inserted with the same id, owner and channel is treated as the same connection. | **A.** The debate marked this blocking; the real harm is narrow, the cost is a catalogue-only change of the Stage 4 shape. |
-| **D7** | Only if P1-c concludes branch B: when does the consent screen start asking for the analytics permission? (§7.4) | Before any branch B code. | **A.** Only for users named in a private gate, then everyone after Google approves. **B.** For nobody until Google approves. **C.** For everyone at deploy. | **A** |
-| **D12** | Only if P1-a refuses with all three scopes: how is the isolated sufficiency test run? (§7.2) | When P1-c is about to run. | **A.** A separate test OAuth client and project, a channel Waleed owns. **B.** Postora's production client in the Playground. | **A** |
-| **P1 approvals** | Each part is a real request to Google on the owner's channel. | When each is about to run. | — | Run P1-a before implementation starts. |
+| **D7** | Only if P1 concludes branch B: when does **Google's** consent screen start asking for the analytics permission? (§7.4) | Before any branch B code. | **A.** Only for users named in a private scope gate, then everyone after Google approves. **B.** For nobody until Google approves. **C.** For everyone at deploy. | **A** |
+| **D12** | How are the isolated probe parts (P1-i, P1-b, P1-c) run? (§7.2) | When one is about to run; P1-i is recommended before implementation. | **A.** A separate test OAuth client and project, a channel Waleed owns. **B.** Postora's production client in the Playground. | **A** |
+| **D13** | Does an acceptance survive a reconnect of the same channel by the same owner? (§7.3) | Before the migration is written. | **A.** Yes: it is keyed by owner and channel; disconnecting is not withdrawing. **B.** No: every new connection asks again. | **A** |
+| **P1 approvals** | Each part is a real request to Google on the owner's channel. | When each is about to run. | — | Run P1-i before implementation; P1-a after deployment and acceptance. |
 
-Recorded assumptions unless the owner objects: native connections only; no revenue; no agent, n8n or MCP access; no comparison with the previous period until the Google policy has been read in full.
+Recorded assumptions unless the owner objects: acceptance is given only by the channel's owner in the product, never by an admin on their behalf; declining records nothing; no IP address or user agent is recorded with an acceptance; native connections only; no revenue; no agent, n8n or MCP access; no comparison with the previous period until the Google policy has been read in full.
 
 ## 12. Verification performed for this document
 
@@ -877,10 +986,10 @@ The plan debate (Codex, one round; verdict **proceed after changes**, seven bloc
 | # | Objection | Resolution | Where |
 |---|---|---|---|
 | 1 | Refresh can lease a replacement connection or store on a withdrawn one; replacing `readAccount` is not enough | **Resolved.** Two bound wrappers around the existing lease functions: account row `FOR UPDATE`, then the full decision, then the unchanged shared function; the neutral store is called under the same lock. No Google I/O under a lock. Shared functions, the Stage 4 neutral store, the refresh helper and every other caller are untouched; no fourth trusted writer. Persistence is bound to the connection, deliberately not to the rollout. | §5.3, §9.2 |
-| 2 | Generation restarts at 1 for a re-inserted row | **Resolved by design, owner decision D11.** The insert policy and grants leave `id` client-settable, so reuse cannot be proved impossible. A nullable `binding_incarnation`, trigger-assigned and never client-writable, joins every identity comparison and `connection_revision`. | §5.2, §9.2, D11 |
+| 2 | Generation restarts at 1 for a re-inserted row | **Resolved; the owner decided D11 = yes.** The insert policy and grants leave `id` client-settable, so reuse cannot be proved impossible. A nullable `binding_incarnation`, trigger-assigned and never client-writable, joins every identity comparison and `connection_revision`. | §5.2, §9.2 |
 | 3 | Final check incomplete; "zero requests after withdrawal" too wide | **Resolved.** One SQL statement returns a typed reason in a fixed order, covering owner, binding, provider, rollout, health and scopes; it runs at admission, at credential release, before **every** Google attempt (after the debit) and as the last step before a response. The residual is stated: an attempt already authorized is in flight; no awaited I/O follows the final decision. | §5.2, §5.4, §8, R-10 |
 | 4 | Branch B circular; closing the gate does not undo a grant | **Resolved.** P1-c runs in an isolated, separately approved setting that does not use Postora's connect flow; P1-a eligibility and refusal rules; grants verified per connection; rollback no longer claims to restore the grant state. | §7.2, §7.4, D12 |
-| 5 | Disclosure text does not cover user consent to the new purpose | **Resolved as an owner decision, D10.** Facts and options written; no acceptance record exists to reuse; recommended: written agreement per owner for the pilot, in-app mechanism before `all`; gate G-consent. | §7.3, D10 |
+| 5 | Disclosure text does not cover user consent to the new purpose | **Resolved; the owner decided D10 = in-app acceptance from the start.** An acceptance record, a `consent_required` reason inside the one decision, an acceptance panel before the first view, and withdrawal. | §7.3, §5.2, §9 |
 | 6 | The 24-hour limiter window can spend twice the ceiling; a lost row must refuse | **Resolved.** Budgets are keyed by Pacific date with a 48-hour window; a debit counts only with `allowed` and `count ≥ 1`; tests against the real RPC for exhaustion, both daylight-saving changes and cleanup. | §5.6, §9.2 |
 | 7 | Query keys identical across operations; lease renewal can restart reports | **Resolved.** Namespace and operation in every key; display and fetching are separate decisions; queries never depend on the lease and never auto-refetch; status is single-flight with epoch, deadline, backoff and `Retry-After`; resume requires a status issued after it. | §5.7, §9.3 |
 
@@ -893,7 +1002,7 @@ Non-blocking points taken in: the `app_settings` policy tests (admin through `au
 | Probe assumes the consent change it gates; P1-c needs a grant the flow cannot request (HIGH, several) | Real; = objection 4 | §7.2 |
 | Partial grant cannot establish that the analytics scope is needed (HIGH) | Real | §7.2: a refusal counts toward branch B only with all three existing scopes |
 | Scope gate proves only the simplest report (MEDIUM) | Real | §7.2: the probe sends the four shipped shapes |
-| Branch B omits consent from credential and final checks (HIGH, several) | Real | §7.4: the consent predicate lives in the one `decide` |
+| Branch B omits consent from credential and final checks (HIGH, several) | Real | §7.4: the scope-gate rule lives in the one `decide` |
 | First-pilot verification leaves later reconnects unverified (MEDIUM) | Real | §7.4: per-connection check; `grant_not_effective` at run time |
 | Binding not rechecked before provider dispatch (MEDIUM) | Real | §5.4 step 8 |
 | Bound refresh reads omit account health (MEDIUM) | Real | `decide` returns `needs_reauth`; bound read passes it to the helper |
@@ -908,3 +1017,7 @@ Non-blocking points taken in: the `app_settings` policy tests (admin through `au
 | Refresh-race test assumes disconnect invalidates the lease (MEDIUM, several) | Real | Both disconnect paths tested; the browser path is fenced by the bound store (§9.1, §9.4 step 15) |
 
 All were judged real; none was rejected. Two are answered by a stated residual rather than a guarantee: the `status` response decided just before a withdrawal, and the attempt already authorized when access is withdrawn.
+
+### Fourth revision: decisions D10 and D11
+
+After the third revision the owner answered the two open decisions. **D11: yes** — the incarnation column is now unconditional. **D10: an in-app mechanism from the start**, not the written agreement this document had recommended. What changed: a new §7.3 (the record, the enforcement, the panel, withdrawal, the tie to the policy text); `consent_required` as the fifth reason of `decide` (§5.2); two acceptance operations on the edge function (§5.4); one table in the migration, stated plainly against D6's "no table"; P1-a moved after deployment and acceptance, because a production probe is a read like any other (§7.2); gate G-consent replaced by the product itself; `mode: "all"` no longer waits for a separate mechanism (§8); branch B's key renamed to `youtube_analytics_stage5_scope_gate` so that Google's permission and the owner's acceptance are never called by the same word (§7, §7.4). One new open decision, D13.
