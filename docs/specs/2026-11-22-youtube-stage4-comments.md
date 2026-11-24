@@ -223,6 +223,17 @@ Why this cannot expose or replay:
 - **Replay.** A claim made under generation *n* cannot pass `mark_dispatched` under *n+1*. A `dispatched` or `indeterminate` row is never sent again by construction.
 - **Deletion and re-creation.** Fences are keyed by owner and channel, not by account row, so they survive a hard delete followed by a fresh connection of the same channel.
 
+### 7.6 PR 2 amendments (migration `20261124120000_youtube_stage4_key_integrity.sql`)
+
+Four rules the first migration left open. They change §7.2 and §7.4 as follows, and nothing else in this document.
+
+- **The digest map is required.** `youtube_comment_op_claim` keeps its twelve-argument signature, but `p_intent_digests` is no longer optional: a `NULL` or non-object map is `invalid_request`, answered before the account is read. The map alone decides the stored intent digest (the entry for the key version the claim locked) and the comparison on a retry (the entry for the receipt's key version). `p_intent_digest` stays in the signature and decides nothing beyond being present, like `p_capability`. A retry whose map has no entry for the receipt's key version is the temporary `upstream` and changes nothing; it used to be `conflict`, which a browser shows as a refusal and uses to forget a live operation.
+- **Key versions are monotonic and referenced by a foreign key.** `youtube_comment_digest_key_watermark` holds the highest version ever issued; an inserted version must be above it, so a deleted version number is never issued again (a later `INSERT … ON CONFLICT DO NOTHING` on an existing version now raises, because the guard fires on `INSERT`). A foreign key `ON DELETE RESTRICT` from `youtube_comment_operations.intent_key_version` to `youtube_comment_digest_keys.version` makes the delete guard's `EXISTS` an early, readable error rather than the authority: a `REPEATABLE READ` session that took its snapshot before a claim committed cannot delete the key that claim's receipt references. A CHECK ties `digest_key_version` to it (equal for `create_thread` and `reply`, `0` for `edit` and `moderate`).
+- **The status read locks the account first.** Once a receipt is known to exist, `youtube_comment_op_status` takes `FOR SHARE` on the owner-scoped account row, then re-reads the receipt: the order the claim and the mark already use (account, then receipt). A rebind or an account delete waits for a status read in flight, and the receipt returned after a lost 90-second conversion belongs to a binding that is still current. An operation id with no receipt locks nothing.
+
+Procedure, rollback and the watermark note: `docs/runbooks/youtube-stage4-pr2-migration.md`.
+
+
 ## 8. Private actions
 
 Added to the deployed `comment-manager` handler. `index.ts` only routes: when `action` is in the Stage 4 set it hands the already-authenticated caller to a separate handler module **before** the legacy account lookup. The handler is built from injected ports so it is testable without Supabase (ARCHITECTURE §§12, 34).
