@@ -162,8 +162,12 @@ export function useYouTubeStage4(params: {
       const readAtByKey = new Map<string, number>();
       for (const query of pageQueries) {
         for (const item of query.data?.page ?? []) {
-          byKey.set(item.key, item);
-          readAtByKey.set(item.key, query.dataUpdatedAt);
+          // The copy read last wins, whatever page it came from.
+          const readAt = readAtByKey.get(item.key);
+          if (readAt === undefined || query.dataUpdatedAt >= readAt) {
+            byKey.set(item.key, item);
+            readAtByKey.set(item.key, query.dataUpdatedAt);
+          }
         }
       }
       return { items: [...byKey.values()], readAt: readAtByKey };
@@ -326,13 +330,26 @@ export function useYouTubeStage4(params: {
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
       const targetCommentId = input.targetCommentId ?? "";
+      // Storage can be blocked or full, so a stored list can miss an operation;
+      // the in-memory identities are the same ones, so the guard reads both.
+      const pendingForTarget = (): PendingStage4Operation[] => {
+        const stored = findPendingOperations(userId, { accountId, videoId: input.videoId, action, targetCommentId });
+        const seen = new Set(stored.map((op) => op.operationId));
+        const live = [...liveOperations.current.values()].filter((op) =>
+          op.accountId === accountId
+          && op.videoId === input.videoId
+          && op.action === action
+          && op.targetCommentId === targetCommentId
+          && !seen.has(op.operationId));
+        return [...stored, ...live];
+      };
       // An earlier submit for this target blocks a new one only while it may
       // still land (claimed or dispatched) or cannot be read right now. An
       // INDETERMINATE one stays guarded by the server's fence for the
       // original (the same logical create or reply is refused while it is
       // unresolved), so a different text, a deliberate new edit or a new
       // reject is a new intent and gets its own key (spec 9.1 and 9.3).
-      for (const earlier of findPendingOperations(userId, { accountId, videoId: input.videoId, action, targetCommentId })) {
+      for (const earlier of pendingForTarget()) {
         const recovery = await recoverOperation(gateway, accountId, earlier);
         if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
         if (recovery.settled && recovery.status) {
@@ -687,8 +704,16 @@ export function useStage4Replies(params: {
 
   const items = useMemo(() => {
     const byKey = new Map<string, ReplyItem>();
+    const readAtByKey = new Map<string, number>();
     for (const query of pageQueries) {
-      for (const item of query.data?.page ?? []) byKey.set(item.key, { ...item, readAt: query.dataUpdatedAt });
+      for (const item of query.data?.page ?? []) {
+        // The copy read last wins, whatever page it came from.
+        const readAt = readAtByKey.get(item.key);
+        if (readAt === undefined || query.dataUpdatedAt >= readAt) {
+          byKey.set(item.key, { ...item, readAt: query.dataUpdatedAt });
+          readAtByKey.set(item.key, query.dataUpdatedAt);
+        }
+      }
     }
     return [...byKey.values()];
   }, [pageQueries]);
