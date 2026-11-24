@@ -99,13 +99,48 @@ const ANON_AUDIT_MAX_PER_MINUTE = 30;
  */
 const ANON_BUCKET_CLOSED_MS = 10_000;
 const ANON_COUNTER_INTERVAL_MS = 60_000;
+/** A probe that has not answered by then is treated as a refusal and stops holding the gate. */
+const ANON_PROBE_TIMEOUT_MS = 1_500;
 let anonBucketClosedUntil = 0;
 let anonCounterNextAt = 0;
+/** True while this worker's single shared-bucket probe is in flight. */
+let anonProbeInFlight = false;
 
 /** Test seam: forget what this instance learned about the shared bucket. */
 export function resetAnonRefusalGate(): void {
   anonBucketClosedUntil = 0;
   anonCounterNextAt = 0;
+  anonProbeInFlight = false;
+}
+
+/**
+ * Whether the shared anonymous bucket admits one more audit row. At most ONE
+ * probe is in flight per worker: a request that arrives while it is pending is
+ * treated as refused without a call of its own (it is counted in the
+ * suppression tally), so a burst can never put more than one call on the
+ * shared row. The probe waits at most ANON_PROBE_TIMEOUT_MS, and a refusal or
+ * a timeout closes the gate for ANON_BUCKET_CLOSED_MS, so over time this worker
+ * makes at most one probe per ANON_BUCKET_CLOSED_MS (plus one counter call a
+ * minute).
+ */
+async function anonBucketAdmits(deps: Stage4Deps): Promise<boolean> {
+  if (deps.now() < anonBucketClosedUntil || anonProbeInFlight) return false;
+  anonProbeInFlight = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let admitted = false;
+  try {
+    const probe = stage4RateLimit(deps.admin, "anonymous", "stage4_audit_anon", ANON_AUDIT_MAX_PER_MINUTE, 60)
+      .then((result) => result.allowed);
+    const timeout = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), ANON_PROBE_TIMEOUT_MS);
+    });
+    admitted = await Promise.race([probe, timeout]);
+  } finally {
+    clearTimeout(timer);
+    anonProbeInFlight = false;
+  }
+  if (!admitted) anonBucketClosedUntil = deps.now() + ANON_BUCKET_CLOSED_MS;
+  return admitted;
 }
 
 async function refusal(
@@ -130,25 +165,23 @@ async function refusal(
     // receipt row exists for it (spec 12); only post-claim refusals pass it.
     operationId: audit.operationVerified === true ? audit.operationId : null,
   }, {
-    rateLimitBucket: async () => {
-      if (deps.now() < anonBucketClosedUntil) return false;
-      const admitted = await stage4RateLimit(
-        deps.admin,
-        "anonymous",
-        "stage4_audit_anon",
-        ANON_AUDIT_MAX_PER_MINUTE,
-        60,
-      );
-      if (!admitted.allowed) anonBucketClosedUntil = deps.now() + ANON_BUCKET_CLOSED_MS;
-      return admitted.allowed;
-    },
+    rateLimitBucket: () => anonBucketAdmits(deps),
     counterSink: async (suppressed) => {
-      // At most one counter attempt per interval per instance: the tally stays
-      // in memory (returning false keeps it) and costs no database work.
-      if (deps.now() < anonCounterNextAt) return false;
+      // At most one counter attempt per interval per instance, and only once
+      // the shared bucket has actually refused (a request that merely found a
+      // probe in flight is not a refusal): the tally stays in memory
+      // (returning false keeps it) and costs no database work.
+      if (deps.now() >= anonBucketClosedUntil || deps.now() < anonCounterNextAt) return false;
       anonCounterNextAt = deps.now() + ANON_COUNTER_INTERVAL_MS;
       // At most one counter row per minute, whatever the suppression volume.
-      const counter = await stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60);
+      // Bounded like the probe: a hung call must not hold this request.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const counter = await Promise.race([
+        stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60),
+        new Promise<{ allowed: false }>((resolve) => {
+          timer = setTimeout(() => resolve({ allowed: false }), ANON_PROBE_TIMEOUT_MS);
+        }),
+      ]).finally(() => clearTimeout(timer));
       if (!counter.allowed) return false;
       try {
         const inserted = await deps.admin.from("system_logs").insert({
@@ -776,6 +809,18 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     });
   }
 
+  // Hold is not offered while STAGE4_HOLD_FROM_PUBLISHED is off: a published
+  // or rejected comment cannot return to held (Google's implementation guide)
+  // and a 204 would be recorded as confirmed while nothing changed. The status
+  // in a handle is only what the list saw when it was issued, so a handle from
+  // a held moment cannot prove the comment is still held. One check, straight
+  // after validation and identity, before the limiter and any account work.
+  if (action === "youtube_moderate_comment"
+    && (input as Extract<Stage4Request, { action: "youtube_moderate_comment" }>).status === "heldForReview"
+    && !STAGE4_HOLD_FROM_PUBLISHED) {
+    return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId: null, operationId: null });
+  }
+
   const accountId = (input as { social_account_id: string }).social_account_id;
 
   // Rate limit.
@@ -1039,6 +1084,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     const payload: Stage4ThreadPagePayload = {
       account_id: accountId,
       channel_id: account.platform_user_id,
+      binding_generation: account.binding_generation,
       video_id: inp.video_id,
       list: inp.list,
       items: rows,
@@ -1143,6 +1189,7 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     const payload: Stage4ReplyPagePayload = {
       account_id: accountId,
       channel_id: account.platform_user_id,
+      binding_generation: account.binding_generation,
       parent_handle: inp.parent_handle,
       items: rows,
       next_cursor: nextCursor,
@@ -1534,16 +1581,6 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (inp.ban_confirmation && inp.status !== "rejected") {
       return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId, operationId: null });
     }
-    // Hold is not offered while STAGE4_HOLD_FROM_PUBLISHED is off: a published
-    // or rejected comment cannot return to held (Google's implementation
-    // guide) and a 204 would be recorded as confirmed while nothing changed.
-    // The status in a handle is only what the list saw when it was issued
-    // (comments.list?id= returns no moderation status), so a handle from a
-    // held moment cannot prove the comment is still held. The whole action is
-    // refused here, before any account or provider work and before the claim.
-    if (inp.status === "heldForReview" && !STAGE4_HOLD_FROM_PUBLISHED) {
-      return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId, operationId: null });
-    }
     const verified = await verifyTargetHandle(inp.target_handle, deps, account, userId);
     if (!verified.ok) {
       return refusal(deps, 400, verified.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
@@ -1737,39 +1774,51 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       };
       const first = await bindingCheck();
       if (!first.ok) return first.response;
-      const blocked = await capabilityRefusal(deps.admin, accountId, "read");
-      if (blocked?.status === 503) {
-        return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
-      }
-      if (!blocked) {
-        const tok = await prepareToken(first.account, deps);
-        if (tok.ok) {
+      // Without a draft there is nothing to compare: the receipt is returned at
+      // once, with no settings read and no provider read (the draft never
+      // survives a reload, so this is the common recovery path).
+      if (inp.text === undefined) {
+        observation = "unavailable";
+      } else {
+        const unreadable = () => refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+        const blocked = await capabilityRefusal(deps.admin, accountId, "read");
+        if (blocked?.status === 503) return unreadable();
+        if (blocked) {
+          // The capability answered false. It may be false BECAUSE of a
+          // reconnect, so the binding is read again before the receipt goes out.
+          const afterGate = await bindingCheck();
+          if (!afterGate.ok) return afterGate.response;
+          observation = "unavailable";
+        } else {
+          const tok = await prepareToken(first.account, deps);
+          // `read` is checked again right before the provider read: a
+          // withdrawal while the credential was being prepared must stop it.
+          const stillAllowed = await capabilityRefusal(deps.admin, accountId, "read");
+          if (stillAllowed?.status === 503) return unreadable();
+          // After EVERY credential preparation, a failed one included.
           const afterToken = await bindingCheck();
           if (!afterToken.ok) return afterToken.response;
-          const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
-          const afterRead = await bindingCheck();
-          if (!afterRead.ok) return afterRead.response;
-          const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
-          // Only the comment the receipt targets is an observation: a provider
-          // answer for any other id says nothing about this edit.
-          const text = citem && String(citem.id ?? "") === String(observedTargetId) && citem.snippet?.textOriginal
-            ? String(citem.snippet.textOriginal)
-            : null;
-          if (text === null) {
-            observation = "unavailable";
-          } else if (inp.text === undefined) {
-            observation = "unavailable";
-            // Observed text is not returned without a comparison basis: the
-            // caller already lost the draft, so echoing provider text would
-            // claim more knowledge than the observation has.
+          if (tok.ok && !stillAllowed) {
+            const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
+            const afterRead = await bindingCheck();
+            if (!afterRead.ok) return afterRead.response;
+            const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
+            // Only the comment the receipt targets is an observation: a provider
+            // answer for any other id says nothing about this edit.
+            const text = citem && String(citem.id ?? "") === String(observedTargetId) && citem.snippet?.textOriginal
+              ? String(citem.snippet.textOriginal)
+              : null;
+            if (text === null) {
+              observation = "unavailable";
+            } else {
+              observedText = text;
+              observation = normaliseText(text) === normaliseText(inp.text)
+                ? "requested_text_observed"
+                : "different_text_observed";
+            }
           } else {
-            observedText = text;
-            observation = normaliseText(text) === normaliseText(inp.text)
-              ? "requested_text_observed"
-              : "different_text_observed";
+            observation = "unavailable";
           }
-        } else {
-          observation = "unavailable";
         }
       }
     }

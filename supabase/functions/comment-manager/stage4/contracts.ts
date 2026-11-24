@@ -285,6 +285,8 @@ export interface Stage4CommentRow {
 export interface Stage4ThreadPagePayload {
   account_id: string;
   channel_id: string;
+  /** The channel binding these rows (and their handles and cursors) belong to; it changes on a reconnect. */
+  binding_generation: number;
   video_id: string;
   list: Stage4List;
   items: Stage4CommentRow[];
@@ -296,6 +298,7 @@ export interface Stage4ThreadPagePayload {
 export interface Stage4ReplyPagePayload {
   account_id: string;
   channel_id: string;
+  binding_generation: number;
   parent_handle: string;
   items: Stage4CommentRow[];
   next_cursor: string | null;

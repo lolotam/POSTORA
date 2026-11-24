@@ -292,10 +292,12 @@ Deno.test("a body whose declared length exceeds the cap is refused without readi
   const serve = await loadRoute();
   const { supabase, calls } = countingSupabase();
   let cancelled = false;
+  let pulled = 0;
+  // highWaterMark 0: the source is asked for data ONLY when a reader reads, so `pulled` counts real read attempts.
   const body = new ReadableStream<Uint8Array>({
-    pull(controller) { controller.enqueue(new TextEncoder().encode("{}")); controller.close(); },
+    pull(controller) { pulled += 1; controller.enqueue(new TextEncoder().encode("{}")); controller.close(); },
     cancel() { cancelled = true; },
-  });
+  }, { highWaterMark: 0 });
   const res = await serve(
     new Request("http://localhost/functions/v1/comment-manager", {
       method: "POST",
@@ -309,5 +311,6 @@ Deno.test("a body whose declared length exceeds the cap is refused without readi
   assertEquals(await res.json(), { error: "Unauthorized" });
   await settle();
   assertEquals(cancelled, true, "the unread body is cancelled, not left open");
+  assertEquals(pulled, 0, "no read was attempted before the cancel");
   assertEquals(calls.limiter + calls.inserts, 0);
 });

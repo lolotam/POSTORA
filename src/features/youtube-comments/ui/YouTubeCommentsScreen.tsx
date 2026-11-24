@@ -17,7 +17,7 @@ import { useStage4Replies, useYouTubeStage4 } from "../application/useYouTubeSta
 import { useStage4Recovery } from "../application/useStage4Recovery";
 import { defaultYouTubeCommentsGateway } from "../infrastructure/supabaseYouTubeCommentsGateway";
 import { YouTubeCommentsGateway } from "../application/ports";
-import { isRebindReason } from "../domain/errors";
+import { isRebindReason, isStaleContextReason } from "../domain/errors";
 
 /** The translation function shape the reason labels need. */
 type Translate = TFunction<"automation">;
@@ -376,9 +376,15 @@ function ThreadList({ stage4, onNotice }: { stage4: ReturnType<typeof useYouTube
       {stage4.threads.error && (
         <div className="flex items-center gap-2 text-sm text-destructive">
           <span>{reasonText(t, stage4.threads.error)}</span>
-          <Button size="sm" variant="outline" onClick={stage4.threads.retry}>
-            {t("youtubeStage4.list.retry", "Retry this page")}
-          </Button>
+          {isStaleContextReason(stage4.threads.errorCode) ? (
+            <Button size="sm" variant="outline" onClick={stage4.threads.reload}>
+              {t("youtubeStage4.list.reloadFromStart", "Reload from the first page")}
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={stage4.threads.retry}>
+              {t("youtubeStage4.list.retry", "Retry this page")}
+            </Button>
+          )}
         </div>
       )}
 
@@ -623,13 +629,17 @@ function ReplyBlock(params: {
     gateway: stage4.gateway,
     parentCommentId: parent.comment_id,
     parentHandle: parent.handle,
+    bindingGeneration: stage4.threads.bindingGeneration,
+    refreshEpoch: stage4.repliesEpoch,
     enabled: open,
   });
   // Replies merge by comment id across the inline preview and every loaded
   // page (spec 8.3): one map, keyed by the comment id.
+  // The thread page's own rows are the freshest copy: an older cached reply
+  // page must never overwrite them, so they are merged last.
   const merged = new Map<string, { key: string; row: Stage4CommentRow }>();
-  for (const row of inlineReplies) merged.set(row.comment_id, { key: row.comment_id, row });
   for (const item of replies.items) merged.set(item.key, item);
+  for (const row of inlineReplies) merged.set(row.comment_id, { key: row.comment_id, row });
   const allReplies = [...merged.values()];
   // A thread in the Held list with no loaded row (its own, an inline reply or
   // a paged reply) that reads heldForReview says so, per thread (spec 8.4).
@@ -666,10 +676,22 @@ function ReplyBlock(params: {
       </div>
       {replies.error && (
         <div className="flex items-center gap-2 text-xs text-destructive">
-          <span>{t("youtubeStage4.replies.error", "A page of replies failed to load.")}</span>
-          <Button size="sm" variant="outline" onClick={replies.retry}>
-            {t("youtubeStage4.replies.retry", "Retry this page")}
-          </Button>
+          {isStaleContextReason(replies.errorCode) ? (
+            <>
+              <span>{t("youtubeStage4.replies.stale", "These replies are out of date.")}</span>
+              {/* Repeating a refused cursor cannot help: read from page one again. */}
+              <Button size="sm" variant="outline" onClick={replies.reloadFromStart}>
+                {t("youtubeStage4.replies.reloadFromStart", "Reload from the start")}
+              </Button>
+            </>
+          ) : (
+            <>
+              <span>{t("youtubeStage4.replies.error", "A page of replies failed to load.")}</span>
+              <Button size="sm" variant="outline" onClick={replies.retry}>
+                {t("youtubeStage4.replies.retry", "Retry this page")}
+              </Button>
+            </>
+          )}
         </div>
       )}
       {allReplies.map((item) => (
@@ -868,6 +890,13 @@ function OutcomeLine({ outcome, checking, onCheckStatus }: {
       <p role="alert" className="flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
         <HelpCircle className="h-3.5 w-3.5" />
         {t("youtubeStage4.outcome.indeterminate", "This may or may not have been applied. It was not sent again — refresh the thread to see what is there.")}
+        {/* What a status check compared against the draft, apart from the receipt state. */}
+        {outcome.observation === "requested_text_observed" && (
+          <span data-testid="yt-stage4-observation">{t("youtubeStage4.outcome.observedRequested", "YouTube currently shows the text you asked for.")}</span>
+        )}
+        {outcome.observation === "different_text_observed" && (
+          <span data-testid="yt-stage4-observation">{t("youtubeStage4.outcome.observedDifferent", "YouTube currently shows different text.")}</span>
+        )}
         {checkButton}
       </p>
     );

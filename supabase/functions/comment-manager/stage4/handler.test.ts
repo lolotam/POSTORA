@@ -1714,16 +1714,20 @@ Deno.test("the refusal audit is finished before the answer is returned (it is pa
   // (a `void` write), the answer would arrive while the row is still unwritten.
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => { release = resolve; });
+  let signalEntered: () => void = () => undefined;
+  const insertEntered = new Promise<void>((resolve) => { signalEntered = resolve; });
   const written: Array<Record<string, unknown>> = [];
   const admin = world.deps.admin as unknown as { from: (table: string) => unknown };
   const originalFrom = admin.from.bind(admin);
   admin.from = (table: string) => table === "system_logs"
-    ? { insert: async (row: Record<string, unknown>) => { await gate; written.push(row); return { error: null }; } }
+    ? { insert: async (row: Record<string, unknown>) => { signalEntered(); await gate; written.push(row); return { error: null }; } }
     : originalFrom(table);
   let answered = false;
   const pending = world.calls("youtube_stage4_capabilities", { social_account_id: "77777777-7777-4777-8777-777777777777" })
     .then((res) => { answered = true; return res; });
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  // Only once the insert has been ENTERED is "not answered yet" evidence that the answer waits for it.
+  await insertEntered;
+  await new Promise((resolve) => setTimeout(resolve, 10));
   assertEquals(answered, false, "the answer waits for the audit write");
   assertEquals(written.length, 0);
   release();
@@ -2141,4 +2145,143 @@ Deno.test("an edit observation reports only the comment the receipt targets", as
   const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
   assertEquals(status.data.observation, "unavailable", "an answer for another id is not an observation");
   assertEquals((status.data as { observed_text?: unknown }).observed_text ?? null, null);
+});
+
+// ---- fix round: the anonymous gate, the status path, Hold ordering -------------------------------------
+
+/** Replaces check_rate_limit with one the test answers; returns the log of its calls. */
+function deferredLimiter(world: World) {
+  const calls: string[] = [];
+  const pending: Array<(allowed: boolean) => void> = [];
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  fake.rpc = (fn: string, params: Record<string, unknown>) => {
+    if (fn !== "check_rate_limit") return original(fn, params);
+    calls.push(String(params.p_endpoint));
+    return new Promise((resolve) => {
+      pending.push((allowed) => resolve({ data: { allowed, remaining: 0, retry_after: 30 }, error: null }));
+    });
+  };
+  return { calls, answerAll: (allowed: boolean) => { while (pending.length) pending.shift()!(allowed); } };
+}
+
+const anonymous = (world: World) =>
+  handleStage4({ deps: world.deps, corsHeaders: {}, userId: "", isServiceRole: false, body: undefined });
+
+Deno.test("concurrent anonymous refusals put at most one call on the shared bucket", async () => {
+  const world = createWorld();
+  const limiter = deferredLimiter(world);
+  const burst = Array.from({ length: 25 }, () => anonymous(world));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assertEquals(limiter.calls.length, 1, "one probe in flight, however many requests are waiting");
+  limiter.answerAll(true);
+  const answers = await Promise.all(burst);
+  for (const res of answers) assertEquals(res.status, 401, "every request still gets the same refusal");
+  assertEquals(limiter.calls.length, 1, "the others were refused without a call of their own");
+});
+
+Deno.test("after the shared bucket refuses, calls over time stay at one probe per closed window", async () => {
+  let clock = 1_000_000;
+  const world = createWorld({ now: () => clock, rateLimited: false });
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  let limiterCalls = 0;
+  fake.rpc = (fn: string, params: Record<string, unknown>) => {
+    if (fn !== "check_rate_limit") return original(fn, params);
+    limiterCalls += 1;
+    return Promise.resolve({ data: { allowed: false, remaining: 0, retry_after: 30 }, error: null });
+  };
+  // A request every 100 ms for one minute of clock time.
+  for (let step = 0; step < 600; step += 1) {
+    clock += 100;
+    const res = await anonymous(world);
+    assertEquals(res.status, 401);
+  }
+  // 60 s / 10 s closed window = 6 probes (+1 for the first), plus one counter call for the minute.
+  assertEquals(limiterCalls <= 8, true, `limiter calls over one minute: ${limiterCalls}`);
+});
+
+Deno.test("a probe that never answers is cut off and does not hold the gate", async () => {
+  const world = createWorld();
+  const limiter = deferredLimiter(world);
+  const started = Date.now();
+  const first = await anonymous(world);
+  assertEquals(first.status, 401);
+  assertEquals(Date.now() - started < 6000, true, "bounded by the probe and counter timeouts, not by the limiter");
+  const probes = () => limiter.calls.filter((endpoint) => endpoint.includes("stage4_audit_anon")).length;
+  assertEquals(probes(), 1);
+  // The gate is closed for a while after the timeout: no new probe from the next requests.
+  await anonymous(world);
+  await anonymous(world);
+  assertEquals(probes(), 1, "a timed-out probe closes the gate instead of letting every request retry");
+  limiter.answerAll(false);
+});
+
+Deno.test("Hold is refused straight after validation, before the limiter, the account read and the capability gate", async () => {
+  // The account is NOT admitted for writes: the old order answered 403 capability_off first.
+  const world = createWorld({ policy: { [nativeAccount().id]: { read: true, held: false, write: false } } });
+  const handle = await firstHandle(world);
+  world.rpcLog.length = 0;
+  const res = await world.calls("youtube_moderate_comment", { target_handle: handle, status: "heldForReview", operation_id: crypto.randomUUID() });
+  assertEquals(res.status, 400);
+  assertEquals((await jsonOf(res)).reason, "invalid_request");
+  assertEquals(world.rpcLog.length, 0, "no limiter call, no capability read, nothing");
+});
+
+Deno.test("an edit status read where the read capability answers false because of a reconnect returns no receipt", async () => {
+  const { world, op } = await editedWorld();
+  // The change lands while the capability is being checked, and the answer turns false BECAUSE of it.
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  fake.rpc = async (name: string, params: Record<string, unknown>) => {
+    if (name === "youtube_comments_stage4_admits") {
+      reconnect(world);
+      world.setPolicy({ [nativeAccount().id]: { read: false, held: false, write: false, ban: false } });
+    }
+    return original(name, params);
+  };
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  const body = await res.json();
+  assertEquals(res.status, 404);
+  assertEquals("data" in body, false, "no field of the old receipt crosses the reconnect");
+});
+
+Deno.test("an edit status read where the credential preparation FAILS during a reconnect returns no receipt", async () => {
+  const { world, op } = await editedWorld();
+  const account = world.accounts.get(nativeAccount().id)!;
+  // A credential that cannot be prepared: expired, with nothing to refresh it.
+  account.token_expires_at = new Date(Date.now() - 1000).toISOString();
+  account.refresh_token = null;
+  afterRpc(world, "youtube_comments_stage4_admits", () => reconnect(world));
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 404);
+  assertEquals("data" in (await res.json()), false);
+  assertEquals(world.reads.length, 0);
+});
+
+Deno.test("an edit status read stops before the provider when the read capability is withdrawn during preparation", async () => {
+  const { world, op } = await editedWorld();
+  let admitsCalls = 0;
+  afterRpc(world, "youtube_comments_stage4_admits", () => {
+    admitsCalls += 1;
+    // The first answer (before the credential step) said yes; it is withdrawn right after.
+    if (admitsCalls === 1) world.setPolicy({ [nativeAccount().id]: { read: false, held: false, write: false, ban: false } });
+  });
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
+  assertEquals(world.reads.length, 0, "no provider read after the withdrawal");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals(status.data.state, "confirmed", "the receipt itself is still returned under the unchanged binding");
+});
+
+Deno.test("an edit status read with no draft returns the receipt at once: no settings read, no provider read", async () => {
+  const { world, op } = await editedWorld();
+  world.rpcLog.length = 0;
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op }));
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals(world.reads.length, 0, "no provider read");
+  assertEquals(
+    world.rpcLog.filter((c) => c.fn.startsWith("youtube_comments_stage4")).length,
+    0,
+    "no rollout settings read either",
+  );
 });

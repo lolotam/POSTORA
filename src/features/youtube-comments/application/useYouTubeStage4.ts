@@ -24,7 +24,13 @@ import { clearSettled, recoverOperation } from "./recoverOperation";
 export type SubmissionOutcome =
   | { kind: "confirmed"; receipt: Stage4ReceiptPayload; operationId: string }
   | { kind: "refused"; reason: string; draftKept: true; operationId: string }
-  | { kind: "indeterminate"; receipt: Stage4ReceiptPayload; operationId: string }
+  | {
+    kind: "indeterminate";
+    receipt: Stage4ReceiptPayload;
+    operationId: string;
+    /** What a status check compared against the draft (an edit), kept apart from the receipt state. */
+    observation?: Stage4OperationStatusPayload["observation"];
+  }
   | { kind: "pending"; operationId: string }
   /**
    * The pre-submit check found that an EARLIER submit of the owner's has since
@@ -52,6 +58,12 @@ export interface Stage4PageState<Item> {
   nextCursor: string | null;
   loading: boolean;
   error: string | null;
+  /** The stable refusal reason of the failed page, when the server named one. */
+  errorCode: string | null;
+  /** The channel binding the first page was read under; null until it is read (or for lists that carry none). */
+  bindingGeneration: number | null;
+  /** When the first page last finished loading (0 until it has); it moves on every reload. */
+  firstPageUpdatedAt: number;
   loadMore: () => void;
   /** Retry only the failed page; earlier rows stay (spec 8.3). */
   retry: () => void;
@@ -97,7 +109,7 @@ export function useYouTubeStage4(params: {
     accountId: string;
     resource: string;
     enabled: boolean;
-    fetchPage: (cursor: string | undefined) => Promise<{ page: Item[]; next: string | null; account_id: string }>;
+    fetchPage: (cursor: string | undefined) => Promise<{ page: Item[]; next: string | null; account_id: string; binding_generation?: number }>;
   }): Stage4PageState<Item> {
     const listQueryClient = useQueryClient();
     const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
@@ -113,9 +125,11 @@ export function useYouTubeStage4(params: {
 
     const pages = cursors.map((cursor, index) => ({
       queryKey: youtubeCommentsKey(listOptions.userId, listOptions.accountId, listOptions.resource, cursor ?? `page-${index}`),
-      queryFn: async (): Promise<{ page: Item[]; next: string | null; stale: boolean }> => {
+      queryFn: async (): Promise<{ page: Item[]; next: string | null; stale: boolean; generation: number | null }> => {
         const result = await listOptions.fetchPage(cursor);
-        return guard(result) ? { page: result.page, next: result.next, stale: false } : { page: [], next: null, stale: true };
+        return guard(result)
+          ? { page: result.page, next: result.next, stale: false, generation: result.binding_generation ?? null }
+          : { page: [], next: null, stale: true, generation: null };
       },
       // Only the live tail fetches. Every earlier page still has an OBSERVER
       // (a disabled one), which is what keeps its cache entry alive for as
@@ -140,7 +154,11 @@ export function useYouTubeStage4(params: {
       items,
       nextCursor: tailQuery.data?.next ?? null,
       loading: tailQuery.isLoading || tailQuery.isFetching,
-      error: tailQuery.error instanceof Error ? tailQuery.error.message : null,
+      error: tailQuery.error instanceof YouTubeCommentsError ? tailQuery.error.code
+        : tailQuery.error instanceof Error ? tailQuery.error.message : null,
+      errorCode: tailQuery.error instanceof YouTubeCommentsError ? tailQuery.error.code : null,
+      bindingGeneration: pageQueries[0]?.data?.generation ?? null,
+      firstPageUpdatedAt: pageQueries[0]?.dataUpdatedAt ?? 0,
       loadMore: () => {
         const next = tailQuery.data?.next;
         if (next) setCursors((prev) => [...prev, next]);
@@ -188,11 +206,25 @@ export function useYouTubeStage4(params: {
       const page = await gateway.threadPage({ accountId, videoId: effectiveVideoId!, list: listMode, cursor });
       return {
         account_id: page.account_id,
+        binding_generation: page.binding_generation,
         next: page.next_cursor,
         page: page.items.map((row) => ({ key: row.comment_id, row })),
       };
     },
   });
+  // Every time the thread list has been read again (the Refresh button, and the
+  // reload every confirmed action triggers) the OPEN reply pages are read again
+  // too. It happens when the list has LANDED, not when the reload starts: only
+  // then do the parents carry their new sealed handles. The epoch is what an
+  // open thread's replies watch for.
+  const [repliesEpoch, setRepliesEpoch] = useState(0);
+  const firstPageUpdatedAt = threads.firstPageUpdatedAt;
+  const seenListUpdate = useRef(firstPageUpdatedAt);
+  useEffect(() => {
+    if (seenListUpdate.current === firstPageUpdatedAt) return;
+    seenListUpdate.current = firstPageUpdatedAt;
+    setRepliesEpoch((epoch) => epoch + 1);
+  }, [firstPageUpdatedAt]);
 
   // ---- reply paging per thread ------------------------------------------------
   //
@@ -407,7 +439,9 @@ export function useYouTubeStage4(params: {
         return { kind: "confirmed", receipt: status as Stage4ReceiptPayload, operationId };
       }
       if (status.state === "refused") return { kind: "refused", reason: status.reason ?? "upstream", draftKept: true, operationId };
-      if (status.state === "indeterminate") return { kind: "indeterminate", receipt: status as Stage4ReceiptPayload, operationId };
+      if (status.state === "indeterminate") {
+        return { kind: "indeterminate", receipt: status as Stage4ReceiptPayload, operationId, observation: status.observation };
+      }
       return { kind: "pending", operationId };
     },
     [gateway, accountId, userId, threads],
@@ -467,6 +501,7 @@ export function useYouTubeStage4(params: {
     listMode,
     setListMode,
     threads,
+    repliesEpoch,
     replyTargetsOpen,
     openReplies,
     closeReplies,
@@ -543,17 +578,27 @@ export function useStage4Replies(params: {
   parentCommentId: string;
   /** The parent's CURRENT sealed handle: request data only, never part of a key. */
   parentHandle: string;
+  /**
+   * The channel binding the list was read under. A reconnect changes it, and
+   * the cached pages and cursors of the old binding are then abandoned.
+   */
+  bindingGeneration: number | null;
+  /** Changes whenever the thread list is reloaded: open reply pages are read again from page one. */
+  refreshEpoch: number;
   enabled: boolean;
 }) {
-  const { userId, accountId, gateway, parentCommentId, parentHandle, enabled } = params;
+  const { userId, accountId, gateway, parentCommentId, parentHandle, bindingGeneration, refreshEpoch, enabled } = params;
+  const queryClient = useQueryClient();
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
-  // A cursor belongs to one user, account and parent: reset the chain when any changes.
-  const repliesIdentity = `${userId}:${accountId}:${parentCommentId}`;
+  // A cursor belongs to one user, account, binding and parent: reset the chain when any changes.
+  const resource = `replies:${parentCommentId}:g${bindingGeneration ?? "-"}`;
+  const repliesIdentity = `${userId}:${accountId}:${resource}`;
   const lastRepliesIdentity = useRef(repliesIdentity);
   if (lastRepliesIdentity.current !== repliesIdentity) {
     lastRepliesIdentity.current = repliesIdentity;
     setCursors([undefined]);
   }
+  const firstPageKey = youtubeCommentsKey(userId, accountId, resource, "page-0");
 
   const tailIndex = cursors.length - 1;
   type ReplyPage = { page: { key: string; row: Stage4CommentRow }[]; next: string | null; stale: boolean };
@@ -561,7 +606,7 @@ export function useStage4Replies(params: {
   // not the live tail is not garbage-collected while the thread is open.
   const pageQueries = useQueries({
     queries: cursors.map((cursor, index) => ({
-      queryKey: youtubeCommentsKey(userId, accountId, `replies:${parentCommentId}`, cursor ?? `page-${index}`),
+      queryKey: youtubeCommentsKey(userId, accountId, resource, cursor ?? `page-${index}`),
       queryFn: async (): Promise<ReplyPage> => {
         const page = await gateway.replyPage({ accountId, parentHandle, cursor });
         if (page.account_id !== accountId) return { page: [], next: null, stale: true };
@@ -586,15 +631,33 @@ export function useStage4Replies(params: {
     return [...byKey.values()];
   }, [pageQueries]);
 
+  /** Back to page one, read again. The rows already shown stay until the new page replaces them. */
+  const reloadFromStart = useCallback(() => {
+    setCursors([undefined]);
+    void queryClient.invalidateQueries({ queryKey: firstPageKey });
+  }, [queryClient, firstPageKey]);
+
+  // The thread list was reloaded (Refresh, or a confirmed action on this
+  // thread): the cached reply pages may be older than the thread's own rows.
+  const lastEpoch = useRef(refreshEpoch);
+  useEffect(() => {
+    if (lastEpoch.current === refreshEpoch) return;
+    lastEpoch.current = refreshEpoch;
+    reloadFromStart();
+  }, [refreshEpoch, reloadFromStart]);
+
+  const errorCode = tailQuery.error instanceof YouTubeCommentsError ? tailQuery.error.code : null;
   return {
     items,
     nextCursor: tailQuery.data?.next ?? null,
     loading: tailQuery.isLoading || tailQuery.isFetching,
-    error: tailQuery.error instanceof Error ? tailQuery.error.message : null,
+    error: errorCode ?? (tailQuery.error instanceof Error ? tailQuery.error.message : null),
+    errorCode,
     loadMore: () => {
       const next = tailQuery.data?.next;
       if (next) setCursors((prev) => [...prev, next]);
     },
     retry: () => void tailQuery.refetch(),
+    reloadFromStart,
   };
 }

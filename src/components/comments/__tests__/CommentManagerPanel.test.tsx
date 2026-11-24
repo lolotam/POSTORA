@@ -13,9 +13,10 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 // The Stage 4 admission is "legacy" unless a test flips it: the baseline
 // inbox and the other platforms must stay exactly as they were.
-let stage4Admission: "loading" | "admitted" | "legacy" = "legacy";
+let stage4Admission: "loading" | "admitted" | "legacy" | "unavailable" = "legacy";
+const retryAdmission = vi.fn();
 vi.mock("@/features/youtube-comments/application/useYouTubeStage4Admission", () => ({
-  useYouTubeStage4Admission: () => stage4Admission,
+  useYouTubeStage4Admission: () => ({ admission: stage4Admission, retry: retryAdmission }),
 }));
 const useComments = vi.fn((_opts: unknown) => ({ data: [], isLoading: false, error: null, refetch: vi.fn(), isFetching: false }));
 // The comment list under the panel binds the mutation hooks from the same module, so they are

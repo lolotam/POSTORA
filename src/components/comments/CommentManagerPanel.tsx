@@ -61,7 +61,7 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
   // as it was (Composio, gate-off, old backend, transport failure).
   // A Composio connection can never be admitted, so it skips the question
   // and its baseline inbox loads at once.
-  const stage4Admission = useYouTubeStage4Admission(
+  const { admission: stage4Admission, retry: retryAdmission } = useYouTubeStage4Admission(
     platform === "youtube" ? activeAccountId : null,
     platform === "youtube" && !needsReconnect && activeAccount?.auth_provider !== "composio",
     defaultYouTubeCommentsGateway,
@@ -81,7 +81,9 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
     // While admission is still being decided the panel shows a spinner, and a
     // legacy provider read for a channel that is about to be admitted would
     // spend quota and could drop a stored grant that Stage 4 leaves alone.
-    enabled: !needsReconnect && stage4Admission !== "admitted" && stage4Admission !== "loading",
+    // An unreadable settings answer is not a "no": the channel may well be admitted, so no
+    // baseline read is started for it either; the owner is offered a retry instead.
+    enabled: !needsReconnect && stage4Admission !== "admitted" && stage4Admission !== "loading" && stage4Admission !== "unavailable",
   });
 
   const EmptyIcon = EMPTY_ICONS[platform];
@@ -211,6 +213,14 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
       ) : platform === "youtube" && stage4Admission === "loading" ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      ) : platform === "youtube" && stage4Admission === "unavailable" ? (
+        <div role="alert" className="text-center py-12 text-muted-foreground" data-testid="yt-stage4-admission-unavailable">
+          <p className="font-medium">{t("youtubeStage4.settings.unavailableTitle", "Postora could not read its settings")}</p>
+          <p className="text-sm mt-1">{t("youtubeStage4.reasons.settings_unavailable", "Postora could not read its settings. Try again.")}</p>
+          <Button size="sm" variant="outline" className="mt-3" onClick={retryAdmission}>
+            {t("youtubeStage4.settings.retry", "Try again")}
+          </Button>
         </div>
       ) : commentsLoading ? (
         <div className="flex items-center justify-center py-12">

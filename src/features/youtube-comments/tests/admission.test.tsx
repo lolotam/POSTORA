@@ -43,22 +43,22 @@ describe("useYouTubeStage4Admission", () => {
       () => Promise.resolve(capabilities(true)),
       () => Promise.reject(new Error("transient failure")),
     ]);
-    await waitFor(() => expect(hook.result.current).toBe("admitted"));
+    await waitFor(() => expect(hook.result.current.admission).toBe("admitted"));
     await act(async () => { await client.invalidateQueries({ queryKey: youtubeCommentsKey(USER, ACCOUNT, "admission") }); });
     await waitFor(() => expect(gateway.capabilities).toHaveBeenCalledTimes(2));
     // The failed refetch really did put the query in the error state (the data is kept)...
     await waitFor(() => expect(client.getQueryState(youtubeCommentsKey(USER, ACCOUNT, "admission"))?.status).toBe("error"));
     // ...and the screen must not be unmounted by it.
-    expect(hook.result.current).toBe("admitted");
+    expect(hook.result.current.admission).toBe("admitted");
   });
 
   it("is legacy when the first load fails: with no data an error means the baseline inbox", async () => {
     const { hook } = setup([() => Promise.reject(new Error("down"))]);
-    await waitFor(() => expect(hook.result.current).toBe("legacy"));
+    await waitFor(() => expect(hook.result.current.admission).toBe("legacy"));
   });
 
   it("is legacy when the data says reads are not allowed", async () => {
     const { hook } = setup([() => Promise.resolve(capabilities(false))]);
-    await waitFor(() => expect(hook.result.current).toBe("legacy"));
+    await waitFor(() => expect(hook.result.current.admission).toBe("legacy"));
   });
 });
