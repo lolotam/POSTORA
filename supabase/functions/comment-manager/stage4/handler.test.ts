@@ -8,7 +8,7 @@
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { handleStage4, type Stage4Deps } from "./handler.ts";
+import { handleStage4, resetAnonRefusalGate, type Stage4Deps } from "./handler.ts";
 import { STAGE4_ACTIONS } from "./contracts.ts";
 import { sealCursor, sealHandle, HANDLE_TTL_MS } from "./sealing.ts";
 import { writeRefusalAudit } from "./audit.ts";
@@ -190,6 +190,8 @@ function nativeAccount(overrides: Partial<FakeAccount> = {}): FakeAccount {
 }
 
 export function createWorld(options: WorldOptions = {}): World {
+  // Each world is a fresh deployment: nothing learned about the shared anonymous bucket carries over.
+  resetAnonRefusalGate();
   const accounts = new Map<string, FakeAccount>();
   for (const a of options.accounts ?? [nativeAccount()]) accounts.set(a.id, a);
 
@@ -288,10 +290,6 @@ export function createWorld(options: WorldOptions = {}): World {
 
   function capabilityStatus(accountId: string) {
     const reasons: Record<string, string | null> = {};
-    if (options.admitsError) {
-      for (const cap of ["read", "held", "write", "ban"]) reasons[cap] = "settings_unavailable";
-      return reasons;
-    }
     for (const cap of ["read", "held", "write", "ban"]) {
       reasons[cap] = admits(accountId, cap) ? null : "capability_off";
     }
@@ -351,6 +349,7 @@ export function createWorld(options: WorldOptions = {}): World {
         return { data: admits(String(params.p_account_id), String(params.p_capability)), error: null };
       }
       if (fn === "youtube_comments_stage4_capability_status") {
+        if (options.admitsError) return { data: null, error: { message: "unreadable" } };
         const reasons = capabilityStatus(String(params.p_account_id));
         const out: Record<string, { allowed: boolean; reason: string | null }> = {};
         for (const cap of ["read", "held", "write", "ban"]) {
@@ -1142,11 +1141,13 @@ Deno.test("the Held list needs the held capability", async () => {
   assertEquals(published.status, 200);
 });
 
-Deno.test("an unreadable rollout fails closed without looking like off", async () => {
+Deno.test("an unreadable rollout is an upstream error, never a payload that looks like off", async () => {
   const world = createWorld({ admitsError: true });
   const res = await world.calls("youtube_stage4_capabilities");
   const body = await jsonOf(res);
-  assertEquals(body.data.capabilities.read.reason, "settings_unavailable");
+  assertEquals(res.status, 503);
+  assertEquals(body.reason, "upstream");
+  assertEquals("data" in body, false, "no capabilities payload of denials is returned");
 });
 
 Deno.test("credential preparation failure claims nothing", async () => {
@@ -1709,8 +1710,26 @@ Deno.test("a digest key load failure is an audited 503, not an uncaught throw", 
 
 Deno.test("the refusal audit is finished before the answer is returned (it is part of the request)", async () => {
   const world = createWorld();
-  await world.calls("youtube_stage4_capabilities", { social_account_id: "77777777-7777-4777-8777-777777777777" });
-  assertEquals(world.auditRows.length, 1, "no timer was needed: the audit write was awaited");
+  // The audit insert only completes when the test lets it: if the handler did not await it
+  // (a `void` write), the answer would arrive while the row is still unwritten.
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const written: Array<Record<string, unknown>> = [];
+  const admin = world.deps.admin as unknown as { from: (table: string) => unknown };
+  const originalFrom = admin.from.bind(admin);
+  admin.from = (table: string) => table === "system_logs"
+    ? { insert: async (row: Record<string, unknown>) => { await gate; written.push(row); return { error: null }; } }
+    : originalFrom(table);
+  let answered = false;
+  const pending = world.calls("youtube_stage4_capabilities", { social_account_id: "77777777-7777-4777-8777-777777777777" })
+    .then((res) => { answered = true; return res; });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assertEquals(answered, false, "the answer waits for the audit write");
+  assertEquals(written.length, 0);
+  release();
+  const res = await pending;
+  assertEquals(res.status, 404);
+  assertEquals(written.length, 1, "the row was written before the answer was returned");
 });
 
 Deno.test("a failed suppression-counter insert is reported", async () => {
@@ -1742,6 +1761,7 @@ Deno.test("a key rotation between the digests and the claim is a retryable 503 f
   });
   const handle = await firstHandle(world);
   world.writes.length = 0;
+  world.rpcLog.length = 0;
   for (const [action, extra] of [
     ["youtube_edit_comment", { text: "edited" }],
     ["youtube_moderate_comment", { status: "published" }],
@@ -1753,6 +1773,10 @@ Deno.test("a key rotation between the digests and the claim is a retryable 503 f
   assertEquals(world.writes.length, 0, "nothing reached the provider");
   assertEquals(world.receipts.size, 0, "no receipt was stored");
   assertEquals(world.rpcLog.some((c) => c.fn === "youtube_comment_op_mark_dispatched"), false, "nothing was marked dispatched");
+  // The 503 must come from the CLAIM refusing the stale key version, not from the key read failing
+  // earlier: the keys were read, and a claim was attempted for each of the two actions.
+  assertEquals(world.rpcLog.filter((c) => c.fn === "youtube_comment_digest_keys").length >= 2, true, "the digest keys were read");
+  assertEquals(world.rpcLog.filter((c) => c.fn === "youtube_comment_op_claim").length, 2, "a claim was attempted for each action");
 });
 
 Deno.test("a ban confirmation with Hold or Publish is refused before any provider work", async () => {
@@ -1985,4 +2009,136 @@ Deno.test("an edit status read whose account re-read fails is a temporary upstre
   assertEquals(res.status, 503);
   assertEquals(body.reason, "upstream");
   assertEquals("data" in body, false);
+});
+
+Deno.test("an unreadable rollout on a gated action is upstream too, and nothing is sent", async () => {
+  const world = createWorld({ admitsError: true });
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["youtube_video_page", {}],
+    ["youtube_thread_page", { video_id: "vid-1", list: "published" }],
+    ["youtube_thread_page", { video_id: "vid-1", list: "heldForReview" }],
+    ["youtube_create_thread", { video_id: "vid-1", text: "x", operation_id: crypto.randomUUID() }],
+  ];
+  for (const [action, extra] of cases) {
+    const res = await world.calls(action, extra);
+    assertEquals(res.status, 503, action);
+    assertEquals((await jsonOf(res)).reason, "upstream", action);
+  }
+  assertEquals(world.writes.length + world.reads.length, 0, "no provider traffic");
+  assertEquals(world.receipts.size, 0);
+});
+
+Deno.test("Hold through a stale handle issued while the comment was held is refused before the claim", async () => {
+  // comments.list?id= carries no moderation status, so the handler cannot see
+  // that the comment was published since; the handle still says held.
+  const world = createWorld();
+  const staleHandle = await sealHandle(
+    { o: USER, a: nativeAccount().id, g: 1, c: "UC-handler-test", vi: "vid-1", th: "thread-9", co: "comment-7", k: "thread", p: "", au: "UC-author-1", s: "heldForReview" },
+    { signingSecret: TEST_SIGNER, now: Date.now(), ttlMs: HANDLE_TTL_MS },
+  );
+  const res = await world.calls("youtube_moderate_comment", { target_handle: staleHandle, status: "heldForReview", operation_id: crypto.randomUUID() });
+  assertEquals(res.status, 400);
+  assertEquals((await jsonOf(res)).reason, "invalid_request");
+  assertEquals(world.writes.length, 0, "nothing was sent");
+  assertEquals(world.reads.length, 0, "refused before any provider read");
+  assertEquals(world.rpcLog.some((c) => c.fn === "youtube_comment_op_claim"), false, "nothing was claimed");
+  assertEquals(world.receipts.size, 0);
+});
+
+/** A world with one edit that settled normally; `op` is its operation id. */
+async function editedWorld() {
+  const world = createWorld({
+    provider: ownTopProvider((call) => {
+      if (call.path === "comments" && call.method === "GET" && call.query.get("id")) {
+        return { status: 200, body: { items: [commentFixture(call.query.get("id")!, { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "edited" } })] } };
+      }
+      if (call.path === "comments" && call.method === "PUT") return { status: 200, body: { id: (call.body as { id?: string }).id, snippet: {} } };
+      return undefined;
+    }),
+  });
+  const handle = await firstHandle(world);
+  const op = crypto.randomUUID();
+  await world.calls("youtube_edit_comment", { target_handle: handle, text: "edited", operation_id: op });
+  world.reads.length = 0;
+  return { world, op };
+}
+
+/** Runs `change` right after the next call of the RPC `fn` returns. */
+function afterRpc(world: World, fn: string, change: () => void) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  fake.rpc = async (name: string, params: Record<string, unknown>) => {
+    const out = await original(name, params);
+    if (name === fn) change();
+    return out;
+  };
+}
+
+/** Runs `change` right after a provider read of a single comment returns. */
+function afterCommentRead(world: World, change: () => void) {
+  const baseFetcher = world.deps.fetcher;
+  world.deps.fetcher = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const out = await baseFetcher(url, init);
+    const full = new URL(String(url));
+    if (full.pathname.endsWith("/comments") && (init?.method ?? "GET") === "GET" && full.searchParams.get("id")) change();
+    return out;
+  }) as typeof fetch;
+}
+
+function reconnect(world: World) {
+  world.accounts.get(nativeAccount().id)!.binding_generation += 1;
+}
+
+Deno.test("an edit status read after a reconnect returns nothing when the read capability answers false", async () => {
+  const { world, op } = await editedWorld();
+  // The channel is reconnected right after the receipt was read, and the read capability then answers
+  // false: the observation is skipped, but the old receipt must still not be returned.
+  afterRpc(world, "youtube_comment_op_status", () => {
+    reconnect(world);
+    world.setPolicy({ [nativeAccount().id]: { read: false, held: false, write: false, ban: false } });
+  });
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  const body = await res.json();
+  assertEquals(res.status, 404);
+  assertEquals(body.reason, "not_found");
+  assertEquals("data" in body, false, "no field of the old receipt crosses the reconnect");
+});
+
+Deno.test("an edit status read discards the receipt when the channel is reconnected before the credential is prepared", async () => {
+  const { world, op } = await editedWorld();
+  // The reconnect lands between the capability answer and the credential step.
+  afterRpc(world, "youtube_comments_stage4_admits", () => reconnect(world));
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 404);
+  assertEquals("data" in (await res.json()), false);
+  assertEquals(world.reads.length, 0, "the provider was never read with the superseded binding's credential");
+});
+
+Deno.test("an edit status read discards the receipt when the channel is reconnected during the provider read", async () => {
+  const { world, op } = await editedWorld();
+  afterCommentRead(world, () => reconnect(world));
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  const body = await res.json();
+  assertEquals(world.reads.length >= 1, true, "the provider was read");
+  assertEquals(res.status, 404);
+  assertEquals("data" in body, false, "nothing the superseded read observed is returned");
+});
+
+Deno.test("an edit observation reports only the comment the receipt targets", async () => {
+  const { world, op } = await editedWorld();
+  // The provider answers with a DIFFERENT comment that happens to carry the requested text.
+  const baseFetcher = world.deps.fetcher;
+  world.deps.fetcher = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const full = new URL(String(url));
+    if (full.pathname.endsWith("/comments") && (init?.method ?? "GET") === "GET" && full.searchParams.get("id")) {
+      return new Response(
+        JSON.stringify({ items: [commentFixture("some-other-comment", { snippet: { authorChannelId: { value: "UC-handler-test" }, textOriginal: "edited" } })] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return baseFetcher(url, init);
+  }) as typeof fetch;
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
+  assertEquals(status.data.observation, "unavailable", "an answer for another id is not an observation");
+  assertEquals((status.data as { observed_text?: unknown }).observed_text ?? null, null);
 });

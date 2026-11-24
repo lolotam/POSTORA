@@ -16,9 +16,9 @@ const OWNER_EMAIL = process.env.STAGE4_OWNER_EMAIL ?? "stage4-journey@example.in
 // Generated per run by scripts/stage4-e2e.mjs; there is no default on purpose.
 const { STAGE4_OWNER_PASSWORD: OWNER_PASSWORD = "" } = process.env;
 
-async function providerState(): Promise<{ writes: number; writePaths: string[]; writeBodies: unknown[]; reads: number }> {
+async function providerState(): Promise<{ writes: number; writePaths: string[]; writeBodies: unknown[]; reads: number; overlapObserved: boolean }> {
   const response = await fetch(`${API}/__stage4/provider`);
-  return await response.json() as { writes: number; writePaths: string[]; writeBodies: unknown[]; reads: number };
+  return await response.json() as { writes: number; writePaths: string[]; writeBodies: unknown[]; reads: number; overlapObserved: boolean };
 }
 
 async function control(action: string, body?: unknown): Promise<void> {
@@ -317,6 +317,10 @@ test.describe("Stage 4 fences across tabs and reloads (en)", () => {
     for (const tab of pages) {
       await tab.getByTestId("yt-stage4-composer").locator("textarea").fill(racing);
     }
+    // Two clicks started together can still reach the server one after the other, and the second would
+    // then find the first already settled ("just posted") without ever meeting the unresolved fence.
+    // The fixture holds the first provider create until the second request has been answered.
+    await control("hold-create-for-twin");
     await Promise.all(pages.map((tab) =>
       tab.getByTestId("yt-stage4-composer").getByRole("button", { name: /^Comment$/ }).click()));
     const lines: string[] = [];
@@ -326,8 +330,12 @@ test.describe("Stage 4 fences across tabs and reloads (en)", () => {
       lines.push(await line.innerText());
     }
     expect(lines.filter((line) => /Accepted by YouTube/.test(line))).toHaveLength(1);
-    expect(lines.filter((line) => /may already be on its way|was just posted/.test(line))).toHaveLength(1);
-    expect((await providerState()).writes).toBe(1);
+    // Specifically the UNRESOLVED fence: the first write was still in flight when the second claim arrived.
+    expect(lines.filter((line) => /may already be on its way/.test(line))).toHaveLength(1);
+    expect(lines.filter((line) => /was just posted/.test(line))).toHaveLength(0);
+    const after = await providerState();
+    expect(after.overlapObserved, "both requests were in flight before the first provider call returned").toBe(true);
+    expect(after.writes).toBe(1);
     await Promise.all(pages.map((tab) => tab.context().close()));
   });
 

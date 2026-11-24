@@ -3,6 +3,7 @@
 // before the audit path, passes every handler-level test and fails here.
 
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { resetAnonRefusalGate } from "./handler.ts";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 
@@ -140,7 +141,8 @@ Deno.test("legacy behaviour is the baseline's: malformed JSON after auth is a 50
   const serve = await loadRoute();
   const { supabase, auditRows } = fakeSupabase();
   const nativeError = console.error;
-  console.error = () => undefined;
+  const logged: unknown[][] = [];
+  console.error = (...args: unknown[]) => { logged.push(args); };
   try {
     for (const raw of ["{not json", "null"]) {
       const res = await serve(post(raw, "good-token"), { supabase });
@@ -159,6 +161,11 @@ Deno.test("legacy behaviour is the baseline's: malformed JSON after auth is a 50
   assertEquals(metadata.action, "unknown");
   assertEquals(metadata.reason, "invalid_request");
   assertEquals(JSON.stringify(auditRows[0]).includes("not json"), false, "the body text is never logged");
+  // The outer catch logs a fixed message for the unreadable body: neither the
+  // parser's own error nor any of the body text reaches the log.
+  assertEquals(logged[0], ["Comment manager error:", "the request body was not valid JSON"]);
+  assertEquals(logged.length, 2, "one log line per failed request");
+  assertEquals(JSON.stringify(logged[0]).includes("not json"), false);
 });
 
 Deno.test("authentication comes first: a request that never finishes its body is answered 401 within the bound", async () => {
@@ -189,4 +196,118 @@ Deno.test("an unauthenticated body larger than the peek bound is not classified:
   assertEquals(await res.json(), { error: "Unauthorized" });
   await settle();
   assertEquals(auditRows.length, 0);
+});
+
+/** A fake whose shared limiter really counts, and which counts every call it receives. */
+function countingSupabase() {
+  const used = new Map<string, number>();
+  const calls = { limiter: 0, inserts: 0 };
+  const supabase = {
+    auth: { getUser: () => Promise.resolve({ data: { user: null }, error: { message: "invalid token" } }) },
+    from(table: string) {
+      if (table !== "system_logs") throw new Error(`route test: unexpected table ${table}`);
+      return { insert: () => { calls.inserts += 1; return Promise.resolve({ error: null }); } };
+    },
+    rpc: (fn: string, params: { p_endpoint: string; p_max_requests: number }) => {
+      if (fn !== "check_rate_limit") return Promise.resolve({ data: null, error: { message: `unexpected rpc ${fn}` } });
+      calls.limiter += 1;
+      const count = (used.get(params.p_endpoint) ?? 0) + 1;
+      used.set(params.p_endpoint, count);
+      return Promise.resolve({ data: { allowed: count <= params.p_max_requests, remaining: 0, retry_after: 30 }, error: null });
+    },
+  };
+  return { supabase, calls };
+}
+
+Deno.test("after the shared bucket refuses, unauthenticated Stage 4 refusals cost no limiter call and no insert", async () => {
+  resetAnonRefusalGate();
+  const serve = await loadRoute();
+  const { supabase, calls } = countingSupabase();
+  const nativeWarn = console.warn;
+  console.warn = () => undefined;
+  try {
+    const stage4 = () => post({ action: "youtube_reply", social_account_id: "77777777-7777-4777-8777-777777777777" }, "bad-token");
+    // Fill the shared cap (30 rows) and trip it once, so the counter row is written.
+    for (let i = 0; i < 32; i++) {
+      assertEquals((await serve(stage4(), { supabase })).status, 401);
+    }
+    const limiterBefore = calls.limiter;
+    const insertsBefore = calls.inserts;
+    for (let i = 0; i < 40; i++) {
+      const res = await serve(stage4(), { supabase });
+      assertEquals(res.status, 401);
+      assertEquals((await res.json()).reason, "unauthorized", "the same refusal, only without database work");
+    }
+    assertEquals(calls.limiter - limiterBefore, 0, "no limiter call after the bucket has refused");
+    assertEquals(calls.inserts - insertsBefore, 0, "no audit insert after the bucket has refused");
+  } finally {
+    console.warn = nativeWarn;
+    resetAnonRefusalGate();
+  }
+});
+
+Deno.test("the legacy 401 does no database work at all, byte for byte", async () => {
+  resetAnonRefusalGate();
+  const serve = await loadRoute();
+  const { supabase, calls } = countingSupabase();
+  const noHeader = await serve(post({ action: "get_youtube_comments" }), { supabase });
+  const badToken = await serve(post({ action: "get_youtube_comments" }, "bad-token"), { supabase });
+  assertEquals(await noHeader.text(), '{"error":"No authorization header"}');
+  assertEquals(await badToken.text(), '{"error":"Unauthorized"}');
+  assertEquals(calls.limiter + calls.inserts, 0);
+});
+
+Deno.test("an oversized unauthenticated body is refused without being read and its stream is cancelled", async () => {
+  resetAnonRefusalGate();
+  const serve = await loadRoute();
+  const { supabase, calls } = countingSupabase();
+  let cancelled = false;
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(new TextEncoder().encode("x".repeat(8 * 1024)));
+    },
+    cancel() { cancelled = true; },
+  });
+  const res = await serve(
+    new Request("http://localhost/functions/v1/comment-manager", {
+      method: "POST",
+      headers: { Authorization: "Bearer bad-token", "Content-Type": "application/json" },
+      body,
+      duplex: "half",
+    } as RequestInit),
+    { supabase },
+  );
+  assertEquals(res.status, 401);
+  assertEquals(await res.json(), { error: "Unauthorized" });
+  await settle();
+  assertEquals(cancelled, true, "the original body is not left unread");
+  assertEquals(pulled <= 6, true, `reading stopped near the 16 KiB cap (pulled ${pulled} chunks)`);
+  assertEquals(calls.limiter + calls.inserts, 0, "an unclassified body does no database work");
+});
+
+Deno.test("a body whose declared length exceeds the cap is refused without reading it", async () => {
+  resetAnonRefusalGate();
+  const serve = await loadRoute();
+  const { supabase, calls } = countingSupabase();
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) { controller.enqueue(new TextEncoder().encode("{}")); controller.close(); },
+    cancel() { cancelled = true; },
+  });
+  const res = await serve(
+    new Request("http://localhost/functions/v1/comment-manager", {
+      method: "POST",
+      headers: { Authorization: "Bearer bad-token", "Content-Length": String(1024 * 1024) },
+      body,
+      duplex: "half",
+    } as RequestInit),
+    { supabase },
+  );
+  assertEquals(res.status, 401);
+  assertEquals(await res.json(), { error: "Unauthorized" });
+  await settle();
+  assertEquals(cancelled, true, "the unread body is cancelled, not left open");
+  assertEquals(calls.limiter + calls.inserts, 0);
 });

@@ -55,7 +55,29 @@ const state = {
   failReplyPageOnce: false,
   indeterminateNextCreate: false,
   dropNextResponse: false,
+  /**
+   * The overlap barrier. While armed, a provider create is held until a SECOND
+   * create request has reached the route AND been answered (the fence refusing
+   * it), so the two requests are provably in flight at the same time and the
+   * server's unresolved-write fence is what separates them, not timing.
+   */
+  holdCreateForTwin: false,
+  createRequestsSeen: 0,
+  createRequestsAnswered: 0,
+  overlapObserved: false,
 };
+
+const BARRIER_TIMEOUT_MS = 10_000;
+
+/** Holds a provider create until its twin has been answered, or gives up after a bounded wait. */
+async function holdForTwin(): Promise<void> {
+  if (!state.holdCreateForTwin) return;
+  const deadline = Date.now() + BARRIER_TIMEOUT_MS;
+  while (!(state.createRequestsSeen >= 2 && state.createRequestsAnswered >= 1) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  state.overlapObserved = state.createRequestsSeen >= 2 && state.createRequestsAnswered >= 1;
+}
 
 function envelope(reason: string) {
   return { error: { errors: [{ reason, message: reason }], message: reason } };
@@ -262,6 +284,7 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(request.url);
   if (url.hostname === "www.googleapis.com") {
     const bodyText = typeof init?.body === "string" ? init.body : null;
+    if (request.method === "POST" && url.pathname.endsWith("/commentThreads")) await holdForTwin();
     const answer = provider(request, bodyText);
     return new Response(answer.status === 204 ? null : JSON.stringify(answer.body), {
       status: answer.status,
@@ -368,12 +391,18 @@ async function route(request: Request): Promise<Response> {
   if (url.pathname.startsWith("/__stage4/")) {
     const action = url.pathname.slice("/__stage4/".length);
     if (request.method === "GET" && action === "provider") {
-      return Response.json({ writes: state.writes.length, writePaths: state.writes.map((w) => `${w.method} ${w.path}${w.query}`), writeBodies: state.writes.map((w) => w.body ?? null), reads: state.reads });
+      return Response.json({ writes: state.writes.length, writePaths: state.writes.map((w) => `${w.method} ${w.path}${w.query}`), writeBodies: state.writes.map((w) => w.body ?? null), reads: state.reads, overlapObserved: state.overlapObserved });
     }
     if (request.method === "POST") {
       if (action === "fail-reply-page-once") state.failReplyPageOnce = true;
       else if (action === "indeterminate-next-create") state.indeterminateNextCreate = true;
       else if (action === "drop-next-response") state.dropNextResponse = true;
+      else if (action === "hold-create-for-twin") {
+        state.holdCreateForTwin = true;
+        state.createRequestsSeen = 0;
+        state.createRequestsAnswered = 0;
+        state.overlapObserved = false;
+      }
       else if (action === "capabilities") {
         const body = await request.json() as { on: boolean };
         await setCapabilities(body.on === true);
@@ -383,6 +412,10 @@ async function route(request: Request): Promise<Response> {
         state.failReplyPageOnce = false;
         state.indeterminateNextCreate = false;
         state.dropNextResponse = false;
+        state.holdCreateForTwin = false;
+        state.createRequestsSeen = 0;
+        state.createRequestsAnswered = 0;
+        state.overlapObserved = false;
       } else {
         return new Response(null, { status: 404 });
       }
@@ -407,9 +440,17 @@ async function route(request: Request): Promise<Response> {
     // Clone before the handler consumes the body: the drop decision below
     // still needs to read the action.
     const cloned = request.clone();
-    const response = request.method === "OPTIONS"
-      ? new Response(null, { status: 204 })
-      : await commentManager(request);
+    const isCreate = state.holdCreateForTwin && request.method === "POST"
+      && ((await request.clone().json().catch(() => null)) as { action?: string } | null)?.action === "youtube_create_thread";
+    if (isCreate) state.createRequestsSeen += 1;
+    let response: Response;
+    try {
+      response = request.method === "OPTIONS"
+        ? new Response(null, { status: 204 })
+        : await commentManager(request);
+    } finally {
+      if (isCreate) state.createRequestsAnswered += 1;
+    }
     if (state.dropNextResponse && request.method === "POST") {
       // Only a deliberate WRITE loses its answer; reads keep flowing.
       const body = await cloned.json().catch(() => null) as { action?: string } | null;

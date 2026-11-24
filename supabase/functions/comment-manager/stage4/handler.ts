@@ -26,6 +26,7 @@ import {
   type Stage4BanConfirmationPayload,
   type Stage4OperationStatusPayload,
   type Stage4CapabilitiesPayload,
+  type Stage4Capability,
 } from "./contracts.ts";
 import {
   HANDLE_PREFIX,
@@ -47,7 +48,7 @@ import { normaliseText, computeIntentDigests, computeLogicalDigests, type Digest
 import * as provider from "./provider.ts";
 import type { Stage4ProviderClass } from "./provider.ts";
 import { writeRefusalAudit, sanitiseAction } from "./audit.ts";
-import { readCapabilities, admitsCapability } from "./rollout.ts";
+import { readCapabilities, admitsCapability, SettingsReadError } from "./rollout.ts";
 import { STAGE4_HOLD_FROM_PUBLISHED } from "./contractTypes.ts";
 import { stage4RateLimit, STAGE4_RATE_LIMITS } from "./rateLimit.ts";
 
@@ -86,6 +87,27 @@ function json(status: number, body: unknown, headers: Record<string, string>): R
  */
 const ANON_AUDIT_MAX_PER_MINUTE = 30;
 
+/**
+ * In-process memory of the shared anonymous bucket's answer, so that a flood of
+ * unauthenticated refusals stops costing the database anything once the bucket
+ * has said no. After a refusal from the shared bucket, further anonymous
+ * refusals for ANON_BUCKET_CLOSED_MS skip the bucket call entirely (they still
+ * get the same 401 and the console event and join the suppression tally). The
+ * counter row is attempted at most once per ANON_COUNTER_INTERVAL_MS per
+ * instance. Both only ever make this instance write LESS than the shared
+ * limits already allow.
+ */
+const ANON_BUCKET_CLOSED_MS = 10_000;
+const ANON_COUNTER_INTERVAL_MS = 60_000;
+let anonBucketClosedUntil = 0;
+let anonCounterNextAt = 0;
+
+/** Test seam: forget what this instance learned about the shared bucket. */
+export function resetAnonRefusalGate(): void {
+  anonBucketClosedUntil = 0;
+  anonCounterNextAt = 0;
+}
+
 async function refusal(
   deps: Stage4Deps,
   status: number,
@@ -109,6 +131,7 @@ async function refusal(
     operationId: audit.operationVerified === true ? audit.operationId : null,
   }, {
     rateLimitBucket: async () => {
+      if (deps.now() < anonBucketClosedUntil) return false;
       const admitted = await stage4RateLimit(
         deps.admin,
         "anonymous",
@@ -116,9 +139,14 @@ async function refusal(
         ANON_AUDIT_MAX_PER_MINUTE,
         60,
       );
+      if (!admitted.allowed) anonBucketClosedUntil = deps.now() + ANON_BUCKET_CLOSED_MS;
       return admitted.allowed;
     },
     counterSink: async (suppressed) => {
+      // At most one counter attempt per interval per instance: the tally stays
+      // in memory (returning false keeps it) and costs no database work.
+      if (deps.now() < anonCounterNextAt) return false;
+      anonCounterNextAt = deps.now() + ANON_COUNTER_INTERVAL_MS;
       // At most one counter row per minute, whatever the suppression volume.
       const counter = await stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60);
       if (!counter.allowed) return false;
@@ -689,6 +717,26 @@ export function rateLimitFor(action: Stage4Action): { max: number; windowSeconds
   return STAGE4_ACTION_CAPABILITY[action] === "write" ? STAGE4_RATE_LIMITS.write : STAGE4_RATE_LIMITS.read;
 }
 
+/**
+ * Why a capability is not available, or null when it is. An unreadable
+ * rollout setting is an ERROR (503 upstream), never a 403 that looks like the
+ * capability being off (spec 13).
+ */
+async function capabilityRefusal(
+  admin: SupabaseClient,
+  accountId: string,
+  capability: Stage4Capability,
+): Promise<{ status: 403 | 503; reason: Stage4Reason } | null> {
+  try {
+    if (await admitsCapability(admin, accountId, capability)) return null;
+    const status = await readCapabilities(admin, accountId);
+    return { status: 403, reason: (status.capabilities[capability].reason ?? "capability_off") as Stage4Reason };
+  } catch (error) {
+    if (error instanceof SettingsReadError) return { status: 503, reason: "upstream" };
+    throw error;
+  }
+}
+
 // ---- the handler ----------------------------------------------------------
 
 export async function handleStage4(call: Stage4Call): Promise<Response> {
@@ -787,13 +835,11 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
   // Capability gate.
   const requiredCap = STAGE4_ACTION_CAPABILITY[action];
   if (requiredCap) {
-    const admits = await admitsCapability(deps.admin, accountId, requiredCap);
-    if (!admits) {
-      // Distinguish capability_off vs prerequisite vs not_admitted via the
-      // status payload.
-      const status = await readCapabilities(deps.admin, accountId);
-      const reason = (status.capabilities[requiredCap].reason ?? "capability_off") as Stage4Reason;
-      return refusal(deps, 403, reason, requestId, headers, {
+    // Distinguishes capability_off vs prerequisite vs not_admitted via the
+    // status payload, and an unreadable setting (upstream) from all of them.
+    const blocked = await capabilityRefusal(deps.admin, accountId, requiredCap);
+    if (blocked) {
+      return refusal(deps, blocked.status, blocked.reason, requestId, headers, {
         action, userId, accountId, operationId: (input as { operation_id?: string }).operation_id ?? null,
       });
     }
@@ -801,7 +847,14 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
 
   // ---- youtube_stage4_capabilities ---------------------------------------
   if (action === "youtube_stage4_capabilities") {
-    const status = await readCapabilities(deps.admin, accountId);
+    let status: Awaited<ReturnType<typeof readCapabilities>>;
+    try {
+      status = await readCapabilities(deps.admin, accountId);
+    } catch (error) {
+      if (!(error instanceof SettingsReadError)) throw error;
+      // An unreadable setting is an error answer, never a payload of "not allowed".
+      return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     const payload: Stage4CapabilitiesPayload = {
       account_id: accountId,
       capabilities: status.capabilities,
@@ -884,11 +937,9 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     const inp = input as Extract<Stage4Request, { action: "youtube_thread_page" }>;
     const requiresHeld = inp.list === "heldForReview";
     if (requiresHeld) {
-      const admits = await admitsCapability(deps.admin, accountId, "held");
-      if (!admits) {
-        const status = await readCapabilities(deps.admin, accountId);
-        const reason = (status.capabilities.held.reason ?? "capability_off") as Stage4Reason;
-        return refusal(deps, 403, reason, requestId, headers, { action, userId, accountId, operationId: null });
+      const blocked = await capabilityRefusal(deps.admin, accountId, "held");
+      if (blocked) {
+        return refusal(deps, blocked.status, blocked.reason, requestId, headers, { action, userId, accountId, operationId: null });
       }
     }
     // Verify video ownership.
@@ -1443,11 +1494,9 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     }
     const h = verified.payload;
     // Re-verify account capability for ban.
-    const admits = await admitsCapability(deps.admin, accountId, "ban");
-    if (!admits) {
-      const status = await readCapabilities(deps.admin, accountId);
-      const reason = (status.capabilities.ban.reason ?? "capability_off") as Stage4Reason;
-      return refusal(deps, 403, reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
+    const blocked = await capabilityRefusal(deps.admin, accountId, "ban");
+    if (blocked) {
+      return refusal(deps, blocked.status, blocked.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
     }
     // Fresh target read.
     const tok = await prepareToken(account, deps);
@@ -1485,6 +1534,16 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (inp.ban_confirmation && inp.status !== "rejected") {
       return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId, operationId: null });
     }
+    // Hold is not offered while STAGE4_HOLD_FROM_PUBLISHED is off: a published
+    // or rejected comment cannot return to held (Google's implementation
+    // guide) and a 204 would be recorded as confirmed while nothing changed.
+    // The status in a handle is only what the list saw when it was issued
+    // (comments.list?id= returns no moderation status), so a handle from a
+    // held moment cannot prove the comment is still held. The whole action is
+    // refused here, before any account or provider work and before the claim.
+    if (inp.status === "heldForReview" && !STAGE4_HOLD_FROM_PUBLISHED) {
+      return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId, operationId: null });
+    }
     const verified = await verifyTargetHandle(inp.target_handle, deps, account, userId);
     if (!verified.ok) {
       return refusal(deps, 400, verified.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id });
@@ -1506,11 +1565,9 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       }
       // The ban capability is checked BEFORE any provider read, and again at
       // claim and at mark_dispatched in SQL (the receipt carries ban_author).
-      const admits = await admitsCapability(deps.admin, accountId, "ban");
-      if (!admits) {
-        const status = await readCapabilities(deps.admin, accountId);
-        const reason = (status.capabilities.ban.reason ?? "capability_off") as Stage4Reason;
-        return refusal(deps, 403, reason, requestId, headers, { action, userId, accountId, operationId: null });
+      const blocked = await capabilityRefusal(deps.admin, accountId, "ban");
+      if (blocked) {
+        return refusal(deps, blocked.status, blocked.reason, requestId, headers, { action, userId, accountId, operationId: null });
       }
       banAuthorToken = bnc;
       banAuthor = true;
@@ -1531,14 +1588,6 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       return refusal(deps, target.status, target.reason, requestId, headers, { action, userId, accountId, operationId: inp.operation_id, providerClass: target.providerClass });
     }
     const citem = target.citem;
-    // A published or rejected comment cannot return to held (Google's
-    // implementation guide), and a 204 would be recorded as confirmed while
-    // nothing changed. Refused before the claim, with no provider write.
-    const currentStatus = citem?.snippet?.moderationStatus ?? h.s;
-    if (inp.status === "heldForReview" && !STAGE4_HOLD_FROM_PUBLISHED
-      && (currentStatus === "published" || currentStatus === "rejected")) {
-      return refusal(deps, 400, "invalid_request", requestId, headers, { action, userId, accountId, operationId: null });
-    }
     if (banAuthorToken) {
       const author = citem?.snippet?.authorChannelId?.value ? String(citem.snippet.authorChannelId.value) : null;
       if (!author || author !== banAuthorToken.au || author === account.platform_user_id) {
@@ -1666,25 +1715,46 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     // failed has no result id). The two stay separate fields on the receipt.
     const observedTargetId = data.result_comment_id ?? data.target_comment_id;
     if (data.action === "edit" && observedTargetId) {
-      const admits = await admitsCapability(deps.admin, accountId, "read");
-      if (admits) {
-        // The account snapshot was read before the status call: a reconnect in
-        // between must not let the provider read use the superseded binding's
-        // credential, and no field of the old receipt may cross it. A failed
-        // read is temporary (503); a missing account or a changed binding is
-        // the same not_found as everywhere else, with no payload.
+      // The account snapshot was read before the status call. A reconnect, a
+      // disconnect or an account delete in between must not let any field of
+      // the old receipt cross it, so the binding is re-read FIRST, ahead of
+      // the capability question (a read capability that answers false must not
+      // skip this check), and again after every step that can take time: the
+      // credential preparation and the provider read. A failed read is
+      // temporary (503); a missing account or a changed binding is the same
+      // not_found as everywhere else, with no payload.
+      const bindingCheck = async (): Promise<
+        { ok: true; account: AccountRow } | { ok: false; response: Response }
+      > => {
         const fresh = await readAccount(deps.admin, accountId, userId);
         if (fresh.kind === "failed") {
-          return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+          return { ok: false, response: await refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null }) };
         }
         if (fresh.kind === "absent" || fresh.account.binding_generation !== data.binding_generation) {
-          return refusal(deps, 404, "not_found", requestId, headers, { action, userId, accountId, operationId: null });
+          return { ok: false, response: await refusal(deps, 404, "not_found", requestId, headers, { action, userId, accountId, operationId: null }) };
         }
-        const tok = await prepareToken(fresh.account, deps);
+        return { ok: true, account: fresh.account };
+      };
+      const first = await bindingCheck();
+      if (!first.ok) return first.response;
+      const blocked = await capabilityRefusal(deps.admin, accountId, "read");
+      if (blocked?.status === 503) {
+        return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+      }
+      if (!blocked) {
+        const tok = await prepareToken(first.account, deps);
         if (tok.ok) {
+          const afterToken = await bindingCheck();
+          if (!afterToken.ok) return afterToken.response;
           const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
+          const afterRead = await bindingCheck();
+          if (!afterRead.ok) return afterRead.response;
           const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
-          const text = citem?.snippet?.textOriginal ? String(citem.snippet.textOriginal) : null;
+          // Only the comment the receipt targets is an observation: a provider
+          // answer for any other id says nothing about this edit.
+          const text = citem && String(citem.id ?? "") === String(observedTargetId) && citem.snippet?.textOriginal
+            ? String(citem.snippet.textOriginal)
+            : null;
           if (text === null) {
             observation = "unavailable";
           } else if (inp.text === undefined) {

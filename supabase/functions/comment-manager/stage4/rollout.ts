@@ -14,6 +14,20 @@ export interface RolloutAccountResult {
   capabilities: Record<Stage4Capability, { allowed: boolean; reason: Stage4Reason | null }>;
 }
 
+/** The rollout settings could not be read at all (RPC error or empty answer). */
+export class SettingsReadError extends Error {
+  constructor() {
+    super("stage4 rollout settings unreadable");
+    this.name = "SettingsReadError";
+  }
+}
+
+/**
+ * Per-capability decisions for one account. A failed read THROWS
+ * `SettingsReadError`: it is an error, never a "not allowed" payload that
+ * looks like the rollout being off (spec 13). The caller maps it to the
+ * `upstream` refusal.
+ */
 export async function readCapabilities(
   admin: SupabaseClient,
   accountId: string,
@@ -21,18 +35,7 @@ export async function readCapabilities(
   const { data, error } = await admin.rpc("youtube_comments_stage4_capability_status", {
     p_account_id: accountId,
   });
-  if (error || !data) {
-    // A failed read is an error, never a deny that looks like "off". Surface
-    // it as a settings_unavailable refusal.
-    return {
-      capabilities: {
-        read: { allowed: false, reason: "settings_unavailable" },
-        held: { allowed: false, reason: "settings_unavailable" },
-        write: { allowed: false, reason: "settings_unavailable" },
-        ban: { allowed: false, reason: "settings_unavailable" },
-      },
-    };
-  }
+  if (error || !data) throw new SettingsReadError();
   const caps: Record<Stage4Capability, { allowed: boolean; reason: Stage4Reason | null }> = {
     read: { allowed: false, reason: null },
     held: { allowed: false, reason: null },
@@ -49,6 +52,7 @@ export async function readCapabilities(
   return { capabilities: caps };
 }
 
+/** Whether the capability is admitted; throws `SettingsReadError` when the setting cannot be read. */
 export async function admitsCapability(
   admin: SupabaseClient,
   accountId: string,
@@ -58,6 +62,7 @@ export async function admitsCapability(
     p_account_id: accountId,
     p_capability: capability,
   });
-  if (error) return false;
+  // An RPC error is NOT "no": it is an unreadable setting.
+  if (error) throw new SettingsReadError();
   return data === true;
 }

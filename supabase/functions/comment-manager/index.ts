@@ -124,13 +124,22 @@ const PEEK_TIMEOUT_MS = 1000;
 
 /**
  * Whether an UNAUTHENTICATED request names a Stage 4 action, decided from a
- * bounded read of a CLONE of the request: at most 16 KiB and one second. Past
- * either bound, or on anything that is not JSON, the answer is "no" and the
- * caller gets the legacy 401. It only ever runs for a request that is about
- * to be refused, so no authenticated request waits on it.
+ * bounded read of the request body: at most 16 KiB and one second. The bounds
+ * are enforced as the bytes arrive: a declared length past the cap is refused
+ * without reading, a chunk that would cross the cap is never retained, and the
+ * body is cancelled on every exit so no branch is left unread. Past either
+ * bound, or on anything that is not JSON, the answer is "no" and the caller
+ * gets the legacy 401. It only ever runs for a request that is about to be
+ * refused, so no authenticated request waits on it and nothing reads the body
+ * afterwards.
  */
 async function peekIsStage4Action(req: Request): Promise<boolean> {
-  const reader = req.clone().body?.getReader();
+  const declared = Number(req.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > PEEK_MAX_BYTES) {
+    req.body?.cancel().catch(() => undefined);
+    return false;
+  }
+  const reader = req.body?.getReader();
   if (!reader) return false;
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -143,8 +152,10 @@ async function peekIsStage4Action(req: Request): Promise<boolean> {
       const next = await Promise.race([reader.read(), deadline]);
       if (next === "timeout") return false;
       if (next.done) break;
+      // The cap is checked BEFORE the chunk is kept, so memory never holds
+      // more than the cap plus the one chunk the platform just delivered.
+      if (total + next.value.byteLength > PEEK_MAX_BYTES) return false;
       total += next.value.byteLength;
-      if (total > PEEK_MAX_BYTES) return false;
       chunks.push(next.value);
     }
     const bytes = new Uint8Array(total);
