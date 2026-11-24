@@ -110,16 +110,24 @@ function fail(
   return { ok: false, kind, message };
 }
 
-interface NativeToken {
+export interface NativeToken {
   token: string;
   // True when this call minted the token, so a 401 that follows is not retried with another refresh.
   refreshed: boolean;
 }
 
-async function nativeToken(
+export async function nativeAccessToken(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; healthNeutral?: boolean } = {},
+): Promise<YouTubeResult<NativeToken>> {
+  return nativeTokenImpl(account, deps, options);
+}
+
+async function nativeTokenImpl(
+  account: YouTubeCommentAccount,
+  deps: YouTubeCommentsDeps,
+  options: { force?: boolean; healthNeutral?: boolean } = {},
 ): Promise<YouTubeResult<NativeToken>> {
   const outcome = await refreshYouTubeAccountToken({
     accountId: account.id,
@@ -130,6 +138,7 @@ async function nativeToken(
       needs_reauth: account.needs_reauth ?? false,
     },
     force: options.force ?? false,
+    healthNeutral: options.healthNeutral ?? false,
     recordTransientFailure: false,
     refreshWindowMs: REFRESH_WINDOW_MS,
     store: deps.refreshStore ?? createSupabaseYouTubeRefreshStore(deps.admin),
@@ -204,7 +213,7 @@ async function callNative(
   call: Call,
 ): Promise<YouTubeResult<any>> {
   const fetcher = deps.fetcher ?? fetch;
-  let token = await nativeToken(account, deps);
+  let token = await nativeTokenImpl(account, deps);
   if (!token.ok) return token;
   let sent = await sendNative(fetcher, call, token.value.token);
   if (!sent.ok) return sent;
@@ -214,7 +223,7 @@ async function callNative(
   // calls too, since a 401 is rejected at Google's auth gate before anything executes. A
   // second 401 falls through to the classifier as unauthorized.
   if (sent.value.status === 401 && !token.value.refreshed) {
-    token = await nativeToken(account, deps, { force: true });
+    token = await nativeTokenImpl(account, deps, { force: true });
     if (!token.ok) return token;
     sent = await sendNative(fetcher, call, token.value.token);
     if (!sent.ok) return sent;

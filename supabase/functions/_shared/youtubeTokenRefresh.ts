@@ -68,6 +68,12 @@ export interface YouTubeRefreshStore {
     tokenExpiresAt: string;
     refreshToken: string | null;
     grantedScopes: string[] | null;
+    /**
+     * Store through the health-neutral RPC: the token is written under the
+     * lease and needs_reauth, failure_count, last_refresh_error and granted
+     * scopes are left exactly as they were. Default false (the refresh job).
+     */
+    healthNeutral?: boolean;
   }): Promise<StoreTokenWithLeaseResult>;
   recordFailureWithLease(input: {
     accountId: string;
@@ -135,6 +141,15 @@ export interface RefreshYouTubeAccountOptions {
    * account keeps refusing until an administrator or the user reconnects.
    */
   adminRecovery?: boolean;
+  /**
+   * Health-neutral mode (Stage 4 comment operations, spec 11). The exchange
+   * and the token store run under the lease exactly as usual, but this call
+   * never records account health: an invalid_grant does NOT set needs_reauth
+   * and does not count a failure, and a successful exchange does NOT rewrite
+   * `granted_scopes`. The refusal is still returned to the caller. Default
+   * false: every existing caller behaves as before.
+   */
+  healthNeutral?: boolean;
   maxFailures?: number;
   lastAlertSentAt?: string | null;
   refreshWindowMs?: number;
@@ -456,17 +471,19 @@ export function createSupabaseYouTubeRefreshStore(admin: unknown): YouTubeRefres
     },
 
     async storeTokenWithLease(input) {
-      const { data: raw, error } = await supabase.rpc(
-        "store_youtube_refreshed_token_with_lease",
-        {
-          p_account_id: input.accountId,
-          p_lease_token: input.leaseToken,
-          p_new_access_token: input.accessToken,
-          p_new_token_expires_at: input.tokenExpiresAt,
-          p_new_refresh_token: input.refreshToken,
+      const common = {
+        p_account_id: input.accountId,
+        p_lease_token: input.leaseToken,
+        p_new_access_token: input.accessToken,
+        p_new_token_expires_at: input.tokenExpiresAt,
+        p_new_refresh_token: input.refreshToken,
+      };
+      const { data: raw, error } = input.healthNeutral === true
+        ? await supabase.rpc("store_youtube_refreshed_token_with_lease_neutral", common)
+        : await supabase.rpc("store_youtube_refreshed_token_with_lease", {
+          ...common,
           p_granted_scopes: input.grantedScopes,
-        },
-      );
+        });
       const data = asRecord(raw);
       if (error || !data) {
         return { ok: false, reason: "store_failed" };
@@ -591,6 +608,7 @@ export async function refreshYouTubeAccountToken(
     snapshot,
     force = false,
     adminRecovery = false,
+    healthNeutral = false,
     recordTransientFailure = false,
     maxFailures = 3,
     lastAlertSentAt = null,
@@ -774,6 +792,19 @@ export async function refreshYouTubeAccountToken(
       });
 
     if (!exchangeResult.ok) {
+      if (exchangeResult.invalidGrant && healthNeutral) {
+        // Stage 4 reads and writes must not change stored health. The lease
+        // is released by the finally block; nothing is recorded.
+        return {
+          ok: false,
+          status: "needs_reauth",
+          retryable: false,
+          reason: "invalid_grant",
+          accessToken: null,
+          expiresAt: current.token_expires_at,
+          needsReauth: true,
+        };
+      }
       if (exchangeResult.invalidGrant) {
         const recorded = await store.recordFailureWithLease({
           accountId,
@@ -809,7 +840,7 @@ export async function refreshYouTubeAccountToken(
         );
       }
 
-      if (recordTransientFailure) {
+      if (recordTransientFailure && !healthNeutral) {
         const recorded = await store.recordFailureWithLease({
           accountId,
           leaseToken: lease.lease_token,
@@ -871,7 +902,8 @@ export async function refreshYouTubeAccountToken(
     const parsedScopes = exchangeResult.scope
       ? splitScopeString(exchangeResult.scope)
       : [];
-    const grantedScopes = parsedScopes.length > 0 ? parsedScopes : null;
+    // Health-neutral callers never rewrite the stored scope grants.
+    const grantedScopes = !healthNeutral && parsedScopes.length > 0 ? parsedScopes : null;
 
     const stored = await store.storeTokenWithLease({
       accountId,
@@ -880,6 +912,7 @@ export async function refreshYouTubeAccountToken(
       tokenExpiresAt: expiresAt,
       refreshToken: exchangeResult.refreshToken,
       grantedScopes,
+      healthNeutral,
     });
 
     if (stored.ok) {

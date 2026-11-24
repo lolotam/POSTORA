@@ -139,6 +139,8 @@ const ports: YouTubeOAuthPorts = {
             token_expires_at: input.tokenExpiresAt,
             avatar_url: avatarUrl,
             is_active: true,
+            auth_provider: 'native',
+            connection_id: null,
             connected_at: input.connectedAt,
             updated_at: input.updatedAt,
             social_profile_id: input.socialProfileId,

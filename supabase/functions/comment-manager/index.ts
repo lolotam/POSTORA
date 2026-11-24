@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
 import { isDirectInstagramAccount } from "../_shared/messengerCredentials.ts";
 import {
@@ -12,6 +12,8 @@ import {
   groupThreadsByVideo,
 } from "./youtubeCommentsView.ts";
 import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
+import { STAGE4_ACTIONS } from "./stage4/contracts.ts";
+import { handleStage4 } from "./stage4/handler.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -117,23 +119,103 @@ function json400(message: string): Response {
   });
 }
 
-Deno.serve(async (req) => {
+const PEEK_MAX_BYTES = 16 * 1024;
+const PEEK_TIMEOUT_MS = 1000;
+
+/**
+ * Whether an UNAUTHENTICATED request names a Stage 4 action, decided from a
+ * bounded read of a CLONE of the request: at most 16 KiB and one second. Past
+ * either bound, or on anything that is not JSON, the answer is "no" and the
+ * caller gets the legacy 401. It only ever runs for a request that is about
+ * to be refused, so no authenticated request waits on it.
+ */
+async function peekIsStage4Action(req: Request): Promise<boolean> {
+  const reader = req.clone().body?.getReader();
+  if (!reader) return false;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), PEEK_TIMEOUT_MS);
+  });
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), deadline]);
+      if (next === "timeout") return false;
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > PEEK_MAX_BYTES) return false;
+      chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { action?: unknown } | null;
+    return typeof parsed?.action === "string" && (STAGE4_ACTIONS as readonly string[]).includes(parsed.action);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    reader.cancel().catch(() => undefined);
+  }
+}
+
+/**
+ * The one request handler. Exported so the real route — including auth, the
+ * Stage 4 dispatch and the legacy switch — is testable without a network;
+ * `Deno.serve` below is a one-line wrapper over it.
+ *
+ * `inject` exists for tests alone: production passes nothing and the client
+ * and fetcher come from the environment as deployed.
+ */
+export async function serveCommentManager(
+  req: Request,
+  inject?: { supabase?: SupabaseClient; fetcher?: typeof fetch },
+): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  // Set when the request body could not be read as JSON: the parser's own
+  // message is not logged for that audited case, only a fixed one.
+  let bodyUnreadable = false;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabase = inject?.supabase ?? createClient(supabaseUrl, supabaseServiceKey);
+    const fetcher = inject?.fetcher ?? fetch;
+
+    const stage4Deps = {
+      admin: supabase,
+      fetcher,
+      now: () => Date.now(),
+      newRequestId: () => crypto.randomUUID(),
+      signingSecret: supabaseServiceKey,
+    };
+    /**
+     * Every request is authenticated BEFORE its body is read, exactly as the
+     * legacy route always did. A 401 for a request that turns out (by a
+     * size- and time-bounded peek, see peekIsStage4Action) to name a Stage 4
+     * action is a Stage 4 refusal: audited and rate-bounded, no user id. Any
+     * other 401 is the legacy answer, byte for byte.
+     */
+    const unauthorized = async (legacyMessage: string): Promise<Response> => {
+      if (await peekIsStage4Action(req)) {
+        return await handleStage4({ deps: stage4Deps, corsHeaders, userId: "", isServiceRole: false, body: undefined });
+      }
+      return new Response(JSON.stringify({ error: legacyMessage }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    };
 
     // Verify auth
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: "No authorization header" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return await unauthorized("No authorization header");
     }
 
     const token = authHeader.replace("Bearer ", "");
@@ -141,10 +223,7 @@ Deno.serve(async (req) => {
     try {
       serviceUserId = await serviceRoleCallerUserId(req);
     } catch {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return await unauthorized("Unauthorized");
     }
     let user: { id: string };
     if (serviceUserId) {
@@ -152,16 +231,44 @@ Deno.serve(async (req) => {
     } else {
       const { data: { user: authUser }, error: authError } = await supabase.auth.getUser(token);
       if (authError || !authUser) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return await unauthorized("Unauthorized");
       }
       user = authUser;
     }
 
-    const body = await req.json();
+    // Read once, after authentication, as before: a body that is not valid
+    // JSON throws into the catch below (a 500), for every action, as it always
+    // has. The legacy switch below was written against an untyped body and
+    // passes these fields straight into helpers that expect their JSON types;
+    // the Stage 4 path never reads from here (its own strict schema is the
+    // authority).
+    // Unreadable JSON after identification is a refusal like any other (spec
+    // 12): it is audited with the caller's user id and action "unknown", and
+    // the legacy 500 answer is unchanged.
+    let body: Awaited<ReturnType<Request["json"]>>;
+    try {
+      body = await req.json();
+    } catch (error) {
+      bodyUnreadable = true;
+      await handleStage4({ deps: stage4Deps, corsHeaders, userId: user.id, isServiceRole: !!serviceUserId, body: undefined });
+      throw error;
+    }
     const { action, social_account_id, comment_id, message, page_id, ig_user_id } = body;
+
+    // Stage 4 private actions are handled by a separate module, BEFORE the
+    // legacy service-role gate and the legacy account lookup (which checks
+    // neither is_active nor platform). The handler refuses service-role
+    // callers itself, with an audited refusal, so the legacy allow-list keeps
+    // governing only the legacy actions.
+    if (typeof action === "string" && (STAGE4_ACTIONS as readonly string[]).includes(action)) {
+      return await handleStage4({
+        deps: stage4Deps,
+        corsHeaders,
+        userId: user.id,
+        isServiceRole: !!serviceUserId,
+        body,
+      });
+    }
 
     if (serviceUserId && !SERVICE_ROLE_ACTIONS.has(action)) {
       return new Response(JSON.stringify({ error: "This action is not available to service-role callers" }), {
@@ -384,10 +491,12 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Comment manager error:", error);
+    console.error("Comment manager error:", bodyUnreadable ? "the request body was not valid JSON" : error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-});
+}
+
+Deno.serve((req) => serveCommentManager(req));
