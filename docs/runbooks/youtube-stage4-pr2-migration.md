@@ -31,7 +31,9 @@ The database goes first. A merge to `main` syncs the edge functions within about
 6. Post-apply verification (below).
 7. Merge; verify the edge sync per changed file (SHA-256) and the frontend deploy.
 
-## Pre-flight (read-only, production)
+## First-launch pre-flight (read-only, production)
+
+These are the checks for the first apply only, before any receipt or key rotation exists. For a database that has already been rolled back, use **Re-apply after a rollback** below instead.
 
 ```sql
 -- receipts: expected 0 (the rollout key is absent, so no claim can have passed the rollout check)
@@ -49,9 +51,8 @@ select p.proname, pg_get_userbyid(p.proowner) from pg_proc p
  where p.proname in ('store_youtube_refreshed_token','store_youtube_refreshed_token_with_lease','store_youtube_refreshed_token_with_lease_neutral');
 -- the rollout key: expected absent
 select count(*) from public.app_settings where key = 'youtube_comments_stage4_rollout';
--- names the migration creates: on a FIRST apply both are NULL; on a RE-APPLY
--- after a rollback the watermark table exists (the rollback keeps it) while
--- the index is NULL. Both are fine to proceed.
+-- names the migration creates: on this FIRST apply both constraints are absent,
+-- and both regclass values are NULL
 select conname from pg_constraint where conname in ('youtube_comment_operations_key_versions_check','youtube_comment_operations_intent_key_version_fkey');
 select to_regclass('public.youtube_comment_digest_key_watermark'), to_regclass('public.youtube_comment_operations_intent_key_version_idx');
 -- Postgres major: equal to the CI image (17)
@@ -60,7 +61,9 @@ show server_version;
 
 The pre-check inside the migration refuses a violating row with a message of its own. The harness cannot test that branch (migrations apply before any suite can seed a violating row), so its verification is code review plus the two violating-shape queries above.
 
-## Post-apply verification (read-only)
+## First-launch post-apply verification (read-only)
+
+These are the first-apply checks; the watermark expectation of 1 does not apply to a re-apply after rotation.
 
 - the foreign key is validated: `select convalidated from pg_constraint where conname = 'youtube_comment_operations_intent_key_version_fkey'` is true; the CHECK exists and is validated;
 - the guard trigger fires on `INSERT`: `select pg_get_triggerdef(oid) from pg_trigger where tgname = 'trg_youtube_comment_digest_keys_guard'` reads `BEFORE INSERT OR DELETE OR UPDATE`;
@@ -69,6 +72,74 @@ The pre-check inside the migration refuses a violating row with a message of its
 - the three token store functions keep their owner; the rollout key is still absent; each of the six channels still answers `rollout_missing`;
 - a claim called with a `NULL` map inside a transaction that is rolled back answers `invalid_request`.
 
+## Re-apply after a rollback
+
+Use this section instead of the first-launch checks when the rollback kept the watermark table and receipts or rotated key versions may exist. Confirm that the rollout key removed for the rollback drain is still absent before proceeding, and keep it off until post-apply verification passes. Compare the watermark table and value with the rollback receipt before proceeding; a missing table, a changed value or any K1 object still present stops the re-apply.
+
+### Re-apply pre-flight (read-only, production)
+
+```sql
+-- The rollout key was removed for the rollback drain: expected 0 (keep it off until post-apply verification passes).
+select count(*) from public.app_settings where key = 'youtube_comments_stage4_rollout';
+-- Receipts MAY be non-zero after go-live: record the count, do not require zero.
+select count(*) from public.youtube_comment_operations;
+-- Rotated versions are allowed: record every surviving version for the watermark check
+-- (at least one active row with retired_at is null must still exist).
+select version, retired_at from public.youtube_comment_digest_keys order by version;
+-- Both K1 violation queries must still return zero.
+select count(*) from public.youtube_comment_operations o
+ where not exists (select 1 from public.youtube_comment_digest_keys k where k.version = o.intent_key_version);
+select count(*) from public.youtube_comment_operations o
+ where not ((o.action in ('create_thread','reply') and o.digest_key_version = o.intent_key_version)
+         or (o.action in ('edit','moderate') and o.digest_key_version = 0));
+-- The rollback receipt says the watermark was kept: expected regclass non-NULL,
+-- then confirm last_version equals the value recorded by that receipt.
+select to_regclass('public.youtube_comment_digest_key_watermark');
+select last_version from public.youtube_comment_digest_key_watermark;
+-- K1 FK and CHECK: expected no rows. K1 index: expected NULL.
+select conname from pg_constraint
+ where conname in ('youtube_comment_operations_key_versions_check','youtube_comment_operations_intent_key_version_fkey');
+select to_regclass('public.youtube_comment_operations_intent_key_version_idx');
+-- Owners: expected youtube_stage4_refresh on all three rows.
+select p.proname, pg_get_userbyid(p.proowner) from pg_proc p
+ where p.proname in ('store_youtube_refreshed_token','store_youtube_refreshed_token_with_lease','store_youtube_refreshed_token_with_lease_neutral');
+-- Postgres major: expected 17, matching the CI image.
+show server_version;
+```
+
+### Re-apply post-apply verification (read-only)
+
+- Both K1 constraints exist and are validated: `select conname, convalidated from pg_constraint where conname in ('youtube_comment_operations_key_versions_check','youtube_comment_operations_intent_key_version_fkey')` returns two rows, both true.
+- The K1 index exists: `select to_regclass('public.youtube_comment_operations_intent_key_version_idx')` is non-NULL.
+- `select pg_get_triggerdef(oid) from pg_trigger where tgname = 'trg_youtube_comment_digest_keys_guard'` reads `BEFORE INSERT OR DELETE OR UPDATE`.
+- `EXECUTE` on the claim and status functions is granted to `service_role` only (no `PUBLIC`, `anon` or `authenticated`).
+- The three token store functions keep their owner (`youtube_stage4_refresh`).
+- The rollout key is still absent (`select count(*) from public.app_settings where key = 'youtube_comments_stage4_rollout'` returns `0`); re-enable it only after every check in this section passes.
+- A claim called with a `NULL` digest map inside a transaction that is rolled back answers `invalid_request`.
+- Replace `NULL` in the `receipt` CTE below with the watermark recorded **before** the rollback. The query must return `watermark_ok = true`; this proves the new watermark covers that receipt, the highest surviving key version and every surviving receipt reference.
+
+```sql
+with receipt as (
+  select null::integer as pre_rollback_watermark -- replace NULL with the rollback receipt value
+), bounds as (
+  select
+    (select coalesce(max(version), 0) from public.youtube_comment_digest_keys) as highest_surviving_key_version,
+    (select coalesce(max(intent_key_version), 0) from public.youtube_comment_operations) as max_intent_key_version,
+    (select coalesce(max(digest_key_version), 0) from public.youtube_comment_operations) as max_digest_key_version
+)
+select w.last_version, r.pre_rollback_watermark, b.*,
+       r.pre_rollback_watermark is not null
+       and w.last_version >= greatest(
+         r.pre_rollback_watermark,
+         b.highest_surviving_key_version,
+         b.max_intent_key_version,
+         b.max_digest_key_version
+       ) as watermark_ok
+  from public.youtube_comment_digest_key_watermark w
+ cross join receipt r
+ cross join bounds b;
+```
+
 ## Rollback
 
 Edge and frontend: revert the merge commit on `main`; the sync and the deploy follow on their own. The three parts roll back independently.
@@ -76,10 +147,23 @@ Edge and frontend: revert the merge commit on `main`; the sync and the deploy fo
 **Drain live claims first.** Turn the rollout off (remove the rollout key per the Stage 4 runbook) and wait at least 2 minutes, then run
 
 ```sql
-select a.pid, a.state, a.xact_start, a.query from pg_locks l join pg_stat_activity a on a.pid = l.pid where l.relation in ('public.youtube_comment_operations'::regclass, 'public.youtube_comment_digest_keys'::regclass, 'public.social_accounts'::regclass) and a.pid <> pg_backend_pid();
+with ddl_targets as (
+  select array_remove(array[
+    to_regclass('public.youtube_comment_operations'),
+    to_regclass('public.youtube_comment_digest_keys'),
+    to_regclass('public.youtube_comment_operations_intent_key_version_idx')
+  ], null) as relations
+)
+select l.relation::regclass as target, l.mode, l.granted,
+       a.pid, a.usename, a.application_name, a.state, a.xact_start, a.query
+  from pg_locks l
+  join pg_stat_activity a on a.pid = l.pid
+  join ddl_targets t on l.relation = any(t.relations)
+ where l.database = (select oid from pg_database where datname = current_database())
+   and a.pid <> pg_backend_pid();
 ```
 
-It must return no row whose `query` belongs to the comment-manager or the claim / settle / status RPCs. A count of visible receipt rows cannot show an uncommitted claim, which is why the lock view is used instead. The rollback's own 5 s `lock_timeout` aborts it cleanly if something still holds a lock: wait for the holder to finish and retry.
+**The stop condition is zero rows: no held (`granted = true`) or waiting (`granted = false`) lock on any exact DDL target.** A count of visible receipt rows cannot show an uncommitted claim, which is why the lock view is used instead. `pg_stat_activity.query` shows only the session's last statement, not necessarily the statement that took the lock; use it with `pid`, `usename` and `application_name` only to identify the holder, and use `l.mode` to identify the lock. The rollback's own 5 s `lock_timeout` aborts it cleanly if something still holds a lock: wait for the holder to finish and retry.
 
 Database: apply `docs/runbooks/sql/20261124120000_youtube_stage4_key_integrity_rollback.sql` as `supabase_admin` with `ON_ERROR_STOP` on. It is one transaction that restores the three function bodies of `20261122130000` (copied verbatim), recreates the guard trigger as `BEFORE UPDATE OR DELETE`, drops the foreign key, the CHECK and the index, and keeps the watermark table (the only record of deleted key versions). It changes no receipt and no key. The rollback script is rehearsed in CI-style on the harness database: after it, `md5(pg_get_functiondef(...))` of the claim, the status and the guard equals the value before the migration, and the forward migration applies again.
 

@@ -609,6 +609,7 @@ async function runModerate(
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const outcome = await stage4.moderate(videoId, row, status, banConfirmation, operationId);
+  if (outcome.kind === "cancelled") return;
   // Only a surface that is still there to show the outcome acknowledges it.
   if (isCurrent()) {
     if (outcome.kind === "confirmed" || outcome.kind === "refused") stage4.acknowledge(outcome.operationId);
@@ -820,7 +821,7 @@ function Composer(params: {
   }, [localOutcome]);
 
   const show = (outcome: SubmissionOutcome, fromCheck = false) => {
-    if (!mounted.current) return;
+    if (!mounted.current || outcome.kind === "cancelled") return;
     setLocalOutcome(outcome);
     if (outcome.kind === "earlier") {
       // The result of an earlier send, shown. What is typed now was never sent,
@@ -856,9 +857,9 @@ function Composer(params: {
     submitSeq.current += 1;
     const submittedText = text;
     const outcome = await params.onSubmit(submittedText);
-    // Only an outcome of THIS submit names the operation it sent. "pending" and
-    // "earlier" carry the id of an EARLIER operation and nothing was sent now.
-    if (outcome.kind !== "pending" && outcome.kind !== "earlier") {
+    // Only an outcome of THIS submit names the operation it sent. "pending",
+    // "earlier" and "cancelled" sent nothing in this invocation.
+    if (outcome.kind !== "pending" && outcome.kind !== "earlier" && outcome.kind !== "cancelled") {
       sent.current = { operationId: outcome.operationId, text: submittedText };
     }
     if (mounted.current) setBusy(false);
@@ -918,7 +919,8 @@ function Composer(params: {
 
 /** The operation a not-yet-settled outcome belongs to, when a status check can read it. */
 function checkableOperationId(outcome: SubmissionOutcome): string | null {
-  if (outcome.kind === "indeterminate" || outcome.kind === "pending" || outcome.kind === "error") return outcome.operationId;
+  if (outcome.kind === "indeterminate" || outcome.kind === "error") return outcome.operationId;
+  if (outcome.kind === "pending") return outcome.operationId ?? null;
   return null;
 }
 
@@ -928,6 +930,7 @@ function OutcomeLine({ outcome, checking, onCheckStatus }: {
   onCheckStatus?: (operationId: string) => void;
 }): JSX.Element {
   const { t } = useTranslation("automation");
+  if (outcome.kind === "cancelled") return <></>;
   const operationId = checkableOperationId(outcome);
   // A terminal miss was already acknowledged and its identity forgotten; a check would only replace the final message with a retryable one.
   const checkButton = operationId && onCheckStatus && !(outcome.kind === "error" && outcome.terminal) ? (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { YouTubeCommentsGateway } from "../application/ports";
 import { YouTubeCommentsError } from "../domain/errors";
@@ -32,7 +32,8 @@ export type SubmissionOutcome =
     /** What a status check compared against the draft (an edit), kept apart from the receipt state. */
     observation?: Stage4OperationStatusPayload["observation"];
   }
-  | { kind: "pending"; operationId: string }
+  | { kind: "pending"; operationId?: string }
+  | { kind: "cancelled" }
   /**
    * The pre-submit check found that an EARLIER submit of the owner's has since
    * settled. Its result is shown first; what was typed now was not sent, and a
@@ -64,6 +65,14 @@ export interface RecoveredOperation {
   unavailable: boolean;
   /** True when the receipt is still claimed or dispatched. */
   inFlight: boolean;
+}
+
+/** One submit's claim on a target while it runs. */
+interface SubmitLock {
+  /** The operation this submit minted; null while it is still recovering earlier ones. */
+  operationId: string | null;
+  /** The context epoch the lock was taken in. */
+  epoch: number;
 }
 
 export interface Stage4PageState<Item> {
@@ -307,13 +316,33 @@ export function useYouTubeStage4(params: {
   // quota); a status check must still know what the operation was. Removed
   // when a surface acknowledges the outcome, and when the account is discarded.
   const liveOperations = useRef(new Map<string, PendingStage4Operation>());
-  // One entry per target while a submit for it runs: the operation that submit
-  // is waiting on (an earlier one it is recovering, then its own).
-  const submitsInFlight = useRef(new Map<string, string>());
+  // One entry per target while a submit for it runs. The id stays null until
+  // this submit mints its own operation; object identity and epoch protect a
+  // newer submit's lock after a rapid context switch.
+  const submitsInFlight = useRef(new Map<string, SubmitLock>());
   const aliveRef = useRef(true);
   const contextRef = useRef(`${userId}:${accountId}`);
-  contextRef.current = `${userId}:${accountId}`;
-  useEffect(() => {
+  const activeVideoIdRef = useRef<string | null>(effectiveVideoId);
+  const contextEpochRef = useRef(0);
+  // Published in a layout effect so uncommitted renders never advance the
+  // epoch, while every committed user, account or video switch bumps it before
+  // any asynchronous recovery continuation can resume.
+  useLayoutEffect(() => {
+    const nextContext = `${userId}:${accountId}`;
+    const accountChanged = contextRef.current !== nextContext;
+    const videoChanged = effectiveVideoId !== null
+      && activeVideoIdRef.current !== null
+      && activeVideoIdRef.current !== effectiveVideoId;
+    contextRef.current = nextContext;
+    if (accountChanged) {
+      activeVideoIdRef.current = effectiveVideoId;
+      contextEpochRef.current += 1;
+    } else if (effectiveVideoId !== null) {
+      activeVideoIdRef.current = effectiveVideoId;
+      if (videoChanged) contextEpochRef.current += 1;
+    }
+  }, [userId, accountId, effectiveVideoId]);
+  useLayoutEffect(() => {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
@@ -324,6 +353,7 @@ export function useYouTubeStage4(params: {
     async (action: Stage4OperationAction, input: {
       videoId: string;
       targetCommentId?: string;
+      legacyTargetCommentId?: string;
       targetHandle?: string;
       text?: string;
       status?: "published" | "heldForReview" | "rejected";
@@ -332,26 +362,39 @@ export function useYouTubeStage4(params: {
       operationId?: string;
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
+      if (activeVideoIdRef.current === null) activeVideoIdRef.current = input.videoId;
+      const submitContext = `${userId}:${accountId}`;
+      const submitEpoch = contextEpochRef.current;
+      const isStillCurrent = () => aliveRef.current
+        && contextRef.current === submitContext
+        && contextEpochRef.current === submitEpoch
+        && (activeVideoIdRef.current === null || activeVideoIdRef.current === input.videoId);
+      if (!isStillCurrent()) return { kind: "cancelled" };
       const targetCommentId = input.targetCommentId ?? "";
       const guardKey = `${accountId}|${input.videoId}|${action}|${targetCommentId}`;
       // Storage can be blocked or full, so a stored list can miss an operation;
       // the in-memory identities are the same ones, so the guard reads both.
       const pendingForTarget = (): PendingStage4Operation[] => {
-        const stored = findPendingOperations(userId, { accountId, videoId: input.videoId, action, targetCommentId });
+        const loadedRows = threads.items.map((item) => item.row);
+        const stored = findPendingOperations(userId, { accountId, videoId: input.videoId, action })
+          .filter((op) => matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, loadedRows));
         const seen = new Set(stored.map((op) => op.operationId));
         const live = [...liveOperations.current.values()].filter((op) =>
           op.accountId === accountId
           && op.videoId === input.videoId
           && op.action === action
-          && op.targetCommentId === targetCommentId
+          && matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, loadedRows)
           && !seen.has(op.operationId));
         return [...stored, ...live];
       };
       // One submit per target at a time: a second click while the first is
       // still recovering or sending is answered as pending and sends nothing.
-      const inFlightOperationId = submitsInFlight.current.get(guardKey);
-      if (inFlightOperationId !== undefined) return { kind: "pending", operationId: inFlightOperationId };
+      // Recovery has no NEW operation id to check yet.
+      const existingLock = submitsInFlight.current.get(guardKey);
+      if (existingLock && blocksNewSubmit(existingLock, submitEpoch)) return pendingOutcomeFor(existingLock);
+      const submitLock: SubmitLock = { operationId: null, epoch: submitEpoch };
       try {
+        submitsInFlight.current.set(guardKey, submitLock);
         // An earlier submit for this target blocks a new one only while it may
         // still land (claimed or dispatched) or cannot be read right now. An
         // INDETERMINATE one stays guarded by the server's fence for the
@@ -359,8 +402,8 @@ export function useYouTubeStage4(params: {
         // unresolved), so a different text, a deliberate new edit or a new
         // reject is a new intent and gets its own key (spec 9.1 and 9.3).
         for (const earlier of pendingForTarget()) {
-          submitsInFlight.current.set(guardKey, earlier.operationId);
           const recovery = await recoverOperation(gateway, accountId, earlier);
+          if (!isStillCurrent()) return { kind: "cancelled" };
           if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
           if (recovery.settled && recovery.status) {
             // A result the owner never saw: show it, and keep its identity until
@@ -381,48 +424,38 @@ export function useYouTubeStage4(params: {
           }
         }
 
+        if (!isStillCurrent()) return { kind: "cancelled" };
         const operationId = input.operationId ?? mintOperationId();
+        submitLock.operationId = operationId;
         const identity: PendingStage4Operation = {
           operationId,
           accountId,
           videoId: input.videoId,
           action,
           targetCommentId,
+          ...(action === "reply" ? { targetIsCanonicalParent: true } : {}),
           createdAt: Date.now(),
         };
         liveOperations.current.set(operationId, identity);
         savePendingOperation(userId, identity);
-        submitsInFlight.current.set(guardKey, operationId);
 
         let receipt: Stage4ReceiptPayload;
         try {
           receipt = await input.run(operationId);
         } catch (error) {
-          const reason = error instanceof YouTubeCommentsError ? error.code
-            : error instanceof Error && error.message ? error.message
-            : "upstream";
-          // A transport failure after the claim is indeterminate unless the
-          // server said otherwise; the local identity stays until status is read.
-          if (isShownRefusal(reason)) {
-            return { kind: "refused", reason, draftKept: true, operationId };
-          }
-          return { kind: "error", reason, draftKept: true, operationId };
+          return failedOutcome(error, operationId);
         }
 
         // The identity is NOT cleared here. Only a surface that shows the
         // outcome acknowledges it (see `acknowledge`): a response that lands
         // after its composer is gone leaves the identity for the recovery
         // banner of the next view instead of losing the only reference.
-        if (receipt.state === "confirmed") {
+        if (receipt.state === "confirmed" && isStillCurrent()) {
           void threads.reload();
         }
-        if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
-        if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
-        if (receipt.state === "indeterminate") return { kind: "indeterminate", receipt, operationId };
-        // claimed/dispatched: the browser lost the answer before settlement.
-        return { kind: "indeterminate", receipt, operationId };
+        return outcomeForReceipt(receipt, operationId);
       } finally {
-        submitsInFlight.current.delete(guardKey);
+        if (submitsInFlight.current.get(guardKey) === submitLock) submitsInFlight.current.delete(guardKey);
       }
     },
     [userId, accountId, threads, gateway],
@@ -448,7 +481,8 @@ export function useYouTubeStage4(params: {
   const reply = useCallback(
     (videoId: string, target: Stage4CommentRow, text: string) => submit("reply", {
       videoId,
-      targetCommentId: target.comment_id,
+      targetCommentId: target.canonical_parent_id.trim() || target.comment_id,
+      legacyTargetCommentId: target.comment_id,
       run: (operationId) => gateway.reply({ accountId, targetHandle: target.handle, text, operationId }),
     }),
     [submit, gateway, accountId],
@@ -633,6 +667,57 @@ export function useYouTubeStage4(params: {
       clearPendingOperationsForAccount(userId, accountId);
     },
   };
+}
+
+/** Match a pending operation by canonical target, plus legacy child-keyed reply records. */
+function matchesPendingTarget(
+  op: PendingStage4Operation,
+  action: Stage4OperationAction,
+  targetCommentId: string,
+  legacyTargetCommentId: string | undefined,
+  loadedRows: Stage4CommentRow[],
+): boolean {
+  if (op.targetCommentId === targetCommentId) return true;
+  if (action !== "reply" || !op.targetCommentId) return false;
+  if (op.targetIsCanonicalParent === true) return false;
+  if (legacyTargetCommentId && op.targetCommentId === legacyTargetCommentId) return true;
+  const loaded = loadedRows.find((row) => row.comment_id === op.targetCommentId);
+  if (loaded) {
+    return (loaded.canonical_parent_id.trim() || loaded.comment_id) === targetCommentId;
+  }
+  return true;
+}
+
+/**
+ * A lock of a context that is gone does not block a submit in this one: only a
+ * lock of this context, or one that already minted an operation, does.
+ */
+function blocksNewSubmit(lock: SubmitLock, epoch: number): boolean {
+  return lock.operationId !== null || lock.epoch === epoch;
+}
+
+/** The answer a blocked submit gets: the operation to check, when one is known. */
+function pendingOutcomeFor(lock: SubmitLock): SubmissionOutcome {
+  return lock.operationId ? { kind: "pending", operationId: lock.operationId } : { kind: "pending" };
+}
+
+/** The outcome of a call that never returned a receipt. */
+function failedOutcome(error: unknown, operationId: string): SubmissionOutcome {
+  // A transport failure after the claim is indeterminate unless the server
+  // said otherwise; the local identity stays until status is read.
+  const reason = error instanceof YouTubeCommentsError ? error.code
+    : error instanceof Error && error.message ? error.message
+    : "upstream";
+  if (isShownRefusal(reason)) return { kind: "refused", reason, draftKept: true, operationId };
+  return { kind: "error", reason, draftKept: true, operationId };
+}
+
+/** The outcome a receipt maps to; every state but a refusal is an unknown settlement. */
+function outcomeForReceipt(receipt: Stage4ReceiptPayload, operationId: string): SubmissionOutcome {
+  if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
+  if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
+  // claimed, dispatched or indeterminate: the browser lost the answer before settlement.
+  return { kind: "indeterminate", receipt, operationId };
 }
 
 /** Reasons whose refusal is definite and was shown, so the identity may go.

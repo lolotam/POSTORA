@@ -271,6 +271,7 @@ describe("T5 O7: discarding an account forgets its in-memory identities", () => 
     let operationId = "";
     await act(async () => {
       const outcome = await result.current.editComment("vid-1", ownRow(), "my edited comment");
+      if (outcome.kind !== "error") throw new Error(`Expected a lost-response error, got ${outcome.kind}`);
       operationId = outcome.operationId;
     });
     await act(async () => { await result.current.checkStatus(operationId, "my edited comment"); });
