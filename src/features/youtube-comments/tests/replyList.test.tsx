@@ -264,19 +264,13 @@ describe("T6 mergeReplyRows", () => {
   const r = (id: string, text: string, handle = "h") => reply(id, text, { handle });
   const at = (readAt: number, ...rows: Stage4CommentRow[]) => rows.map((row) => ({ row, readAt }));
 
-  it("takes the inline row when it was read later", () => {
-    const merged = mergeReplyRows(at(20, r("a", "inline")), at(10, r("a", "paged")));
-    expect(merged.map((x) => x.text)).toEqual(["inline"]);
-  });
-
-  it("takes the paged row when it was read later", () => {
-    const merged = mergeReplyRows(at(10, r("a", "inline")), at(20, r("a", "paged")));
-    expect(merged.map((x) => x.text)).toEqual(["paged"]);
-  });
-
-  it("takes the paged row on a tie", () => {
-    const merged = mergeReplyRows(at(10, r("a", "inline")), at(10, r("a", "paged")));
-    expect(merged.map((x) => x.text)).toEqual(["paged"]);
+  it.each([
+    { name: "the inline row when it was read later", inlineAt: 20, pagedAt: 10, expected: "inline" },
+    { name: "the paged row when it was read later", inlineAt: 10, pagedAt: 20, expected: "paged" },
+    { name: "the paged row on a tie", inlineAt: 10, pagedAt: 10, expected: "paged" },
+  ])("takes $name", ({ inlineAt, pagedAt, expected }) => {
+    const merged = mergeReplyRows(at(inlineAt, r("a", "inline")), at(pagedAt, r("a", "paged")));
+    expect(merged.map((x) => x.text)).toEqual([expected]);
   });
 
   it("keeps the rows that exist on one side only, paged order first", () => {
