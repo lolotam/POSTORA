@@ -27,6 +27,10 @@ describe("youtube-comments layering", () => {
     const offenders = nonScreen.filter((f) => INFRA_IMPORT.test(readFileSync(f, "utf8")));
     expect(offenders).toEqual([]);
   });
+  it("the draft store keeps comment text in memory only: it names no browser storage", () => {
+    const source = readFileSync(join(FEATURE_ROOT, "application", "stage4Drafts.ts"), "utf8");
+    expect(/localStorage|sessionStorage|indexedDB|document.cookie|navigator.storage/.test(source)).toBe(false);
+  });
   it("only infrastructure imports the Supabase client", () => {
     const all = allFiles(FEATURE_ROOT);
     const nonInfra = all.filter((f) => !f.replace(/\\/g, "/").includes("/infrastructure/"));

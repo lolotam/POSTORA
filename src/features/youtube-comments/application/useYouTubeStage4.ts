@@ -20,6 +20,7 @@ import type {
 } from "../domain/types";
 import { youtubeCommentsKey, YOUTUBE_COMMENTS_STALE_MS } from "./queryKeys";
 import { clearSettled, readOperationStatus, recoverOperation } from "./recoverOperation";
+import { createStage4DraftStore } from "./stage4Drafts";
 /** The outcome of one deliberate submit, as the composer must show it. */
 export type SubmissionOutcome =
   | { kind: "confirmed"; receipt: Stage4ReceiptPayload; operationId: string }
@@ -76,6 +77,8 @@ export interface Stage4PageState<Item> {
   bindingGeneration: number | null;
   /** When the first page last finished loading (0 until it has); it moves on every reload. */
   firstPageUpdatedAt: number;
+  /** When the read that produced the row of this key finished (0 for a key that is not loaded). */
+  readAtOf: (key: string) => number;
   loadMore: () => void;
   /** Retry only the failed page; earlier rows stay (spec 8.3). */
   retry: () => void;
@@ -154,16 +157,21 @@ export function useYouTubeStage4(params: {
     const pageQueries = useQueries({ queries: pages });
     const tailQuery = pageQueries[pageQueries.length - 1];
 
-    const items = useMemo(() => {
+    const { items, readAt } = useMemo(() => {
       const byKey = new Map<string, Item>();
+      const readAtByKey = new Map<string, number>();
       for (const query of pageQueries) {
-        for (const item of query.data?.page ?? []) byKey.set(item.key, item);
+        for (const item of query.data?.page ?? []) {
+          byKey.set(item.key, item);
+          readAtByKey.set(item.key, query.dataUpdatedAt);
+        }
       }
-      return [...byKey.values()];
+      return { items: [...byKey.values()], readAt: readAtByKey };
     }, [pageQueries]);
 
     return {
       items,
+      readAtOf: (key: string) => readAt.get(key) ?? 0,
       nextCursor: tailQuery.data?.next ?? null,
       loading: tailQuery.isLoading || tailQuery.isFetching,
       error: tailQuery.error instanceof YouTubeCommentsError ? tailQuery.error.code
@@ -237,6 +245,19 @@ export function useYouTubeStage4(params: {
     seenListUpdate.current = firstPageUpdatedAt;
     setRepliesEpoch((epoch) => epoch + 1);
   }, [firstPageUpdatedAt]);
+
+  // ---- drafts ---------------------------------------------------------------------
+  //
+  // What the owner typed into a reply or edit editor lives here, outside the row
+  // that shows it: a Refresh returns every reply chain to page one and unmounts
+  // the rows of the later pages. Memory only (comment text is never stored). A
+  // draft written under another binding generation is forgotten when the list
+  // reports the new one.
+  const drafts = useMemo(() => createStage4DraftStore(), []);
+  const listGeneration = threads.bindingGeneration;
+  useEffect(() => {
+    if (listGeneration !== null) drafts.keepGeneration(listGeneration);
+  }, [drafts, listGeneration]);
 
   // ---- reply paging per thread ------------------------------------------------
   //
@@ -535,6 +556,7 @@ export function useYouTubeStage4(params: {
     listMode,
     setListMode,
     threads,
+    drafts,
     repliesEpoch,
     replyTargetsOpen,
     openReplies,
@@ -641,6 +663,7 @@ export function useStage4Replies(params: {
 
   const tailIndex = cursors.length - 1;
   type ReplyPage = { page: { key: string; row: Stage4CommentRow }[]; next: string | null; stale: boolean };
+  type ReplyItem = { key: string; row: Stage4CommentRow; readAt: number };
   // Every page keeps an observer (only the tail may fetch), so a page that is
   // not the live tail is not garbage-collected while the thread is open.
   const pageQueries = useQueries({
@@ -663,9 +686,9 @@ export function useStage4Replies(params: {
   const tailQuery = pageQueries[tailIndex];
 
   const items = useMemo(() => {
-    const byKey = new Map<string, { key: string; row: Stage4CommentRow }>();
+    const byKey = new Map<string, ReplyItem>();
     for (const query of pageQueries) {
-      for (const item of query.data?.page ?? []) byKey.set(item.key, item);
+      for (const item of query.data?.page ?? []) byKey.set(item.key, { ...item, readAt: query.dataUpdatedAt });
     }
     return [...byKey.values()];
   }, [pageQueries]);
