@@ -50,12 +50,24 @@ import type { Stage4ProviderClass } from "./provider.ts";
 import { writeRefusalAudit, sanitiseAction } from "./audit.ts";
 import { readCapabilities, admitsCapability, SettingsReadError } from "./rollout.ts";
 import { STAGE4_HOLD_FROM_PUBLISHED } from "./contractTypes.ts";
-import { stage4RateLimit, STAGE4_RATE_LIMITS } from "./rateLimit.ts";
+import {
+  stage4RateLimit,
+  STAGE4_RATE_LIMITS,
+  resetAnonymousSlots,
+  runInAnonymousSlot,
+} from "./rateLimit.ts";
 
 export interface Stage4Deps {
   admin: SupabaseClient;
   fetcher: typeof fetch;
+  /** Wall-clock milliseconds: handles, cursors and ban confirmations expire on it. */
   now: () => number;
+  /**
+   * Monotonic milliseconds: the anonymous refusal gate's cool-down runs on it,
+   * so a wall clock that jumps can neither reopen the gate early nor keep it
+   * closed.
+   */
+  monotonicNow: () => number;
   newRequestId: () => string;
   signingSecret: string;
 }
@@ -96,21 +108,21 @@ const ANON_AUDIT_MAX_PER_MINUTE = 30;
  * counter row is attempted at most once per ANON_COUNTER_INTERVAL_MS per
  * instance. Both only ever make this instance write LESS than the shared
  * limits already allow.
+ *
+ * Both windows are measured on the MONOTONIC clock, so a wall clock that
+ * jumps (a step back, an NTP correction) can neither reopen the gate early
+ * nor keep it closed.
  */
 const ANON_BUCKET_CLOSED_MS = 10_000;
 const ANON_COUNTER_INTERVAL_MS = 60_000;
-/** A probe that has not answered by then is treated as a refusal and stops holding the gate. */
-const ANON_PROBE_TIMEOUT_MS = 1_500;
 let anonBucketClosedUntil = 0;
 let anonCounterNextAt = 0;
-/** True while this worker's single shared-bucket probe is in flight. */
-let anonProbeInFlight = false;
 
 /** Test seam: forget what this instance learned about the shared bucket. */
 export function resetAnonRefusalGate(): void {
   anonBucketClosedUntil = 0;
   anonCounterNextAt = 0;
-  anonProbeInFlight = false;
+  resetAnonymousSlots();
 }
 
 /**
@@ -122,24 +134,22 @@ export function resetAnonRefusalGate(): void {
  * a timeout closes the gate for ANON_BUCKET_CLOSED_MS, so over time this worker
  * makes at most one probe per ANON_BUCKET_CLOSED_MS (plus one counter call a
  * minute).
+ *
+ * The probe's slot is freed by the CALL, not by the timeout: a call that is
+ * still running keeps the slot, so this worker makes NO further probe until
+ * that call settles. A call that never settles therefore stops this worker
+ * from probing again for the rest of its life: that is the fail-closed
+ * outcome, and every refusal it still answers keeps its console event.
  */
 async function anonBucketAdmits(deps: Stage4Deps): Promise<boolean> {
-  if (deps.now() < anonBucketClosedUntil || anonProbeInFlight) return false;
-  anonProbeInFlight = true;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let admitted = false;
-  try {
-    const probe = stage4RateLimit(deps.admin, "anonymous", "stage4_audit_anon", ANON_AUDIT_MAX_PER_MINUTE, 60)
-      .then((result) => result.allowed);
-    const timeout = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), ANON_PROBE_TIMEOUT_MS);
-    });
-    admitted = await Promise.race([probe, timeout]);
-  } finally {
-    clearTimeout(timer);
-    anonProbeInFlight = false;
-  }
-  if (!admitted) anonBucketClosedUntil = deps.now() + ANON_BUCKET_CLOSED_MS;
+  if (deps.monotonicNow() < anonBucketClosedUntil) return false;
+  const outcome = await runInAnonymousSlot("bucket_probe", () =>
+    stage4RateLimit(deps.admin, "anonymous", "stage4_audit_anon", ANON_AUDIT_MAX_PER_MINUTE, 60));
+  // A request that finds the probe running is refused without a call of its
+  // own and does not close the gate: the running probe decides that.
+  if (outcome.kind === "busy") return false;
+  const admitted = outcome.kind === "settled" && outcome.value.allowed;
+  if (!admitted) anonBucketClosedUntil = deps.monotonicNow() + ANON_BUCKET_CLOSED_MS;
   return admitted;
 }
 
@@ -151,9 +161,13 @@ async function refusal(
   headers: Record<string, string>,
   audit: { action: string; userId: string | null; accountId: string | null; operationId: string | null; providerClass?: string | null; operationVerified?: boolean },
 ): Promise<Response> {
-  // The audit write belongs to the request (awaited, so it cannot outlive an
-  // edge worker that has already answered), and it never changes the answer:
-  // writeRefusalAudit swallows and logs its own failures.
+  // The AUTHENTICATED audit write belongs to the request (awaited, so it
+  // cannot outlive an edge worker that has already answered), and it never
+  // changes the answer: writeRefusalAudit swallows and logs its own
+  // failures. The ANONYMOUS write is bounded instead: it holds a slot of its
+  // own and may complete after the response has gone out, and a frozen
+  // isolate may drop the row. The console event and the counter row are the
+  // trace of that refusal.
   await writeRefusalAudit(deps.admin, {
     action: audit.action,
     reason,
@@ -171,43 +185,45 @@ async function refusal(
       // the shared bucket has actually refused (a request that merely found a
       // probe in flight is not a refusal): the tally stays in memory
       // (returning false keeps it) and costs no database work.
-      if (deps.now() >= anonBucketClosedUntil || deps.now() < anonCounterNextAt) return false;
-      anonCounterNextAt = deps.now() + ANON_COUNTER_INTERVAL_MS;
-      // At most one counter row per minute, whatever the suppression volume.
-      // Bounded like the probe: a hung call must not hold this request.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const counter = await Promise.race([
-        stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60),
-        new Promise<{ allowed: false }>((resolve) => {
-          timer = setTimeout(() => resolve({ allowed: false }), ANON_PROBE_TIMEOUT_MS);
-        }),
-      ]).finally(() => clearTimeout(timer));
-      if (!counter.allowed) return false;
-      try {
-        const inserted = await deps.admin.from("system_logs").insert({
-          level: "warn",
-          category: "edge",
-          source: "comment-manager",
-          message: "Stage 4 refusal audit suppressed",
-          user_id: null,
-          metadata: {
-            action: "unknown",
-            reason: "audit_suppressed",
-            provider_class: null,
-            request_id: "",
-            suppressed: suppressed,
-          },
-        });
-        if (inserted && inserted.error) {
-          console.warn("comment-manager stage4 audit counter insert failed: cause=insert_error");
-          return false;
-        }
-        return true;
-      } catch {
-        // A failed counter insert must not change the response either.
+      const now = deps.monotonicNow();
+      if (now >= anonBucketClosedUntil || now < anonCounterNextAt) return false;
+      anonCounterNextAt = now + ANON_COUNTER_INTERVAL_MS;
+      // The counter probe holds a slot of its own: while one is running this
+      // worker starts no second one, and the request waits at most the bound
+      // for it.
+      const counter = await runInAnonymousSlot("counter_probe", () =>
+        stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60));
+      if (counter.kind !== "settled" || !counter.value.allowed) return false;
+      // The counter row: one insert at a time per worker. A request that
+      // finds the slot taken skips the insert (it never waits on the running
+      // one and never starts a second) and the tally stays in memory.
+      const insertOutcome = await runInAnonymousSlot("counter_insert", () => deps.admin.from("system_logs").insert({
+        level: "warn",
+        category: "edge",
+        source: "comment-manager",
+        message: "Stage 4 refusal audit suppressed",
+        user_id: null,
+        metadata: {
+          action: "unknown",
+          reason: "audit_suppressed",
+          provider_class: null,
+          request_id: "",
+          suppressed: suppressed,
+        },
+      }));
+      // An insert that is still running past the bound may land after the
+      // response has gone out; the tally stays in memory and the suppression
+      // console event remains the trace either way.
+      if (insertOutcome.kind === "busy" || insertOutcome.kind === "bound") return false;
+      if (insertOutcome.kind === "failed") {
         console.warn("comment-manager stage4 audit counter insert failed: cause=exception");
         return false;
       }
+      if (insertOutcome.value && insertOutcome.value.error) {
+        console.warn("comment-manager stage4 audit counter insert failed: cause=insert_error");
+        return false;
+      }
+      return true;
     },
   });
   return json(status, { ok: false, request_id: requestId, reason }, headers);
@@ -898,7 +914,9 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     } catch (error) {
       if (!(error instanceof SettingsReadError)) throw error;
       // An unreadable setting is an error answer, never a payload of "not allowed".
-      return refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+      // It names the settings as the cause so the browser can tell this from a
+      // failed transport or an old backend, which both read as the baseline inbox.
+      return refusal(deps, 503, "settings_unavailable", requestId, headers, { action, userId, accountId, operationId: null });
     }
     const payload: Stage4CapabilitiesPayload = {
       account_id: accountId,
@@ -1772,6 +1790,62 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
         }
         return { ok: true, account: fresh.account };
       };
+      type Observed = { response: Response } | { observation: Stage4OperationStatusPayload["observation"]; observedText: string | null };
+      const unobserved: Observed = { observation: "unavailable", observedText: null };
+      // The optional comparison of the draft with what YouTube shows. Anything
+      // that stops it (the capability answers false, the settings cannot be
+      // read, the credential cannot be prepared) returns the receipt unobserved
+      // after the binding was read again: a binding read that FAILS is the only
+      // 503, and a changed binding is the same not_found as everywhere else.
+      const observeEdit = async (draft: string): Promise<Observed> => {
+        const blocked = await capabilityRefusal(deps.admin, accountId, "read");
+        if (blocked) {
+          // The capability may be false BECAUSE of a reconnect.
+          const afterGate = await bindingCheck();
+          return afterGate.ok ? unobserved : { response: afterGate.response };
+        }
+        // The credential is prepared from a row read AFTER the capability
+        // answer, never from the first snapshot: a reconnect that landed during
+        // the capability check must not start a refresh with the superseded
+        // refresh token.
+        const fresh = await bindingCheck();
+        if (!fresh.ok) return { response: fresh.response };
+        const tok = await prepareToken(fresh.account, deps);
+        if (!tok.ok) {
+          // After EVERY credential preparation, a failed one included.
+          const afterToken = await bindingCheck();
+          return afterToken.ok ? unobserved : { response: afterToken.response };
+        }
+        // The send boundary. Capability first, then the binding, sequentially:
+        // the binding read is the last awaited work before the provider
+        // request starts, so a withdrawal, a changed binding or an unreadable
+        // setting stops it and no parallel answer from an earlier point in
+        // time can be used. An SQL call and an HTTP call share no transaction,
+        // so the window cannot be zero: the same two questions are asked again
+        // after the read, capability first and the binding last, so the binding
+        // result used for the answer is the latest read.
+        const allowed = await capabilityRefusal(deps.admin, accountId, "read");
+        const boundary = await bindingCheck();
+        if (!boundary.ok) return { response: boundary.response };
+        if (allowed) return unobserved;
+        const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
+        const stillAllowed = await capabilityRefusal(deps.admin, accountId, "read");
+        const afterRead = await bindingCheck();
+        if (!afterRead.ok) return { response: afterRead.response };
+        const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
+        // Only the comment the receipt targets is an observation: a provider
+        // answer for any other id says nothing about this edit.
+        const text = citem && String(citem.id ?? "") === String(observedTargetId) && citem.snippet?.textOriginal
+          ? String(citem.snippet.textOriginal)
+          : null;
+        // A read capability withdrawn (or unreadable) while the provider was
+        // being read drops the text that was read.
+        if (text === null || stillAllowed) return unobserved;
+        return {
+          observation: normaliseText(text) === normaliseText(draft) ? "requested_text_observed" : "different_text_observed",
+          observedText: text,
+        };
+      };
       const first = await bindingCheck();
       if (!first.ok) return first.response;
       // Without a draft there is nothing to compare: the receipt is returned at
@@ -1780,46 +1854,10 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       if (inp.text === undefined) {
         observation = "unavailable";
       } else {
-        const unreadable = () => refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
-        const blocked = await capabilityRefusal(deps.admin, accountId, "read");
-        if (blocked?.status === 503) return unreadable();
-        if (blocked) {
-          // The capability answered false. It may be false BECAUSE of a
-          // reconnect, so the binding is read again before the receipt goes out.
-          const afterGate = await bindingCheck();
-          if (!afterGate.ok) return afterGate.response;
-          observation = "unavailable";
-        } else {
-          const tok = await prepareToken(first.account, deps);
-          // `read` is checked again right before the provider read: a
-          // withdrawal while the credential was being prepared must stop it.
-          const stillAllowed = await capabilityRefusal(deps.admin, accountId, "read");
-          if (stillAllowed?.status === 503) return unreadable();
-          // After EVERY credential preparation, a failed one included.
-          const afterToken = await bindingCheck();
-          if (!afterToken.ok) return afterToken.response;
-          if (tok.ok && !stillAllowed) {
-            const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
-            const afterRead = await bindingCheck();
-            if (!afterRead.ok) return afterRead.response;
-            const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
-            // Only the comment the receipt targets is an observation: a provider
-            // answer for any other id says nothing about this edit.
-            const text = citem && String(citem.id ?? "") === String(observedTargetId) && citem.snippet?.textOriginal
-              ? String(citem.snippet.textOriginal)
-              : null;
-            if (text === null) {
-              observation = "unavailable";
-            } else {
-              observedText = text;
-              observation = normaliseText(text) === normaliseText(inp.text)
-                ? "requested_text_observed"
-                : "different_text_observed";
-            }
-          } else {
-            observation = "unavailable";
-          }
-        }
+        const observed = await observeEdit(inp.text);
+        if ("response" in observed) return observed.response;
+        observation = observed.observation;
+        observedText = observed.observedText;
       }
     }
     const payload: Stage4OperationStatusPayload = {

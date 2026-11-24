@@ -22,13 +22,31 @@ describe("SupabaseYouTubeCommentsGateway.capabilities", () => {
     expect(result.capabilities.read.reason).toBe("capability_off");
   });
 
-  it("turns an answer that says the settings were unreadable into an upstream error, never a denial", async () => {
+  it("turns an answer that says the settings were unreadable into a settings_unavailable error, never a denial", async () => {
     // An older server answered a failed settings read as data. As a denial it would unmount an admitted screen.
     invoke.mockResolvedValueOnce({ data: { ok: true, data: payload("settings_unavailable", false) }, error: null });
     await expect(new SupabaseYouTubeCommentsGateway().capabilities(ACCOUNT)).rejects.toMatchObject({
       constructor: YouTubeCommentsError,
-      code: "upstream",
+      code: "settings_unavailable",
     });
+  });
+
+  it("keeps a transport failure with no body, and an empty answer, as upstream", async () => {
+    invoke.mockResolvedValueOnce({ data: null, error: new Error("Failed to send a request to the Edge Function") });
+    await expect(new SupabaseYouTubeCommentsGateway().capabilities(ACCOUNT)).rejects.toMatchObject({ code: "upstream" });
+    invoke.mockResolvedValueOnce({ data: null, error: null });
+    await expect(new SupabaseYouTubeCommentsGateway().capabilities(ACCOUNT)).rejects.toMatchObject({ code: "upstream" });
+  });
+
+  it("carries the reason of a 503 body, so a failed settings read is told from a failed transport", async () => {
+    const body = (reason: string) => ({
+      data: null,
+      error: Object.assign(new Error("non-2xx"), { context: new Response(JSON.stringify({ ok: false, reason }), { status: 503 }) }),
+    });
+    invoke.mockResolvedValueOnce(body("settings_unavailable"));
+    await expect(new SupabaseYouTubeCommentsGateway().capabilities(ACCOUNT)).rejects.toMatchObject({ code: "settings_unavailable" });
+    invoke.mockResolvedValueOnce(body("upstream"));
+    await expect(new SupabaseYouTubeCommentsGateway().capabilities(ACCOUNT)).rejects.toMatchObject({ code: "upstream" });
   });
 
   it("sends the draft with a status check only when there is one", async () => {

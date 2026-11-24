@@ -40,6 +40,24 @@ DELETE FROM public.workspaces
 DELETE FROM auth.users
  WHERE id IN ('6e9a0001-0000-4000-8000-000000000001', '6e8a0001-0000-4000-8000-000000000001', '6e8a0002-0000-4000-8000-000000000002');
 
+-- The two helpers every claim below depends on. They are session temp functions:
+-- nothing here outlives the psql session.
+--
+-- pg_temp.s4_map(digest): the digest map the claim requires, the same intent
+-- digest under every retained key version. It stands for what the single-digest
+-- form used to express; the cases that test rotation build explicit
+-- per-version maps instead.
+CREATE FUNCTION pg_temp.s4_map(p_digest text) RETURNS jsonb LANGUAGE sql AS
+  $$ SELECT jsonb_object_agg(k.version::text, p_digest) FROM public.youtube_comment_digest_keys AS k $$;
+
+-- pg_temp.s4_next_version(): the next key version number nobody ever used. A
+-- deleted version number is never issued again, so a case that rotates keys
+-- cannot name a literal: it asks the watermark.
+CREATE FUNCTION pg_temp.s4_next_version() RETURNS int LANGUAGE sql AS
+  $$ SELECT GREATEST(
+            COALESCE((SELECT max(version) FROM public.youtube_comment_digest_keys), 0),
+            COALESCE((SELECT last_version FROM public.youtube_comment_digest_key_watermark), 0)) + 1 $$;
+
 BEGIN;
 
 -- ---------------------------------------------------------------------------
@@ -443,7 +461,8 @@ BEGIN
     '{"video_id":"vid-s4-1"}'::jsonb,
     repeat('a', 64),
     '{}'::jsonb,
-    'write', 's3-probe');
+    'write', 's3-probe',
+    jsonb_build_object('1', repeat('a', 64)));
   RAISE EXCEPTION 'S3b the browser executed the claim';
 EXCEPTION
   WHEN insufficient_privilege THEN NULL;
@@ -507,7 +526,8 @@ BEGIN
        || convert_to('','utf8') || '\x00'::bytea
        || convert_to('First!','utf8'), k.key, 'sha256'), 'hex'))
      FROM public.youtube_comment_digest_keys k),
-    'write', 's4-a1');
+    'write', 's4-a1',
+    pg_temp.s4_map(repeat('a', 64)));
   ASSERT (r ->> 'ok')::boolean, format('S4 owner A claimed on a1: %s', r);
 
   -- crossed owner: B claims A's account
@@ -516,7 +536,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a1),
     '00000000-0000-4000-8000-000000000102',
     'create_thread', '{"video_id":"vid-s4-1"}'::jsonb,
-    repeat('b', 64), '{}'::jsonb, 'write', 's4-b-on-a1');
+    repeat('b', 64), '{}'::jsonb, 'write', 's4-b-on-a1',
+    pg_temp.s4_map(repeat('b', 64)));
   ASSERT r ->> 'reason' = 'not_found', format('S4 a crossed owner and account was refused: %s', r);
 
   -- missing account
@@ -524,7 +545,8 @@ BEGIN
     u_a, a_missing, 'UC-s4-alpha', 1,
     '00000000-0000-4000-8000-000000000103',
     'create_thread', '{"video_id":"vid-s4-1"}'::jsonb,
-    repeat('c', 64), '{}'::jsonb, 'write', 's4-missing');
+    repeat('c', 64), '{}'::jsonb, 'write', 's4-missing',
+    pg_temp.s4_map(repeat('c', 64)));
   ASSERT r ->> 'reason' = 'not_found', format('S4 a missing account was refused identically: %s', r);
 
   -- the Composio row and the facebook row are not native YouTube rows
@@ -533,7 +555,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a4),
     '00000000-0000-4000-8000-000000000104',
     'create_thread', '{"video_id":"vid-s4-1"}'::jsonb,
-    repeat('d', 64), '{}'::jsonb, 'write', 's4-composio');
+    repeat('d', 64), '{}'::jsonb, 'write', 's4-composio',
+    pg_temp.s4_map(repeat('d', 64)));
   ASSERT r ->> 'reason' = 'not_found', format('S4 a Composio row was refused identically: %s', r);
 
   r := public.youtube_comment_op_claim(
@@ -541,7 +564,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a5),
     '00000000-0000-4000-8000-000000000105',
     'create_thread', '{"video_id":"vid-s4-1"}'::jsonb,
-    repeat('e', 64), '{}'::jsonb, 'write', 's4-facebook');
+    repeat('e', 64), '{}'::jsonb, 'write', 's4-facebook',
+    pg_temp.s4_map(repeat('e', 64)));
   ASSERT r ->> 'reason' = 'not_found', format('S4 a facebook row was refused identically: %s', r);
 
   -- two owners on the SAME channel id are separate fence domains
@@ -558,7 +582,8 @@ BEGIN
        || convert_to('','utf8') || '\x00'::bytea
        || convert_to('First!','utf8'), k.key, 'sha256'), 'hex'))
      FROM public.youtube_comment_digest_keys k),
-    'write', 's4-b1');
+    'write', 's4-b1',
+    pg_temp.s4_map(repeat('f', 64)));
   ASSERT (r ->> 'ok')::boolean,
     format('S4 owner B on the same channel is a separate fence domain: %s', r);
 END
@@ -580,7 +605,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a1),
     '00000000-0000-4000-8000-000000000201',
     'create_thread', '{"video_id":"vid-s4-2"}'::jsonb,
-    repeat('1', 64), '{}'::jsonb, 'write', 's5-channel');
+    repeat('1', 64), '{}'::jsonb, 'write', 's5-channel',
+    pg_temp.s4_map(repeat('1', 64)));
   ASSERT r ->> 'reason' = 'not_found', format('S5 a wrong expected channel was refused: %s', r);
 
   -- wrong expected generation
@@ -589,7 +615,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a1) + 5,
     '00000000-0000-4000-8000-000000000202',
     'create_thread', '{"video_id":"vid-s4-2"}'::jsonb,
-    repeat('2', 64), '{}'::jsonb, 'write', 's5-generation');
+    repeat('2', 64), '{}'::jsonb, 'write', 's5-generation',
+    pg_temp.s4_map(repeat('2', 64)));
   ASSERT r ->> 'reason' = 'not_found', format('S5 a wrong expected generation was refused: %s', r);
 
   -- a spoofed token cannot mark or settle
@@ -598,7 +625,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a1),
     '00000000-0000-4000-8000-000000000203',
     'edit', '{"video_id":"vid-s4-2","comment_id":"cmt-s4-2"}'::jsonb,
-    repeat('3', 64), '{}'::jsonb, 'write', 's5-token');
+    repeat('3', 64), '{}'::jsonb, 'write', 's5-token',
+    pg_temp.s4_map(repeat('3', 64)));
   ASSERT (r ->> 'ok')::boolean, format('S5 claim ok: %s', r);
   v_token := (r ->> 'attempt_token')::uuid;
 
@@ -632,7 +660,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha',
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a1),
     op, 'edit', '{"video_id":"vid-s4-3","comment_id":"cmt-s4-3"}'::jsonb,
-    repeat('6', 64), '{}'::jsonb, 'write', 's6-1');
+    repeat('6', 64), '{}'::jsonb, 'write', 's6-1',
+    pg_temp.s4_map(repeat('6', 64)));
   ASSERT (r ->> 'ok')::boolean AND (r ->> 'attempt_token') IS NOT NULL,
     format('S6 the first claim of a key wins the token: %s', r);
 
@@ -640,7 +669,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha',
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a1),
     op, 'edit', '{"video_id":"vid-s4-3","comment_id":"cmt-s4-3"}'::jsonb,
-    repeat('6', 64), '{}'::jsonb, 'write', 's6-2');
+    repeat('6', 64), '{}'::jsonb, 'write', 's6-2',
+    pg_temp.s4_map(repeat('6', 64)));
   ASSERT r ->> 'reason' = 'already_recorded' AND r ->> 'attempt_token' IS NULL,
     format('S6 the same key and intent returns the existing state with no token: %s', r);
 
@@ -648,7 +678,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha',
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a1),
     op, 'edit', '{"video_id":"vid-s4-3","comment_id":"cmt-s4-3"}'::jsonb,
-    repeat('7', 64), '{}'::jsonb, 'write', 's6-3');
+    repeat('7', 64), '{}'::jsonb, 'write', 's6-3',
+    pg_temp.s4_map(repeat('7', 64)));
   ASSERT r ->> 'reason' = 'conflict',
     format('S6 the same key with a different intent is a conflict: %s', r);
 END
@@ -679,7 +710,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000401',
     'create_thread', '{"video_id":"vid-s4-7"}'::jsonb,
-    repeat('a', 64), v_logical, 'write', 's7-1');
+    repeat('a', 64), v_logical, 'write', 's7-1',
+    pg_temp.s4_map(repeat('a', 64)));
   ASSERT (r ->> 'ok')::boolean, format('S7 first logical claim ok: %s', r);
   r := public.youtube_comment_op_mark_dispatched(
     u_a, '00000000-0000-4000-8000-000000000401', (r ->> 'attempt_token')::uuid,
@@ -690,7 +722,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000402',
     'create_thread', '{"video_id":"vid-s4-7"}'::jsonb,
-    repeat('b', 64), v_logical, 'write', 's7-2');
+    repeat('b', 64), v_logical, 'write', 's7-2',
+    pg_temp.s4_map(repeat('b', 64)));
   ASSERT r ->> 'reason' = 'possible_duplicate',
     format('S7 an unresolved identical logical operation is refused under a new key: %s', r);
 
@@ -706,7 +739,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000403',
     'create_thread', '{"video_id":"vid-s4-7"}'::jsonb,
-    repeat('c', 64), v_logical, 'write', 's7-3');
+    repeat('c', 64), v_logical, 'write', 's7-3',
+    pg_temp.s4_map(repeat('c', 64)));
   ASSERT r ->> 'reason' = 'recently_posted' AND r ->> 'result_comment_id' = 'cmt-s4-7'
     AND r ->> 'result_thread_id' = 'th-s4-7',
     format('S7 a recent confirmation under the live binding carries the comment id and the thread id: %s', r);
@@ -719,7 +753,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000404',
     'create_thread', '{"video_id":"vid-s4-7"}'::jsonb,
-    repeat('d', 64), v_logical, 'write', 's7-4');
+    repeat('d', 64), v_logical, 'write', 's7-4',
+    pg_temp.s4_map(repeat('d', 64)));
   ASSERT (r ->> 'ok')::boolean,
     format('S7 after the recent-confirmation window the same text is allowed again: %s', r);
 
@@ -738,13 +773,15 @@ BEGIN
       u_a, a_a1, 'UC-s4-alpha', v_gen,
       '00000000-0000-4000-8000-000000000405',
       'reply', '{"video_id":"vid-s4-7","parent_comment_id":"cmt-top-s4-7"}'::jsonb,
-      repeat('e', 64), v_reply_logical, 'write', 's7-5');
+      repeat('e', 64), v_reply_logical, 'write', 's7-5',
+    pg_temp.s4_map(repeat('e', 64)));
     ASSERT (r ->> 'ok')::boolean, format('S7 reply to reply A claimed: %s', r);
     r := public.youtube_comment_op_claim(
       u_a, a_a1, 'UC-s4-alpha', v_gen,
       '00000000-0000-4000-8000-000000000406',
       'reply', '{"video_id":"vid-s4-7","parent_comment_id":"cmt-top-s4-7"}'::jsonb,
-      repeat('f', 64), v_reply_logical, 'write', 's7-6');
+      repeat('f', 64), v_reply_logical, 'write', 's7-6',
+    pg_temp.s4_map(repeat('f', 64)));
     ASSERT r ->> 'reason' = 'possible_duplicate',
       format('S7 the same text to a different reply in the thread is the same logical operation: %s', r);
   END;
@@ -765,7 +802,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000407',
     'create_thread', '{"video_id":"vid-s4-7"}'::jsonb,
-    repeat('g', 64), v_logical, 'write', 's7-7');
+    repeat('g', 64), v_logical, 'write', 's7-7',
+    pg_temp.s4_map(repeat('g', 64)));
   ASSERT r ->> 'reason' = 'recently_posted' AND r ->> 'result_comment_id' IS NULL
     AND r ->> 'result_thread_id' IS NULL AND (r - 'ok' - 'reason') = '{}'::jsonb,
     format('S7 across a binding change the fence refusal is the bare recently_posted, with no id of either kind: %s', r);
@@ -783,6 +821,7 @@ DECLARE
   r jsonb;
   v_d1 text;
   v_d2 text;
+  v_ver int := pg_temp.s4_next_version();
 BEGIN
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = a_a1;
 
@@ -799,20 +838,21 @@ BEGIN
     '00000000-0000-4000-8000-000000000501',
     'create_thread', '{"video_id":"vid-s4-8"}'::jsonb,
     repeat('1', 64),
-    jsonb_build_object('1', v_d1), 'write', 's8-1');
+    jsonb_build_object('1', v_d1), 'write', 's8-1',
+    pg_temp.s4_map(repeat('1', 64)));
   ASSERT (r ->> 'ok')::boolean, format('S8 the version-1 claim landed: %s', r);
   r := public.youtube_comment_op_mark_dispatched(
     u_a, '00000000-0000-4000-8000-000000000501', (r ->> 'attempt_token')::uuid,
     'UC-s4-alpha', v_gen);
   ASSERT (r ->> 'ok')::boolean, 'S8 the version-1 claim is dispatched';
 
-  -- rotate: add version 2, retire nothing
+  -- rotate: add a new version, retire nothing
   INSERT INTO public.youtube_comment_digest_keys (version, key)
-  VALUES (2, sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'utf8')));
+  VALUES (v_ver, sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'utf8')));
 
   -- the digest keys reader returns both, newest active
   r := public.youtube_comment_digest_keys();
-  ASSERT (r ->> 'active_version')::int = 2
+  ASSERT (r ->> 'active_version')::int = v_ver
      AND (SELECT count(*) FROM jsonb_array_elements(r -> 'keys')) = 2,
     format('S8 the digest key reader returns both versions: %s', r);
 
@@ -823,13 +863,14 @@ BEGIN
        || convert_to('vid-s4-8','utf8') || '\x00'::bytea
        || convert_to('','utf8') || '\x00'::bytea
        || convert_to('Rotated key text','utf8'),
-       (SELECT key FROM public.youtube_comment_digest_keys WHERE version = 2), 'sha256'), 'hex');
+       (SELECT key FROM public.youtube_comment_digest_keys WHERE version = v_ver), 'sha256'), 'hex');
   r := public.youtube_comment_op_claim(
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000502',
     'create_thread', '{"video_id":"vid-s4-8"}'::jsonb,
     repeat('2', 64),
-    jsonb_build_object('1', v_d1, '2', v_d2), 'write', 's8-2');
+    jsonb_build_object('1', v_d1, v_ver::text, v_d2), 'write', 's8-2',
+    pg_temp.s4_map(repeat('2', 64)));
   ASSERT r ->> 'reason' = 'possible_duplicate',
     format('S8 evidence written under version 1 still blocks after rotation: %s', r);
 
@@ -861,7 +902,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000601',
     'edit', '{"video_id":"vid-s4-9","comment_id":"cmt-s4-9"}'::jsonb,
-    repeat('9', 64), '{}'::jsonb, 'write', 's9-stale');
+    repeat('9', 64), '{}'::jsonb, 'write', 's9-stale',
+    pg_temp.s4_map(repeat('9', 64)));
   ASSERT (r ->> 'ok')::boolean, 'S9 the stale claim landed';
   UPDATE public.youtube_comment_operations
      SET claimed_at = clock_timestamp() - interval '121 seconds'
@@ -871,7 +913,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000602',
     'edit', '{"video_id":"vid-s4-9b","comment_id":"cmt-s4-9b"}'::jsonb,
-    repeat('8', 64), '{}'::jsonb, 'write', 's9-next');
+    repeat('8', 64), '{}'::jsonb, 'write', 's9-next',
+    pg_temp.s4_map(repeat('8', 64)));
   ASSERT (r ->> 'ok')::boolean, 'S9 the next claim proceeded';
   ASSERT (SELECT state FROM public.youtube_comment_operations
            WHERE owner_id = u_a AND operation_id = '00000000-0000-4000-8000-000000000601') = 'refused'
@@ -884,7 +927,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000603',
     'edit', '{"video_id":"vid-s4-9c","comment_id":"cmt-s4-9c"}'::jsonb,
-    repeat('7', 64), '{}'::jsonb, 'write', 's9-conv');
+    repeat('7', 64), '{}'::jsonb, 'write', 's9-conv',
+    pg_temp.s4_map(repeat('7', 64)));
   r := public.youtube_comment_op_mark_dispatched(
     u_a, '00000000-0000-4000-8000-000000000603', (r ->> 'attempt_token')::uuid,
     'UC-s4-alpha', v_gen);
@@ -895,6 +939,8 @@ BEGIN
   ASSERT (r ->> 'ok')::boolean AND r ->> 'state' = 'indeterminate',
     format('S9 a dispatched receipt older than 90 s reads as indeterminate: %s', r);
 
+  -- (These two fixtures write the digest key version 0 an edit receipt carries: the claim writes
+  -- 0 there for edit and moderate, and the key version CHECK of 20261124120000 requires it.)
   -- pruning removes ONLY never-dispatched refused rows older than 30 days,
   -- at most 20 per claim, same owner; a dispatched row is never deleted
   FOR i IN 1..25 LOOP
@@ -906,7 +952,7 @@ BEGIN
     ) VALUES (
       u_a, ('00000000-0000-4000-8000-' || lpad((700 + i)::text, 12, '0'))::uuid, a_a1, a_a1, 'UC-s4-alpha',
       v_gen, 'native', 'edit', 'vid-s4-9', 'cmt-s4-prune',
-      repeat('p', 64), 1, 'refused', gen_random_uuid(),
+      repeat('p', 64), 0, 'refused', gen_random_uuid(),
       'commentTextTooLong', clock_timestamp() - interval '31 days',
       clock_timestamp() - interval '31 days'
     );
@@ -920,7 +966,7 @@ BEGIN
   ) VALUES (
     u_a, '00000000-0000-4000-8000-000000000799', a_a1, a_a1, 'UC-s4-alpha',
     v_gen, 'native', 'edit', 'vid-s4-9', 'cmt-s4-keep',
-    repeat('q', 64), 1, 'indeterminate', gen_random_uuid(),
+    repeat('q', 64), 0, 'indeterminate', gen_random_uuid(),
     'http_5xx', 'http_5xx', clock_timestamp() - interval '40 days',
     clock_timestamp() - interval '40 days', clock_timestamp() - interval '40 days'
   );
@@ -929,7 +975,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000604',
     'edit', '{"video_id":"vid-s4-9d","comment_id":"cmt-s4-9d"}'::jsonb,
-    repeat('6', 64), '{}'::jsonb, 'write', 's9-prune');
+    repeat('6', 64), '{}'::jsonb, 'write', 's9-prune',
+    pg_temp.s4_map(repeat('6', 64)));
   ASSERT (r ->> 'ok')::boolean, 'S9 the pruning claim proceeded';
   ASSERT (SELECT count(*) FROM public.youtube_comment_operations
            WHERE owner_id = u_a AND video_id = 'vid-s4-9' AND comment_id = 'cmt-s4-prune') = 5,
@@ -950,14 +997,15 @@ DECLARE
   v_gen bigint;
   r jsonb;
   v_token uuid;
+  v_rot int := (SELECT max(version) FROM public.youtube_comment_digest_keys);
   -- A reply claim must carry a logical digest; each test uses a distinct
   -- synthetic one so these cases never collide with each other's fences.
-  -- S8 rotated the active version to 2 inside this transaction, so the
+  -- S8 rotated the active version inside this transaction (v_rot), so the
   -- digests are carried under every retained version, exactly as the
   -- handler does.
-  v_dig_a jsonb := jsonb_build_object('1', repeat('A', 64), '2', repeat('A', 64));
-  v_dig_b jsonb := jsonb_build_object('1', repeat('B', 64), '2', repeat('B', 64));
-  v_dig_c jsonb := jsonb_build_object('1', repeat('C', 64), '2', repeat('C', 64));
+  v_dig_a jsonb := jsonb_build_object('1', repeat('A', 64), v_rot::text, repeat('A', 64));
+  v_dig_b jsonb := jsonb_build_object('1', repeat('B', 64), v_rot::text, repeat('B', 64));
+  v_dig_c jsonb := jsonb_build_object('1', repeat('C', 64), v_rot::text, repeat('C', 64));
 BEGIN
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = a_a1;
 
@@ -966,7 +1014,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000801',
     'reply', '{"video_id":"vid-s4-10","parent_comment_id":"cmt-top-10"}'::jsonb,
-    repeat('1', 64), v_dig_a, 'write', 's10-1');
+    repeat('1', 64), v_dig_a, 'write', 's10-1',
+    pg_temp.s4_map(repeat('1', 64)));
   ASSERT (r ->> 'ok')::boolean, format('S10 claim: %s', r);
   v_token := (r ->> 'attempt_token')::uuid;
   PERFORM public.youtube_comment_op_mark_dispatched(
@@ -987,7 +1036,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000802',
     'reply', '{"video_id":"vid-s4-10","parent_comment_id":"cmt-top-10b"}'::jsonb,
-    repeat('2', 64), v_dig_b, 'write', 's10-2');
+    repeat('2', 64), v_dig_b, 'write', 's10-2',
+    pg_temp.s4_map(repeat('2', 64)));
   v_token := (r ->> 'attempt_token')::uuid;
   PERFORM public.youtube_comment_op_mark_dispatched(
     u_a, '00000000-0000-4000-8000-000000000802', v_token, 'UC-s4-alpha', v_gen);
@@ -1014,7 +1064,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000803',
     'reply', '{"video_id":"vid-s4-10","parent_comment_id":"cmt-top-10c"}'::jsonb,
-    repeat('3', 64), v_dig_c, 'write', 's10-3');
+    repeat('3', 64), v_dig_c, 'write', 's10-3',
+    pg_temp.s4_map(repeat('3', 64)));
   v_token := (r ->> 'attempt_token')::uuid;
   PERFORM public.youtube_comment_op_mark_dispatched(
     u_a, '00000000-0000-4000-8000-000000000803', v_token, 'UC-s4-alpha', v_gen);
@@ -1076,7 +1127,8 @@ BEGIN
     u_a, a_a1, 'UC-s4-alpha', v_gen,
     '00000000-0000-4000-8000-000000000901',
     'edit', '{"video_id":"vid-s4-11","comment_id":"cmt-s4-11"}'::jsonb,
-    repeat('4', 64), '{}'::jsonb, 'write', 's11-off');
+    repeat('4', 64), '{}'::jsonb, 'write', 's11-off',
+    pg_temp.s4_map(repeat('4', 64)));
   ASSERT r ->> 'reason' = 'capability_denied',
     format('S11 a write claim with the capability off is refused: %s', r);
   UPDATE public.app_settings
@@ -1159,7 +1211,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = a_a1),
     '00000000-0000-4000-8000-000000000a01',
     'edit', '{"video_id":"vid-s4-12","comment_id":"cmt-s4-12"}'::jsonb,
-    repeat('5', 64), '{}'::jsonb, 'write', 's12-delete');
+    repeat('5', 64), '{}'::jsonb, 'write', 's12-delete',
+    pg_temp.s4_map(repeat('5', 64)));
   ASSERT (r ->> 'ok')::boolean, 'S12 claim before the hard delete';
   DELETE FROM public.social_accounts WHERE id = a_a1;
   r := public.youtube_comment_op_status(u_a, a_a1, '00000000-0000-4000-8000-000000000a01');
@@ -1230,11 +1283,11 @@ DECLARE
   v_a text := '6e9a0001-0000-4000-8000-000000000001';
   v_acct text := '6e9b0001-0000-4000-8000-000000000001';
   v_claim text := format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)::text',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)::text',
     v_a, v_acct, 'UC-s4-race', v_acct,
     '00000000-0000-4000-8000-00000000b001',
     'edit', '{"' || 'video_id' || '":"' || 'vid-r1' || '","comment_id":"cmt-r1"}',
-    repeat('r', 64), '{}', 'write', 'r1');
+    repeat('r', 64), '{}', 'write', 'r1', pg_temp.s4_map(repeat('r', 64))::text);
   r_a text;
   r_b text;
   v_pid_b int;
@@ -1293,17 +1346,17 @@ BEGIN
     INTO v_dig;
 
   v_claim_a := format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)::text',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)::text',
     v_a, v_acct, 'UC-s4-race', v_acct,
     '00000000-0000-4000-8000-00000000b101',
     'create_thread', '{"video_id":"vid-r2"}',
-    repeat('x', 64), jsonb_build_object('1', v_dig)::text, 'write', 'r2a');
+    repeat('x', 64), jsonb_build_object('1', v_dig)::text, 'write', 'r2a', pg_temp.s4_map(repeat('x', 64))::text);
   v_claim_b := format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)::text',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)::text',
     v_a, v_acct, 'UC-s4-race', v_acct,
     '00000000-0000-4000-8000-00000000b102',
     'create_thread', '{"video_id":"vid-r2"}',
-    repeat('y', 64), jsonb_build_object('1', v_dig)::text, 'write', 'r2b');
+    repeat('y', 64), jsonb_build_object('1', v_dig)::text, 'write', 'r2b', pg_temp.s4_map(repeat('y', 64))::text);
 
   PERFORM extensions.dblink_exec('s4_a', 'BEGIN');
   SELECT res INTO r_a FROM extensions.dblink('s4_a', v_claim_a) AS t(res text);
@@ -1358,11 +1411,11 @@ BEGIN
   -- A claims with the values it verified: the row lock serialises against
   -- B's committed rebind, and the expected generation no longer matches.
   SELECT res INTO r FROM extensions.dblink('s4_a', format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)::text',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)::text',
     v_a, v_acct, v_verified ->> 'channel', v_verified ->> 'generation',
     '00000000-0000-4000-8000-00000000b201',
     'edit', '{"video_id":"vid-r3","comment_id":"cmt-r3"}',
-    repeat('z', 64), '{}', 'write', 'r3')) AS t(res text);
+    repeat('z', 64), '{}', 'write', 'r3', pg_temp.s4_map(repeat('z', 64))::text)) AS t(res text);
   PERFORM extensions.dblink_exec('s4_a', 'COMMIT');
 
   ASSERT r::jsonb ->> 'reason' = 'not_found',
@@ -1384,7 +1437,8 @@ BEGIN
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen::bigint,
     '00000000-0000-4000-8000-00000000b301',
     'edit', '{"video_id":"vid-r4","comment_id":"cmt-r4"}'::jsonb,
-    repeat('w', 64), '{}'::jsonb, 'write', 'r4');
+    repeat('w', 64), '{}'::jsonb, 'write', 'r4',
+    pg_temp.s4_map(repeat('w', 64)));
   v_token := r ->> 'attempt_token';
 
   -- the rebind lands between the claim and the mark
@@ -1420,7 +1474,8 @@ BEGIN
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen::bigint,
     '00000000-0000-4000-8000-00000000b401',
     'edit', '{"video_id":"vid-r5","comment_id":"cmt-r5"}'::jsonb,
-    repeat('v', 64), '{}'::jsonb, 'write', 'r5');
+    repeat('v', 64), '{}'::jsonb, 'write', 'r5',
+    pg_temp.s4_map(repeat('v', 64)));
   v_token := r ->> 'attempt_token';
   r := public.youtube_comment_op_mark_dispatched(
     v_a::uuid, '00000000-0000-4000-8000-00000000b401', v_token::uuid,
@@ -1460,7 +1515,8 @@ BEGIN
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen::bigint,
     '00000000-0000-4000-8000-00000000b501',
     'edit', '{"video_id":"vid-r6","comment_id":"cmt-r6a"}'::jsonb,
-    repeat('u', 64), '{}'::jsonb, 'write', 'r6a');
+    repeat('u', 64), '{}'::jsonb, 'write', 'r6a',
+    pg_temp.s4_map(repeat('u', 64)));
   ASSERT r ->> 'reason' = 'capability_denied', format('R6 off before the claim refused it: %s', r);
 
   -- off BETWEEN the claim and the mark
@@ -1470,7 +1526,8 @@ BEGIN
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen::bigint,
     '00000000-0000-4000-8000-00000000b502',
     'edit', '{"video_id":"vid-r6","comment_id":"cmt-r6b"}'::jsonb,
-    repeat('t', 64), '{}'::jsonb, 'write', 'r6b');
+    repeat('t', 64), '{}'::jsonb, 'write', 'r6b',
+    pg_temp.s4_map(repeat('t', 64)));
   v_token := r ->> 'attempt_token';
   UPDATE public.app_settings
      SET value = jsonb_set(value, ARRAY['accounts', v_acct, 'write'], 'false'::jsonb)
@@ -1491,7 +1548,8 @@ BEGIN
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen::bigint,
     '00000000-0000-4000-8000-00000000b503',
     'edit', '{"video_id":"vid-r6","comment_id":"cmt-r6c"}'::jsonb,
-    repeat('s', 64), '{}'::jsonb, 'write', 'r6c');
+    repeat('s', 64), '{}'::jsonb, 'write', 'r6c',
+    pg_temp.s4_map(repeat('s', 64)));
   v_token := r ->> 'attempt_token';
   r := public.youtube_comment_op_mark_dispatched(
     v_a::uuid, '00000000-0000-4000-8000-00000000b503', v_token::uuid,
@@ -1533,11 +1591,11 @@ BEGIN
   -- Session B settles and the reply is discarded before the caller sees it.
   PERFORM extensions.dblink_exec('s4_b', 'BEGIN');
   SELECT res INTO r FROM extensions.dblink('s4_b', format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)::text',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid), %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)::text',
     v_a, v_acct, 'UC-s4-race', v_acct,
     '00000000-0000-4000-8000-00000000b601',
     'create_thread', '{"video_id":"vid-r7"}',
-    repeat('l', 64), jsonb_build_object('1', v_dig)::text, 'write', 'r7')) AS t(res text);
+    repeat('l', 64), jsonb_build_object('1', v_dig)::text, 'write', 'r7', pg_temp.s4_map(repeat('l', 64))::text)) AS t(res text);
   v_token := (r::jsonb ->> 'attempt_token');
   PERFORM res2 FROM extensions.dblink('s4_b', format(
     'SELECT public.youtube_comment_op_mark_dispatched(%L::uuid, %L::uuid, %L::uuid, %L, (SELECT binding_generation FROM public.social_accounts WHERE id = %L::uuid))::text',
@@ -1559,7 +1617,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = v_acct::uuid),
     '00000000-0000-4000-8000-00000000b601',
     'create_thread', '{"video_id":"vid-r7"}'::jsonb,
-    repeat('l', 64), jsonb_build_object('1', v_dig), 'write', 'r7-replay');
+    repeat('l', 64), jsonb_build_object('1', v_dig), 'write', 'r7-replay',
+    pg_temp.s4_map(repeat('l', 64)));
   ASSERT r ->> 'reason' = 'already_recorded' AND r ->> 'state' = 'confirmed',
     format('R7 the same key replays the confirmed state, it never re-sends: %s', r);
 
@@ -1569,7 +1628,8 @@ BEGIN
     (SELECT binding_generation FROM public.social_accounts WHERE id = v_acct::uuid),
     '00000000-0000-4000-8000-00000000b602',
     'create_thread', '{"video_id":"vid-r7"}'::jsonb,
-    repeat('m', 64), jsonb_build_object('1', v_dig), 'write', 'r7-newkey');
+    repeat('m', 64), jsonb_build_object('1', v_dig), 'write', 'r7-newkey',
+    pg_temp.s4_map(repeat('m', 64)));
   ASSERT r ->> 'reason' = 'recently_posted' AND r ->> 'result_comment_id' = 'cmt-r7',
     format('R7 a new key within the window is recently_posted with the comment id: %s', r);
 END
@@ -1599,7 +1659,8 @@ BEGIN
   r := public.youtube_comment_op_claim(
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen::bigint,
     '00000000-0000-4000-8000-00000000b701',
-    'moderate', v_targets, repeat('b', 64), '{}'::jsonb, 'write', 'r8a');
+    'moderate', v_targets, repeat('b', 64), '{}'::jsonb, 'write', 'r8a',
+    pg_temp.s4_map(repeat('b', 64)));
   ASSERT r ->> 'reason' = 'capability_denied',
     format('R8 a ban claim is refused when only write is on, whatever p_capability says: %s', r);
 
@@ -1610,7 +1671,8 @@ BEGIN
   r := public.youtube_comment_op_claim(
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen::bigint,
     '00000000-0000-4000-8000-00000000b702',
-    'moderate', v_targets, repeat('c', 64), '{}'::jsonb, 'ban', 'r8b');
+    'moderate', v_targets, repeat('c', 64), '{}'::jsonb, 'ban', 'r8b',
+    pg_temp.s4_map(repeat('c', 64)));
   ASSERT (r ->> 'ok')::boolean, format('R8 a ban claim lands when ban is on: %s', r);
   v_token := r ->> 'attempt_token';
 
@@ -1671,7 +1733,8 @@ BEGIN
     v_a::uuid, x1::uuid, 'UC-s4-x1', v_g1,
     '00000000-0000-4000-8000-00000000b801',
     'edit', '{"video_id":"vid-r9","comment_id":"cmt-r9"}'::jsonb,
-    repeat('d', 64), '{}'::jsonb, 'write', 'r9');
+    repeat('d', 64), '{}'::jsonb, 'write', 'r9',
+    pg_temp.s4_map(repeat('d', 64)));
   v_token := r ->> 'attempt_token';
   r := public.youtube_comment_op_mark_dispatched(
     v_a::uuid, '00000000-0000-4000-8000-00000000b801', v_token::uuid, 'UC-s4-x1', v_g1);
@@ -1829,11 +1892,13 @@ $r12$;
 -- pick of it and the insert of its receipt. Two real sessions: A claims under
 -- version 2 and holds the transaction open; B tries to delete version 2 and
 -- must wait, then be refused because the receipt now references it.
+SELECT set_config('s4.r13', pg_temp.s4_next_version()::text, false);
 INSERT INTO public.youtube_comment_digest_keys (version, key)
-VALUES (2, sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'utf8')));
+VALUES (current_setting('s4.r13')::int, sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'utf8')));
 
 DO $r13$
 DECLARE
+  v_ver int := current_setting('s4.r13')::int;
   v_a text := '6e9a0001-0000-4000-8000-000000000001';
   v_acct text := '6e9b0001-0000-4000-8000-000000000001';
   v_claim text := format(
@@ -1841,7 +1906,8 @@ DECLARE
     v_a, v_acct, 'UC-s4-race', v_acct,
     '00000000-0000-4000-8000-00000000c101',
     'create_thread', '{"video_id":"vid-r13"}', repeat('q', 64),
-    '{"1":"r13-logical-v1","2":"r13-logical-v2"}', 'write', 'r13', ('{"1":"' || repeat('a', 64) || '","2":"' || repeat('b', 64) || '"}'));
+    jsonb_build_object('1', 'r13-logical-v1', v_ver::text, 'r13-logical-v2')::text, 'write', 'r13',
+    jsonb_build_object('1', repeat('a', 64), v_ver::text, repeat('b', 64))::text);
   r_a text;
   v_pid_b int;
   v_blocked boolean;
@@ -1849,11 +1915,11 @@ DECLARE
 BEGIN
   PERFORM extensions.dblink_exec('s4_a', 'BEGIN');
   SELECT res INTO r_a FROM extensions.dblink('s4_a', v_claim) AS t(res text);
-  ASSERT (r_a::jsonb ->> 'ok')::boolean AND (r_a::jsonb ->> 'digest_key_version')::int = 2,
-    format('R13 session A claimed under key version 2: %s', r_a);
+  ASSERT (r_a::jsonb ->> 'ok')::boolean AND (r_a::jsonb ->> 'digest_key_version')::int = v_ver,
+    format('R13 session A claimed under key version %s: %s', v_ver, r_a);
 
   SELECT pid INTO v_pid_b FROM extensions.dblink('s4_b', 'SELECT pg_backend_pid()') AS t(pid int);
-  PERFORM extensions.dblink_send_query('s4_b', 'DELETE FROM public.youtube_comment_digest_keys WHERE version = 2');
+  PERFORM extensions.dblink_send_query('s4_b', format('DELETE FROM public.youtube_comment_digest_keys WHERE version = %s', v_ver));
   -- B must PARK on A's lock on the key row (bounded wait; fails loudly).
   PERFORM extensions.dblink_exec('s4_a', format(
     'DO $$ BEGIN
@@ -1874,9 +1940,9 @@ BEGIN
     v_refused := SQLERRM LIKE '%still referenced by a receipt%';
   END;
   ASSERT v_refused, 'R13 the delete was refused once the claim committed (the receipt references the version)';
-  ASSERT EXISTS (SELECT 1 FROM public.youtube_comment_digest_keys WHERE version = 2), 'R13 version 2 still exists';
+  ASSERT EXISTS (SELECT 1 FROM public.youtube_comment_digest_keys WHERE version = v_ver), 'R13 the claimed version still exists';
   ASSERT (SELECT digest_key_version FROM public.youtube_comment_operations
-           WHERE owner_id = v_a::uuid AND operation_id = '00000000-0000-4000-8000-00000000c101') = 2,
+           WHERE owner_id = v_a::uuid AND operation_id = '00000000-0000-4000-8000-00000000c101') = v_ver,
     'R13 the receipt references the surviving version';
 END
 $r13$;
@@ -1892,27 +1958,29 @@ DECLARE
   v_op uuid := '00000000-0000-4000-8000-00000000c201';
   v_v1 text := repeat('1', 64);
   v_v2 text := repeat('2', 64);
+  v_ver int := current_setting('s4.r13')::int;
+  v_ver3 int := pg_temp.s4_next_version();
   r jsonb;
 BEGIN
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct;
-  -- version 2 is already active (R13). The receipt is written under it.
+  -- The R13 version is already active. The receipt is written under it.
   r := public.youtube_comment_op_claim(
     v_a, v_acct, 'UC-s4-race', v_gen, v_op,
     'edit', '{"video_id":"vid-r14","comment_id":"cmt-r14"}'::jsonb,
     v_v2, '{}'::jsonb, 'write', 'r14a',
-    jsonb_build_object('1', v_v1, '2', v_v2));
+    jsonb_build_object('1', v_v1, v_ver::text, v_v2));
   ASSERT (r ->> 'ok')::boolean, format('R14 first claim: %s', r);
-  ASSERT (SELECT intent_key_version FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_op) = 2,
+  ASSERT (SELECT intent_key_version FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_op) = v_ver,
     'R14 the receipt records the key version its intent digest was signed with';
 
-  -- Rotation: version 3 becomes active; the SAME key and intent are retried.
+  -- Rotation: a newer version becomes active; the SAME key and intent are retried.
   INSERT INTO public.youtube_comment_digest_keys (version, key)
-  VALUES (3, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+  VALUES (v_ver3, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
   r := public.youtube_comment_op_claim(
     v_a, v_acct, 'UC-s4-race', v_gen, v_op,
     'edit', '{"video_id":"vid-r14","comment_id":"cmt-r14"}'::jsonb,
     repeat('3', 64), '{}'::jsonb, 'write', 'r14b',
-    jsonb_build_object('1', v_v1, '2', v_v2, '3', repeat('3', 64)));
+    jsonb_build_object('1', v_v1, v_ver::text, v_v2, v_ver3::text, repeat('3', 64)));
   ASSERT r ->> 'reason' = 'already_recorded' AND (r ->> 'attempt_token') IS NULL,
     format('R14 the same key and intent after a rotation is answered from the receipt, with no token: %s', r);
 
@@ -1921,20 +1989,23 @@ BEGIN
     v_a, v_acct, 'UC-s4-race', v_gen, v_op,
     'edit', '{"video_id":"vid-r14","comment_id":"cmt-r14"}'::jsonb,
     repeat('9', 64), '{}'::jsonb, 'write', 'r14c',
-    jsonb_build_object('1', repeat('7', 64), '2', repeat('8', 64), '3', repeat('9', 64)));
+    jsonb_build_object('1', repeat('7', 64), v_ver::text, repeat('8', 64), v_ver3::text, repeat('9', 64)));
   ASSERT r ->> 'reason' = 'conflict', format('R14 a different intent is a conflict: %s', r);
 
-  -- A caller that sends no digest for the receipt's version cannot verify it: conflict, never a pass.
+  -- A caller that sends no digest for the receipt's version cannot verify it. That is the
+  -- temporary refusal (the caller recomputes), never a pass and, since PR 2, never a conflict:
+  -- a browser shows a conflict as a refusal and uses it to forget a live operation.
   r := public.youtube_comment_op_claim(
     v_a, v_acct, 'UC-s4-race', v_gen, v_op,
     'edit', '{"video_id":"vid-r14","comment_id":"cmt-r14"}'::jsonb,
     repeat('3', 64), '{}'::jsonb, 'write', 'r14d',
-    jsonb_build_object('3', repeat('3', 64)));
-  ASSERT r ->> 'reason' = 'conflict', format('R14 an unverifiable version is a conflict: %s', r);
+    jsonb_build_object(v_ver3::text, repeat('3', 64)));
+  ASSERT r ->> 'reason' = 'upstream' AND (r ->> 'attempt_token') IS NULL,
+    format('R14 an unverifiable version is the temporary refusal, with no token: %s', r);
 
-  -- Version 2 is referenced by a receipt (its intent, and R13's logical digest) and cannot be removed.
+  -- The R13 version is referenced by a receipt (its intent, and R13's logical digest) and cannot be removed.
   BEGIN
-    DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
+    DELETE FROM public.youtube_comment_digest_keys WHERE version = v_ver;
     RAISE EXCEPTION 'R14 a key version used by a receipt was deleted';
   EXCEPTION WHEN raise_exception THEN
     IF SQLERRM NOT LIKE '%still referenced by a receipt%' THEN RAISE; END IF;
@@ -1943,7 +2014,7 @@ BEGIN
   -- clean up: receipts first, then the extra versions.
   DELETE FROM public.youtube_comment_operations
    WHERE owner_id = v_a AND operation_id IN ('00000000-0000-4000-8000-00000000c101', v_op);
-  DELETE FROM public.youtube_comment_digest_keys WHERE version IN (3, 2);
+  DELETE FROM public.youtube_comment_digest_keys WHERE version IN (v_ver3, v_ver);
   ASSERT (SELECT count(*) FROM public.youtube_comment_digest_keys) >= 1, 'R14 version 1 remains';
 END
 $r14$;
@@ -1957,15 +2028,16 @@ DECLARE
   v_a uuid := '6e9a0001-0000-4000-8000-000000000001';
   v_acct uuid := '6e9b0001-0000-4000-8000-000000000001';
   v_gen bigint;
+  v_ver int := pg_temp.s4_next_version();
   v_old jsonb := jsonb_build_object('1', repeat('1', 64));
-  v_both jsonb := jsonb_build_object('1', repeat('1', 64), '2', repeat('2', 64));
+  v_both jsonb := jsonb_build_object('1', repeat('1', 64), v_ver::text, repeat('2', 64));
   v_op uuid;
   r jsonb;
   v_case record;
 BEGIN
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct;
   INSERT INTO public.youtube_comment_digest_keys (version, key)
-  VALUES (2, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+  VALUES (v_ver, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
 
   FOR v_case IN SELECT * FROM (VALUES
     ('edit', '{"video_id":"vid-r15","comment_id":"cmt-r15"}', '00000000-0000-4000-8000-00000000c301'),
@@ -1990,7 +2062,7 @@ BEGIN
       repeat('1', 64), '{}'::jsonb, 'write', 'r15b', v_both);
     ASSERT (r ->> 'ok')::boolean, format('R15 %s: the claim with both versions lands: %s', v_case.action, r);
     ASSERT (SELECT intent_digest || ':' || intent_key_version FROM public.youtube_comment_operations
-             WHERE owner_id = v_a AND operation_id = v_op) = repeat('2', 64) || ':2',
+             WHERE owner_id = v_a AND operation_id = v_op) = repeat('2', 64) || ':' || v_ver,
       format('R15 %s: the stored digest is the one for the key version it is labelled with', v_case.action);
 
     -- a retry of the same key and intent is answered from the receipt.
@@ -2002,18 +2074,22 @@ BEGIN
 
   DELETE FROM public.youtube_comment_operations
    WHERE owner_id = v_a AND operation_id IN ('00000000-0000-4000-8000-00000000c301', '00000000-0000-4000-8000-00000000c302');
-  DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = v_ver;
 END
 $r15$;
 
 -- R15b. The same rotation for create_thread and reply: digests computed under
 -- version 1 only while version 2 is active are a TEMPORARY refusal, nothing is
--- stored, and a caller that sends no intent map keeps the permanent one.
+-- stored, and a caller with a VALID intent map whose logical digests omit the
+-- active version is refused (invalid_request) by the logical-digest check, not
+-- by the required-map check.
+SELECT set_config('s4.r15b', pg_temp.s4_next_version()::text, false);
 INSERT INTO public.youtube_comment_digest_keys (version, key)
-VALUES (2, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+VALUES (current_setting('s4.r15b')::int, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
 
 DO $r15b$
 DECLARE
+  v_ver int := current_setting('s4.r15b')::int;
   v_a uuid := '6e9a0001-0000-4000-8000-000000000001';
   v_acct uuid := '6e9b0001-0000-4000-8000-000000000001';
   v_gen bigint;
@@ -2036,29 +2112,31 @@ BEGIN
 
     r := public.youtube_comment_op_claim(
       v_a, v_acct, 'UC-s4-race', v_gen, v_case.op::uuid, v_case.action, v_case.targets::jsonb,
-      repeat('1', 64), jsonb_build_object('1', 'r15b-logical-v1'), 'write', 'r15b', NULL);
+      repeat('1', 64), jsonb_build_object('1', 'r15b-logical-v1'), 'write', 'r15b',
+      jsonb_build_object(v_ver::text, repeat('1', 64)));
     ASSERT NOT (r ->> 'ok')::boolean AND r ->> 'reason' = 'invalid_request',
-      format('R15b %s: with no intent map a missing logical digest stays a permanent refusal: %s', v_case.action, r);
+      format('R15b %s: a valid intent map without the active logical digest is invalid_request: %s', v_case.action, r);
   END LOOP;
-  DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = v_ver;
 END
 $r15b$;
 
 -- R16. The digest key guard: the only active key can be neither deleted nor
 -- retired, key bytes never change under a version, and a rotation (insert a new
--- version, then retire the old one) still works. Version 7 carries no receipt,
+-- version, then retire the old one) still works. The new version carries no receipt,
 -- so only the last-active rule can stop its removal.
 DO $r16$
 DECLARE
   v_refused text;
+  v_ver int := pg_temp.s4_next_version();
 BEGIN
   INSERT INTO public.youtube_comment_digest_keys (version, key)
-  VALUES (7, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
-  -- the rotation itself: version 1 retires while version 7 is active.
+  VALUES (v_ver, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+  -- the rotation itself: version 1 retires while the new version is active.
   UPDATE public.youtube_comment_digest_keys SET retired_at = now() WHERE version = 1;
 
   BEGIN
-    DELETE FROM public.youtube_comment_digest_keys WHERE version = 7;
+    DELETE FROM public.youtube_comment_digest_keys WHERE version = v_ver;
     v_refused := NULL;
   EXCEPTION WHEN OTHERS THEN
     v_refused := SQLERRM;
@@ -2067,7 +2145,7 @@ BEGIN
     format('R16 the only active key cannot be deleted: %s', v_refused);
 
   BEGIN
-    UPDATE public.youtube_comment_digest_keys SET retired_at = now() WHERE version = 7;
+    UPDATE public.youtube_comment_digest_keys SET retired_at = now() WHERE version = v_ver;
     v_refused := NULL;
   EXCEPTION WHEN OTHERS THEN
     v_refused := SQLERRM;
@@ -2076,7 +2154,7 @@ BEGIN
     format('R16 the only active key cannot be retired: %s', v_refused);
 
   BEGIN
-    UPDATE public.youtube_comment_digest_keys SET key = sha256(convert_to('other', 'utf8')) WHERE version = 7;
+    UPDATE public.youtube_comment_digest_keys SET key = sha256(convert_to('other', 'utf8')) WHERE version = v_ver;
     v_refused := NULL;
   EXCEPTION WHEN OTHERS THEN
     v_refused := SQLERRM;
@@ -2084,10 +2162,10 @@ BEGIN
   ASSERT v_refused LIKE '%key material of a version cannot be changed%',
     format('R16 the bytes of a version cannot be replaced: %s', v_refused);
 
-  -- with another active key standing, version 7 can go.
+  -- with another active key standing, the new version can go.
   UPDATE public.youtube_comment_digest_keys SET retired_at = NULL WHERE version = 1;
-  DELETE FROM public.youtube_comment_digest_keys WHERE version = 7;
-  ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_digest_keys WHERE version = 7),
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = v_ver;
+  ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_digest_keys WHERE version = v_ver),
     'R16 a key can be deleted while another active key remains';
   ASSERT (SELECT retired_at IS NULL FROM public.youtube_comment_digest_keys WHERE version = 1),
     'R16 version 1 is active again for the blocks that follow';
@@ -2121,9 +2199,9 @@ BEGIN
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
   -- Committed (session B autocommits) so that session A can see the receipt.
   SELECT res::jsonb INTO r FROM extensions.dblink('s4_b', format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)',
     v_a, v_acct, 'UC-s4-race', v_gen, v_op, 'edit', '{"video_id":"vid-r17","comment_id":"cmt-r17"}',
-    repeat('v', 64), '{}', 'write', 'r17')) AS t(res text);
+    repeat('v', 64), '{}', 'write', 'r17', pg_temp.s4_map(repeat('v', 64))::text)) AS t(res text);
   ASSERT (r ->> 'ok')::boolean, format('R17 claimed: %s', r);
   v_token := r ->> 'attempt_token';
 
@@ -2169,7 +2247,8 @@ BEGIN
   r := public.youtube_comment_op_claim(
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen, '00000000-0000-4000-8000-00000000c502'::uuid,
     'edit', '{"video_id":"vid-r17","comment_id":"cmt-r17b"}'::jsonb,
-    repeat('w', 64), '{}'::jsonb, 'write', 'r17b');
+    repeat('w', 64), '{}'::jsonb, 'write', 'r17b',
+    pg_temp.s4_map(repeat('w', 64)));
   ASSERT (r ->> 'ok')::boolean, format('R17 claimed while writes were allowed: %s', r);
   v_token := r ->> 'attempt_token';
   UPDATE public.app_settings
@@ -2204,9 +2283,9 @@ DECLARE
 BEGIN
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
   SELECT res::jsonb INTO r FROM extensions.dblink('s4_b', format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)',
     v_a, v_acct, 'UC-s4-race', v_gen, v_op, 'edit', '{"video_id":"vid-r18","comment_id":"cmt-r18"}',
-    repeat('x', 64), '{}', 'write', 'r18')) AS t(res text);
+    repeat('x', 64), '{}', 'write', 'r18', pg_temp.s4_map(repeat('x', 64))::text)) AS t(res text);
   ASSERT (r ->> 'ok')::boolean, format('R18 claimed: %s', r);
   v_token := r ->> 'attempt_token';
   SELECT res::jsonb INTO r FROM extensions.dblink('s4_b', format(
@@ -2291,7 +2370,8 @@ BEGIN
   r := public.youtube_comment_op_claim(
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen, '00000000-0000-4000-8000-00000000c701'::uuid,
     'edit', '{"video_id":"vid-r20","comment_id":"cmt-r20a"}'::jsonb,
-    repeat('y', 64), '{}'::jsonb, 'write', 'r20a');
+    repeat('y', 64), '{}'::jsonb, 'write', 'r20a',
+    pg_temp.s4_map(repeat('y', 64)));
   ASSERT (r ->> 'ok')::boolean, format('R20 claimed a: %s', r);
   v_token := r ->> 'attempt_token';
   st := public.youtube_comment_op_status(v_a::uuid, v_acct::uuid, '00000000-0000-4000-8000-00000000c701'::uuid);
@@ -2315,7 +2395,8 @@ BEGIN
   r := public.youtube_comment_op_claim(
     v_a::uuid, v_acct::uuid, 'UC-s4-race', v_gen, '00000000-0000-4000-8000-00000000c702'::uuid,
     'edit', '{"video_id":"vid-r20","comment_id":"cmt-r20b"}'::jsonb,
-    repeat('z', 64), '{}'::jsonb, 'write', 'r20b');
+    repeat('z', 64), '{}'::jsonb, 'write', 'r20b',
+    pg_temp.s4_map(repeat('z', 64)));
   v_token := r ->> 'attempt_token';
   r := public.youtube_comment_op_mark_dispatched(
     v_a::uuid, '00000000-0000-4000-8000-00000000c702'::uuid, v_token::uuid, 'UC-s4-race', v_gen);
@@ -2344,24 +2425,25 @@ DECLARE
   v_acct uuid := '6e9b0001-0000-4000-8000-000000000001';
   v_gen bigint;
   v_case record;
+  v_ver int := pg_temp.s4_next_version();
   r jsonb;
 BEGIN
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct;
   INSERT INTO public.youtube_comment_digest_keys (version, key)
-  VALUES (2, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
+  VALUES (v_ver, sha256(convert_to(gen_random_uuid()::text, 'utf8')));
 
   FOR v_case IN SELECT * FROM (VALUES
     ('unresolved', 'r21-u', '00000000-0000-4000-8000-00000000c801', '00000000-0000-4000-8000-00000000c802'),
     ('confirmed',  'r21-c', '00000000-0000-4000-8000-00000000c811', '00000000-0000-4000-8000-00000000c812')
   ) AS c(kind, tag, op_b, op_a) LOOP
-    -- B, with both versions' digests, claims under the active version 2.
+    -- B, with both versions' digests, claims under the newest active version.
     r := public.youtube_comment_op_claim(
       v_a, v_acct, 'UC-s4-race', v_gen, v_case.op_b::uuid, 'create_thread', '{"video_id":"vid-r21"}'::jsonb,
-      repeat('b', 64), jsonb_build_object('1', v_case.tag || '-v1', '2', v_case.tag || '-v2'), 'write', 'r21b', NULL);
+      repeat('b', 64), jsonb_build_object('1', v_case.tag || '-v1', v_ver::text, v_case.tag || '-v2'), 'write', 'r21b', pg_temp.s4_map(repeat('b', 64)));
     ASSERT (r ->> 'ok')::boolean, format('R21 %s: B claimed: %s', v_case.kind, r);
     ASSERT (SELECT digest_key_version FROM public.youtube_comment_operations
-             WHERE owner_id = v_a AND operation_id = v_case.op_b::uuid) = 2,
-      format('R21 %s: B is recorded under version 2', v_case.kind);
+             WHERE owner_id = v_a AND operation_id = v_case.op_b::uuid) = v_ver,
+      format('R21 %s: B is recorded under the newest version', v_case.kind);
     IF v_case.kind = 'confirmed' THEN
       r := public.youtube_comment_op_mark_dispatched(v_a, v_case.op_b::uuid, (r ->> 'attempt_token')::uuid, 'UC-s4-race', v_gen);
       ASSERT (r ->> 'ok')::boolean, format('R21 confirmed: B marked: %s', r);
@@ -2372,12 +2454,12 @@ BEGIN
       ASSERT (r ->> 'ok')::boolean, format('R21 confirmed: B settled: %s', r);
     END IF;
 
-    -- The rotation is rolled back: version 2 retires, version 1 is active again.
-    UPDATE public.youtube_comment_digest_keys SET retired_at = now() WHERE version = 2;
+    -- The rotation is rolled back: the newest version retires, version 1 is active again.
+    UPDATE public.youtube_comment_digest_keys SET retired_at = now() WHERE version = v_ver;
 
     r := public.youtube_comment_op_claim(
       v_a, v_acct, 'UC-s4-race', v_gen, v_case.op_a::uuid, 'create_thread', '{"video_id":"vid-r21"}'::jsonb,
-      repeat('a', 64), jsonb_build_object('1', v_case.tag || '-v1'), 'write', 'r21a', NULL);
+      repeat('a', 64), jsonb_build_object('1', v_case.tag || '-v1'), 'write', 'r21a', pg_temp.s4_map(repeat('a', 64)));
     ASSERT NOT (r ->> 'ok')::boolean AND r ->> 'reason' = 'upstream' AND (r ->> 'attempt_token') IS NULL,
       format('R21 %s: digests that miss a retained version are a temporary refusal: %s', v_case.kind, r);
     ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_case.op_a::uuid),
@@ -2386,20 +2468,20 @@ BEGIN
     -- Recomputed over every retained version, A meets B's receipt.
     r := public.youtube_comment_op_claim(
       v_a, v_acct, 'UC-s4-race', v_gen, v_case.op_a::uuid, 'create_thread', '{"video_id":"vid-r21"}'::jsonb,
-      repeat('a', 64), jsonb_build_object('1', v_case.tag || '-v1', '2', v_case.tag || '-v2'), 'write', 'r21a', NULL);
+      repeat('a', 64), jsonb_build_object('1', v_case.tag || '-v1', v_ver::text, v_case.tag || '-v2'), 'write', 'r21a', pg_temp.s4_map(repeat('a', 64)));
     ASSERT NOT (r ->> 'ok')::boolean
        AND r ->> 'reason' = CASE v_case.kind WHEN 'unresolved' THEN 'possible_duplicate' ELSE 'recently_posted' END,
       format('R21 %s: the fence holds across the rolled-back rotation: %s', v_case.kind, r);
     ASSERT NOT EXISTS (SELECT 1 FROM public.youtube_comment_operations WHERE owner_id = v_a AND operation_id = v_case.op_a::uuid),
       format('R21 %s: still nothing stored or dispatched for A', v_case.kind);
 
-    UPDATE public.youtube_comment_digest_keys SET retired_at = NULL WHERE version = 2;
+    UPDATE public.youtube_comment_digest_keys SET retired_at = NULL WHERE version = v_ver;
   END LOOP;
 
   DELETE FROM public.youtube_comment_operations
    WHERE owner_id = v_a
      AND operation_id IN ('00000000-0000-4000-8000-00000000c801', '00000000-0000-4000-8000-00000000c811');
-  DELETE FROM public.youtube_comment_digest_keys WHERE version = 2;
+  DELETE FROM public.youtube_comment_digest_keys WHERE version = v_ver;
 END
 $r21$;
 
@@ -2437,9 +2519,9 @@ BEGIN
     FROM public.app_settings WHERE key = 'youtube_comments_stage4_rollout';
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
   SELECT res::jsonb INTO r FROM extensions.dblink('s4_b', format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)',
     v_a, v_acct, 'UC-s4-race', v_gen, v_op, 'edit', '{"video_id":"vid-r17b","comment_id":"cmt-r17b"}',
-    repeat('p', 64), '{}', 'write', 'r17b')) AS t(res text);
+    repeat('p', 64), '{}', 'write', 'r17b', pg_temp.s4_map(repeat('p', 64))::text)) AS t(res text);
   ASSERT (r ->> 'ok')::boolean, format('R17b claimed: %s', r);
   v_token := r ->> 'attempt_token';
 
@@ -2502,9 +2584,9 @@ DECLARE
 BEGIN
   SELECT binding_generation INTO v_gen FROM public.social_accounts WHERE id = v_acct::uuid;
   SELECT res::jsonb INTO r FROM extensions.dblink('s4_c', format(
-    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L)',
+    'SELECT public.youtube_comment_op_claim(%L::uuid, %L::uuid, %L, %s, %L::uuid, %L, %L::jsonb, %L, %L::jsonb, %L, %L, %L::jsonb)',
     v_a, v_acct, 'UC-s4-race', v_gen, v_op, 'edit', '{"video_id":"vid-r17c","comment_id":"cmt-r17c"}',
-    repeat('q', 64), '{}', 'write', 'r17c')) AS t(res text);
+    repeat('q', 64), '{}', 'write', 'r17c', pg_temp.s4_map(repeat('q', 64))::text)) AS t(res text);
   ASSERT (r ->> 'ok')::boolean, format('R17c claimed: %s', r);
   v_token := r ->> 'attempt_token';
 

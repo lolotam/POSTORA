@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import "@/i18n";
@@ -15,6 +15,8 @@ import { STAGE4_HOLD_FROM_PUBLISHED, type Stage4CommentRow, type Stage4Reason } 
 import type { SubmissionOutcome } from "../application/useYouTubeStage4";
 import { useStage4Replies, useYouTubeStage4 } from "../application/useYouTubeStage4";
 import { useStage4Recovery } from "../application/useStage4Recovery";
+import { mergeReplyRows } from "../application/mergeReplyRows";
+import { draftKey, type DraftKind } from "../application/stage4Drafts";
 import { defaultYouTubeCommentsGateway } from "../infrastructure/supabaseYouTubeCommentsGateway";
 import { YouTubeCommentsGateway } from "../application/ports";
 import { isRebindReason, isStaleContextReason } from "../domain/errors";
@@ -398,8 +400,9 @@ function ThreadList({ stage4, onNotice }: { stage4: ReturnType<typeof useYouTube
         {stage4.threads.items
           .filter((item) => item.row.kind === "thread")
           .map((item) => (
+            // The generation is part of the key so a rebind remounts the card and its editors (no draft or outcome crosses a binding).
             <CommentCard
-              key={item.row.comment_id}
+              key={`${stage4.threads.bindingGeneration ?? 0}:${item.row.comment_id}`}
               stage4={stage4}
               row={item.row}
               videoId={videoId}
@@ -433,7 +436,25 @@ function CommentCard(params: {
 }): JSX.Element {
   const { stage4, row, videoId, onNotice, reply = false, inlineReplies = [] } = params;
   const { t } = useTranslation("automation");
-  const [composer, setComposer] = useState<"none" | "reply" | "edit">("none");
+  // The editors read what they hold from the draft store: this card can leave the
+  // screen (a Refresh returns the reply chain to page one) and come back.
+  const generation = stage4.threads.bindingGeneration ?? 0;
+  const draftKeyOf = (kind: DraftKind) => draftKey(stage4.accountId, generation, row.comment_id, kind);
+  // The thread this comment belongs to: a reply names its canonical parent, a top-level comment is its own.
+  const threadId = row.canonical_parent_id || row.comment_id;
+  const [composer, setComposerState] = useState<"none" | "reply" | "edit">(() =>
+    stage4.drafts.get(draftKeyOf("edit"))?.open ? "edit" : stage4.drafts.get(draftKeyOf("reply"))?.open ? "reply" : "none");
+  const openComposer = (kind: DraftKind) => {
+    const key = draftKeyOf(kind);
+    if (!stage4.drafts.get(key)) {
+      stage4.drafts.set(key, { text: kind === "edit" ? row.text : "", open: true, parentCommentId: threadId });
+    }
+    setComposerState(kind);
+  };
+  const closeComposer = (kind: DraftKind) => {
+    stage4.drafts.remove(draftKeyOf(kind));
+    setComposerState("none");
+  };
   const [rejectOpen, setRejectOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   // An outcome that lands after this card is gone has nobody to show it to:
@@ -488,12 +509,12 @@ function CommentCard(params: {
 
         <div className="flex flex-wrap gap-2">
           {stage4.canWrite && composer === "none" && (
-            <Button size="sm" variant="outline" onClick={() => setComposer("reply")}>
+            <Button size="sm" variant="outline" onClick={() => openComposer("reply")}>
               {t("youtubeStage4.actions.reply", "Reply")}
             </Button>
           )}
           {stage4.canWrite && row.is_own && composer === "none" && (
-            <Button size="sm" variant="outline" onClick={() => setComposer("edit")}>
+            <Button size="sm" variant="outline" onClick={() => openComposer("edit")}>
               {t("youtubeStage4.actions.edit", "Edit")}
             </Button>
           )}
@@ -522,13 +543,16 @@ function CommentCard(params: {
         {composer === "reply" && (
           <Composer
             key={`reply-${row.comment_id}`}
+            initialText={stage4.drafts.get(draftKeyOf("reply"))?.text}
+            onTextChange={(text) => stage4.drafts.set(draftKeyOf("reply"), { text, open: true, parentCommentId: threadId })}
+            onConfirmed={() => stage4.drafts.remove(draftKeyOf("reply"))}
             placeholder={t("youtubeStage4.composer.replyPlaceholder", "Write a reply")}
             submitLabel={t("youtubeStage4.composer.replySubmit", "Reply")}
             onSubmit={async (text) => {
               const outcome = await stage4.reply(videoId, row, text);
               return outcome;
             }}
-            onCancel={() => setComposer("none")}
+            onCancel={() => closeComposer("reply")}
             onNotice={onNotice}
             onCheckStatus={stage4.checkStatus}
             onAcknowledge={stage4.acknowledge}
@@ -537,14 +561,16 @@ function CommentCard(params: {
         {composer === "edit" && (
           <Composer
             key={`edit-${row.comment_id}`}
-            initialText={row.text}
+            initialText={stage4.drafts.get(draftKeyOf("edit"))?.text ?? row.text}
+            onTextChange={(text) => stage4.drafts.set(draftKeyOf("edit"), { text, open: true, parentCommentId: threadId })}
+            onConfirmed={() => stage4.drafts.remove(draftKeyOf("edit"))}
             placeholder={t("youtubeStage4.composer.editPlaceholder", "Edit your comment")}
             submitLabel={t("youtubeStage4.composer.editSubmit", "Save")}
             onSubmit={async (text) => {
               const outcome = await stage4.editComment(videoId, row, text);
               return outcome;
             }}
-            onCancel={() => setComposer("none")}
+            onCancel={() => closeComposer("edit")}
             onNotice={onNotice}
             onCheckStatus={stage4.checkStatus}
             onAcknowledge={stage4.acknowledge}
@@ -634,13 +660,17 @@ function ReplyBlock(params: {
     enabled: open,
   });
   // Replies merge by comment id across the inline preview and every loaded
-  // page (spec 8.3): one map, keyed by the comment id.
-  // The thread page's own rows are the freshest copy: an older cached reply
-  // page must never overwrite them, so they are merged last.
-  const merged = new Map<string, { key: string; row: Stage4CommentRow }>();
-  for (const item of replies.items) merged.set(item.key, item);
-  for (const row of inlineReplies) merged.set(row.comment_id, { key: row.comment_id, row });
-  const allReplies = [...merged.values()];
+  // page (spec 8.3). For one comment id the row from the LATER successful read
+  // wins: an older cached reply page must not overwrite the thread page's own
+  // fresher copy, and a reply page read after the thread page must not lose to it.
+  const allReplies = mergeReplyRows(
+    inlineReplies.map((row) => ({ row, readAt: stage4.threads.readAtOf(row.comment_id) })),
+    replies.items.map((item) => ({ row: item.row, readAt: item.readAt })),
+  ).map((row) => ({ key: row.comment_id, row }));
+  // Drafts waiting on a reply this block has not loaded (their row left the screen with a Refresh).
+  useSyncExternalStore(stage4.drafts.subscribe, stage4.drafts.version);
+  const waitingDrafts = stage4.drafts.forParent(parent.comment_id).filter((draft) =>
+    draft.entry.open && draft.commentId !== parent.comment_id && !allReplies.some((item) => item.row.comment_id === draft.commentId));
   // A thread in the Held list with no loaded row (its own, an inline reply or
   // a paged reply) that reads heldForReview says so, per thread (spec 8.4).
   const heldHidden = stage4.listMode === "heldForReview"
@@ -668,6 +698,11 @@ function ReplyBlock(params: {
   return (
     <div className="space-y-2 ms-6 border-s ps-3" data-testid="yt-stage4-replies">
       {heldHiddenNotice}
+      {waitingDrafts.length > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="yt-stage4-draft-waiting">
+          {t("youtubeStage4.replies.draftWaiting", "You have an unsent draft on a reply that is not loaded here. Load more replies to see it.")}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <p className="text-xs font-medium text-muted-foreground">{t("youtubeStage4.replies.title", "Replies")}</p>
         <Button size="sm" variant="ghost" onClick={() => stage4.closeReplies(parent.comment_id)}>
@@ -679,8 +714,11 @@ function ReplyBlock(params: {
           {isStaleContextReason(replies.errorCode) ? (
             <>
               <span>{t("youtubeStage4.replies.stale", "These replies are out of date.")}</span>
-              {/* Repeating a refused cursor cannot help: read from page one again. */}
-              <Button size="sm" variant="outline" onClick={replies.reloadFromStart}>
+              {/* Repeating a refused cursor cannot help, and the refused handle is the PARENT's: it is
+                  issued again with the thread list, so the list is read first and the open reply
+                  chains restart from it with the new handles. A parent that sat on a later page of
+                  the list leaves the screen with the list's return to page one; the drafts stay. */}
+              <Button size="sm" variant="outline" onClick={stage4.threads.reload}>
                 {t("youtubeStage4.replies.reloadFromStart", "Reload from the start")}
               </Button>
             </>
@@ -695,7 +733,8 @@ function ReplyBlock(params: {
         </div>
       )}
       {allReplies.map((item) => (
-        <CommentCard key={item.row.comment_id} stage4={stage4} row={item.row} videoId={videoId} onNotice={onNotice} reply />
+        // The generation is part of the key so a rebind remounts the card and its editors (no draft or outcome crosses a binding).
+        <CommentCard key={`${stage4.threads.bindingGeneration ?? 0}:${item.row.comment_id}`} stage4={stage4} row={item.row} videoId={videoId} onNotice={onNotice} reply />
       ))}
       {replies.nextCursor && (
         <Button size="sm" variant="outline" onClick={replies.loadMore} disabled={replies.loading}>
@@ -743,10 +782,16 @@ function Composer(params: {
   onCheckStatus?: (operationId: string, draftText?: string) => Promise<SubmissionOutcome>;
   /** Called once this composer has shown a definite outcome, so its identity can be forgotten. */
   onAcknowledge?: (operationId: string) => void;
+  /** Called with the text on every change, so a draft store can keep it outside this component. */
+  onTextChange?: (text: string) => void;
+  /** Called only when a confirmed outcome also empties the composer; newer unsent text keeps its stored draft. */
+  onConfirmed?: () => void;
 }): JSX.Element {
   const { t } = useTranslation("automation");
   const inputId = useId();
   const [text, setText] = useState(params.initialText ?? "");
+  const textRef = useRef(text);
+  textRef.current = text;
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [localOutcome, setLocalOutcome] = useState<SubmissionOutcome | null>(null);
@@ -784,14 +829,22 @@ function Composer(params: {
       return;
     }
     if (outcome.kind === "confirmed") {
-      params.onAcknowledge?.(outcome.operationId);
       // A check reads the receipt of the operation that WAS sent: the box is
       // emptied only when this is that operation AND the box still holds the
       // text it sent, so newer typing, or a draft that was never sent, is kept.
       const confirmedSent = sent.current?.operationId === outcome.operationId ? sent.current.text : null;
-      setText((current) => (fromCheck && current !== confirmedSent ? current : ""));
+      const keepsNewer = fromCheck && textRef.current !== confirmedSent;
+      params.onAcknowledge?.(outcome.operationId);
+      if (!keepsNewer) {
+        params.onConfirmed?.();
+        setText("");
+      }
       params.onNotice?.(t("youtubeStage4.notice.posted", "Posted. Refresh the thread to see it."));
     } else if (outcome.kind === "refused") {
+      params.onAcknowledge?.(outcome.operationId);
+    } else if (outcome.kind === "error" && outcome.terminal) {
+      // The receipt can never be read again and this composer has just said so:
+      // the identity would otherwise come back on the next mount. The draft stays.
       params.onAcknowledge?.(outcome.operationId);
     }
   };
@@ -834,7 +887,11 @@ function Composer(params: {
         className="w-full min-h-[70px] rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
         placeholder={params.placeholder}
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => {
+          textRef.current = event.target.value;
+          setText(event.target.value);
+          params.onTextChange?.(event.target.value);
+        }}
         disabled={busy}
       />
       <div className="flex items-center gap-2">
@@ -872,7 +929,8 @@ function OutcomeLine({ outcome, checking, onCheckStatus }: {
 }): JSX.Element {
   const { t } = useTranslation("automation");
   const operationId = checkableOperationId(outcome);
-  const checkButton = operationId && onCheckStatus ? (
+  // A terminal miss was already acknowledged and its identity forgotten; a check would only replace the final message with a retryable one.
+  const checkButton = operationId && onCheckStatus && !(outcome.kind === "error" && outcome.terminal) ? (
     <Button size="sm" variant="outline" disabled={checking} onClick={() => onCheckStatus(operationId)}>
       {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin me-1" /> : null}
       {t("youtubeStage4.recovered.checkStatus", "Check status")}

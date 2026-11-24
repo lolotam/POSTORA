@@ -48,3 +48,98 @@ export const STAGE4_RATE_LIMITS = {
   write: { max: 20, windowSeconds: 60 },
   ban: { max: 5, windowSeconds: 86400 },
 } as const;
+
+// ---------------------------------------------------------------------------
+// The anonymous refusal gate.
+//
+// Every anonymous database call this worker makes holds its OWN slot. The
+// slot is taken when the call starts and freed when the CALL settles, never
+// by the timeout: a call that outlives the bound keeps its slot, so this
+// worker cannot put a second call on the same row while the first is still
+// running. A request that finds a slot taken never waits on that call and
+// never starts a second one.
+//
+// A call that never settles therefore keeps its slot for the lifetime of the
+// worker. That is the fail-closed outcome: the worker stops calling the
+// database, and every refusal it still answers keeps its console event.
+//
+// The bound is a LOCAL one: it limits how long a request waits, nothing
+// else. The database is never aborted, because aborting would release the
+// slot at the bound and let a second call start while the first is still
+// running on the server.
+// ---------------------------------------------------------------------------
+
+/** How long a request waits for one anonymous database call. */
+export const ANON_PROBE_TIMEOUT_MS = 1_500;
+
+/** The anonymous calls that each hold their own slot. */
+export type AnonymousSlotName =
+  | "bucket_probe"
+  | "counter_probe"
+  | "counter_insert"
+  | "audit_insert";
+
+/**
+ * Which call holds a slot. The holder is a token, not a flag, so a call that
+ * settles late (after `resetAnonymousSlots`, or after a newer holder took the
+ * slot) can only free its own hold, never somebody else's.
+ */
+const anonymousSlots = new Map<AnonymousSlotName, symbol>();
+
+/** Forget every slot: a fresh worker (test seam). */
+export function resetAnonymousSlots(): void {
+  anonymousSlots.clear();
+}
+
+/**
+ * How one anonymous call ended, as far as the request that started it can tell.
+ *   busy     another call holds the slot: nothing was started
+ *   bound    ANON_PROBE_TIMEOUT_MS passed and the call is STILL running
+ *   failed   the call settled by rejecting
+ *   settled  the call settled with `value`
+ */
+export type AnonymousCall<T> =
+  | { kind: "busy" }
+  | { kind: "bound" }
+  | { kind: "failed" }
+  | { kind: "settled"; value: T };
+
+/**
+ * Run one anonymous database call in its slot and wait for it at most
+ * ANON_PROBE_TIMEOUT_MS. `start` is called only when the slot was free. The
+ * call keeps running when the bound passes, and the slot is freed by the call
+ * settling, never by the bound.
+ */
+export async function runInAnonymousSlot<T>(
+  name: AnonymousSlotName,
+  start: () => PromiseLike<T>,
+): Promise<AnonymousCall<T>> {
+  if (anonymousSlots.has(name)) return { kind: "busy" };
+  const token = Symbol(name);
+  anonymousSlots.set(name, token);
+
+  let call: Promise<AnonymousCall<T>>;
+  try {
+    call = Promise.resolve(start()).then(
+      (value) => ({ kind: "settled" as const, value }),
+      () => ({ kind: "failed" as const }),
+    );
+  } catch {
+    call = Promise.resolve({ kind: "failed" as const });
+  }
+  // Attached before the race below, so the slot is already free when the
+  // request that waited for this call carries on.
+  call.then(() => {
+    if (anonymousSlots.get(name) === token) anonymousSlots.delete(name);
+  });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<AnonymousCall<T>>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "bound" }), ANON_PROBE_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([call, bound]);
+  } finally {
+    clearTimeout(timer);
+  }
+}

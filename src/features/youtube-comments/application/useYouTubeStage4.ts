@@ -19,7 +19,8 @@ import type {
   Stage4ReceiptPayload,
 } from "../domain/types";
 import { youtubeCommentsKey, YOUTUBE_COMMENTS_STALE_MS } from "./queryKeys";
-import { clearSettled, recoverOperation } from "./recoverOperation";
+import { clearSettled, readOperationStatus, recoverOperation } from "./recoverOperation";
+import { createStage4DraftStore } from "./stage4Drafts";
 /** The outcome of one deliberate submit, as the composer must show it. */
 export type SubmissionOutcome =
   | { kind: "confirmed"; receipt: Stage4ReceiptPayload; operationId: string }
@@ -39,7 +40,19 @@ export type SubmissionOutcome =
    */
   | { kind: "earlier"; state: "confirmed" | "refused"; reason: string | null; operationId: string }
   /** A failure with no receipt (a lost response): the operation id is what a status check needs. */
-  | { kind: "error"; reason: string; draftKept: true; operationId: string };
+  | {
+    kind: "error";
+    reason: string;
+    draftKept: true;
+    operationId: string;
+    /**
+     * Set when a status check learned that the receipt can never be read again
+     * (the binding changed). A surface that shows it acknowledges the identity;
+     * an error without it (a lost answer, a miss inside the pre-claim grace)
+     * keeps the identity so the check can be repeated.
+     */
+    terminal?: true;
+  };
 
 /** A restored operation from storage, after its status was read. */
 export interface RecoveredOperation {
@@ -64,6 +77,8 @@ export interface Stage4PageState<Item> {
   bindingGeneration: number | null;
   /** When the first page last finished loading (0 until it has); it moves on every reload. */
   firstPageUpdatedAt: number;
+  /** When the read that produced the row of this key finished (0 for a key that is not loaded). */
+  readAtOf: (key: string) => number;
   loadMore: () => void;
   /** Retry only the failed page; earlier rows stay (spec 8.3). */
   retry: () => void;
@@ -142,16 +157,25 @@ export function useYouTubeStage4(params: {
     const pageQueries = useQueries({ queries: pages });
     const tailQuery = pageQueries[pageQueries.length - 1];
 
-    const items = useMemo(() => {
+    const { items, readAt } = useMemo(() => {
       const byKey = new Map<string, Item>();
+      const readAtByKey = new Map<string, number>();
       for (const query of pageQueries) {
-        for (const item of query.data?.page ?? []) byKey.set(item.key, item);
+        for (const item of query.data?.page ?? []) {
+          // The copy read last wins, whatever page it came from.
+          const readAt = readAtByKey.get(item.key);
+          if (readAt === undefined || query.dataUpdatedAt >= readAt) {
+            byKey.set(item.key, item);
+            readAtByKey.set(item.key, query.dataUpdatedAt);
+          }
+        }
       }
-      return [...byKey.values()];
+      return { items: [...byKey.values()], readAt: readAtByKey };
     }, [pageQueries]);
 
     return {
       items,
+      readAtOf: (key: string) => readAt.get(key) ?? 0,
       nextCursor: tailQuery.data?.next ?? null,
       loading: tailQuery.isLoading || tailQuery.isFetching,
       error: tailQuery.error instanceof YouTubeCommentsError ? tailQuery.error.code
@@ -226,6 +250,19 @@ export function useYouTubeStage4(params: {
     setRepliesEpoch((epoch) => epoch + 1);
   }, [firstPageUpdatedAt]);
 
+  // ---- drafts ---------------------------------------------------------------------
+  //
+  // What the owner typed into a reply or edit editor lives here, outside the row
+  // that shows it: a Refresh returns every reply chain to page one and unmounts
+  // the rows of the later pages. Memory only (comment text is never stored). A
+  // draft written under another binding generation is forgotten when the list
+  // reports the new one.
+  const drafts = useMemo(() => createStage4DraftStore(), []);
+  const listGeneration = threads.bindingGeneration;
+  useEffect(() => {
+    if (listGeneration !== null) drafts.keepGeneration(listGeneration);
+  }, [drafts, listGeneration]);
+
   // ---- reply paging per thread ------------------------------------------------
   //
   // The controller only tracks WHICH parents are open; each open parent gets
@@ -254,11 +291,25 @@ export function useYouTubeStage4(params: {
   // its outcome was shown (or can never be read again). A refused submit keeps
   // the draft; an indeterminate one is never re-sent (spec 9.1, 14).
 
-  const [recovered, setRecovered] = useState<RecoveredOperation[]>([]);
+  const [recovered, setRecoveredState] = useState<RecoveredOperation[]>([]);
   // What the owner can see right now, read after an await: a re-check that
   // finishes for a banner the owner has since dismissed has shown nothing.
+  // The ref is written in the SAME call that queues the state update, never
+  // by a later render: an answer that lands between a dismissal and the next
+  // render would otherwise still find the dismissed entry.
   const recoveredRef = useRef(recovered);
-  recoveredRef.current = recovered;
+  const setRecovered = useCallback((next: RecoveredOperation[]) => {
+    recoveredRef.current = next;
+    setRecoveredState(next);
+  }, []);
+  // The identity of every submission this view started, kept in memory beside
+  // the stored one. Storage can be unavailable (a locked-down profile, a full
+  // quota); a status check must still know what the operation was. Removed
+  // when a surface acknowledges the outcome, and when the account is discarded.
+  const liveOperations = useRef(new Map<string, PendingStage4Operation>());
+  // One entry per target while a submit for it runs: the operation that submit
+  // is waiting on (an earlier one it is recovering, then its own).
+  const submitsInFlight = useRef(new Map<string, string>());
   const aliveRef = useRef(true);
   const contextRef = useRef(`${userId}:${accountId}`);
   contextRef.current = `${userId}:${accountId}`;
@@ -282,75 +333,107 @@ export function useYouTubeStage4(params: {
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
       const targetCommentId = input.targetCommentId ?? "";
-      // An earlier submit for this target blocks a new one only while it may
-      // still land (claimed or dispatched) or cannot be read right now. An
-      // INDETERMINATE one stays guarded by the server's fence for the
-      // original (the same logical create or reply is refused while it is
-      // unresolved), so a different text, a deliberate new edit or a new
-      // reject is a new intent and gets its own key (spec 9.1 and 9.3).
-      for (const earlier of findPendingOperations(userId, { accountId, videoId: input.videoId, action, targetCommentId })) {
-        const recovery = await recoverOperation(gateway, accountId, earlier);
-        if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
-        if (recovery.settled && recovery.status) {
-          // A result the owner never saw: show it, and keep its identity until
-          // the surface that shows it acknowledges it. Nothing new is sent in
-          // the same click.
-          if (recovery.status.state === "confirmed") void threads.reload();
-          return {
-            kind: "earlier",
-            state: recovery.status.state as "confirmed" | "refused",
-            reason: recovery.status.reason,
-            operationId: earlier.operationId,
-          };
-        }
-        // Unreadable for good (the binding changed): there is nothing to show.
-        if (recovery.settled) clearPendingOperation(userId, earlier.operationId);
-      }
-
-      const operationId = input.operationId ?? mintOperationId();
-      savePendingOperation(userId, {
-        operationId,
-        accountId,
-        videoId: input.videoId,
-        action,
-        targetCommentId,
-        createdAt: Date.now(),
-      });
-
-      let receipt: Stage4ReceiptPayload;
+      const guardKey = `${accountId}|${input.videoId}|${action}|${targetCommentId}`;
+      // Storage can be blocked or full, so a stored list can miss an operation;
+      // the in-memory identities are the same ones, so the guard reads both.
+      const pendingForTarget = (): PendingStage4Operation[] => {
+        const stored = findPendingOperations(userId, { accountId, videoId: input.videoId, action, targetCommentId });
+        const seen = new Set(stored.map((op) => op.operationId));
+        const live = [...liveOperations.current.values()].filter((op) =>
+          op.accountId === accountId
+          && op.videoId === input.videoId
+          && op.action === action
+          && op.targetCommentId === targetCommentId
+          && !seen.has(op.operationId));
+        return [...stored, ...live];
+      };
+      // One submit per target at a time: a second click while the first is
+      // still recovering or sending is answered as pending and sends nothing.
+      const inFlightOperationId = submitsInFlight.current.get(guardKey);
+      if (inFlightOperationId !== undefined) return { kind: "pending", operationId: inFlightOperationId };
       try {
-        receipt = await input.run(operationId);
-      } catch (error) {
-        const reason = error instanceof YouTubeCommentsError ? error.code
-          : error instanceof Error && error.message ? error.message
-          : "upstream";
-        // A transport failure after the claim is indeterminate unless the
-        // server said otherwise; the local identity stays until status is read.
-        if (isShownRefusal(reason)) {
-          return { kind: "refused", reason, draftKept: true, operationId };
+        // An earlier submit for this target blocks a new one only while it may
+        // still land (claimed or dispatched) or cannot be read right now. An
+        // INDETERMINATE one stays guarded by the server's fence for the
+        // original (the same logical create or reply is refused while it is
+        // unresolved), so a different text, a deliberate new edit or a new
+        // reject is a new intent and gets its own key (spec 9.1 and 9.3).
+        for (const earlier of pendingForTarget()) {
+          submitsInFlight.current.set(guardKey, earlier.operationId);
+          const recovery = await recoverOperation(gateway, accountId, earlier);
+          if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
+          if (recovery.settled && recovery.status) {
+            // A result the owner never saw: show it, and keep its identity until
+            // the surface that shows it acknowledges it. Nothing new is sent in
+            // the same click.
+            if (recovery.status.state === "confirmed") void threads.reload();
+            return {
+              kind: "earlier",
+              state: recovery.status.state as "confirmed" | "refused",
+              reason: recovery.status.reason,
+              operationId: earlier.operationId,
+            };
+          }
+          // Unreadable for good (the binding changed): there is nothing to show.
+          if (recovery.settled) {
+            liveOperations.current.delete(earlier.operationId);
+            clearPendingOperation(userId, earlier.operationId);
+          }
         }
-        return { kind: "error", reason, draftKept: true, operationId };
-      }
 
-      // The identity is NOT cleared here. Only a surface that shows the
-      // outcome acknowledges it (see `acknowledge`): a response that lands
-      // after its composer is gone leaves the identity for the recovery
-      // banner of the next view instead of losing the only reference.
-      if (receipt.state === "confirmed") {
-        void threads.reload();
+        const operationId = input.operationId ?? mintOperationId();
+        const identity: PendingStage4Operation = {
+          operationId,
+          accountId,
+          videoId: input.videoId,
+          action,
+          targetCommentId,
+          createdAt: Date.now(),
+        };
+        liveOperations.current.set(operationId, identity);
+        savePendingOperation(userId, identity);
+        submitsInFlight.current.set(guardKey, operationId);
+
+        let receipt: Stage4ReceiptPayload;
+        try {
+          receipt = await input.run(operationId);
+        } catch (error) {
+          const reason = error instanceof YouTubeCommentsError ? error.code
+            : error instanceof Error && error.message ? error.message
+            : "upstream";
+          // A transport failure after the claim is indeterminate unless the
+          // server said otherwise; the local identity stays until status is read.
+          if (isShownRefusal(reason)) {
+            return { kind: "refused", reason, draftKept: true, operationId };
+          }
+          return { kind: "error", reason, draftKept: true, operationId };
+        }
+
+        // The identity is NOT cleared here. Only a surface that shows the
+        // outcome acknowledges it (see `acknowledge`): a response that lands
+        // after its composer is gone leaves the identity for the recovery
+        // banner of the next view instead of losing the only reference.
+        if (receipt.state === "confirmed") {
+          void threads.reload();
+        }
+        if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
+        if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
+        if (receipt.state === "indeterminate") return { kind: "indeterminate", receipt, operationId };
+        // claimed/dispatched: the browser lost the answer before settlement.
+        return { kind: "indeterminate", receipt, operationId };
+      } finally {
+        submitsInFlight.current.delete(guardKey);
       }
-      if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
-      if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
-      if (receipt.state === "indeterminate") return { kind: "indeterminate", receipt, operationId };
-      // claimed/dispatched: the browser lost the answer before settlement.
-      return { kind: "indeterminate", receipt, operationId };
     },
     [userId, accountId, threads, gateway],
   );
 
   /** A surface that has shown this operation's outcome forgets its identity. */
   const acknowledge = useCallback(
-    (operationId: string) => clearPendingOperation(userId, operationId),
+    (operationId: string) => {
+      liveOperations.current.delete(operationId);
+      clearPendingOperation(userId, operationId);
+    },
     [userId],
   );
 
@@ -425,14 +508,20 @@ export function useYouTubeStage4(params: {
       // the pre-claim grace window and keeps the identity; a settled answer is
       // definite. The local identity says what the operation was, which decides
       // whether the draft is sent along for the edit comparison.
-      const operation: PendingStage4Operation = listPendingOperations(userId, accountId)
-        .find((op) => op.operationId === operationId)
-        ?? { operationId, accountId, videoId: "", action: "create_thread", targetCommentId: "", createdAt: 0 };
-      const result = await recoverOperation(gateway, accountId, operation, operation.action === "edit" ? draftText : undefined);
+      // The live submission first, then storage. With neither, nothing is
+      // invented: the status is read with no draft (the action is unknown, so
+      // an edit comparison cannot be asked for) and a miss stays temporary.
+      const operation: PendingStage4Operation | undefined = liveOperations.current.get(operationId)
+        ?? listPendingOperations(userId, accountId).find((op) => op.operationId === operationId);
+      const result = operation
+        ? await recoverOperation(gateway, accountId, operation, operation.action === "edit" ? draftText : undefined)
+        : await readOperationStatus(gateway, accountId, operationId, undefined, false);
       const status = result.status;
       if (!status) {
-        // Unreadable for good (the binding changed) or not readable yet.
-        return { kind: "error", reason: result.unavailable ? "upstream" : "not_found", draftKept: true, operationId };
+        // Not readable yet: the owner can check again. Unreadable for good (the
+        // binding changed): final, and the surface that shows it acknowledges it.
+        if (result.unavailable) return { kind: "error", reason: "upstream", draftKept: true, operationId };
+        return { kind: "error", reason: "not_found", draftKept: true, operationId, terminal: true };
       }
       if (status.state === "confirmed") {
         void threads.reload();
@@ -475,7 +564,7 @@ export function useYouTubeStage4(params: {
     return () => {
       cancelled = true;
     };
-  }, [userId, accountId, gateway]);
+  }, [userId, accountId, gateway, setRecovered]);
 
   // An account switch discards every cached list, draft and open context.
   useEffect(() => {
@@ -501,6 +590,7 @@ export function useYouTubeStage4(params: {
     listMode,
     setListMode,
     threads,
+    drafts,
     repliesEpoch,
     replyTargetsOpen,
     openReplies,
@@ -515,15 +605,15 @@ export function useYouTubeStage4(params: {
     recovered,
     acknowledge,
     clearRecovered: (operationId: string) => {
-      const entry = recovered.find((r) => r.operation.operationId === operationId);
+      const entry = recoveredRef.current.find((r) => r.operation.operationId === operationId);
       // Dismissing acknowledges a terminal state the owner was shown. A
       // receipt still in flight, or one that could not be read, keeps its identity.
       if (entry && !entry.inFlight && !entry.unavailable) clearPendingOperation(userId, operationId);
-      setRecovered((prev) => prev.filter((r) => r.operation.operationId !== operationId));
+      setRecovered(recoveredRef.current.filter((r) => r.operation.operationId !== operationId));
     },
     /** Check the status of one recovered operation again (after a temporary failure). */
     recheckRecovered: async (operationId: string) => {
-      const current = recovered.find((r) => r.operation.operationId === operationId);
+      const current = recoveredRef.current.find((r) => r.operation.operationId === operationId);
       if (!current) return;
       const context = `${userId}:${accountId}`;
       const next = await recoverOperation(gateway, accountId, current.operation);
@@ -533,10 +623,15 @@ export function useYouTubeStage4(params: {
       // Dismissed while the re-check was in flight: its outcome was never shown,
       // so it is not acknowledged either, and the identity stays for the next view.
       if (!recoveredRef.current.some((r) => r.operation.operationId === operationId)) return;
-      setRecovered((prev) => prev.map((r) => (r.operation.operationId === operationId ? next : r)));
+      setRecovered(recoveredRef.current.map((r) => (r.operation.operationId === operationId ? next : r)));
       clearSettled(userId, [next]);
     },
-    discardAccountContext: () => clearPendingOperationsForAccount(userId, accountId),
+    discardAccountContext: () => {
+      for (const [operationId, operation] of liveOperations.current) {
+        if (operation.accountId === accountId) liveOperations.current.delete(operationId);
+      }
+      clearPendingOperationsForAccount(userId, accountId);
+    },
   };
 }
 
@@ -602,6 +697,7 @@ export function useStage4Replies(params: {
 
   const tailIndex = cursors.length - 1;
   type ReplyPage = { page: { key: string; row: Stage4CommentRow }[]; next: string | null; stale: boolean };
+  type ReplyItem = { key: string; row: Stage4CommentRow; readAt: number };
   // Every page keeps an observer (only the tail may fetch), so a page that is
   // not the live tail is not garbage-collected while the thread is open.
   const pageQueries = useQueries({
@@ -624,9 +720,17 @@ export function useStage4Replies(params: {
   const tailQuery = pageQueries[tailIndex];
 
   const items = useMemo(() => {
-    const byKey = new Map<string, { key: string; row: Stage4CommentRow }>();
+    const byKey = new Map<string, ReplyItem>();
+    const readAtByKey = new Map<string, number>();
     for (const query of pageQueries) {
-      for (const item of query.data?.page ?? []) byKey.set(item.key, item);
+      for (const item of query.data?.page ?? []) {
+        // The copy read last wins, whatever page it came from.
+        const readAt = readAtByKey.get(item.key);
+        if (readAt === undefined || query.dataUpdatedAt >= readAt) {
+          byKey.set(item.key, { ...item, readAt: query.dataUpdatedAt });
+          readAtByKey.set(item.key, query.dataUpdatedAt);
+        }
+      }
     }
     return [...byKey.values()];
   }, [pageQueries]);

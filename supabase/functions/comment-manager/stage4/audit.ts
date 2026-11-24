@@ -19,6 +19,7 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { STAGE4_ACTIONS, type Stage4Reason } from "./contracts.ts";
+import { runInAnonymousSlot } from "./rateLimit.ts";
 
 export interface Stage4AuditRow {
   action: string;
@@ -66,16 +67,19 @@ export async function writeRefusalAudit(
 
   const userId = row.userId ?? null;
 
+  const insertRow = {
+    level: "warn",
+    category: "edge",
+    source: "comment-manager",
+    message: "Stage 4 refusal",
+    user_id: userId,
+    metadata,
+  };
+
   // Anonymous bucket. A single counter row per minute records how many were
   // suppressed; each suppressed refusal still emits a sanitised console event.
   if (!userId) {
-    let admitted = false;
-    try {
-      admitted = await opts.rateLimitBucket();
-    } catch {
-      admitted = false;
-    }
-    if (!admitted) {
+    const suppress = async (): Promise<void> => {
       anonAuditSuppressedCount += 1;
       console.warn(
         `comment-manager stage4 refusal suppressed: action=${action} reason=${row.reason} request_id=${row.requestId}`,
@@ -94,20 +98,58 @@ export async function writeRefusalAudit(
           // Never let the counter change anything about the refusal.
         }
       }
+    };
+
+    let admitted = false;
+    try {
+      admitted = await opts.rateLimitBucket();
+    } catch {
+      admitted = false;
+    }
+    if (!admitted) {
+      await suppress();
       return;
     }
+
+    // The admitted ANONYMOUS row holds a slot of its own and is bounded: the
+    // request waits at most the bound for it, and the row may land after the
+    // response has gone out (an isolate frozen first drops it; the console
+    // event and the counter row remain the trace of the refusal). A request
+    // that finds the slot taken skips its insert, never waits on the running
+    // one and never starts a second, and is counted as suppressed.
+    const outcome = await runInAnonymousSlot("audit_insert", () => admin.from("system_logs").insert(insertRow));
+    if (outcome.kind === "busy") {
+      await suppress();
+      return;
+    }
+    if (outcome.kind === "bound") {
+      console.warn(
+        `comment-manager stage4 refusal audit insert is still running: action=${action} reason=${row.reason} request_id=${row.requestId}`,
+      );
+      return;
+    }
+    if (outcome.kind === "failed") {
+      // The exception text (which can carry request or database details) is
+      // never logged.
+      console.warn(
+        `comment-manager stage4 audit insert failed: action=${action} reason=${row.reason} request_id=${row.requestId} cause=exception`,
+      );
+      return;
+    }
+    if (outcome.value && outcome.value.error) {
+      console.warn(
+        `comment-manager stage4 audit insert failed: action=${action} reason=${row.reason} request_id=${row.requestId} cause=insert_error`,
+      );
+    }
+    return;
   }
 
+  // The AUTHENTICATED insert belongs to the request: it is awaited, so it
+  // cannot outlive an edge worker that has already answered, and it never
+  // changes the answer either.
   try {
     // supabase-js returns `{ error }` rather than throwing; read it.
-    const result = await admin.from("system_logs").insert({
-      level: "warn",
-      category: "edge",
-      source: "comment-manager",
-      message: "Stage 4 refusal",
-      user_id: userId,
-      metadata,
-    });
+    const result = await admin.from("system_logs").insert(insertRow);
     if (result && result.error) {
       console.warn(
         `comment-manager stage4 audit insert failed: action=${action} reason=${row.reason} request_id=${row.requestId} cause=insert_error`,

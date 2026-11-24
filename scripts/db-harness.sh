@@ -222,6 +222,7 @@ SUITES=(
   ai_oauth_openrouter.sql
   ai_model_catalog_refresh.sql
   youtube_comment_operations.sql
+  youtube_stage4_key_integrity.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

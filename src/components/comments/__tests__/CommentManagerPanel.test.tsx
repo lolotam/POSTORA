@@ -1,8 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const OLD_NATIVE = { id: "yt-old", platform: "youtube", platform_username: "Old Channel", platform_user_id: "UC-old", avatar_url: null, is_active: true, auth_provider: "native", account_metadata: {} };
 const COMPOSIO = { id: "yt-cx", platform: "youtube", platform_username: "Composio Channel", platform_user_id: "UC-cx", avatar_url: null, is_active: true, auth_provider: "composio", account_metadata: {} };
+// A native channel that carries the comments scope, so it is read at all.
+const NATIVE = { ...OLD_NATIVE, id: "yt-native", account_metadata: { granted_scopes: ["https://www.googleapis.com/auth/youtube.force-ssl"] } };
 // The panel picks the first account, so each test states which rows exist.
 let accounts: Array<typeof OLD_NATIVE> = [];
 vi.mock("@/hooks/useSocialAccounts", () => ({
@@ -15,10 +17,13 @@ vi.mock("@/hooks/useAuth", () => ({
 // inbox and the other platforms must stay exactly as they were.
 let stage4Admission: "loading" | "admitted" | "legacy" | "unavailable" = "legacy";
 const retryAdmission = vi.fn();
+// The baseline list's own refetch: the Refresh button must never fire it while
+// the baseline read is held back.
+const baselineRefetch = vi.fn();
 vi.mock("@/features/youtube-comments/application/useYouTubeStage4Admission", () => ({
   useYouTubeStage4Admission: () => ({ admission: stage4Admission, retry: retryAdmission }),
 }));
-const useComments = vi.fn((_opts: unknown) => ({ data: [], isLoading: false, error: null, refetch: vi.fn(), isFetching: false }));
+const useComments = vi.fn((_opts: unknown) => ({ data: [], isLoading: false, error: null, refetch: baselineRefetch, isFetching: false }));
 // The comment list under the panel binds the mutation hooks from the same module, so they are
 // stubbed too — a factory that omits them fails before any render, and the real ones would
 // demand a QueryClient this test has no reason to set up.
@@ -42,6 +47,8 @@ import { defaultYouTubeCommentsGateway } from "@/features/youtube-comments";
 describe("CommentManagerPanel for YouTube", () => {
   beforeEach(() => {
     stage4Admission = "legacy";
+    retryAdmission.mockClear();
+    baselineRefetch.mockClear();
   });
   // The four native channels in production connected before force-ssl was requested. Loading
   // them would 403; the banner names the fix and the query is not even started.
@@ -77,6 +84,41 @@ describe("CommentManagerPanel for YouTube", () => {
     expect(useComments).toHaveBeenLastCalledWith(
       expect.objectContaining({ platform: "youtube", socialAccountId: "yt-cx", enabled: true }),
     );
+  });
+
+  // The Refresh button must never fire a query whose `enabled` is false.
+  // While the settings could not be read there is no baseline list to
+  // refetch (that read is held back), so the button asks the server about
+  // the admission again instead.
+  describe("the Refresh button", () => {
+    it("asks the admission again while the settings could not be read, and refetches no list", () => {
+      accounts = [NATIVE];
+      stage4Admission = "unavailable";
+      render(<CommentManagerPanel platform="youtube" />);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      expect(retryAdmission).toHaveBeenCalledTimes(1);
+      expect(baselineRefetch).not.toHaveBeenCalled();
+    });
+
+    it("is disabled while the admission is still being decided", () => {
+      accounts = [NATIVE];
+      stage4Admission = "loading";
+      render(<CommentManagerPanel platform="youtube" />);
+      const button = screen.getByRole("button", { name: "Refresh" });
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+      expect(retryAdmission).not.toHaveBeenCalled();
+      expect(baselineRefetch).not.toHaveBeenCalled();
+    });
+
+    it("refetches the baseline list for a channel that is not admitted", () => {
+      accounts = [NATIVE];
+      stage4Admission = "legacy";
+      render(<CommentManagerPanel platform="youtube" />);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      expect(baselineRefetch).toHaveBeenCalledTimes(1);
+      expect(retryAdmission).not.toHaveBeenCalled();
+    });
   });
 
   // A pending receipt is read by exactly ONE surface. While the admission answer is still

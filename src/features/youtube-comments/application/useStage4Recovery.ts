@@ -28,11 +28,17 @@ export function useStage4Recovery(params: {
 }) {
   const { userId, accountId, enabled } = params;
   const gateway = params.gateway;
-  const [recovered, setRecovered] = useState<StandaloneRecoveredOperation[]>([]);
+  const [recovered, setRecoveredState] = useState<StandaloneRecoveredOperation[]>([]);
   // What the owner can see right now, read after an await: a re-check that
   // finishes for a banner the owner has since dismissed has shown nothing.
+  // The ref is written in the SAME call that queues the state update, never
+  // by a later render: an answer that lands between a dismissal and the next
+  // render would otherwise still find the dismissed entry.
   const recoveredRef = useRef(recovered);
-  recoveredRef.current = recovered;
+  const setRecovered = (next: StandaloneRecoveredOperation[]) => {
+    recoveredRef.current = next;
+    setRecoveredState(next);
+  };
   // The view's lifetime and context, read after an await: a manual re-check
   // that completes for a view that is gone (or an account that is no longer
   // current) must not clear an identity nobody has seen the outcome of.
@@ -71,15 +77,15 @@ export function useStage4Recovery(params: {
   return {
     recovered,
     clear: (operationId: string) => {
-      const entry = recovered.find((r) => r.operation.operationId === operationId);
+      const entry = recoveredRef.current.find((r) => r.operation.operationId === operationId);
       // Dismissing acknowledges a terminal state the owner was shown. A
       // receipt still in flight, or one that could not be read, keeps its identity.
       const inFlight = entry?.status?.state === "claimed" || entry?.status?.state === "dispatched";
       if (entry && !entry.unavailable && !inFlight) clearPendingOperation(userId, operationId);
-      setRecovered((prev) => prev.filter((r) => r.operation.operationId !== operationId));
+      setRecovered(recoveredRef.current.filter((r) => r.operation.operationId !== operationId));
     },
     recheck: async (operationId: string) => {
-      const current = recovered.find((r) => r.operation.operationId === operationId);
+      const current = recoveredRef.current.find((r) => r.operation.operationId === operationId);
       if (!current) return;
       const context = `${userId}:${accountId}`;
       const next = await recoverOperation(gateway, accountId, current.operation);
@@ -87,7 +93,7 @@ export function useStage4Recovery(params: {
       // Dismissed while the re-check was in flight: its outcome was never shown,
       // so it is not acknowledged either and the identity stays.
       if (!recoveredRef.current.some((r) => r.operation.operationId === operationId)) return;
-      setRecovered((prev) => prev.map((r) => (
+      setRecovered(recoveredRef.current.map((r) => (
         r.operation.operationId === operationId ? { operation: next.operation, status: next.status, unavailable: next.unavailable } : r
       )));
       clearSettled(userId, [next]);

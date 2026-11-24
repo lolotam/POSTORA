@@ -54,10 +54,11 @@ export class SupabaseYouTubeCommentsGateway implements YouTubeCommentsGateway {
     const payload = await call<Stage4CapabilitiesPayload>({ action: "youtube_stage4_capabilities", social_account_id: accountId });
     // A payload that says the settings could not be read is an ERROR, not a
     // denial: an older server answered a failed settings read as data, and a
-    // denial would unmount a screen the owner is using. Failed reads are
-    // `upstream`, which keeps whatever was admitted and offers a retry.
+    // denial would unmount a screen the owner is using. The reason is
+    // `settings_unavailable`, the same one the current server names in its
+    // 503, so both shapes read alike.
     if (Object.values(payload?.capabilities ?? {}).some((entry) => entry?.reason === "settings_unavailable")) {
-      throw new YouTubeCommentsError("upstream", "rollout settings unreadable");
+      throw new YouTubeCommentsError("settings_unavailable", "rollout settings unreadable");
     }
     return payload;
   }

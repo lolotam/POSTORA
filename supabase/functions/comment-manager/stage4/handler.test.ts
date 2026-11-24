@@ -144,6 +144,8 @@ export interface WorldOptions {
   /** Overrides specific provider answers; return undefined to fall through to the default. */
   provider?: (call: ProviderCall) => { status: number; body: unknown } | undefined;
   now?: () => number;
+  /** A clock for cool-downs that is independent of `now` (which is wall time). */
+  monotonicNow?: () => number;
   failSettleOnce?: boolean;
   /** The status RPC itself fails (a transport/database error, not "no receipt"). */
   statusRpcError?: boolean;
@@ -576,6 +578,9 @@ export function createWorld(options: WorldOptions = {}): World {
     admin: admin as unknown as SupabaseClient,
     fetcher,
     now,
+    // The anonymous-refusal gate measures cool-downs on a clock that wall-clock
+    // steps cannot move. Unless a test drives it on its own, it follows `now`.
+    monotonicNow: options.monotonicNow ?? options.now ?? (() => performance.now()),
     newRequestId: () => crypto.randomUUID(),
     signingSecret: TEST_SIGNER,
   };
@@ -1141,13 +1146,21 @@ Deno.test("the Held list needs the held capability", async () => {
   assertEquals(published.status, 200);
 });
 
-Deno.test("an unreadable rollout is an upstream error, never a payload that looks like off", async () => {
+Deno.test("T2.3 an unreadable rollout is an error, never a payload that looks like off: settings_unavailable on the capabilities action, upstream on every other", async () => {
   const world = createWorld({ admitsError: true });
   const res = await world.calls("youtube_stage4_capabilities");
   const body = await jsonOf(res);
   assertEquals(res.status, 503);
-  assertEquals(body.reason, "upstream");
+  assertEquals(body.reason, "settings_unavailable", "the capabilities answer names the settings as the cause");
   assertEquals("data" in body, false, "no capabilities payload of denials is returned");
+  // The refusal is still audited, with the new reason and the verified owner and account.
+  const audited = world.auditRows.find((row) => (row.metadata as { reason?: string }).reason === "settings_unavailable");
+  assertEquals(audited?.user_id, USER);
+  assertEquals((audited?.metadata as { action?: string }).action, "youtube_stage4_capabilities");
+
+  const list = await world.calls("youtube_thread_page", { video_id: "vid-1", list: "published" });
+  assertEquals(list.status, 503);
+  assertEquals((await jsonOf(list)).reason, "upstream", "a list action keeps the generic 503");
 });
 
 Deno.test("credential preparation failure claims nothing", async () => {
@@ -2201,7 +2214,7 @@ Deno.test("after the shared bucket refuses, calls over time stay at one probe pe
   assertEquals(limiterCalls <= 8, true, `limiter calls over one minute: ${limiterCalls}`);
 });
 
-Deno.test("a probe that never answers is cut off and does not hold the gate", async () => {
+Deno.test("a probe that never answers answers the request within the bound and closes the gate", async () => {
   const world = createWorld();
   const limiter = deferredLimiter(world);
   const started = Date.now();
@@ -2215,6 +2228,194 @@ Deno.test("a probe that never answers is cut off and does not hold the gate", as
   await anonymous(world);
   assertEquals(probes(), 1, "a timed-out probe closes the gate instead of letting every request retry");
   limiter.answerAll(false);
+});
+
+// ---- T1: the slot belongs to the call, the cool-down to a monotonic clock ----------------------------
+
+/** Replaces check_rate_limit: each bucket answers true, false, or hangs until it is released. */
+function scriptedLimiter(world: World, plan: (endpoint: string) => boolean | "hang") {
+  const calls: string[] = [];
+  const hung: Array<(allowed: boolean) => void> = [];
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  fake.rpc = (fn: string, params: Record<string, unknown>) => {
+    if (fn !== "check_rate_limit") return original(fn, params);
+    const endpoint = String(params.p_endpoint);
+    calls.push(endpoint);
+    const decision = plan(endpoint);
+    if (decision === "hang") {
+      return new Promise((resolve) => {
+        hung.push((allowed) => resolve({ data: { allowed, remaining: 0, retry_after: 30 }, error: null }));
+      });
+    }
+    return Promise.resolve({ data: { allowed: decision, remaining: 0, retry_after: 30 }, error: null });
+  };
+  return {
+    count: (needle: string) => calls.filter((endpoint) => endpoint.includes(needle)).length,
+    releaseAll: (allowed: boolean) => {
+      while (hung.length) hung.shift()!(allowed);
+    },
+    releaseOldest: (allowed: boolean) => hung.shift()?.(allowed),
+  };
+}
+
+/** Every system_logs insert hangs until it is released; counts the inserts that were started. */
+function hangingAuditInserts(world: World) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.from.bind(fake);
+  let started = 0;
+  const hung: Array<() => void> = [];
+  fake.from = (table: string) => {
+    if (table !== "system_logs") return original(table);
+    return {
+      insert: () => {
+        started += 1;
+        return new Promise((resolve) => hung.push(() => resolve({ error: null })));
+      },
+    };
+  };
+  return {
+    started: () => started,
+    releaseAll: () => {
+      while (hung.length) hung.shift()!();
+    },
+  };
+}
+
+/** Lets the settle handlers of released promises run before the next request. */
+const settleMicrotasks = () => new Promise((resolve) => setTimeout(resolve, 15));
+const BOUND_MS = 6000;
+
+Deno.test("T1.1 a hung probe keeps its slot: after the cool-down no second call starts until it settles", async () => {
+  let mono = 1_000;
+  // One clock drives both, so the gate follows it on the old and the new code alike.
+  const world = createWorld({ now: () => mono });
+  const limiter = scriptedLimiter(world, () => "hang");
+  const started = performance.now();
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(performance.now() - started < BOUND_MS, true, "the first refusal answers within the bound");
+  assertEquals(limiter.count("stage4_audit_anon"), 1);
+
+  mono += 11_000; // the 10 s cool-down has passed on the monotonic clock
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(limiter.count("stage4_audit_anon"), 1, "the hung call still holds the slot: no second limiter call");
+
+  limiter.releaseAll(false);
+  await settleMicrotasks();
+  mono += 11_000;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2, "once the hung call settled the next refusal probes again");
+  limiter.releaseAll(false);
+});
+
+Deno.test("T1.1b a stale call that settles after a reset cannot free the slot of a newer call", async () => {
+  let mono = 1_000;
+  const world = createWorld({ now: () => mono });
+  const limiter = scriptedLimiter(world, (endpoint) => (endpoint.includes("stage4_audit_anon") ? "hang" : false));
+  await anonymous(world); // probe #1 hangs and is cut off at the bound
+  resetAnonRefusalGate(); // a fresh worker: the new probe is call #2
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2);
+
+  limiter.releaseOldest(false); // call #1 finally settles: it must free ITS hold only
+  await settleMicrotasks();
+  mono += 11_000;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2, "call #2 still holds the slot");
+  limiter.releaseAll(false);
+});
+
+Deno.test("T1.2a a hung counter probe keeps its slot until it settles", async () => {
+  let mono = 1_000;
+  // One clock drives both, so the gate follows it on the old and the new code alike.
+  const world = createWorld({ now: () => mono });
+  const limiter = scriptedLimiter(world, (endpoint) => (endpoint.includes("stage4_audit_counter") ? "hang" : false));
+  const started = performance.now();
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(performance.now() - started < BOUND_MS, true);
+  assertEquals(limiter.count("stage4_audit_counter"), 1);
+
+  mono += 61_000; // both the closed window and the counter interval have passed
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(limiter.count("stage4_audit_counter"), 1, "no second counter probe while the first is unsettled");
+
+  limiter.releaseAll(false);
+  await settleMicrotasks();
+  mono += 61_000;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_counter"), 2, "the slot is free again once the call settled");
+});
+
+Deno.test("T1.2b a hung counter insert keeps its slot: no second insert starts", async () => {
+  let mono = 1_000;
+  // One clock drives both, so the gate follows it on the old and the new code alike.
+  const world = createWorld({ now: () => mono });
+  scriptedLimiter(world, (endpoint) => endpoint.includes("stage4_audit_counter"));
+  const inserts = hangingAuditInserts(world);
+  const started = performance.now();
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(performance.now() - started < BOUND_MS, true, "the request does not wait for the insert");
+  assertEquals(inserts.started(), 1);
+
+  mono += 61_000;
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(inserts.started(), 1, "never a second counter insert while the first is unsettled");
+
+  inserts.releaseAll();
+  await settleMicrotasks();
+  mono += 61_000;
+  await anonymous(world);
+  assertEquals(inserts.started(), 2, "the slot is free again once the insert settled");
+  inserts.releaseAll();
+});
+
+Deno.test("T1.2c a hung admitted anonymous audit insert is bounded and never doubled", async () => {
+  const world = createWorld();
+  scriptedLimiter(world, () => true);
+  const inserts = hangingAuditInserts(world);
+  const started = performance.now();
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(performance.now() - started < BOUND_MS, true, "the request does not wait for the insert");
+  assertEquals(inserts.started(), 1);
+
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(inserts.started(), 1, "a request that finds the slot taken skips its insert and counts as suppressed");
+
+  inserts.releaseAll();
+  await settleMicrotasks();
+  await anonymous(world);
+  assertEquals(inserts.started(), 2, "the slot is free again once the insert settled");
+  inserts.releaseAll();
+});
+
+Deno.test("T1.3 the cool-down follows the monotonic clock, not the wall clock", async () => {
+  let wall = 5_000_000_000;
+  let mono = 1_000;
+  const world = createWorld({ now: () => wall, monotonicNow: () => mono });
+  const limiter = scriptedLimiter(world, () => false);
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 1);
+
+  // The wall clock steps back an hour while the monotonic clock passes the cool-down: the gate reopens.
+  wall -= 3_600_000;
+  mono += 10_001;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2, "a backwards wall step must not keep the gate closed");
+
+  // The wall clock steps forward an hour, the monotonic clock only a second: the gate stays closed.
+  wall += 7_200_000;
+  mono += 1_000;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2, "a forwards wall step must not reopen the gate early");
+});
+
+Deno.test("T1.4 expiry of a handle still follows the wall clock", async () => {
+  let wall = Date.now();
+  const world = createWorld({ now: () => wall, monotonicNow: () => 1_000 });
+  const handle = await firstHandle(world);
+  wall += 2 * HANDLE_TTL_MS;
+  const res = await world.calls("youtube_reply", { target_handle: handle, text: "x", operation_id: crypto.randomUUID() });
+  assertEquals((await jsonOf(res)).reason, "expired_handle");
 });
 
 Deno.test("Hold is refused straight after validation, before the limiter, the account read and the capability gate", async () => {
@@ -2284,4 +2485,177 @@ Deno.test("an edit status read with no draft returns the receipt at once: no set
     0,
     "no rollout settings read either",
   );
+});
+
+// ---- T4: the edit-status observation (B2, M4, M5) --------------------------------------------------------
+
+/** Runs `change(n)` on the n-th (1-based) account read the handler makes from now on, before the row is returned. */
+function onAccountRead(world: World, change: (n: number) => void) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.from.bind(fake);
+  let n = 0;
+  fake.from = (table: string) => {
+    const builder = original(table) as { maybeSingle?: () => Promise<unknown> };
+    if (table !== "social_accounts" || typeof builder.maybeSingle !== "function") return builder;
+    const inner = builder.maybeSingle.bind(builder);
+    builder.maybeSingle = () => {
+      n += 1;
+      change(n);
+      return inner();
+    };
+    return builder;
+  };
+}
+
+/** The n-th (1-based) account read from now on fails like a database error. */
+function failAccountReadAt(world: World, failing: number) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.from.bind(fake);
+  let n = 0;
+  fake.from = (table: string) => {
+    const builder = original(table) as { maybeSingle?: () => Promise<unknown> };
+    if (table !== "social_accounts" || typeof builder.maybeSingle !== "function") return builder;
+    const inner = builder.maybeSingle.bind(builder);
+    builder.maybeSingle = () => {
+      n += 1;
+      return n === failing ? Promise.resolve({ data: null, error: { message: "database unavailable" } }) : inner();
+    };
+    return builder;
+  };
+}
+
+/** The n-th (1-based) call of the RPC `fn` from now on answers with a database error. */
+function failRpcAt(world: World, fn: string, failing: number) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  let n = 0;
+  fake.rpc = (name: string, params: Record<string, unknown>) => {
+    if (name === fn) {
+      n += 1;
+      if (n === failing) return Promise.resolve({ data: null, error: { message: "unreadable" } });
+    }
+    return original(name, params);
+  };
+}
+
+const withdrawRead = (world: World) =>
+  world.setPolicy({ [nativeAccount().id]: { read: false, held: false, write: false, ban: false } });
+
+Deno.test("T4.1 read withdrawn during the binding read right before the provider read: no provider read at all", async () => {
+  const { world, op } = await editedWorld();
+  // From the third account read on (the last one before the provider request in the old order),
+  // the capability is withdrawn. The capability must be asked AFTER that read, not before it.
+  onAccountRead(world, (n) => { if (n >= 3) withdrawRead(world); });
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 200);
+  const status = await jsonOf(res);
+  assertEquals(world.reads.length, 0, "no provider read after the withdrawal");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals(status.data.state, "confirmed", "the receipt itself still goes out under the unchanged binding");
+});
+
+Deno.test("T4.1b read withdrawn at the boundary capability check: no provider read", async () => {
+  const { world, op } = await editedWorld();
+  // At the send boundary the capability is asked first, then the binding. The
+  // withdrawal lands on the boundary capability answer (the second admits call
+  // in observeEdit), so the provider read must never start.
+  let admitsCalls = 0;
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  fake.rpc = async (name: string, params: Record<string, unknown>) => {
+    if (name === "youtube_comments_stage4_admits" && ++admitsCalls === 2) withdrawRead(world);
+    return original(name, params);
+  };
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
+  assertEquals(world.reads.length, 0);
+  assertEquals(status.data.observation, "unavailable");
+});
+
+Deno.test("T4.1c a rebind during the boundary capability answer is seen by the binding check that follows", async () => {
+  const { world, op } = await editedWorld();
+  // The boundary capability still answers "allowed", but the account is
+  // rebound before that answer reaches the handler. Only a binding read made
+  // AFTER the capability answer can see the new generation: a parallel read
+  // already captured the old row and lets the provider read through.
+  let admitsCalls = 0;
+  afterRpc(world, "youtube_comments_stage4_admits", () => {
+    admitsCalls += 1;
+    if (admitsCalls === 2) reconnect(world);
+  });
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  const body = await jsonOf(res);
+  assertEquals(res.status, 404);
+  assertEquals(body.reason, "not_found");
+  assertEquals("data" in body, false, "no field of the old receipt crosses the rebind");
+  assertEquals(world.reads.length, 0, "the provider comment was never read under the new binding");
+});
+
+Deno.test("T4.2 read withdrawn during the provider read: the text that was read is dropped", async () => {
+  const { world, op } = await editedWorld();
+  afterCommentRead(world, () => withdrawRead(world));
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
+  assertEquals(world.reads.length, 1, "the provider was read once, before the withdrawal");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals((status.data as { observed_text?: unknown }).observed_text ?? null, null, "no observed text crosses the withdrawal");
+});
+
+Deno.test("T4.3a a settings read error at the first capability check is not a 503: the receipt goes out unobserved", async () => {
+  const { world, op } = await editedWorld();
+  failRpcAt(world, "youtube_comments_stage4_admits", 1);
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 200);
+  const status = await jsonOf(res);
+  assertEquals(status.data.state, "confirmed");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals(world.reads.length, 0, "no provider read");
+});
+
+Deno.test("T4.3b a settings read error at the send boundary is not a 503 either", async () => {
+  const { world, op } = await editedWorld();
+  failRpcAt(world, "youtube_comments_stage4_admits", 2);
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 200);
+  const status = await jsonOf(res);
+  assertEquals(status.data.state, "confirmed");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals(world.reads.length, 0, "no provider read");
+});
+
+Deno.test("T4.3c a failed BINDING read at those points is still a 503", async () => {
+  for (const failing of [2, 3, 4]) {
+    const { world, op } = await editedWorld();
+    failAccountReadAt(world, failing);
+    const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+    assertEquals(res.status, 503, `the account read number ${failing} failing is a temporary refusal`);
+    assertEquals((await jsonOf(res)).reason, "upstream");
+  }
+});
+
+Deno.test("T4.4 a reconnect landing during the first capability check: no credential is prepared from the old row", async () => {
+  const { world, op } = await editedWorld();
+  // The stored credential is expired, so preparing it would start a refresh (a lease RPC) with
+  // the row the handler read BEFORE the reconnect.
+  const account = world.accounts.get(nativeAccount().id)!;
+  account.token_expires_at = new Date(Date.now() - 1000).toISOString();
+  afterRpc(world, "youtube_comments_stage4_admits", () => reconnect(world));
+  world.rpcLog.length = 0;
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 404);
+  assertEquals("data" in (await res.json()), false, "no field of the old receipt crosses the reconnect");
+  assertEquals(
+    world.rpcLog.filter((c) => c.fn.includes("refresh") || c.fn.includes("lease")).length,
+    0,
+    "no refresh was started from the superseded snapshot",
+  );
+  assertEquals(world.reads.length, 0);
+});
+
+Deno.test("T4.5 the unchanged paths: a matching and a differing draft give the two observed values", async () => {
+  const { world, op } = await editedWorld();
+  const same = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
+  assertEquals(same.data.observation, "requested_text_observed");
+  assertEquals((same.data as { observed_text?: unknown }).observed_text, "edited");
+  const other = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "something else" }));
+  assertEquals(other.data.observation, "different_text_observed");
+  assertEquals(world.reads.length, 2, "one provider read per observation");
 });
