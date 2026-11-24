@@ -26,6 +26,8 @@ import type {
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
+const OTHER_ACCOUNT = "44444444-4444-4444-8444-444444444444";
+const STORE_KEY = `postora:yt-stage4:ops:${USER}`;
 
 function capabilities(): Stage4CapabilitiesPayload {
   const on = { allowed: true, reason: null };
@@ -48,6 +50,17 @@ function ownRow(): Stage4CommentRow {
     like_count: 0,
     moderation_status: "published",
     is_own: true,
+  };
+}
+
+function childRow(): Stage4CommentRow {
+  return {
+    ...ownRow(),
+    handle: "hdl-child",
+    kind: "reply",
+    comment_id: "c-child",
+    canonical_parent_id: "c-mine",
+    is_own: false,
   };
 }
 
@@ -76,8 +89,24 @@ function receipt(): Stage4ReceiptPayload {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => { resolve = res; });
-  return { promise, resolve };
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+function storedOperations(): Array<{ operationId: string; targetCommentId: string }> {
+  return JSON.parse(localStorage.getItem(STORE_KEY) ?? "[]") as Array<{ operationId: string; targetCommentId: string }>;
+}
+
+function seedEarlierOperation(action: "edit" | "reply" = "edit") {
+  savePendingOperation(USER, {
+    operationId: "op-earlier",
+    accountId: ACCOUNT,
+    videoId: "vid-1",
+    action,
+    targetCommentId: "c-mine",
+    createdAt: Date.now(),
+  });
 }
 
 function makeGateway(overrides: Partial<YouTubeCommentsGateway> = {}): YouTubeCommentsGateway {
@@ -269,9 +298,221 @@ describe("T2: one submit per target", () => {
       secondOutcome = await second;
     });
 
-    expect(firstOutcome).toMatchObject({ kind: "pending", operationId: "op-earlier" });
-    expect(secondOutcome).toMatchObject({ kind: "pending", operationId: "op-earlier" });
+    expect(firstOutcome).toEqual({ kind: "pending", operationId: "op-earlier" });
+    expect(secondOutcome).toEqual({ kind: "pending" });
     expect(operationStatus).toHaveBeenCalledTimes(1);
     expect(edit).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("canonical-parent reply guarding", () => {
+  it.each(["parent-then-child", "child-then-parent"] as const)(
+    "overlapping replies share one guard and send once: %s",
+    async (order) => {
+      const response = deferred<Stage4ReceiptPayload>();
+      const gateway = makeGateway({ reply: vi.fn(() => response.promise) });
+      const replyMock = gateway.reply as ReturnType<typeof vi.fn>;
+      const { result } = renderHook(() => useYouTubeStage4({ userId: USER, accountId: ACCOUNT, gateway }), {
+        wrapper: ({ children }) => withClient(children),
+      });
+      const rows = order === "parent-then-child" ? [ownRow(), childRow()] : [childRow(), ownRow()];
+      let firstOutcome: unknown = null;
+      let secondOutcome: unknown = null;
+
+      await act(async () => {
+        const first = result.current.reply("vid-1", rows[0], "first reply");
+        const second = result.current.reply("vid-1", rows[1], "second reply");
+        secondOutcome = await second;
+        response.resolve(receipt());
+        firstOutcome = await first;
+      });
+
+      const sent = replyMock.mock.calls[0][0] as { operationId: string; targetHandle: string };
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      expect(sent.targetHandle).toBe(rows[0].handle);
+      expect(firstOutcome).toMatchObject({ kind: "confirmed", operationId: sent.operationId });
+      expect(secondOutcome).toEqual({ kind: "pending", operationId: sent.operationId });
+      expect(storedOperations()).toEqual([expect.objectContaining({
+        operationId: sent.operationId,
+        targetCommentId: "c-mine",
+      })]);
+    },
+  );
+
+  it("a lost reply sent from a child row guards a later reply from its parent row", async () => {
+    const gateway = makeGateway({
+      operationStatus: vi.fn(async () => status("claimed", { action: "reply" })),
+    });
+    const replyMock = gateway.reply as ReturnType<typeof vi.fn>;
+    replyMock.mockRejectedValueOnce(new Error("Failed to fetch"));
+    const { result } = renderHook(() => useYouTubeStage4({ userId: USER, accountId: ACCOUNT, gateway }), {
+      wrapper: ({ children }) => withClient(children),
+    });
+    let lostOutcome: unknown = null;
+    let guardedOutcome: unknown = null;
+
+    await act(async () => {
+      lostOutcome = await result.current.reply("vid-1", childRow(), "reply from the child row");
+    });
+    const sent = replyMock.mock.calls[0][0] as { operationId: string };
+    await act(async () => {
+      guardedOutcome = await result.current.reply("vid-1", ownRow(), "reply from the parent row");
+    });
+
+    expect(lostOutcome).toMatchObject({ kind: "error", operationId: sent.operationId });
+    expect(guardedOutcome).toEqual({ kind: "pending", operationId: sent.operationId });
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(storedOperations()).toEqual([expect.objectContaining({
+      operationId: sent.operationId,
+      targetCommentId: "c-mine",
+    })]);
+  });
+});
+
+describe("submit cancellation during recovery", () => {
+  it.each(["account-switch", "unmount", "rapid-round-trip"] as const)(
+    "returns cancelled without a write or a new identity: %s",
+    async (scenario) => {
+      const recovery = deferred<Stage4OperationStatusPayload>();
+      const operationStatus = vi.fn()
+        .mockImplementationOnce(() => recovery.promise)
+        .mockImplementation(async () => status("claimed", { operation_id: "op-earlier" }));
+      const gateway = makeGateway({ operationStatus });
+      const edit = gateway.edit as ReturnType<typeof vi.fn>;
+      const view = renderHook(
+        ({ accountId }) => useYouTubeStage4({ userId: USER, accountId, gateway }),
+        { initialProps: { accountId: ACCOUNT }, wrapper: ({ children }) => withClient(children) },
+      );
+      seedEarlierOperation();
+      const realNow = Date.now.bind(Date);
+      vi.spyOn(Date, "now").mockImplementation(() => realNow() + 200_000);
+
+      const submission = view.result.current.editComment("vid-1", ownRow(), "must not be sent");
+      expect(operationStatus).toHaveBeenCalledTimes(1);
+      if (scenario === "account-switch") {
+        view.rerender({ accountId: OTHER_ACCOUNT });
+      } else if (scenario === "unmount") {
+        view.unmount();
+      } else {
+        view.rerender({ accountId: OTHER_ACCOUNT });
+        view.rerender({ accountId: ACCOUNT });
+      }
+
+      let outcome: unknown = null;
+      await act(async () => {
+        recovery.reject(new YouTubeCommentsError("not_found"));
+        outcome = await submission;
+      });
+
+      expect(outcome).toEqual({ kind: "cancelled" });
+      expect(edit).not.toHaveBeenCalled();
+      expect(storedOperations()).toEqual([expect.objectContaining({
+        operationId: "op-earlier",
+        targetCommentId: "c-mine",
+      })]);
+    },
+  );
+
+  it("a fresh submit after a rapid round-trip is not blocked by the cancelled recovery lock", async () => {
+    const recovery = deferred<Stage4OperationStatusPayload>();
+    const operationStatus = vi.fn()
+      .mockImplementationOnce(() => recovery.promise)
+      .mockImplementation(async () => status("claimed", { operation_id: "op-earlier" }));
+    const gateway = makeGateway({ operationStatus });
+    const view = renderHook(
+      ({ accountId }) => useYouTubeStage4({ userId: USER, accountId, gateway }),
+      { initialProps: { accountId: ACCOUNT }, wrapper: ({ children }) => withClient(children) },
+    );
+    seedEarlierOperation();
+
+    const stale = view.result.current.editComment("vid-1", ownRow(), "stale");
+    view.rerender({ accountId: OTHER_ACCOUNT });
+    view.rerender({ accountId: ACCOUNT });
+
+    let freshOutcome: unknown = null;
+    await act(async () => {
+      freshOutcome = await view.result.current.editComment("vid-1", ownRow(), "fresh");
+    });
+    expect(freshOutcome).toEqual({ kind: "pending", operationId: "op-earlier" });
+    // Call 1: stale submit; call 2: round-trip mount recovery effect; call 3: fresh submit.
+    expect(operationStatus).toHaveBeenCalledTimes(3);
+
+    let staleOutcome: unknown = null;
+    await act(async () => {
+      recovery.resolve(status("confirmed", { operation_id: "op-earlier" }));
+      staleOutcome = await stale;
+    });
+    expect(staleOutcome).toEqual({ kind: "cancelled" });
+  });
+});
+
+describe("concurrent submit operation identities", () => {
+  it("a second submit during a newly minted write receives that new operation id", async () => {
+    const response = deferred<Stage4ReceiptPayload>();
+    const gateway = makeGateway({ edit: vi.fn(() => response.promise) });
+    const edit = gateway.edit as ReturnType<typeof vi.fn>;
+    const { result } = renderHook(() => useYouTubeStage4({ userId: USER, accountId: ACCOUNT, gateway }), {
+      wrapper: ({ children }) => withClient(children),
+    });
+    let firstOutcome: unknown = null;
+    let secondOutcome: unknown = null;
+
+    await act(async () => {
+      const first = result.current.editComment("vid-1", ownRow(), "first edit");
+      const second = result.current.editComment("vid-1", ownRow(), "second edit");
+      secondOutcome = await second;
+      response.resolve(receipt());
+      firstOutcome = await first;
+    });
+
+    const sent = edit.mock.calls[0][0] as { operationId: string };
+    expect(secondOutcome).toEqual({ kind: "pending", operationId: sent.operationId });
+    expect(firstOutcome).toMatchObject({ kind: "confirmed", operationId: sent.operationId });
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("the composer shows no Check status button for a concurrent submit during recovery", async () => {
+    const recovery = deferred<Stage4OperationStatusPayload>();
+    const gateway = makeGateway({
+      operationStatus: vi.fn(() => recovery.promise),
+      threadPage: vi.fn(async () => ({
+        account_id: ACCOUNT,
+        channel_id: "UC-x",
+        binding_generation: 1,
+        video_id: "vid-1",
+        list: "published" as const,
+        items: [ownRow(), childRow()],
+        next_cursor: null,
+        inconsistent_count: 0,
+      })),
+    });
+    const reply = gateway.reply as ReturnType<typeof vi.fn>;
+    render(withClient(<YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Load replies" }));
+    const replyActions = await screen.findAllByRole("button", { name: "Reply" });
+    expect(replyActions).toHaveLength(2);
+    fireEvent.click(replyActions[0]);
+    fireEvent.click(replyActions[1]);
+    const editors = screen.getAllByLabelText("Write a reply");
+    fireEvent.change(editors[0], { target: { value: "parent submit" } });
+    fireEvent.change(editors[1], { target: { value: "child submit" } });
+    seedEarlierOperation("reply");
+    const submitButtons = screen.getAllByRole("button", { name: "Reply" });
+
+    await act(async () => {
+      fireEvent.click(submitButtons[0]);
+      await Promise.resolve();
+      fireEvent.click(submitButtons[1]);
+    });
+
+    expect(await screen.findByText(/An earlier attempt for this comment is still being checked/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check status" })).not.toBeInTheDocument();
+    expect(reply).not.toHaveBeenCalled();
+
+    await act(async () => {
+      recovery.resolve(status("confirmed", { operation_id: "op-earlier", action: "reply" }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
   });
 });

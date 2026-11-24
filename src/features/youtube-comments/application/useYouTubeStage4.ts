@@ -32,7 +32,8 @@ export type SubmissionOutcome =
     /** What a status check compared against the draft (an edit), kept apart from the receipt state. */
     observation?: Stage4OperationStatusPayload["observation"];
   }
-  | { kind: "pending"; operationId: string }
+  | { kind: "pending"; operationId?: string }
+  | { kind: "cancelled" }
   /**
    * The pre-submit check found that an EARLIER submit of the owner's has since
    * settled. Its result is shown first; what was typed now was not sent, and a
@@ -307,12 +308,18 @@ export function useYouTubeStage4(params: {
   // quota); a status check must still know what the operation was. Removed
   // when a surface acknowledges the outcome, and when the account is discarded.
   const liveOperations = useRef(new Map<string, PendingStage4Operation>());
-  // One entry per target while a submit for it runs: the operation that submit
-  // is waiting on (an earlier one it is recovering, then its own).
-  const submitsInFlight = useRef(new Map<string, string>());
+  // One entry per target while a submit for it runs. The id stays null until
+  // this submit mints its own operation; object identity and epoch protect a
+  // newer submit's lock after a rapid context switch.
+  const submitsInFlight = useRef(new Map<string, { operationId: string | null; epoch: number }>());
   const aliveRef = useRef(true);
-  const contextRef = useRef(`${userId}:${accountId}`);
-  contextRef.current = `${userId}:${accountId}`;
+  const context = `${userId}:${accountId}`;
+  const contextRef = useRef(context);
+  const contextEpochRef = useRef(0);
+  if (contextRef.current !== context) {
+    contextRef.current = context;
+    contextEpochRef.current += 1;
+  }
   useEffect(() => {
     aliveRef.current = true;
     return () => {
@@ -332,6 +339,12 @@ export function useYouTubeStage4(params: {
       operationId?: string;
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
+      const submitContext = contextRef.current;
+      const submitEpoch = contextEpochRef.current;
+      const isStillCurrent = () => aliveRef.current
+        && contextRef.current === submitContext
+        && contextEpochRef.current === submitEpoch;
+      if (!isStillCurrent()) return { kind: "cancelled" };
       const targetCommentId = input.targetCommentId ?? "";
       const guardKey = `${accountId}|${input.videoId}|${action}|${targetCommentId}`;
       // Storage can be blocked or full, so a stored list can miss an operation;
@@ -349,9 +362,16 @@ export function useYouTubeStage4(params: {
       };
       // One submit per target at a time: a second click while the first is
       // still recovering or sending is answered as pending and sends nothing.
-      const inFlightOperationId = submitsInFlight.current.get(guardKey);
-      if (inFlightOperationId !== undefined) return { kind: "pending", operationId: inFlightOperationId };
+      // Recovery has no NEW operation id to check yet.
+      const existingLock = submitsInFlight.current.get(guardKey);
+      if (existingLock && (existingLock.operationId !== null || existingLock.epoch === submitEpoch)) {
+        return existingLock.operationId
+          ? { kind: "pending", operationId: existingLock.operationId }
+          : { kind: "pending" };
+      }
+      const submitLock: { operationId: string | null; epoch: number } = { operationId: null, epoch: submitEpoch };
       try {
+        submitsInFlight.current.set(guardKey, submitLock);
         // An earlier submit for this target blocks a new one only while it may
         // still land (claimed or dispatched) or cannot be read right now. An
         // INDETERMINATE one stays guarded by the server's fence for the
@@ -359,8 +379,8 @@ export function useYouTubeStage4(params: {
         // unresolved), so a different text, a deliberate new edit or a new
         // reject is a new intent and gets its own key (spec 9.1 and 9.3).
         for (const earlier of pendingForTarget()) {
-          submitsInFlight.current.set(guardKey, earlier.operationId);
           const recovery = await recoverOperation(gateway, accountId, earlier);
+          if (!isStillCurrent()) return { kind: "cancelled" };
           if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
           if (recovery.settled && recovery.status) {
             // A result the owner never saw: show it, and keep its identity until
@@ -381,7 +401,9 @@ export function useYouTubeStage4(params: {
           }
         }
 
+        if (!isStillCurrent()) return { kind: "cancelled" };
         const operationId = input.operationId ?? mintOperationId();
+        submitLock.operationId = operationId;
         const identity: PendingStage4Operation = {
           operationId,
           accountId,
@@ -392,7 +414,6 @@ export function useYouTubeStage4(params: {
         };
         liveOperations.current.set(operationId, identity);
         savePendingOperation(userId, identity);
-        submitsInFlight.current.set(guardKey, operationId);
 
         let receipt: Stage4ReceiptPayload;
         try {
@@ -413,7 +434,7 @@ export function useYouTubeStage4(params: {
         // outcome acknowledges it (see `acknowledge`): a response that lands
         // after its composer is gone leaves the identity for the recovery
         // banner of the next view instead of losing the only reference.
-        if (receipt.state === "confirmed") {
+        if (receipt.state === "confirmed" && isStillCurrent()) {
           void threads.reload();
         }
         if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
@@ -422,7 +443,7 @@ export function useYouTubeStage4(params: {
         // claimed/dispatched: the browser lost the answer before settlement.
         return { kind: "indeterminate", receipt, operationId };
       } finally {
-        submitsInFlight.current.delete(guardKey);
+        if (submitsInFlight.current.get(guardKey) === submitLock) submitsInFlight.current.delete(guardKey);
       }
     },
     [userId, accountId, threads, gateway],
@@ -448,7 +469,7 @@ export function useYouTubeStage4(params: {
   const reply = useCallback(
     (videoId: string, target: Stage4CommentRow, text: string) => submit("reply", {
       videoId,
-      targetCommentId: target.comment_id,
+      targetCommentId: target.canonical_parent_id.trim() || target.comment_id,
       run: (operationId) => gateway.reply({ accountId, targetHandle: target.handle, text, operationId }),
     }),
     [submit, gateway, accountId],
