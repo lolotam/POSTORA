@@ -2247,6 +2247,7 @@ function scriptedLimiter(world: World, plan: (endpoint: string) => boolean | "ha
     releaseAll: (allowed: boolean) => {
       while (hung.length) hung.shift()!(allowed);
     },
+    releaseOldest: (allowed: boolean) => hung.shift()?.(allowed),
   };
 }
 
@@ -2279,7 +2280,8 @@ const BOUND_MS = 6000;
 
 Deno.test("T1.1 a hung probe keeps its slot: after the cool-down no second call starts until it settles", async () => {
   let mono = 1_000;
-  const world = createWorld({ monotonicNow: () => mono });
+  // One clock drives both, so the gate follows it on the old and the new code alike.
+  const world = createWorld({ now: () => mono });
   const limiter = scriptedLimiter(world, () => "hang");
   const started = performance.now();
   assertEquals((await anonymous(world)).status, 401);
@@ -2298,9 +2300,27 @@ Deno.test("T1.1 a hung probe keeps its slot: after the cool-down no second call 
   limiter.releaseAll(false);
 });
 
+Deno.test("T1.1b a stale call that settles after a reset cannot free the slot of a newer call", async () => {
+  let mono = 1_000;
+  const world = createWorld({ now: () => mono });
+  const limiter = scriptedLimiter(world, (endpoint) => (endpoint.includes("stage4_audit_anon") ? "hang" : false));
+  await anonymous(world); // probe #1 hangs and is cut off at the bound
+  resetAnonRefusalGate(); // a fresh worker: the new probe is call #2
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2);
+
+  limiter.releaseOldest(false); // call #1 finally settles: it must free ITS hold only
+  await settleMicrotasks();
+  mono += 11_000;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2, "call #2 still holds the slot");
+  limiter.releaseAll(false);
+});
+
 Deno.test("T1.2a a hung counter probe keeps its slot until it settles", async () => {
   let mono = 1_000;
-  const world = createWorld({ monotonicNow: () => mono });
+  // One clock drives both, so the gate follows it on the old and the new code alike.
+  const world = createWorld({ now: () => mono });
   const limiter = scriptedLimiter(world, (endpoint) => (endpoint.includes("stage4_audit_counter") ? "hang" : false));
   const started = performance.now();
   assertEquals((await anonymous(world)).status, 401);
@@ -2320,7 +2340,8 @@ Deno.test("T1.2a a hung counter probe keeps its slot until it settles", async ()
 
 Deno.test("T1.2b a hung counter insert keeps its slot: no second insert starts", async () => {
   let mono = 1_000;
-  const world = createWorld({ monotonicNow: () => mono });
+  // One clock drives both, so the gate follows it on the old and the new code alike.
+  const world = createWorld({ now: () => mono });
   scriptedLimiter(world, (endpoint) => endpoint.includes("stage4_audit_counter"));
   const inserts = hangingAuditInserts(world);
   const started = performance.now();

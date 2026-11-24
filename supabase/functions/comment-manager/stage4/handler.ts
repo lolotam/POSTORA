@@ -53,10 +53,8 @@ import { STAGE4_HOLD_FROM_PUBLISHED } from "./contractTypes.ts";
 import {
   stage4RateLimit,
   STAGE4_RATE_LIMITS,
-  releaseAnonymousSlot,
   resetAnonymousSlots,
-  takeAnonymousSlot,
-  withAnonymousBound,
+  runInAnonymousSlot,
 } from "./rateLimit.ts";
 
 export interface Stage4Deps {
@@ -145,11 +143,12 @@ export function resetAnonRefusalGate(): void {
  */
 async function anonBucketAdmits(deps: Stage4Deps): Promise<boolean> {
   if (deps.monotonicNow() < anonBucketClosedUntil) return false;
-  if (!takeAnonymousSlot("bucket_probe")) return false;
-  const probe = stage4RateLimit(deps.admin, "anonymous", "stage4_audit_anon", ANON_AUDIT_MAX_PER_MINUTE, 60)
-    .then((result) => result.allowed);
-  const outcome = await withAnonymousBound(probe, () => releaseAnonymousSlot("bucket_probe"));
-  const admitted = !outcome.timedOut && outcome.value === true;
+  const outcome = await runInAnonymousSlot("bucket_probe", () =>
+    stage4RateLimit(deps.admin, "anonymous", "stage4_audit_anon", ANON_AUDIT_MAX_PER_MINUTE, 60));
+  // A request that finds the probe running is refused without a call of its
+  // own and does not close the gate: the running probe decides that.
+  if (outcome.kind === "busy") return false;
+  const admitted = outcome.kind === "settled" && outcome.value.allowed;
   if (!admitted) anonBucketClosedUntil = deps.monotonicNow() + ANON_BUCKET_CLOSED_MS;
   return admitted;
 }
@@ -192,15 +191,13 @@ async function refusal(
       // The counter probe holds a slot of its own: while one is running this
       // worker starts no second one, and the request waits at most the bound
       // for it.
-      if (!takeAnonymousSlot("counter_probe")) return false;
-      const counter = stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60);
-      const counterOutcome = await withAnonymousBound(counter, () => releaseAnonymousSlot("counter_probe"));
-      if (counterOutcome.timedOut || !counterOutcome.value?.allowed) return false;
+      const counter = await runInAnonymousSlot("counter_probe", () =>
+        stage4RateLimit(deps.admin, "anonymous", "stage4_audit_counter", 1, 60));
+      if (counter.kind !== "settled" || !counter.value.allowed) return false;
       // The counter row: one insert at a time per worker. A request that
       // finds the slot taken skips the insert (it never waits on the running
       // one and never starts a second) and the tally stays in memory.
-      if (!takeAnonymousSlot("counter_insert")) return false;
-      const insert = deps.admin.from("system_logs").insert({
+      const insertOutcome = await runInAnonymousSlot("counter_insert", () => deps.admin.from("system_logs").insert({
         level: "warn",
         category: "edge",
         source: "comment-manager",
@@ -213,12 +210,12 @@ async function refusal(
           request_id: "",
           suppressed: suppressed,
         },
-      });
-      const insertOutcome = await withAnonymousBound(insert, () => releaseAnonymousSlot("counter_insert"));
-      // The insert may still land after the response has gone out; the
-      // suppression console event remains the trace either way.
-      if (insertOutcome.timedOut) return false;
-      if (insertOutcome.error) {
+      }));
+      // An insert that is still running past the bound may land after the
+      // response has gone out; the tally stays in memory and the suppression
+      // console event remains the trace either way.
+      if (insertOutcome.kind === "busy" || insertOutcome.kind === "bound") return false;
+      if (insertOutcome.kind === "failed") {
         console.warn("comment-manager stage4 audit counter insert failed: cause=exception");
         return false;
       }

@@ -79,19 +79,12 @@ export type AnonymousSlotName =
   | "counter_insert"
   | "audit_insert";
 
-const anonymousSlots = new Set<AnonymousSlotName>();
-
-/** Take the slot. False when another call still holds it. */
-export function takeAnonymousSlot(name: AnonymousSlotName): boolean {
-  if (anonymousSlots.has(name)) return false;
-  anonymousSlots.add(name);
-  return true;
-}
-
-/** Free the slot: called when the call settles, whenever that is. */
-export function releaseAnonymousSlot(name: AnonymousSlotName): void {
-  anonymousSlots.delete(name);
-}
+/**
+ * Which call holds a slot. The holder is a token, not a flag, so a call that
+ * settles late (after `resetAnonymousSlots`, or after a newer holder took the
+ * slot) can only free its own hold, never somebody else's.
+ */
+const anonymousSlots = new Map<AnonymousSlotName, symbol>();
 
 /** Forget every slot: a fresh worker (test seam). */
 export function resetAnonymousSlots(): void {
@@ -99,35 +92,54 @@ export function resetAnonymousSlots(): void {
 }
 
 /**
- * Wait for `call` at most ANON_PROBE_TIMEOUT_MS.
- *
- * The call keeps running when the bound passes. `release` is called when it
- * settles, so a slot held by a hung call is freed by the call itself and
- * never by the timeout. `timedOut` says the bound passed before the call
- * settled; `error` carries the failure of a call that settled in time.
+ * How one anonymous call ended, as far as the request that started it can tell.
+ *   busy     another call holds the slot: nothing was started
+ *   bound    ANON_PROBE_TIMEOUT_MS passed and the call is STILL running
+ *   failed   the call settled by rejecting
+ *   settled  the call settled with `value`
  */
-export async function withAnonymousBound<T>(
-  call: PromiseLike<T>,
-  release: () => void,
-): Promise<{ timedOut: boolean; value: T | null; error: unknown | null }> {
-  let settled = false;
-  let value: T | null = null;
-  let error: unknown = null;
-  const observed = Promise.resolve(call).then(
-    (v) => { settled = true; value = v; release(); return v; },
-    (e) => { settled = true; error = e; release(); throw e; },
-  );
-  // The race observes the rejection, so it is never an unhandled rejection:
-  // the caller reads the timeout and the failure as one answer.
-  const raced = observed.then(() => "settled" as const, () => "settled" as const);
+export type AnonymousCall<T> =
+  | { kind: "busy" }
+  | { kind: "bound" }
+  | { kind: "failed" }
+  | { kind: "settled"; value: T };
+
+/**
+ * Run one anonymous database call in its slot and wait for it at most
+ * ANON_PROBE_TIMEOUT_MS. `start` is called only when the slot was free. The
+ * call keeps running when the bound passes, and the slot is freed by the call
+ * settling, never by the bound.
+ */
+export async function runInAnonymousSlot<T>(
+  name: AnonymousSlotName,
+  start: () => PromiseLike<T>,
+): Promise<AnonymousCall<T>> {
+  if (anonymousSlots.has(name)) return { kind: "busy" };
+  const token = Symbol(name);
+  anonymousSlots.set(name, token);
+
+  let call: Promise<AnonymousCall<T>>;
+  try {
+    call = Promise.resolve(start()).then(
+      (value) => ({ kind: "settled" as const, value }),
+      () => ({ kind: "failed" as const }),
+    );
+  } catch {
+    call = Promise.resolve({ kind: "failed" as const });
+  }
+  // Attached before the race below, so the slot is already free when the
+  // request that waited for this call carries on.
+  call.then(() => {
+    if (anonymousSlots.get(name) === token) anonymousSlots.delete(name);
+  });
+
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const bound = new Promise<"bound">((resolve) => {
-    timer = setTimeout(() => resolve("bound"), ANON_PROBE_TIMEOUT_MS);
+  const bound = new Promise<AnonymousCall<T>>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "bound" }), ANON_PROBE_TIMEOUT_MS);
   });
   try {
-    await Promise.race([raced, bound]);
+    return await Promise.race([call, bound]);
   } finally {
     clearTimeout(timer);
   }
-  return { timedOut: !settled, value, error };
 }
