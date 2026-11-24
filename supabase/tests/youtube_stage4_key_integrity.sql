@@ -35,8 +35,10 @@ CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA extensions;
 -- On a database that does not have it yet this is its first application, which
 -- is what the red run against 20261122130000 alone relies on NOT happening, so
 -- the file is only re-applied when the harness already applied it.
+-- The foreign key marks the migration: the rollback keeps the watermark table,
+-- so the watermark's existence no longer proves it was applied.
 -- ---------------------------------------------------------------------------
-SELECT to_regclass('public.youtube_comment_digest_key_watermark') IS NOT NULL AS s4k_migrated \gset
+SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.youtube_comment_operations'::regclass AND conname = 'youtube_comment_operations_intent_key_version_fkey') AS s4k_migrated \gset
 \if :s4k_migrated
 SELECT set_config('s4k.mark_before', last_version::text, false) FROM public.youtube_comment_digest_key_watermark;
 \ir ../migrations/20261124120000_youtube_stage4_key_integrity.sql
@@ -62,7 +64,8 @@ CREATE FUNCTION pg_temp.s4k_op(p_n int) RETURNS uuid LANGUAGE sql IMMUTABLE AS
   $$ SELECT ('6e7c0000-0000-4000-8000-' || lpad(p_n::text, 12, '0'))::uuid $$;
 
 -- The next key version number nobody ever used: above every existing version
--- and, once the watermark exists, above everything the watermark remembers.
+-- and, when the foreign key shows the migration is applied, above everything
+-- the watermark remembers (the rollback keeps the watermark table).
 CREATE FUNCTION pg_temp.s4k_next_version() RETURNS int LANGUAGE plpgsql AS $f$
 DECLARE
   v_next int;
@@ -74,7 +77,7 @@ BEGIN
            COALESCE((SELECT max(digest_key_version) FROM public.youtube_comment_operations), 0)
          ) + 1
     INTO v_next;
-  IF to_regclass('public.youtube_comment_digest_key_watermark') IS NOT NULL THEN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.youtube_comment_operations'::regclass AND conname = 'youtube_comment_operations_intent_key_version_fkey') THEN
     EXECUTE 'SELECT last_version FROM public.youtube_comment_digest_key_watermark' INTO v_mark;
     v_next := GREATEST(v_next, v_mark + 1);
   END IF;
@@ -909,6 +912,26 @@ BEGIN
     format('K4.8 (new) a non-string logical entry is invalid_request with no receipt: %s rows=%s', v_r, v_rows);
 END
 $k4_8_new$;
+
+-- K4.9 (new) a supplied logical map that is not an object is invalid_request,
+-- even for an edit where the map is otherwise not consumed: JSON null and an
+-- array are both refused, with no receipt.
+DO $k4_9_new$
+DECLARE
+  v_shape text;
+  v_r     jsonb;
+  v_rows  bigint;
+BEGIN
+  FOR v_shape IN SELECT unnest(ARRAY['null', '[]']) LOOP
+    v_r := pg_temp.s4k_k4_claim_logical(409, 'cmt-k4-9-' || v_shape, repeat('u', 64),
+              pg_temp.s4k_map(repeat('u', 64)), v_shape::jsonb);
+    v_rows := pg_temp.s4k_receipts(409);
+    DELETE FROM public.youtube_comment_operations WHERE owner_id = pg_temp.s4k_owner() AND operation_id = pg_temp.s4k_op(409);
+    ASSERT v_r ->> 'reason' = 'invalid_request' AND v_rows = 0,
+      format('K4.9 (new) the logical map %s is invalid_request with no receipt: %s rows=%s', v_shape, v_r, v_rows);
+  END LOOP;
+END
+$k4_9_new$;
 
 SELECT pg_temp.s4k_reset();
 

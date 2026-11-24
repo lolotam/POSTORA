@@ -49,7 +49,9 @@ select p.proname, pg_get_userbyid(p.proowner) from pg_proc p
  where p.proname in ('store_youtube_refreshed_token','store_youtube_refreshed_token_with_lease','store_youtube_refreshed_token_with_lease_neutral');
 -- the rollout key: expected absent
 select count(*) from public.app_settings where key = 'youtube_comments_stage4_rollout';
--- names the migration creates: expected none exist
+-- names the migration creates: on a FIRST apply both are NULL; on a RE-APPLY
+-- after a rollback the watermark table exists (the rollback keeps it) while
+-- the index is NULL. Both are fine to proceed.
 select conname from pg_constraint where conname in ('youtube_comment_operations_key_versions_check','youtube_comment_operations_intent_key_version_fkey');
 select to_regclass('public.youtube_comment_digest_key_watermark'), to_regclass('public.youtube_comment_operations_intent_key_version_idx');
 -- Postgres major: equal to the CI image (17)
@@ -71,7 +73,13 @@ The pre-check inside the migration refuses a violating row with a message of its
 
 Edge and frontend: revert the merge commit on `main`; the sync and the deploy follow on their own. The three parts roll back independently.
 
-**Drain live claims first.** Turn the rollout off (remove the rollout key per the Stage 4 runbook) and wait at least 2 minutes, then check `select count(*) from public.youtube_comment_operations where state = 'claimed' and dispatched_at is null and claimed_at > now() - interval '2 minutes'` is 0. A live claim holds locks the rollback's `ALTER TABLE` would queue behind.
+**Drain live claims first.** Turn the rollout off (remove the rollout key per the Stage 4 runbook) and wait at least 2 minutes, then run
+
+```sql
+select a.pid, a.state, a.xact_start, a.query from pg_locks l join pg_stat_activity a on a.pid = l.pid where l.relation in ('public.youtube_comment_operations'::regclass, 'public.youtube_comment_digest_keys'::regclass, 'public.social_accounts'::regclass) and a.pid <> pg_backend_pid();
+```
+
+It must return no row whose `query` belongs to the comment-manager or the claim / settle / status RPCs. A count of visible receipt rows cannot show an uncommitted claim, which is why the lock view is used instead. The rollback's own 5 s `lock_timeout` aborts it cleanly if something still holds a lock: wait for the holder to finish and retry.
 
 Database: apply `docs/runbooks/sql/20261124120000_youtube_stage4_key_integrity_rollback.sql` as `supabase_admin` with `ON_ERROR_STOP` on. It is one transaction that restores the three function bodies of `20261122130000` (copied verbatim), recreates the guard trigger as `BEFORE UPDATE OR DELETE`, drops the foreign key, the CHECK and the index, and keeps the watermark table (the only record of deleted key versions). It changes no receipt and no key. The rollback script is rehearsed in CI-style on the harness database: after it, `md5(pg_get_functiondef(...))` of the claim, the status and the guard equals the value before the migration, and the forward migration applies again.
 

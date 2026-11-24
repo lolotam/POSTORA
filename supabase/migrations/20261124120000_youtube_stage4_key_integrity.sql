@@ -48,6 +48,12 @@ BEGIN;
 
 SET LOCAL lock_timeout = '5s';
 
+-- The key table is locked FIRST, before any statement touches the receipts or
+-- the watermark, so a concurrent key insert waits at the table and holds no
+-- lock this migration needs. The seed below then reads maxima no insert can
+-- change.
+LOCK TABLE public.youtube_comment_digest_keys IN SHARE ROW EXCLUSIVE MODE;
+
 -- ===========================================================================
 -- 0. The pre-check. The constraints below are added only to data that already
 -- satisfies them; a violating row stops the migration with a clear message
@@ -253,9 +259,6 @@ COMMENT ON FUNCTION public.youtube_stage4_guard_digest_keys() IS
 DROP TRIGGER IF EXISTS trg_youtube_comment_digest_keys_guard
   ON public.youtube_comment_digest_keys;
 
--- The key table is locked before the watermark row so a concurrent key insert waits at the table and the seed reads maxima no insert can change.
-LOCK TABLE public.youtube_comment_digest_keys IN SHARE ROW EXCLUSIVE MODE;
-
 -- Seeded with the greatest of the key versions and of the two version columns
 -- of the receipts; a second application can only raise it.
 INSERT INTO public.youtube_comment_digest_key_watermark (singleton, last_version)
@@ -338,13 +341,13 @@ BEGIN
   -- compared; the single p_intent_digest argument stays in the signature (the
   -- function keeps its identity, its owner and its grants) and decides
   -- nothing beyond being present. A missing or non-object map is malformed,
-  -- and so is a map with a non-string entry; the logical map is optional (edit
-  -- and moderate omit it), but its entries must be strings too. All of it is
-  -- answered before the account is read.
+  -- and so is a map with a non-string entry. A supplied logical map must be an
+  -- object of strings; only SQL NULL means it is omitted (edit and moderate).
+  -- All of it is answered before the account is read.
   IF p_intent_digests IS NULL OR jsonb_typeof(p_intent_digests) <> 'object'
      OR EXISTS (SELECT 1 FROM jsonb_each(p_intent_digests) AS e WHERE jsonb_typeof(e.value) <> 'string')
-     OR (p_logical_digests IS NOT NULL AND jsonb_typeof(p_logical_digests) = 'object'
-         AND EXISTS (SELECT 1 FROM jsonb_each(p_logical_digests) AS e WHERE jsonb_typeof(e.value) <> 'string')) THEN
+     OR (p_logical_digests IS NOT NULL AND (jsonb_typeof(p_logical_digests) <> 'object'
+         OR EXISTS (SELECT 1 FROM jsonb_each(p_logical_digests) AS e WHERE jsonb_typeof(e.value) <> 'string'))) THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
   END IF;
 
