@@ -342,7 +342,7 @@ export function useYouTubeStage4(params: {
       if (videoChanged) contextEpochRef.current += 1;
     }
   }, [userId, accountId, effectiveVideoId]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
@@ -433,6 +433,7 @@ export function useYouTubeStage4(params: {
           videoId: input.videoId,
           action,
           targetCommentId,
+          ...(action === "reply" ? { targetIsCanonicalParent: true } : {}),
           createdAt: Date.now(),
         };
         liveOperations.current.set(operationId, identity);
@@ -678,6 +679,7 @@ function matchesPendingTarget(
 ): boolean {
   if (op.targetCommentId === targetCommentId) return true;
   if (action !== "reply" || !op.targetCommentId) return false;
+  if (op.targetIsCanonicalParent === true) return false;
   if (legacyTargetCommentId && op.targetCommentId === legacyTargetCommentId) return true;
   const loaded = loadedRows.find((row) => row.comment_id === op.targetCommentId);
   if (loaded) {

@@ -394,6 +394,33 @@ describe("canonical-parent reply guarding", () => {
     expect(outcome).toEqual({ kind: "pending", operationId: "op-legacy-child" });
     expect(replyMock).not.toHaveBeenCalled();
   });
+
+  it("an unloaded canonical reply record for another thread does not block this thread", async () => {
+    const gateway = makeGateway();
+    const replyMock = gateway.reply as ReturnType<typeof vi.fn>;
+    const operationStatus = gateway.operationStatus as ReturnType<typeof vi.fn>;
+    const { result } = renderHook(() => useYouTubeStage4({ userId: USER, accountId: ACCOUNT, gateway }), {
+      wrapper: ({ children }) => withClient(children),
+    });
+    savePendingOperation(USER, {
+      operationId: "op-other-thread",
+      accountId: ACCOUNT,
+      videoId: "vid-1",
+      action: "reply",
+      targetCommentId: "c-unloaded-thread",
+      targetIsCanonicalParent: true,
+      createdAt: Date.now(),
+    });
+
+    let outcome: unknown = null;
+    await act(async () => {
+      outcome = await result.current.reply("vid-1", ownRow(), "reply to unrelated thread");
+    });
+
+    expect(outcome).toMatchObject({ kind: "confirmed" });
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(operationStatus).not.toHaveBeenCalled();
+  });
 });
 
 describe("submit cancellation during recovery", () => {

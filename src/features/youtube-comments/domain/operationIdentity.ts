@@ -20,6 +20,8 @@ export interface PendingStage4Operation {
   action: Stage4OperationAction;
   /** The target comment id for reply/edit/moderate; empty for create. */
   targetCommentId: string;
+  /** True when reply `targetCommentId` was normalized to the canonical parent id. */
+  targetIsCanonicalParent?: boolean;
   createdAt: number;
 }
 
