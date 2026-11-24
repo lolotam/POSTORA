@@ -307,6 +307,7 @@ export function useYouTubeStage4(params: {
   // quota); a status check must still know what the operation was. Removed
   // when a surface acknowledges the outcome, and when the account is discarded.
   const liveOperations = useRef(new Map<string, PendingStage4Operation>());
+  const submitsInFlight = useRef(new Set<string>());
   const aliveRef = useRef(true);
   const contextRef = useRef(`${userId}:${accountId}`);
   contextRef.current = `${userId}:${accountId}`;
@@ -330,6 +331,7 @@ export function useYouTubeStage4(params: {
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
       const targetCommentId = input.targetCommentId ?? "";
+      const guardKey = `${accountId}|${input.videoId}|${action}|${targetCommentId}`;
       // Storage can be blocked or full, so a stored list can miss an operation;
       // the in-memory identities are the same ones, so the guard reads both.
       const pendingForTarget = (): PendingStage4Operation[] => {
@@ -343,70 +345,94 @@ export function useYouTubeStage4(params: {
           && !seen.has(op.operationId));
         return [...stored, ...live];
       };
-      // An earlier submit for this target blocks a new one only while it may
-      // still land (claimed or dispatched) or cannot be read right now. An
-      // INDETERMINATE one stays guarded by the server's fence for the
-      // original (the same logical create or reply is refused while it is
-      // unresolved), so a different text, a deliberate new edit or a new
-      // reject is a new intent and gets its own key (spec 9.1 and 9.3).
-      for (const earlier of pendingForTarget()) {
-        const recovery = await recoverOperation(gateway, accountId, earlier);
-        if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
-        if (recovery.settled && recovery.status) {
-          // A result the owner never saw: show it, and keep its identity until
-          // the surface that shows it acknowledges it. Nothing new is sent in
-          // the same click.
-          if (recovery.status.state === "confirmed") void threads.reload();
-          return {
-            kind: "earlier",
-            state: recovery.status.state as "confirmed" | "refused",
-            reason: recovery.status.reason,
-            operationId: earlier.operationId,
-          };
-        }
-        // Unreadable for good (the binding changed): there is nothing to show.
-        if (recovery.settled) clearPendingOperation(userId, earlier.operationId);
+      // One submit per target at a time: a second click while the first is
+      // still recovering or sending is answered as pending and sends nothing.
+      if (submitsInFlight.current.has(guardKey)) {
+        // The `pending` variant needs an operationId string, so name the
+        // operation this click would have waited for instead of inventing one.
+        const inFlightOperationId = pendingForTarget()[0]?.operationId
+          ?? [...liveOperations.current.values()].find((op) =>
+            op.accountId === accountId
+            && op.videoId === input.videoId
+            && op.action === action
+            && op.targetCommentId === targetCommentId)?.operationId;
+        // Unreachable: the key is added before the first await, and the new
+        // identity is stored before the next one. No id is fabricated here.
+        if (!inFlightOperationId) throw new Error("no operation identity for an in-flight submit");
+        return { kind: "pending", operationId: inFlightOperationId };
       }
-
-      const operationId = input.operationId ?? mintOperationId();
-      const identity: PendingStage4Operation = {
-        operationId,
-        accountId,
-        videoId: input.videoId,
-        action,
-        targetCommentId,
-        createdAt: Date.now(),
-      };
-      liveOperations.current.set(operationId, identity);
-      savePendingOperation(userId, identity);
-
-      let receipt: Stage4ReceiptPayload;
+      submitsInFlight.current.add(guardKey);
       try {
-        receipt = await input.run(operationId);
-      } catch (error) {
-        const reason = error instanceof YouTubeCommentsError ? error.code
-          : error instanceof Error && error.message ? error.message
-          : "upstream";
-        // A transport failure after the claim is indeterminate unless the
-        // server said otherwise; the local identity stays until status is read.
-        if (isShownRefusal(reason)) {
-          return { kind: "refused", reason, draftKept: true, operationId };
+        // An earlier submit for this target blocks a new one only while it may
+        // still land (claimed or dispatched) or cannot be read right now. An
+        // INDETERMINATE one stays guarded by the server's fence for the
+        // original (the same logical create or reply is refused while it is
+        // unresolved), so a different text, a deliberate new edit or a new
+        // reject is a new intent and gets its own key (spec 9.1 and 9.3).
+        for (const earlier of pendingForTarget()) {
+          const recovery = await recoverOperation(gateway, accountId, earlier);
+          if (recovery.inFlight || recovery.unavailable) return { kind: "pending", operationId: earlier.operationId };
+          if (recovery.settled && recovery.status) {
+            // A result the owner never saw: show it, and keep its identity until
+            // the surface that shows it acknowledges it. Nothing new is sent in
+            // the same click.
+            if (recovery.status.state === "confirmed") void threads.reload();
+            return {
+              kind: "earlier",
+              state: recovery.status.state as "confirmed" | "refused",
+              reason: recovery.status.reason,
+              operationId: earlier.operationId,
+            };
+          }
+          // Unreadable for good (the binding changed): there is nothing to show.
+          if (recovery.settled) {
+            liveOperations.current.delete(earlier.operationId);
+            clearPendingOperation(userId, earlier.operationId);
+          }
         }
-        return { kind: "error", reason, draftKept: true, operationId };
-      }
 
-      // The identity is NOT cleared here. Only a surface that shows the
-      // outcome acknowledges it (see `acknowledge`): a response that lands
-      // after its composer is gone leaves the identity for the recovery
-      // banner of the next view instead of losing the only reference.
-      if (receipt.state === "confirmed") {
-        void threads.reload();
+        const operationId = input.operationId ?? mintOperationId();
+        const identity: PendingStage4Operation = {
+          operationId,
+          accountId,
+          videoId: input.videoId,
+          action,
+          targetCommentId,
+          createdAt: Date.now(),
+        };
+        liveOperations.current.set(operationId, identity);
+        savePendingOperation(userId, identity);
+
+        let receipt: Stage4ReceiptPayload;
+        try {
+          receipt = await input.run(operationId);
+        } catch (error) {
+          const reason = error instanceof YouTubeCommentsError ? error.code
+            : error instanceof Error && error.message ? error.message
+            : "upstream";
+          // A transport failure after the claim is indeterminate unless the
+          // server said otherwise; the local identity stays until status is read.
+          if (isShownRefusal(reason)) {
+            return { kind: "refused", reason, draftKept: true, operationId };
+          }
+          return { kind: "error", reason, draftKept: true, operationId };
+        }
+
+        // The identity is NOT cleared here. Only a surface that shows the
+        // outcome acknowledges it (see `acknowledge`): a response that lands
+        // after its composer is gone leaves the identity for the recovery
+        // banner of the next view instead of losing the only reference.
+        if (receipt.state === "confirmed") {
+          void threads.reload();
+        }
+        if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
+        if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
+        if (receipt.state === "indeterminate") return { kind: "indeterminate", receipt, operationId };
+        // claimed/dispatched: the browser lost the answer before settlement.
+        return { kind: "indeterminate", receipt, operationId };
+      } finally {
+        submitsInFlight.current.delete(guardKey);
       }
-      if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
-      if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
-      if (receipt.state === "indeterminate") return { kind: "indeterminate", receipt, operationId };
-      // claimed/dispatched: the browser lost the answer before settlement.
-      return { kind: "indeterminate", receipt, operationId };
     },
     [userId, accountId, threads, gateway],
   );

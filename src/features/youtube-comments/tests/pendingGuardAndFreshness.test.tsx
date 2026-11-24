@@ -3,15 +3,19 @@
 //   G1  with browser storage blocked, the guard still sees the operation held
 //       only in memory and reads its status instead of minting a second edit;
 //   F1  when two loaded pages carry the same comment key, the copy read last
-//       (the greater dataUpdatedAt) wins, whatever page it came from.
+//       (the greater dataUpdatedAt) wins, whatever page it came from;
+//   T1  a settled identity leaves the in-memory guard even when storage is blocked;
+//   T2  one submit per target: a second click while the first reads status sends nothing.
 
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { YouTubeCommentsScreen } from "../ui/YouTubeCommentsScreen";
-import { useStage4Replies } from "../application/useYouTubeStage4";
+import { useStage4Replies, useYouTubeStage4 } from "../application/useYouTubeStage4";
 import { youtubeCommentsKey } from "../application/queryKeys";
+import { YouTubeCommentsError } from "../domain/errors";
+import { savePendingOperation } from "../domain/operationIdentity";
 import type { YouTubeCommentsGateway } from "../application/ports";
 import type {
   Stage4CapabilitiesPayload,
@@ -68,6 +72,12 @@ function status(state: Stage4OperationStatusPayload["state"], overrides: Partial
 
 function receipt(): Stage4ReceiptPayload {
   return { ...status("confirmed") } as Stage4ReceiptPayload;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
 }
 
 function makeGateway(overrides: Partial<YouTubeCommentsGateway> = {}): YouTubeCommentsGateway {
@@ -178,5 +188,90 @@ describe("F1: a duplicate row keeps the copy read last", () => {
 
     act(() => result.current.loadMore());
     expect(result.current.items.map((item) => item.row.text)).toEqual(["NEWER page one text"]);
+  });
+});
+
+describe("T1: a settled identity leaves the in-memory guard", () => {
+  it("a terminal not_found under blocked storage is not re-read on the next Save", async () => {
+    const gateway = makeGateway();
+    const edit = gateway.edit as ReturnType<typeof vi.fn>;
+    const operationStatus = gateway.operationStatus as ReturnType<typeof vi.fn>;
+    // The first edit reaches YouTube but its answer is lost in transport.
+    edit.mockRejectedValueOnce(new Error("Failed to fetch"));
+
+    render(withClient(<YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const editor = () => screen.getByLabelText("Edit your comment") as HTMLTextAreaElement;
+    fireEvent.change(editor(), { target: { value: "first text" } });
+
+    // Nothing reaches storage, so the in-memory identity is the only one held.
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage denied"); });
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("storage denied"); });
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("storage denied"); });
+
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save" })); });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    const firstOperationId = edit.mock.calls[0][0] as { operationId: string };
+    const operationIds = () => operationStatus.mock.calls.map((call) => (call[0] as { operationId: string }).operationId);
+
+    // The old operation is now old enough that not_found is final, not a pre-claim miss.
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + 200_000);
+    operationStatus.mockImplementation(async (params: { operationId: string }) => {
+      if (params.operationId === firstOperationId.operationId) throw new YouTubeCommentsError("not_found");
+      return status("confirmed");
+    });
+    operationStatus.mockClear();
+
+    // This Save reads the old id once, clears it, and sends a new edit.
+    fireEvent.change(editor(), { target: { value: "second text" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save" })); });
+    expect(edit).toHaveBeenCalledTimes(2);
+    expect(operationIds()).toContain(firstOperationId.operationId);
+
+    // The next Save must not be guarded by the old id a second time.
+    operationStatus.mockClear();
+    fireEvent.change(editor(), { target: { value: "third text" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save" })); });
+    expect(operationIds()).not.toContain(firstOperationId.operationId);
+    expect(edit).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("T2: one submit per target", () => {
+  it("a second click while the first waits on a status read is answered pending and sends nothing", async () => {
+    const confirmation = deferred<Stage4OperationStatusPayload>();
+    const operationStatus = vi.fn(() => confirmation.promise);
+    const gateway = makeGateway({ operationStatus });
+    const edit = gateway.edit as ReturnType<typeof vi.fn>;
+
+    const { result } = renderHook(() => useYouTubeStage4({ userId: USER, accountId: ACCOUNT, gateway }), {
+      wrapper: ({ children }) => withClient(children),
+    });
+    // Seed the earlier operation after mount so the recovery effect does not read it.
+    savePendingOperation(USER, {
+      operationId: "op-earlier",
+      accountId: ACCOUNT,
+      videoId: "vid-1",
+      action: "edit",
+      targetCommentId: "c-mine",
+      createdAt: Date.now(),
+    });
+
+    let firstOutcome: unknown = null;
+    let secondOutcome: unknown = null;
+    await act(async () => {
+      // The first click is inside recoverOperation(); the second must not start another.
+      const first = result.current.editComment("vid-1", ownRow(), "first");
+      const second = result.current.editComment("vid-1", ownRow(), "second");
+      confirmation.resolve(status("claimed"));
+      firstOutcome = await first;
+      secondOutcome = await second;
+    });
+
+    expect(firstOutcome).toMatchObject({ kind: "pending", operationId: "op-earlier" });
+    expect(secondOutcome).toMatchObject({ kind: "pending", operationId: "op-earlier" });
+    expect(operationStatus).toHaveBeenCalledTimes(1);
+    expect(edit).not.toHaveBeenCalled();
   });
 });

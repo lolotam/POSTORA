@@ -888,6 +888,7 @@ function Composer(params: {
         placeholder={params.placeholder}
         value={text}
         onChange={(event) => {
+          textRef.current = event.target.value;
           setText(event.target.value);
           params.onTextChange?.(event.target.value);
         }}
