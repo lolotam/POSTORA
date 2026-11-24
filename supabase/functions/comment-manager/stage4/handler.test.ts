@@ -2554,15 +2554,40 @@ Deno.test("T4.1 read withdrawn during the binding read right before the provider
   assertEquals(status.data.state, "confirmed", "the receipt itself still goes out under the unchanged binding");
 });
 
-Deno.test("T4.1b read withdrawn exactly at the send boundary: no provider read", async () => {
+Deno.test("T4.1b read withdrawn at the boundary capability check: no provider read", async () => {
   const { world, op } = await editedWorld();
-  // Account reads of one status call: the handler's own (1), the first binding check (2), the fresh
-  // read before the credential (3), the boundary read (4). The provider read must not follow a
-  // withdrawal that lands during the boundary read.
-  onAccountRead(world, (n) => { if (n === 4) withdrawRead(world); });
+  // At the send boundary the capability is asked first, then the binding. The
+  // withdrawal lands on the boundary capability answer (the second admits call
+  // in observeEdit), so the provider read must never start.
+  let admitsCalls = 0;
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  fake.rpc = async (name: string, params: Record<string, unknown>) => {
+    if (name === "youtube_comments_stage4_admits" && ++admitsCalls === 2) withdrawRead(world);
+    return original(name, params);
+  };
   const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
   assertEquals(world.reads.length, 0);
   assertEquals(status.data.observation, "unavailable");
+});
+
+Deno.test("T4.1c a rebind during the boundary capability answer is seen by the binding check that follows", async () => {
+  const { world, op } = await editedWorld();
+  // The boundary capability still answers "allowed", but the account is
+  // rebound before that answer reaches the handler. Only a binding read made
+  // AFTER the capability answer can see the new generation: a parallel read
+  // already captured the old row and lets the provider read through.
+  let admitsCalls = 0;
+  afterRpc(world, "youtube_comments_stage4_admits", () => {
+    admitsCalls += 1;
+    if (admitsCalls === 2) reconnect(world);
+  });
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  const body = await jsonOf(res);
+  assertEquals(res.status, 404);
+  assertEquals(body.reason, "not_found");
+  assertEquals("data" in body, false, "no field of the old receipt crosses the rebind");
+  assertEquals(world.reads.length, 0, "the provider comment was never read under the new binding");
 });
 
 Deno.test("T4.2 read withdrawn during the provider read: the text that was read is dropped", async () => {

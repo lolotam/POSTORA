@@ -1816,17 +1816,21 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
           const afterToken = await bindingCheck();
           return afterToken.ok ? unobserved : { response: afterToken.response };
         }
-        // The send boundary. Binding and capability are asked together and are
-        // the last awaited work before the provider request starts; a
-        // withdrawal, a changed binding or an unreadable setting stops it. An
-        // SQL call and an HTTP call share no transaction, so the window cannot
-        // be zero: the same two questions are asked again after the read and
-        // the observation is discarded if either answer changed.
-        const [boundary, allowed] = await Promise.all([bindingCheck(), capabilityRefusal(deps.admin, accountId, "read")]);
+        // The send boundary. Capability first, then the binding, sequentially:
+        // the binding read is the last awaited work before the provider
+        // request starts, so a withdrawal, a changed binding or an unreadable
+        // setting stops it and no parallel answer from an earlier point in
+        // time can be used. An SQL call and an HTTP call share no transaction,
+        // so the window cannot be zero: the same two questions are asked again
+        // after the read, capability first and the binding last, so the binding
+        // result used for the answer is the latest read.
+        const allowed = await capabilityRefusal(deps.admin, accountId, "read");
+        const boundary = await bindingCheck();
         if (!boundary.ok) return { response: boundary.response };
         if (allowed) return unobserved;
         const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
-        const [afterRead, stillAllowed] = await Promise.all([bindingCheck(), capabilityRefusal(deps.admin, accountId, "read")]);
+        const stillAllowed = await capabilityRefusal(deps.admin, accountId, "read");
+        const afterRead = await bindingCheck();
         if (!afterRead.ok) return { response: afterRead.response };
         const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
         // Only the comment the receipt targets is an observation: a provider
