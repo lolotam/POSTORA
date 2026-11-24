@@ -400,8 +400,9 @@ function ThreadList({ stage4, onNotice }: { stage4: ReturnType<typeof useYouTube
         {stage4.threads.items
           .filter((item) => item.row.kind === "thread")
           .map((item) => (
+            // The generation is part of the key so a rebind remounts the card and its editors (no draft or outcome crosses a binding).
             <CommentCard
-              key={item.row.comment_id}
+              key={`${stage4.threads.bindingGeneration ?? 0}:${item.row.comment_id}`}
               stage4={stage4}
               row={item.row}
               videoId={videoId}
@@ -732,7 +733,8 @@ function ReplyBlock(params: {
         </div>
       )}
       {allReplies.map((item) => (
-        <CommentCard key={item.row.comment_id} stage4={stage4} row={item.row} videoId={videoId} onNotice={onNotice} reply />
+        // The generation is part of the key so a rebind remounts the card and its editors (no draft or outcome crosses a binding).
+        <CommentCard key={`${stage4.threads.bindingGeneration ?? 0}:${item.row.comment_id}`} stage4={stage4} row={item.row} videoId={videoId} onNotice={onNotice} reply />
       ))}
       {replies.nextCursor && (
         <Button size="sm" variant="outline" onClick={replies.loadMore} disabled={replies.loading}>
@@ -926,7 +928,8 @@ function OutcomeLine({ outcome, checking, onCheckStatus }: {
 }): JSX.Element {
   const { t } = useTranslation("automation");
   const operationId = checkableOperationId(outcome);
-  const checkButton = operationId && onCheckStatus ? (
+  // A terminal miss was already acknowledged and its identity forgotten; a check would only replace the final message with a retryable one.
+  const checkButton = operationId && onCheckStatus && !(outcome.kind === "error" && outcome.terminal) ? (
     <Button size="sm" variant="outline" disabled={checking} onClick={() => onCheckStatus(operationId)}>
       {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin me-1" /> : null}
       {t("youtubeStage4.recovered.checkStatus", "Check status")}

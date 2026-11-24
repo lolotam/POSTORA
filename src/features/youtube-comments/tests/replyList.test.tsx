@@ -240,6 +240,53 @@ describe("T6 B3: drafts outlive the row that shows them", () => {
   });
 });
 
+describe("T6 follow-up: a rebind remounts the cards that stayed mounted", () => {
+  it("a Refresh with a new binding generation closes a top-level edit editor holding the old binding's text", async () => {
+    let generation = 1;
+    const gateway = makeGateway({
+      generation: () => generation,
+      threads: () => [row({ comment_id: "c-parent", handle: "hdl-parent", text: "the parent", is_own: true })],
+    });
+    renderScreen(gateway);
+    await screen.findByText("the parent");
+    fireEvent.click(within(cardOf("the parent")).getByRole("button", { name: "Edit" }));
+    const editor = () => within(cardOf("the parent")).getByLabelText("Edit your comment") as HTMLTextAreaElement;
+    fireEvent.change(editor(), { target: { value: "written under generation 1" } });
+    expect(editor().value).toBe("written under generation 1");
+
+    generation = 2; // the same comment id is now under a new binding
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comments" }));
+    await waitFor(() => expect(screen.queryByText("written under generation 1")).not.toBeInTheDocument());
+    expect(within(cardOf("the parent")).queryByLabelText("Edit your comment")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("yt-stage4-draft-waiting")).not.toBeInTheDocument();
+  });
+});
+
+describe("T6 follow-up: a terminal status miss has no check button", () => {
+  it("a status check that returns a terminal error shows the error and drops Check status", async () => {
+    const gateway = makeGateway({
+      threads: () => [row({ comment_id: "c-parent", handle: "hdl-parent", text: "the parent", is_own: true })],
+    });
+    (gateway.edit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Failed to fetch"));
+    renderScreen(gateway);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Edit your comment"), { target: { value: "my edited comment" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    expect(screen.getByRole("button", { name: "Check status" })).toBeInTheDocument();
+
+    // A binding change cannot ever be read again: checkStatus answers with kind "error", terminal true.
+    (gateway.operationStatus as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new YouTubeCommentsError("binding_changed"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+    });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/can no longer be checked here/));
+    expect(screen.queryByRole("button", { name: "Check status" })).not.toBeInTheDocument();
+  });
+});
+
 describe("T6 B4: reload from the start reads the thread list first", () => {
   it("the reply request carries the NEW handle and the refused one is never sent again", async () => {
     let loads = 0;
