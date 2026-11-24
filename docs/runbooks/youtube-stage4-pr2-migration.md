@@ -74,11 +74,13 @@ These are the first-apply checks; the watermark expectation of 1 does not apply 
 
 ## Re-apply after a rollback
 
-Use this section instead of the first-launch checks when the rollback kept the watermark table and receipts or rotated key versions may exist. Compare the watermark table and value with the rollback receipt before proceeding; a missing table, a changed value or any K1 object still present stops the re-apply.
+Use this section instead of the first-launch checks when the rollback kept the watermark table and receipts or rotated key versions may exist. Confirm that the rollout key removed for the rollback drain is still absent before proceeding, and keep it off until post-apply verification passes. Compare the watermark table and value with the rollback receipt before proceeding; a missing table, a changed value or any K1 object still present stops the re-apply.
 
 ### Re-apply pre-flight (read-only, production)
 
 ```sql
+-- The rollout key was removed for the rollback drain: expected 0 (keep it off until post-apply verification passes).
+select count(*) from public.app_settings where key = 'youtube_comments_stage4_rollout';
 -- Receipts MAY be non-zero after go-live: record the count, do not require zero.
 select count(*) from public.youtube_comment_operations;
 -- Rotated versions are allowed: record every surviving version for the watermark check
@@ -112,6 +114,7 @@ show server_version;
 - `select pg_get_triggerdef(oid) from pg_trigger where tgname = 'trg_youtube_comment_digest_keys_guard'` reads `BEFORE INSERT OR DELETE OR UPDATE`.
 - `EXECUTE` on the claim and status functions is granted to `service_role` only (no `PUBLIC`, `anon` or `authenticated`).
 - The three token store functions keep their owner (`youtube_stage4_refresh`).
+- The rollout key is still absent (`select count(*) from public.app_settings where key = 'youtube_comments_stage4_rollout'` returns `0`); re-enable it only after every check in this section passes.
 - A claim called with a `NULL` digest map inside a transaction that is rolled back answers `invalid_request`.
 - Replace `NULL` in the `receipt` CTE below with the watermark recorded **before** the rollback. The query must return `watermark_ok = true`; this proves the new watermark covers that receipt, the highest surviving key version and every surviving receipt reference.
 

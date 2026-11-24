@@ -368,22 +368,62 @@ describe("canonical-parent reply guarding", () => {
       targetCommentId: "c-mine",
     })]);
   });
+
+  it("recovers a legacy child-keyed pending reply before sending on its parent thread", async () => {
+    const gateway = makeGateway({
+      operationStatus: vi.fn(async () => status("claimed", { operation_id: "op-legacy-child", action: "reply" })),
+    });
+    const replyMock = gateway.reply as ReturnType<typeof vi.fn>;
+    const { result } = renderHook(() => useYouTubeStage4({ userId: USER, accountId: ACCOUNT, gateway }), {
+      wrapper: ({ children }) => withClient(children),
+    });
+    savePendingOperation(USER, {
+      operationId: "op-legacy-child",
+      accountId: ACCOUNT,
+      videoId: "vid-1",
+      action: "reply",
+      targetCommentId: "c-child",
+      createdAt: Date.now(),
+    });
+
+    let outcome: unknown = null;
+    await act(async () => {
+      outcome = await result.current.reply("vid-1", ownRow(), "reply after deploy");
+    });
+
+    expect(outcome).toEqual({ kind: "pending", operationId: "op-legacy-child" });
+    expect(replyMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("submit cancellation during recovery", () => {
-  it.each(["account-switch", "unmount", "rapid-round-trip"] as const)(
+  it.each(["account-switch", "video-switch", "unmount", "rapid-round-trip"] as const)(
     "returns cancelled without a write or a new identity: %s",
     async (scenario) => {
       const recovery = deferred<Stage4OperationStatusPayload>();
       const operationStatus = vi.fn()
         .mockImplementationOnce(() => recovery.promise)
         .mockImplementation(async () => status("claimed", { operation_id: "op-earlier" }));
-      const gateway = makeGateway({ operationStatus });
+      const gateway = makeGateway({
+        operationStatus,
+        videoPage: vi.fn(async () => ({
+          account_id: ACCOUNT,
+          channel_id: "UC-x",
+          items: [
+            { id: "vid-1", title: "First upload", published_at: null, thumbnail_url: null },
+            { id: "vid-2", title: "Second upload", published_at: null, thumbnail_url: null },
+          ],
+          next_cursor: null,
+        })),
+      });
       const edit = gateway.edit as ReturnType<typeof vi.fn>;
       const view = renderHook(
         ({ accountId }) => useYouTubeStage4({ userId: USER, accountId, gateway }),
         { initialProps: { accountId: ACCOUNT }, wrapper: ({ children }) => withClient(children) },
       );
+      if (scenario === "video-switch") {
+        await waitFor(() => expect(view.result.current.effectiveVideoId).toBe("vid-1"));
+      }
       seedEarlierOperation();
       const realNow = Date.now.bind(Date);
       vi.spyOn(Date, "now").mockImplementation(() => realNow() + 200_000);
@@ -392,6 +432,10 @@ describe("submit cancellation during recovery", () => {
       expect(operationStatus).toHaveBeenCalledTimes(1);
       if (scenario === "account-switch") {
         view.rerender({ accountId: OTHER_ACCOUNT });
+      } else if (scenario === "video-switch") {
+        act(() => {
+          view.result.current.setSelectedVideoId("vid-2");
+        });
       } else if (scenario === "unmount") {
         view.unmount();
       } else {

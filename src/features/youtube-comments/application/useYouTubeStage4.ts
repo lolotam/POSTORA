@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { YouTubeCommentsGateway } from "../application/ports";
 import { YouTubeCommentsError } from "../domain/errors";
@@ -321,17 +321,27 @@ export function useYouTubeStage4(params: {
   // newer submit's lock after a rapid context switch.
   const submitsInFlight = useRef(new Map<string, SubmitLock>());
   const aliveRef = useRef(true);
-  const context = `${userId}:${accountId}`;
-  const contextRef = useRef(context);
+  const contextRef = useRef(`${userId}:${accountId}`);
+  const activeVideoIdRef = useRef<string | null>(effectiveVideoId);
   const contextEpochRef = useRef(0);
-  // The epoch moves DURING the render, not in an effect: a submit that waits
-  // for a recovery must notice a switch that happened between two awaits, and
-  // an effect would run too late for it (a switch back to the account it came
-  // from would look like no switch at all).
-  if (contextRef.current !== context) {
-    contextRef.current = context;
-    contextEpochRef.current += 1;
-  }
+  // Published in a layout effect so uncommitted renders never advance the
+  // epoch, while every committed user, account or video switch bumps it before
+  // any asynchronous recovery continuation can resume.
+  useLayoutEffect(() => {
+    const nextContext = `${userId}:${accountId}`;
+    const accountChanged = contextRef.current !== nextContext;
+    const videoChanged = effectiveVideoId !== null
+      && activeVideoIdRef.current !== null
+      && activeVideoIdRef.current !== effectiveVideoId;
+    contextRef.current = nextContext;
+    if (accountChanged) {
+      activeVideoIdRef.current = effectiveVideoId;
+      contextEpochRef.current += 1;
+    } else if (effectiveVideoId !== null) {
+      activeVideoIdRef.current = effectiveVideoId;
+      if (videoChanged) contextEpochRef.current += 1;
+    }
+  }, [userId, accountId, effectiveVideoId]);
   useEffect(() => {
     aliveRef.current = true;
     return () => {
@@ -343,6 +353,7 @@ export function useYouTubeStage4(params: {
     async (action: Stage4OperationAction, input: {
       videoId: string;
       targetCommentId?: string;
+      legacyTargetCommentId?: string;
       targetHandle?: string;
       text?: string;
       status?: "published" | "heldForReview" | "rejected";
@@ -351,24 +362,28 @@ export function useYouTubeStage4(params: {
       operationId?: string;
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
+      if (activeVideoIdRef.current === null) activeVideoIdRef.current = input.videoId;
       const submitContext = `${userId}:${accountId}`;
       const submitEpoch = contextEpochRef.current;
       const isStillCurrent = () => aliveRef.current
         && contextRef.current === submitContext
-        && contextEpochRef.current === submitEpoch;
+        && contextEpochRef.current === submitEpoch
+        && (activeVideoIdRef.current === null || activeVideoIdRef.current === input.videoId);
       if (!isStillCurrent()) return { kind: "cancelled" };
       const targetCommentId = input.targetCommentId ?? "";
       const guardKey = `${accountId}|${input.videoId}|${action}|${targetCommentId}`;
       // Storage can be blocked or full, so a stored list can miss an operation;
       // the in-memory identities are the same ones, so the guard reads both.
       const pendingForTarget = (): PendingStage4Operation[] => {
-        const stored = findPendingOperations(userId, { accountId, videoId: input.videoId, action, targetCommentId });
+        const loadedRows = threads.items.map((item) => item.row);
+        const stored = findPendingOperations(userId, { accountId, videoId: input.videoId, action })
+          .filter((op) => matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, loadedRows));
         const seen = new Set(stored.map((op) => op.operationId));
         const live = [...liveOperations.current.values()].filter((op) =>
           op.accountId === accountId
           && op.videoId === input.videoId
           && op.action === action
-          && op.targetCommentId === targetCommentId
+          && matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, loadedRows)
           && !seen.has(op.operationId));
         return [...stored, ...live];
       };
@@ -466,6 +481,7 @@ export function useYouTubeStage4(params: {
     (videoId: string, target: Stage4CommentRow, text: string) => submit("reply", {
       videoId,
       targetCommentId: target.canonical_parent_id.trim() || target.comment_id,
+      legacyTargetCommentId: target.comment_id,
       run: (operationId) => gateway.reply({ accountId, targetHandle: target.handle, text, operationId }),
     }),
     [submit, gateway, accountId],
@@ -650,6 +666,24 @@ export function useYouTubeStage4(params: {
       clearPendingOperationsForAccount(userId, accountId);
     },
   };
+}
+
+/** Match a pending operation by canonical target, plus legacy child-keyed reply records. */
+function matchesPendingTarget(
+  op: PendingStage4Operation,
+  action: Stage4OperationAction,
+  targetCommentId: string,
+  legacyTargetCommentId: string | undefined,
+  loadedRows: Stage4CommentRow[],
+): boolean {
+  if (op.targetCommentId === targetCommentId) return true;
+  if (action !== "reply" || !op.targetCommentId) return false;
+  if (legacyTargetCommentId && op.targetCommentId === legacyTargetCommentId) return true;
+  const loaded = loadedRows.find((row) => row.comment_id === op.targetCommentId);
+  if (loaded) {
+    return (loaded.canonical_parent_id.trim() || loaded.comment_id) === targetCommentId;
+  }
+  return true;
 }
 
 /**
