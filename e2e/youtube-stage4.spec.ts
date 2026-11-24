@@ -179,6 +179,28 @@ for (const locale of ["en", "ar"] as const) {
       expect((await providerState()).writes).toBe(0);
     });
 
+    test("a reply draft on page two survives a Refresh and is back after More replies", async ({ page }) => {
+      await page.getByRole("option", { name: "Journey video" }).click();
+      await page.getByRole("button", { name: /^(Load replies|تحميل الردود)$/ }).first().click();
+      await expect(page.getByText("reply page one", { exact: true })).toBeVisible({ timeout: 10_000 });
+      await page.getByRole("button", { name: /(More replies|المزيد من الردود)/ }).click();
+      const pageTwoCard = () => page.getByText("reply page two", { exact: true }).locator("xpath=ancestor::div[contains(@class,'p-4')][1]");
+      await expect(pageTwoCard()).toBeVisible({ timeout: 10_000 });
+      await pageTwoCard().getByRole("button", { name: /^(Reply|رد)$/ }).click();
+      const draft = uniqueText("a draft that must survive");
+      await pageTwoCard().locator("textarea").fill(draft);
+
+      // The Refresh returns the reply chain to page one: the row of page two leaves the screen.
+      await page.getByRole("button", { name: /(Refresh comments|تحديث التعليقات)/ }).click();
+      await expect(page.getByText("reply page two", { exact: true })).toHaveCount(0, { timeout: 10_000 });
+      await expect(page.getByTestId("yt-stage4-draft-waiting")).toBeVisible();
+
+      await page.getByRole("button", { name: /(More replies|المزيد من الردود)/ }).click();
+      await expect(pageTwoCard()).toBeVisible({ timeout: 10_000 });
+      await expect(pageTwoCard().locator("textarea")).toHaveValue(draft);
+      expect((await providerState()).writes).toBe(0);
+    });
+
     test("publish from the held list, no Hold on a published row, reject and reject-with-ban", async ({ page }) => {
       await page.getByRole("option", { name: "Journey video" }).click();
       await page.getByRole("tab", { name: /(Held for review|بانتظار المراجعة)/ }).click();
