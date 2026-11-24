@@ -144,6 +144,8 @@ export interface WorldOptions {
   /** Overrides specific provider answers; return undefined to fall through to the default. */
   provider?: (call: ProviderCall) => { status: number; body: unknown } | undefined;
   now?: () => number;
+  /** A clock for cool-downs that is independent of `now` (which is wall time). */
+  monotonicNow?: () => number;
   failSettleOnce?: boolean;
   /** The status RPC itself fails (a transport/database error, not "no receipt"). */
   statusRpcError?: boolean;
@@ -576,6 +578,9 @@ export function createWorld(options: WorldOptions = {}): World {
     admin: admin as unknown as SupabaseClient,
     fetcher,
     now,
+    // The anonymous-refusal gate measures cool-downs on a clock that wall-clock
+    // steps cannot move. Unless a test drives it on its own, it follows `now`.
+    monotonicNow: options.monotonicNow ?? options.now ?? (() => performance.now()),
     newRequestId: () => crypto.randomUUID(),
     signingSecret: TEST_SIGNER,
   };
@@ -2201,7 +2206,7 @@ Deno.test("after the shared bucket refuses, calls over time stay at one probe pe
   assertEquals(limiterCalls <= 8, true, `limiter calls over one minute: ${limiterCalls}`);
 });
 
-Deno.test("a probe that never answers is cut off and does not hold the gate", async () => {
+Deno.test("a probe that never answers answers the request within the bound and closes the gate", async () => {
   const world = createWorld();
   const limiter = deferredLimiter(world);
   const started = Date.now();
@@ -2215,6 +2220,173 @@ Deno.test("a probe that never answers is cut off and does not hold the gate", as
   await anonymous(world);
   assertEquals(probes(), 1, "a timed-out probe closes the gate instead of letting every request retry");
   limiter.answerAll(false);
+});
+
+// ---- T1: the slot belongs to the call, the cool-down to a monotonic clock ----------------------------
+
+/** Replaces check_rate_limit: each bucket answers true, false, or hangs until it is released. */
+function scriptedLimiter(world: World, plan: (endpoint: string) => boolean | "hang") {
+  const calls: string[] = [];
+  const hung: Array<(allowed: boolean) => void> = [];
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  fake.rpc = (fn: string, params: Record<string, unknown>) => {
+    if (fn !== "check_rate_limit") return original(fn, params);
+    const endpoint = String(params.p_endpoint);
+    calls.push(endpoint);
+    const decision = plan(endpoint);
+    if (decision === "hang") {
+      return new Promise((resolve) => {
+        hung.push((allowed) => resolve({ data: { allowed, remaining: 0, retry_after: 30 }, error: null }));
+      });
+    }
+    return Promise.resolve({ data: { allowed: decision, remaining: 0, retry_after: 30 }, error: null });
+  };
+  return {
+    count: (needle: string) => calls.filter((endpoint) => endpoint.includes(needle)).length,
+    releaseAll: (allowed: boolean) => {
+      while (hung.length) hung.shift()!(allowed);
+    },
+  };
+}
+
+/** Every system_logs insert hangs until it is released; counts the inserts that were started. */
+function hangingAuditInserts(world: World) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.from.bind(fake);
+  let started = 0;
+  const hung: Array<() => void> = [];
+  fake.from = (table: string) => {
+    if (table !== "system_logs") return original(table);
+    return {
+      insert: () => {
+        started += 1;
+        return new Promise((resolve) => hung.push(() => resolve({ error: null })));
+      },
+    };
+  };
+  return {
+    started: () => started,
+    releaseAll: () => {
+      while (hung.length) hung.shift()!();
+    },
+  };
+}
+
+/** Lets the settle handlers of released promises run before the next request. */
+const settleMicrotasks = () => new Promise((resolve) => setTimeout(resolve, 15));
+const BOUND_MS = 6000;
+
+Deno.test("T1.1 a hung probe keeps its slot: after the cool-down no second call starts until it settles", async () => {
+  let mono = 1_000;
+  const world = createWorld({ monotonicNow: () => mono });
+  const limiter = scriptedLimiter(world, () => "hang");
+  const started = performance.now();
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(performance.now() - started < BOUND_MS, true, "the first refusal answers within the bound");
+  assertEquals(limiter.count("stage4_audit_anon"), 1);
+
+  mono += 11_000; // the 10 s cool-down has passed on the monotonic clock
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(limiter.count("stage4_audit_anon"), 1, "the hung call still holds the slot: no second limiter call");
+
+  limiter.releaseAll(false);
+  await settleMicrotasks();
+  mono += 11_000;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2, "once the hung call settled the next refusal probes again");
+  limiter.releaseAll(false);
+});
+
+Deno.test("T1.2a a hung counter probe keeps its slot until it settles", async () => {
+  let mono = 1_000;
+  const world = createWorld({ monotonicNow: () => mono });
+  const limiter = scriptedLimiter(world, (endpoint) => (endpoint.includes("stage4_audit_counter") ? "hang" : false));
+  const started = performance.now();
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(performance.now() - started < BOUND_MS, true);
+  assertEquals(limiter.count("stage4_audit_counter"), 1);
+
+  mono += 61_000; // both the closed window and the counter interval have passed
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(limiter.count("stage4_audit_counter"), 1, "no second counter probe while the first is unsettled");
+
+  limiter.releaseAll(false);
+  await settleMicrotasks();
+  mono += 61_000;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_counter"), 2, "the slot is free again once the call settled");
+});
+
+Deno.test("T1.2b a hung counter insert keeps its slot: no second insert starts", async () => {
+  let mono = 1_000;
+  const world = createWorld({ monotonicNow: () => mono });
+  scriptedLimiter(world, (endpoint) => endpoint.includes("stage4_audit_counter"));
+  const inserts = hangingAuditInserts(world);
+  const started = performance.now();
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(performance.now() - started < BOUND_MS, true, "the request does not wait for the insert");
+  assertEquals(inserts.started(), 1);
+
+  mono += 61_000;
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(inserts.started(), 1, "never a second counter insert while the first is unsettled");
+
+  inserts.releaseAll();
+  await settleMicrotasks();
+  mono += 61_000;
+  await anonymous(world);
+  assertEquals(inserts.started(), 2, "the slot is free again once the insert settled");
+  inserts.releaseAll();
+});
+
+Deno.test("T1.2c a hung admitted anonymous audit insert is bounded and never doubled", async () => {
+  const world = createWorld();
+  scriptedLimiter(world, () => true);
+  const inserts = hangingAuditInserts(world);
+  const started = performance.now();
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(performance.now() - started < BOUND_MS, true, "the request does not wait for the insert");
+  assertEquals(inserts.started(), 1);
+
+  assertEquals((await anonymous(world)).status, 401);
+  assertEquals(inserts.started(), 1, "a request that finds the slot taken skips its insert and counts as suppressed");
+
+  inserts.releaseAll();
+  await settleMicrotasks();
+  await anonymous(world);
+  assertEquals(inserts.started(), 2, "the slot is free again once the insert settled");
+  inserts.releaseAll();
+});
+
+Deno.test("T1.3 the cool-down follows the monotonic clock, not the wall clock", async () => {
+  let wall = 5_000_000_000;
+  let mono = 1_000;
+  const world = createWorld({ now: () => wall, monotonicNow: () => mono });
+  const limiter = scriptedLimiter(world, () => false);
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 1);
+
+  // The wall clock steps back an hour while the monotonic clock passes the cool-down: the gate reopens.
+  wall -= 3_600_000;
+  mono += 10_001;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2, "a backwards wall step must not keep the gate closed");
+
+  // The wall clock steps forward an hour, the monotonic clock only a second: the gate stays closed.
+  wall += 7_200_000;
+  mono += 1_000;
+  await anonymous(world);
+  assertEquals(limiter.count("stage4_audit_anon"), 2, "a forwards wall step must not reopen the gate early");
+});
+
+Deno.test("T1.4 expiry of a handle still follows the wall clock", async () => {
+  let wall = Date.now();
+  const world = createWorld({ now: () => wall, monotonicNow: () => 1_000 });
+  const handle = await firstHandle(world);
+  wall += 2 * HANDLE_TTL_MS;
+  const res = await world.calls("youtube_reply", { target_handle: handle, text: "x", operation_id: crypto.randomUUID() });
+  assertEquals((await jsonOf(res)).reason, "expired_handle");
 });
 
 Deno.test("Hold is refused straight after validation, before the limiter, the account read and the capability gate", async () => {

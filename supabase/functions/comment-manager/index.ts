@@ -203,6 +203,10 @@ export async function serveCommentManager(
       admin: supabase,
       fetcher,
       now: () => Date.now(),
+      // The anonymous refusal gate's cool-down runs on a monotonic clock, so
+      // a wall clock that jumps can neither reopen the gate early nor keep it
+      // closed. Handles and cursors keep the wall clock: they expire on it.
+      monotonicNow: () => performance.now(),
       newRequestId: () => crypto.randomUUID(),
       signingSecret: supabaseServiceKey,
     };
