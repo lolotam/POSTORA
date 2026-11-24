@@ -2,13 +2,14 @@
 
 24 November 2026 · proposal for owner review, nothing implemented · tier **Heavy**, with a migration (reason in the plan) · [Implementation and acceptance plan](../plans/2026-11-24-youtube-stage5-analytics.md)
 
-Code baseline: `main` at `f7d49921`. The commits since the Stage 4 merge (`44b426cc`, PR #471) are documents only, so every path and line number below, first read with `git show` at the identical Stage 4 tree, holds unchanged. Stage 5 depends on two things Stage 4 created in `supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql`: the health-neutral token store (`store_youtube_refreshed_token_with_lease_neutral`) and the `social_accounts.binding_generation` counter. The manager confirmed on 2026-11-24 that this migration is applied in production and that a real token refresh succeeded through the new store; this document did not check production.
+Code baseline: `main` at `5d020ed`. `git diff --stat f7d49921 5d020ed` over code, scripts and workflows is empty (the commits since are documents), so every path and line number below, read with `git show` at `f7d49921` (itself identical in code to the Stage 4 merge `44b426cc`), holds. Stage 5 depends on two things Stage 4 created in `supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql`: the health-neutral token store (`store_youtube_refreshed_token_with_lease_neutral`) and the `social_accounts.binding_generation` counter. The manager confirmed on 2026-11-24 that the migration is applied in production and that a real token refresh succeeded through the new store; this document did not check production.
 
-This is the second revision. The owner's decisions are recorded in §11 and are built into the design; the options he did not choose have been removed. The two automated review rounds on pull request #472 are answered in §13 and §14. **Stage 5 now carries one database migration** (§5.2).
+This is the **third revision**. The owner's decisions are built in and the options he did not choose are gone (§11). The plan debate's seven blocking objections and the third automated review are answered in §14; rounds 1 and 2 are condensed in §13. **Stage 5 carries one database migration** (§5.2): a policy, a nullable column with a trigger on `social_accounts` (decision D11), and a small set of functions. It creates no table.
 
 Google pages were fetched on 2026-11-23. Each provider fact carries its URL and one of two marks:
 
 - **[V]** the sentence was read word for word on the page;
+- **[D]** the plan debate verified the fact on the cited URL; this document did not re-fetch it;
 - **[S]** the page was too long to read in full and the fact comes from an automated summary of it. An [S] fact is **unverified** and is never the only support for a design rule; plan step 1 re-reads it.
 
 ## 1. Purpose and non-goals
@@ -22,7 +23,7 @@ Today Postora shows only YouTube's public lifetime counters (total views, subscr
 ### Non-goals
 
 - **No revenue or ad numbers.** They need a different Google permission and a channel in the YouTube Partner Program (§3.1).
-- **No stored YouTube analytics data** (decision D2). No table, no cron job, no history beyond what Google returns on request. The one migration of this stage adds a policy and four functions, and stores nothing.
+- **No stored YouTube analytics data** (decision D2). No table, no cron job, no history beyond what Google returns on request. The one migration of this stage adds a policy, a nullable identity column with its trigger, and a few functions; it stores no analytics.
 - **No numbers Postora computes itself**: no net subscribers, no engagement rate, no "+12% versus the previous period" (§3.6).
 - **No audience breakdowns in the first release**: traffic sources, countries, devices, age and gender are listed as later options (§4.2).
 - **No write to YouTube** and no change to publishing, comments, moderation, the comment poller, the OAuth attempt flow, the refresh lease or disconnect.
@@ -34,7 +35,7 @@ Today Postora shows only YouTube's public lifetime counters (total views, subscr
 
 ### 2.1 YouTube, after Stage 4
 
-| Fact | Evidence at `f7d49921` |
+| Fact | Evidence at `5d020ed` |
 |---|---|
 | Native OAuth requests exactly three scopes: `youtube.readonly`, `youtube.upload`, `youtube.force-ssl`, with `access_type=offline`, `prompt=consent`, `include_granted_scopes=true`. | `supabase/functions/youtube-oauth/handler.ts:414-427` |
 | The `scope` string Google returns at connection is stored as `account_metadata.granted_scopes`. | `supabase/functions/youtube-oauth/index.ts:156`; `supabase/functions/_shared/youtubeGrantedScopes.ts:35-43` |
@@ -48,10 +49,14 @@ Today Postora shows only YouTube's public lifetime counters (total views, subscr
 | The only YouTube numbers Postora reads today are Data API counters. | `supabase/functions/youtube-resources/contracts.ts:98-103`, `:138-142` |
 | Stage 4's rollout is a private `app_settings` key, absent by default, per account, hidden from browsers by a RESTRICTIVE policy and evaluated in SQL. | `supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql:126-140`, `:728-741`; `supabase/functions/comment-manager/stage4/rollout.ts:1-8` |
 | Stage 4 added `social_accounts.binding_generation`: a trigger-maintained counter that advances on every disconnect, reactivation, re-consent or provider switch and stays unchanged only for the trusted token-refresh functions. | `supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql:361`; `docs/specs/2026-11-22-youtube-stage4-comments.md` §6.2 |
-| The refresh helper reads credentials by account ID alone, with no owner or generation filter. | `supabase/functions/_shared/youtubeTokenRefresh.ts:440-449`, `:706-718` |
-| The shared rate limiter lets traffic through when its database call fails; Stage 4 wrote a fail-closed limiter on the same database function. | `supabase/functions/_shared/rate-limiter.ts:40-49`; `supabase/functions/comment-manager/stage4/rateLimit.ts` |
+| The refresh helper reads credentials, takes the lease and, through its store, writes the token by account ID alone, with no owner, generation or `is_active` filter. Its fast paths return a token from the snapshot it is given without reading anything. A browser disconnect changes only `is_active` and deletes no lease; the lease is deleted only when a token column changes. | `supabase/functions/_shared/youtubeTokenRefresh.ts:440-449`, `:628-662`, `:706-718`; `supabase/migrations/20261120130000_youtube_refresh_lease_fixes.sql:75-140`, `:377-411`; `src/hooks/useSocialAccounts.tsx:73-77` |
+| The neutral store checks neither `is_active` nor the generation. | `supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql:226-273` |
+| The generation trigger sets the generation to 1 on every insert; the insert policy only requires `auth.uid() = user_id`; `authenticated` holds table-wide privileges and `id` has only a column default. | same migration `:374-384`; `supabase/tests/baseline_schema.sql:17984`, `:22988`, `:7765` |
+| The shared rate limiter lets traffic through when its database call fails; Stage 4 wrote a fail-closed limiter on the same database function. `check_rate_limit` starts a window at its first call and resets it after the window length; its guard branch returns `allowed: true` with `count: 0`; cleanup deletes rows past `expires_at`; the function and table are in the harness baseline. | `supabase/functions/_shared/rate-limiter.ts:40-49`; `supabase/functions/comment-manager/stage4/rateLimit.ts`; `supabase/manual-sql/20260627213616_rate_limit_buckets.sql:36-101`; `supabase/tests/baseline_schema.sql:892`, `:1268-1276`, `:7830` |
 | Stage 4 bounds refusal audit rows with a rate bucket and a suppression counter. | `supabase/functions/comment-manager/stage4/audit.ts` |
 | The browser's query client retries a failed query once by default. | `src/App.tsx:27` |
+| Users accepted a privacy text that limits YouTube data use to publishing and showing channel information; no privacy-policy acceptance record exists in the repository. | `src/pages/Privacy.tsx:92-98`; `supabase/migrations/20260910100000_partner_platform_tier.sql:268-270` (a partner flow only) |
+| Repository rule: every early return that refuses work must write a log row. | `AGENTS.md`, "Reviewing a pull request", rule 4 |
 | Stage 3 gates published edits with a code constant, not a per-account key. | `supabase/functions/youtube-resources/editComposition.ts:23` |
 | The Stage 4 browser journey runs the real handler against a disposable database and a fake provider that counts requests. | `scripts/stage4-e2e.mjs:1-16`; `e2e/fixtures/youtubeStage4Server.ts` |
 | CI has one named Deno step per YouTube function. | `.github/workflows/ci.yml:457-485` |
@@ -107,6 +112,9 @@ Line numbers in this subsection for the collection, retention and rollout migrat
 | `youtube.force-ssl` is not mentioned on any Analytics page fetched. | — | Not stated |
 | `ids=channel==MINE` is the documented form. `channel==<CHANNEL_ID>` is also allowed: "The user authorizing the request must be the owner of the channel." | [V] | [Channel reports](https://developers.google.com/youtube/analytics/channel_reports) |
 | The YouTube Analytics API must be enabled for the Google Cloud project. | [V] | [Authorization guide](https://developers.google.com/youtube/reporting/guides/authorization) |
+| The scopes of an access token can be read with `POST https://oauth2.googleapis.com/tokeninfo`, the token in an `Authorization: Bearer` header, from the space-delimited `scope` field. | [D] | [Google Auth Library `getTokenInfo`](https://googleapis.dev/nodejs/google-auth-library/latest/classes/OAuth2Client.html) |
+| With `include_granted_scopes=true`, "the new access token will also" cover scopes the user previously granted to the application. | [V] (first words quoted; the rest paraphrased) | [Web-server flow](https://developers.google.com/identity/protocols/oauth2/web-server) |
+| "The `refresh_token` is only returned on the first authorization." Whether `prompt=consent` changes this is **not stated** on the page. | [V] | Same page |
 | Whether `yt-analytics.readonly` or `youtube.readonly` is a "sensitive" scope is **not stated** on any page fetched. Google says the category is shown in the Cloud Console: "Sensitive scopes require review by Google and have a *sensitive* indicator on the Google Cloud Console's OAuth consent screen configuration page." | [V] | [OAuth scopes](https://developers.google.com/identity/protocols/oauth2/scopes) |
 
 **The two Google pages disagree about which permission is enough.** One reading is that the permission Postora already holds (`youtube.readonly`) is sufficient. The other is that the dedicated analytics permission is needed. This document cannot settle it without one real request, which it is not allowed to make. §7 handles both outcomes and names the check that decides.
@@ -118,9 +126,9 @@ Line numbers in this subsection for the collection, retention and rollout migrat
 | Channel totals for a period | No dimension. Metrics "Use 1 or more" from a list that includes `views`, `estimatedMinutesWatched`, `averageViewDuration`, `subscribersGained`, `subscribersLost`, `likes`, `comments`, `shares`. Optional filter: "Use 0 or 1" of `video`, `group`. | [V] | [Channel reports](https://developers.google.com/youtube/analytics/channel_reports) |
 | Day-by-day series | Dimension "Use exactly 1 `day`, `month`". Same metric list. `video` is an allowed filter. Sample: `dimensions=day`, `sort=day`. | [V] | Same page; [Sample requests](https://developers.google.com/youtube/analytics/sample-requests) |
 | Most viewed videos | `dimensions=video`, `maxResults=10`, `sort=-views`. The sample page says the request "requires you to specify a value for the `sort` request parameter and to set the `maxResults` parameter to an integer value of `10` or less." | [V] | [Sample requests](https://developers.google.com/youtube/analytics/sample-requests) |
-| Most viewed videos, full rule | Up to 200 rows, sort required, descending sort keys only. | [S] | [Channel reports](https://developers.google.com/youtube/analytics/channel_reports). The first release asks for 10, which satisfies both statements. |
+| Most viewed videos, full rule | The general limit is 200 rows with `sort` required; some examples say 10. The first release asks for 10, which satisfies both. | [D] | [Channel reports](https://developers.google.com/youtube/analytics/channel_reports) |
 | Most viewed videos, metrics | A documented sample uses `metrics=estimatedMinutesWatched,views,likes,subscribersGained` with `dimensions=video`. **This is the one metric list the first release uses** (§5.5). | [V] | [Sample requests](https://developers.google.com/youtube/analytics/sample-requests) |
-| Most viewed videos, wider metrics | Whether `averageViewDuration` and `comments` are allowed with `dimensions=video` was not read word for word. An unsupported mix fails every request with `400`. | [S] | [Channel reports](https://developers.google.com/youtube/analytics/channel_reports). Not requested in the first release. |
+| Most viewed videos, wider metrics | The general table also lists `comments` and `averageViewDuration` for this report. Not requested in the first release (§4.2). | [D] | [Channel reports](https://developers.google.com/youtube/analytics/channel_reports) |
 
 | Metric | Definition used | Mark | Source |
 |---|---|---|---|
@@ -149,10 +157,10 @@ The response is a table: `columnHeaders[]` (name, type) and `rows[]`, columns in
 |---|---|---|
 | "Each API request that you make counts as one unit of your API usage quota." "Quota limits are visible on the Quotas panel in the Google Cloud console." | [V] | [Data model](https://developers.google.com/youtube/analytics/data_model) |
 | A second page says "The API server evaluates each query to determine its quota cost." | [V] | [YouTube Reporting overview](https://developers.google.com/youtube/reporting) |
-| The default daily limit of the Analytics API is **not stated** on any page fetched. The Data API quota table (10,000 units a day, one pool for the whole Google project) lists Data API methods only. | — | [Quota costs](https://developers.google.com/youtube/v3/determine_quota_cost) |
+| The Data API's published default is 10,000 units a day for the endpoints other than `search.list` and `videos.insert`, which have their own quotas; it resets at midnight Pacific Time. It is one pool for the whole Google project. The Analytics API's limit is **not stated**; **2,000 is Postora's own ceiling on request attempts**, not a Google figure. | [V]; [D] for the separate quotas | [Quota costs](https://developers.google.com/youtube/v3/determine_quota_cost) |
 | `channels.list` and `videos.list` cost 1 unit each. | [V] | [channels.list](https://developers.google.com/youtube/v3/docs/channels/list); [videos.list](https://developers.google.com/youtube/v3/docs/videos/list) |
 | No maximum date range is stated. A `video` filter accepts up to 500 IDs; the design sends exactly one. | [V] | [reports.query](https://developers.google.com/youtube/analytics/reference/reports/query) |
-| How many IDs one `videos.list` call accepts is not stated on the fetched page. | — | Not stated. The design asks for at most 10 and degrades if refused (§5.5). |
+| `videos.list` takes a comma-separated list of IDs; the documented 50 is for `maxResults`, which cannot be used with `id`, so **no limit on the ID list is documented**. The reference documents `404 videoNotFound`. | [D] | [videos.list](https://developers.google.com/youtube/data/reference/rest/v3/videos/list). The design sends at most 10 IDs (§5.5) and treats `404 videoNotFound` like an empty `200` (§5.4). |
 | "Some YouTube Analytics data is limited when metrics do not meet a certain threshold." The thresholds "are not published". Demographics and geography are named. | [V] | [Data model](https://developers.google.com/youtube/analytics/data_model) |
 
 ### 3.5 Errors
@@ -164,19 +172,19 @@ The Analytics reference has **no error table** (the `reports.query` page has no 
 
 How this API reports a missing scope, an exhausted quota, an expired token or an API that is not enabled for the project is **not documented on the pages fetched**. The design therefore classifies by HTTP status first and by Google's reason string only where one is present, and treats anything it does not recognise as a temporary failure. Most of these shapes cannot be observed safely on a real channel and stay unverified (§9.5).
 
-### 3.6 YouTube developer policy on stored and derived data
+### 3.6 YouTube developer policy on stored data, derived data and consent
 
-These rules sit deep in a long page that could not be read word for word. They are all [S] and **unverified**; plan step 1 re-reads them before any text or behaviour depends on them.
+| Rule | Mark | Source |
+|---|---|---|
+| Authorized Analytics data may be retained as needed for the consented purpose, with the user's authorisation rechecked every 30 days; other data have type-specific refresh or deletion duties. Stored resource metadata: "API clients must either delete or refresh stored resource metadata from that API after 30 days." | [D]; the second sentence [V] | [Developer policies](https://developers.google.com/youtube/terms/developer-policies) III.E.4; [Policy guide](https://developers.google.com/youtube/terms/developer-policies-guide); [Data model](https://developers.google.com/youtube/analytics/data_model) |
+| A client must not use API data "to create new or derived data or metrics" and must not aggregate data across channels of different owners; permission for derived metrics exists only for audited developers who apply for it. | [D] | Same policy and guide |
+| After a user revokes access in the app, the token must be revoked right away and stored data deleted "within 7 calendar days of the revocation". | [V] | Developer policies, section D.2 |
+| "Do not try to future-proof your access to data by asking for permissions that would enable features" not yet built. | [V] | Developer policies, III.D.2.b |
+| A client "must not use user data for secondary purposes that are not clearly disclosed to users". | [V] | Developer policies, III.D.2 item 3 |
+| A client "must require users to agree to a privacy policy before users can access" its services (quote truncated at the source's length limit). | [V] | Developer policies, III.A.2 |
+| Users must re-accept the privacy policy before data is used for a purpose outside the one they originally accepted (reported by the debate as III.E.3.c). | **[S] — unverified**; this document could not reach the passage | Developer policies, III.E.3 |
 
-| Rule as summarised | Source |
-|---|---|
-| Stored API data must be deleted or refreshed after 30 calendar days. The Analytics data model page repeats this for resource metadata, and that sentence **was** read: "API clients must either delete or refresh stored resource metadata from that API after 30 days." [V] | [Developer policies](https://developers.google.com/youtube/terms/developer-policies) III.E.4; [Data model](https://developers.google.com/youtube/analytics/data_model) |
-| Data from the Analytics API may be kept as long as needed, but the client must confirm every 30 days that the user still authorises it. | Same policy page, [S] |
-| A client must not use API data "to create new or derived data or metrics", and must not aggregate data across channels of different owners. An exception exists only for audited developers who applied for it. | Same policy page and its [guide](https://developers.google.com/youtube/terms/developer-policies-guide), [S] |
-| After a user revokes access in the app, stored data must be deleted "within 7 calendar days of the revocation". | [V] [Developer policies](https://developers.google.com/youtube/terms/developer-policies), section D.2 |
-| "Do not try to future-proof your access to data by asking for permissions that would enable features" not yet built. | [V] Same page, III.D.2.b |
-
-The design stores nothing and derives nothing, so it complies under either reading of the unverified rules.
+The design stores nothing and derives nothing, so it complies with the storage and derivation rules. The consent rule is a real open question (§7.3, decision D10).
 
 ## 4. Proposed scope
 
@@ -186,7 +194,7 @@ One page, "YouTube analytics", for one selected channel and one selected period.
 
 | Block | What the owner sees | Provider requests |
 |---|---|---|
-| Header | Channel picker, period picker (last 7, 14, 30 or 90 days, decision D4), a Refresh button, and two lines: "Period: <start> – <end>, Pacific time" (the dates Postora asked for) and "Last day with daily numbers: <date>" (the last day Google actually returned, §5.8). | none |
+| Header | Channel picker, period picker (last 7, 14, 30 or 90 days, decision D4), a Refresh button, and two lines: "Period: <start> – <end>, Pacific time" (the window `status` pinned for this page load, §5.4) and "Last day with daily numbers: <date>" (the last day Google actually returned, §5.8). | none |
 | Overview cards | Views · Watch time · Average view duration · Subscribers gained · Subscribers lost · Likes · Comments · Shares, each the total for the period, exactly as YouTube returns it. | 1 Analytics request |
 | Daily trend | One line chart with a metric switch: views, watch time, subscribers gained, subscribers lost. One point per day Google returned; a day Google did not return is a gap in the line, never a zero. | 1 Analytics request |
 | Most viewed videos | The ten most viewed videos of the period: title, views, watch time, likes, subscribers gained. One fixed metric set (§5.5). | 1 Analytics request + 1 Data API request for titles |
@@ -194,7 +202,7 @@ One page, "YouTube analytics", for one selected channel and one selected period.
 
 Fixed rules for the first release:
 
-- **Periods** are whole days ending three days before today in Pacific time. That is the period Postora *asks for*. It is not a promise about what Google has finished processing; the page shows the two separately (§5.8).
+- **Periods** are whole days ending three days before today in Pacific time, pinned once per page load by `status`. That is the period Postora *asks for*. It is not a promise about what Google has finished processing; the page shows the two separately (§5.8).
 - **Nothing is computed by Postora.** Subscribers gained and lost are two cards, not one net number. There is no comparison with the previous period. Units are converted for display only (minutes shown as hours and minutes; seconds shown as minutes and seconds).
 - **Native connections only.**
 - **On demand.** Google is called when the owner opens the page, changes the channel or period, or presses Refresh. There is no polling of Google and no background job.
@@ -241,222 +249,228 @@ What "fits the existing analytics work" then means, concretely:
 | A private, default-absent rollout key with the `off` / `allowlist` / `all` vocabulary of Facebook analytics (`supabase/migrations/20261115100000_facebook_analytics_all.sql:159-169`), hidden by a database policy and evaluated in SQL, as both Facebook's and Stage 4's are (decision D6, §5.2). | |
 | The fail-closed limiter and the bounded refusal audit that Stage 4 introduced (§5.6, §6). | |
 
-### 5.2 The database side: one migration, no table
+### 5.2 Connection identity and the one SQL decision
 
-The owner chose to protect the per-channel switch the way Stage 4 does (decision D6). Stage 5 therefore carries **one forward-only migration**. It creates no table and changes no existing table or function. It follows the shape of `supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql`: the RESTRICTIVE policy at `:728-741`, the state reader at `:754`, the per-account status at `:914`, the yes/no evaluator at `:1048`, the grants at `:1895-1907`, and the closing assertions at `:2103-2150`.
+**What identifies "the connection that was admitted".** Four values, all read together: the account ID, the channel ID, `binding_generation` (Stage 4: advances on every disconnect, reactivation, re-consent and provider switch, and stays unchanged only for the trusted refresh functions), and a new **`binding_incarnation`**.
 
-| Object | What it is |
+Why the generation alone is not enough (debate objection 2). Stage 4's trigger sets the generation to `1` on every insert (`supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql:374-384`). The insert policy only requires `auth.uid() = user_id` and `authenticated` holds table-wide privileges (`supabase/tests/baseline_schema.sql:17984`, `:22988`); `id` has only a column default (`:7765`). A row can therefore be deleted by its owner and inserted again with the same `id`, owner and channel, and it reads as generation 1 — indistinguishable from the original. No existing rule prevents this, so it cannot be argued away. The realistic harm is narrow (same owner, same channel, nothing of theirs stored by Stage 5), but the identity is what every later check compares, so it must be exact.
+
+**`binding_incarnation`** is a nullable `uuid` column on `social_accounts` with one `BEFORE INSERT OR UPDATE` trigger function (`SECURITY INVOKER`, pinned `search_path`, the same shape as `youtube_stage4_assign_binding_generation`, same file `:374-440`):
+
+| Event | Result |
 |---|---|
-| Policy `app_settings_youtube_stage5_rollout_private` | RESTRICTIVE, `FOR ALL`, `TO anon, authenticated`. A row whose key is `youtube_analytics_stage5_rollout` or `youtube_analytics_stage5_consent` is visible and writable only to an admin (`public.has_role(auth.uid(), 'admin')`). The service role bypasses RLS. The consent key is covered from the start so that branch B needs no second policy. |
-| `youtube_analytics_stage5_rollout_state()` | Reads the rollout key once and returns `{status, mode, account_ids}` with `status` one of `ok`, `rollout_missing`, `rollout_invalid`. A key that cannot be read **raises** (`ERRCODE 55000`, as Stage 4 does) so that "unreadable" is never mistaken for "off". |
-| `youtube_analytics_stage5_capability_status(p_owner_id, p_account_id)` | The admission answer for one account: `{found, admitted, reason, channel_id, binding_generation, auth_provider, needs_reauth, granted_scopes, has_credentials}`. It returns **no token**. |
-| `youtube_analytics_stage5_credentials(p_owner_id, p_account_id, p_expected_channel, p_expected_generation)` | Returns `access_token`, `refresh_token`, `token_expires_at` **only if** the account is still owned, active, native, admitted by the policy, and its channel and `binding_generation` equal the expected values. Otherwise it returns `{ok: false, reason}` and no credential. |
-| `youtube_analytics_stage5_admits(p_owner_id, p_account_id, p_expected_channel, p_expected_generation)` | The single yes/no evaluator, with the same conditions as the credentials function. Fails closed. |
+| Insert of a YouTube row | `gen_random_uuid()`, whatever the client sent. |
+| Insert of any other platform | `NULL`. |
+| Update of a row that stays YouTube | `OLD` value. A client cannot change it. |
+| Update that turns a row into YouTube | a new `gen_random_uuid()`. |
+| Existing rows | stay `NULL`; the decision reads `NULL` as the all-zero UUID. A re-created row always gets a random value, so it never equals an old row's. |
 
-Rules for all four functions, as in Stage 4: `SECURITY DEFINER`, `SET search_path = public, pg_temp`, `REVOKE ALL … FROM PUBLIC, anon, authenticated`, `GRANT EXECUTE … TO service_role`, applied as `supabase_admin`. The migration ends with an assertion block that fails the migration if any function is not `SECURITY DEFINER` with the pinned path, if a browser role holds `EXECUTE`, or if either key has been seeded.
+Adding a nullable column without a default is a catalogue change with no table rewrite. The migration step of the plan repeats Stage 4's inventory for the added column (positional inserts, `%ROWTYPE`, `select("*")` readers, generated types). This is decision **D11**; without it the identity is `(account, channel, generation)` and the residual of §10 R-3 applies.
 
-**One snapshot per decision.** The three account functions each decide inside **one SQL statement** that reads the account row and the policy row together, so "is this account admitted" and "is this still the same connection" are answered from the same instant. Stage 5 uses no row locks: it performs no write that needs fencing, and a lock would only delay a disconnect.
+**The migration** (decision D6, plus D11) creates exactly these objects, following `20261122130000_youtube_stage4_comment_operations.sql`: the policy at `:728-741`, `SECURITY DEFINER` functions with a pinned `search_path` and service-role-only grants as at `:1895-1907`, and the closing assertions as at `:2103-2150`. It creates no table and changes no existing function, trigger or policy.
 
-The account predicate, identical in all three: `id = p_account_id AND user_id = p_owner_id AND platform = 'youtube' AND is_active`. A row that fails it is reported as not found, the same for a foreign, missing, inactive and non-YouTube account. Admins get no bypass.
+| Object | Purpose |
+|---|---|
+| Policy `app_settings_youtube_stage5_rollout_private` | RESTRICTIVE, `FOR ALL`, `TO anon, authenticated`: a row whose key is `youtube_analytics_stage5_rollout` or `youtube_analytics_stage5_consent` is visible and writable only to an admin (`public.has_role(auth.uid(), 'admin')`). Both `USING` and `WITH CHECK`, so a non-admin cannot rename another row into or out of the two keys. The service role bypasses RLS. |
+| Column `social_accounts.binding_incarnation` and its trigger | Above (D11). |
+| `youtube_analytics_stage5_parse_policy(policy jsonb, account uuid)` | Pure, reads no table, executable by nobody but the functions below. Returns `ok`, `missing`, `invalid`, `off` or `not_listed`. |
+| **`youtube_analytics_stage5_decide(...)`** | The one decision (below). |
+| `youtube_analytics_stage5_acquire_lease(...)`, `youtube_analytics_stage5_store_token(...)` | Bound wrappers around the existing lease functions (§5.3). |
 
-Policy document:
+Policy document, unchanged: `{ "version": 1, "mode": "off" | "allowlist" | "all", "account_ids": ["<uuid>", …] }`. Not an object, unknown version or mode, `account_ids` not an array, a non-UUID entry, or more than 200 entries → `invalid`. Absent → `missing`. Both deny every account. Admins get no bypass.
 
-```json
-{ "version": 1, "mode": "allowlist", "account_ids": ["<social_accounts.id>"] }
+**`decide(p_owner, p_account, p_expected_channel, p_expected_generation, p_expected_incarnation, p_required_scopes, p_with_credentials)`** returns one JSON object and is **one SQL statement**:
+
+```text
+{ ok, reason, channel_id, binding_generation, binding_incarnation, connection_revision,
+  provider, needs_reauth, granted_scopes, credentials? }
 ```
 
-`mode` is `off`, `allowlist` or `all`. Missing key → `rollout_missing`. Not an object, unknown version, unknown mode, `account_ids` not an array, an entry that is not a UUID, or more than 200 entries → `rollout_invalid`. Both mean **deny for every account**. A malformed entry invalidates the whole document, as in Stage 4.
+- It reads the account row (owner-filtered) and the rollout setting together, by one `SELECT … LEFT JOIN`, and calls the pure parser on the joined value. PostgreSQL gives a `SELECT` "a snapshot of the database as of the instant the query begins to run", and "two successive `SELECT` commands can see different data" ([Read Committed](https://www.postgresql.org/docs/current/transaction-iso.html), [V]). Two statements could therefore disagree; one cannot. The function is declared `VOLATILE` so it takes its own snapshot when a wrapper calls it after taking a row lock.
+- `credentials` (`access_token`, `refresh_token`, `token_expires_at`) is produced **in that same statement**, only when `p_with_credentials` and `ok`. A token can therefore never come from a different snapshot than the decision that released it.
+- **Admission** passes no expected values. **Every later use** passes the three expected values the admission returned, which must be given all together or not at all.
+- `connection_revision` is the first 32 hex characters of `sha256(account || ':' || incarnation || ':' || generation)`. It is computed here, once, and compares equal only for the same incarnation and generation. It is not secret and is not a credential.
+- `p_required_scopes` is the required-scope constant (§7.2). An empty recorded list is "unknown" and passes (Stage 2, D5); a non-empty list that lacks a required scope is `missing_scope`.
 
-### 5.3 Edge function
+**One reason, one order.** If several conditions hold, the first in this list wins, so the page never gives a recovery instruction that cannot help:
 
-One new function, `supabase/functions/youtube-analytics/`. It is not added to `youtube-resources`, whose handler already carries browse, categories and edit; analytics is a different job with a different provider host (ARCHITECTURE §13: no unrelated workflows in one handler).
+| # | `reason` | Condition |
+|---|---|---|
+| 1 | `not_found` | Admission only: no row for this owner and account, or the row is not YouTube, or it is inactive. Identical for foreign, missing, inactive and non-YouTube accounts. |
+| 2 | `connection_changed` | Expected values were given and the row is absent, foreign, inactive, or its channel, generation or incarnation differs. (The caller is the server, not the browser, so this leaks nothing.) |
+| 3 | `provider_unsupported` | `COALESCE(auth_provider, 'native') <> 'native'`. |
+| 4 | `not_enabled` | The policy is `missing`, `invalid`, `off` or `not_listed`. Under branch B, also: the consent predicate (§7.4). |
+| 5 | `reconnect_required` | `needs_reauth`, or no stored access and refresh token. |
+| 6 | `missing_scope` | Recorded scopes non-empty and lacking a required scope. |
+| — | `ok` | None of the above. |
+
+A database error is **not** a reason: the adapter reports it as `settings_unavailable`. Stage 4's adapter turns an error into `false` (`supabase/functions/comment-manager/stage4/rollout.ts:61`); Stage 5 must not copy that line.
+
+### 5.3 Credentials, refresh and persistence bound to the connection
+
+**Why replacing only the account read is not enough** (debate objection 1). Replacing only `readAccount` left three paths open. The lease is acquired by account ID alone (`supabase/migrations/20261120130000_youtube_refresh_lease_fixes.sql:75-140`), so Stage 5 could hold the lease of a *replacement* connection. A browser disconnect changes only `is_active` (`src/hooks/useSocialAccounts.tsx:73-77`), and the lease is revoked only when a token column changes (same migration `:377-411`), so a refresh in flight could store a token on a disconnected row; the neutral store checks neither `is_active` nor the generation (`20261122130000_youtube_stage4_comment_operations.sql:226-273`). And the helper's fast paths return a token from the snapshot it is given without reading anything (`supabase/functions/_shared/youtubeTokenRefresh.ts:628-662`).
+
+**The design: bound variants, the shared functions untouched.** The Stage 5 migration adds two wrappers; it does not change the lease functions, the Stage 4 neutral store, the refresh helper, or any caller of them.
+
+| Wrapper | What it does, in one short transaction |
+|---|---|
+| `acquire_lease(owner, account, expected binding, required scopes, ttl)` | 1. `SELECT … FOR UPDATE` on the account row (owner-filtered). 2. `decide(…)` with the expected binding, **after** the lock, so the decision cannot be overtaken by a concurrent change to that row. 3. If `ok`, return `acquire_youtube_refresh_lease(account, ttl)` unchanged (it re-locks the same row in the same transaction and then the lease row); otherwise return `{ok:false, reason}`. |
+| `store_token(owner, account, expected binding, lease_token, access, expires_at, refresh)` | 1. `SELECT … FOR UPDATE` on the account row. 2. **Binding only**: owner, YouTube, native, **active**, channel, generation, incarnation all equal the expected values; otherwise `{ok:false, reason:'connection_changed'}` and nothing is written. 3. Call `store_youtube_refreshed_token_with_lease_neutral(account, lease, access, expires_at, refresh)` unchanged. |
+
+- **Lock order** is account row, then lease row, the order every other writer uses (the comment at the top of `acquire_youtube_refresh_lease`, same migration). **No lock is held across Google I/O**: each wrapper is one RPC, one transaction, a few statements.
+- **A browser disconnect cannot interleave with a store.** `UPDATE … SET is_active = false` needs the row lock the wrapper holds, so the update commits either before the wrapper's check (the check sees an inactive row; nothing is written) or after the wrapper's commit (the token was stored while the connection was still active). There is no third case.
+- **No fourth trusted writer.** The neutral store is owned by the narrow role `youtube_stage4_refresh`, so the generation trigger preserves the generation when it writes (`…stage4…sql:374-440`). The wrappers are owned by the normal owner and *call* it; the narrow role's privileges, and the Stage 4 test that it owns exactly three functions (`supabase/tests/youtube_comment_operations.sql:385-389`), are unchanged.
+- **Persistence is conditioned on the binding, not on the rollout.** Withdrawing the rollout stops *use* of analytics (the next attempt is refused). It does not discard a token Google has already issued to the admitted connection: refusing to store it could lose a rotated refresh token and break publishing for that channel. A `needs_reauth` mark set meanwhile does not prevent the store either.
+- **Other callers.** Publishing, comments, the refresh cron and `youtube-resources` keep calling the shared functions exactly as before. They can still interleave with Stage 5 on the lease: when one holds it, Stage 5's acquire answers `lease_held` and the helper re-reads through the bound read (`resolveFromFreshRead`, `youtubeTokenRefresh.ts:545-587`), reusing the other caller's fresh token.
+
+**The adapter** (`supabase/functions/youtube-analytics/credentials.ts`) is `createSupabaseYouTubeRefreshStore(admin)` with four methods replaced, passed to `refreshYouTubeAccountToken` with `healthNeutral: true`:
+
+| Method | Calls | If refused |
+|---|---|---|
+| `readAccount` | `decide(…, p_with_credentials = true)` | Returns `null`. For `reconnect_required` because of `needs_reauth`, returns an account with `needs_reauth: true` so the helper's own refusal path runs. |
+| `acquireLease` | `acquire_lease` | Returns `account_not_found` (permanent for the helper) so it does not retry. |
+| `storeTokenWithLease` | `store_token` | Returns `{ok:false}`; the helper then re-reads through the bound read. |
+| `recordFailureWithLease` | — | Throws. Health-neutral mode must never reach it; a test asserts it is never called. |
+
+`releaseLease` stays the shared function: it deletes only a lease whose token matches (`supabase/migrations/20261120110000_youtube_refresh_lease.sql:136`). Every refusal is also recorded in a per-request variable (`lastDenial`) **with its typed reason**, and the handler reads it before it reads the helper's outcome, because the helper's own outcomes cannot say "rollout withdrawn" or "connection changed". A stale `snapshot` passed to the helper is the step-6 credentials from the same request; the per-attempt authorization of §5.4 catches a withdrawal that happens after it.
+
+**What an analytics request may write:** the lease row, taken and released; on a successful refresh, `access_token`, `token_expires_at`, a rotated `refresh_token` and `updated_at`, through the neutral store. **Never:** `needs_reauth`, `failure_count`, `last_refresh_error`, `account_metadata.granted_scopes`; and it never calls `dropGrantedScope`. A `403` from Google is shown to the owner and nothing is recorded (Stage 4's finding F7 is the reason).
+
+### 5.4 Edge function
+
+One new function, `supabase/functions/youtube-analytics/`. It is not added to `youtube-resources`, whose handler already carries browse, categories and edit (ARCHITECTURE §13: no unrelated workflows in one handler).
 
 | File | Responsibility |
 |---|---|
-| `contracts.ts` | The single contract: operations, response types, error codes with HTTP status, metric keys and units, the one top-videos metric list, the video-ID pattern, periods, limits, budgets, the required-scope set. Runtime-neutral, so the frontend imports its types from it (the Stage 2 pattern). |
-| `window.ts` | Pure: turns "last N days" and a clock into the requested `startDate` and `endDate` in Pacific time, ending three days back. |
-| `rollout.ts` | Thin adapter over the SQL functions of §5.2, like `supabase/functions/comment-manager/stage4/rollout.ts`. It decides nothing itself and caches nothing across requests. A failed call is an error, never "off". |
-| `capability.ts` | Pure rule over the admission answer: connection type, connection health, recorded scopes. |
-| `limits.ts` | The limiters of §5.6, all on the `check_rate_limit` function and all failing closed, following `supabase/functions/comment-manager/stage4/rateLimit.ts`. |
-| `credentials.ts` | A refresh store for `refreshYouTubeAccountToken` whose account read is the bound credentials function of §5.2 (§5.4). |
-| `analyticsReadClient.ts` | Typed calls to `youtubeanalytics.googleapis.com` and the two `videos.list` uses (ownership, titles). Timeout, per-report row validation, stable error mapping. Never touches the database. |
-| `audit.ts` | Bounded audit rows (§6, rule 7). |
-| `handler.ts` | `createYouTubeAnalyticsHandler(ports)`: CORS, method, authentication, validation, admission, capability, limits, bound credentials, use case, final recheck, response mapping. All I/O behind ports. |
-| `index.ts` | Builds the ports and serves the handler. No business rule (ARCHITECTURE §12). |
+| `contracts.ts` | The single contract: operations, envelopes, error codes with HTTP status and page scope, metric keys and units, the one top-videos metric list, the video-ID pattern, periods, limits, ceilings, the required-scope constant. Runtime-neutral; the frontend imports its types from it. |
+| `window.ts` | Pure: the Pacific reporting end date (three days back), the accepted window set, the Pacific budget day. |
+| `decision.ts` | Adapter over `decide`: typed result; a failed call is `settings_unavailable`; no policy logic. |
+| `credentials.ts` | The bound refresh store of §5.3. |
+| `limits.ts` | The three limiters and the budget of §5.6, on `check_rate_limit`, all failing closed. |
+| `analyticsReadClient.ts` | Typed calls to `youtubeanalytics.googleapis.com` and the two `videos.list` uses. Timeout, per-report row validation, error mapping. No database access. |
+| `audit.ts` | Bounded audit (§6, rule 7). |
+| `handler.ts`, `index.ts` | `createYouTubeAnalyticsHandler(ports)`; `index.ts` only builds ports (ARCHITECTURE §12). |
 
-`POST /functions/v1/youtube-analytics`, JSON body discriminated on `operation`, every schema strict. **Every response carries `Cache-Control: no-store`**, success and refusal alike, so no proxy or browser cache keeps private numbers.
+`POST /functions/v1/youtube-analytics`, JSON body discriminated on `operation`, every schema strict, **every response `Cache-Control: no-store`**.
 
-| Operation | Input | Provider calls on success | Result |
-|---|---|---|---|
-| `status` | `account_id` | none | Whether analytics is available for this account, and if not, one reason. Also `connection_revision` and the policy numbers (periods, limits). The page renders from this. |
-| `summary` | `account_id`, `period_days` (7, 14, 30, 90), optional `video_id` | 1 Analytics (+1 Data when `video_id` is present) | One value per metric for the requested period. |
-| `daily` | same | 1 Analytics (+1 Data when `video_id` is present) | One row per day Google returned, four metrics, plus the observed coverage (§5.8). |
-| `top_videos` | `account_id`, `period_days` | 1 Analytics + 1 Data | Up to ten rows with video ID, title, link and the four metrics of §5.5. |
+| Operation | Input | Success |
+|---|---|---|
+| `status` | `account_id` | Availability or one reason; `connection_revision`; `reporting_end_date`; periods and limits. No provider call. |
+| `summary` | `account_id`, `period_days` (7, 14, 30, 90), `window_end`, optional `video_id` | One value per metric. |
+| `daily` | same | One row per day Google returned, four metrics, plus observed coverage (§5.8). |
+| `top_videos` | `account_id`, `period_days`, `window_end` | Up to ten rows: video ID, title, link, four metrics (§5.5). |
 
-`video_id` must match `^[A-Za-z0-9_-]{6,64}$`, the pattern `youtube-resources` already uses (`supabase/functions/youtube-resources/handler.ts:101`). The same pattern is applied to every video ID Google returns before it is used in a title lookup or a link. Every Google request is built with structured URL parameters, never by joining strings.
+`video_id` must match `^[A-Za-z0-9_-]{6,64}$` (the pattern at `supabase/functions/youtube-resources/handler.ts:101`), and so must every video ID Google returns before it is used in a title lookup or a link. Requests to Google are built with structured URL parameters.
 
-Success envelope, the same shape as `youtube-resources` (`contracts.ts:73-78`) plus the requested window and the connection revision:
+**The reporting window is pinned by the server and carried by every request.** `status` returns `reporting_end_date`, the Pacific date three days before "now". A data request sends it back as `window_end`; the server accepts the current end date and the one before it, and answers `window_stale` for anything else. The start date is `window_end` minus `period_days − 1`. Every block of one page load therefore covers the same dates, across Pacific midnight too, and a response whose window differs from the request is dropped by the client.
 
 ```ts
 interface YouTubeAnalyticsSuccess<T> {
   schema_version: 1;
   request_id: string;
-  connection_revision: string;  // opaque; changes whenever the channel is disconnected or reconnected
+  connection_revision: string;
   freshness: { fetched_at: string; source: "database" | "provider" };
-  requested_window: {           // absent on `status`
-    start_date: string;         // YYYY-MM-DD, what Postora asked Google for
-    end_date: string;           // YYYY-MM-DD, what Postora asked Google for
-    days: 7 | 14 | 30 | 90;
-    time_zone: "America/Los_Angeles";
-  };
+  requested_window?: { start_date: string; end_date: string; days: 7|14|30|90; time_zone: "America/Los_Angeles" };
   data: T;
 }
-
 interface YouTubeAnalyticsMetric {
-  key: "views" | "watch_time" | "average_view_duration" | "subscribers_gained"
-     | "subscribers_lost" | "likes" | "comments" | "shares";
-  unit: "count" | "minutes" | "seconds";
-  value: number | null;         // null only when Google sent an explicit null for that cell
+  key: "views"|"watch_time"|"average_view_duration"|"subscribers_gained"|"subscribers_lost"|"likes"|"comments"|"shares";
+  unit: "count"|"minutes"|"seconds";
+  value: number | null;            // null only for an explicit null from Google
 }
-
 interface YouTubeAnalyticsDaily {
   rows: Array<{ day: string; metrics: YouTubeAnalyticsMetric[] }>;   // only days Google returned
-  coverage: {
-    first_day: string | null;   // null when no row came back
-    last_day: string | null;
-    days_returned: number;
-    days_missing: number;       // requested days with no row
-  };
+  coverage: { first_day: string|null; last_day: string|null; days_returned: number; days_missing: number };
 }
 ```
 
-`connection_revision` is a keyed hash of the account ID and its `binding_generation`. It reveals nothing but equality. `requested_window` never claims coverage; only `daily.coverage` does, and only from rows Google sent.
+#### Order of checks
 
-#### Checks, in this order, on every request
+1. **Caller.** User JWT, as in `youtube-resources`; a service-role bearer is refused.
+2. **Admission limiter** (§5.6), every operation. A refusal is a cheap terminal path (§6, rule 7).
+3. **Validation.** Strict schema; unknown keys, `user_id`, `channel_id`, a malformed `video_id`, an unsupported period or a malformed `window_end` fail.
+4. **Admission.** `decide(owner, account, no expected values, required scopes, no credentials)`. Not `ok` → the reason of §5.2 (`not_found`, `provider_unsupported`, `not_enabled`, `reconnect_required`, `missing_scope`). An RPC error → `settings_unavailable`. Its channel, generation, incarnation and `connection_revision` are the **admitted binding** for the rest of the request. `status` ends here, and `window_stale` is checked here for data operations.
+5. **Per-user data limiter.**
+6. **Credentials.** `decide(… expected binding …, with credentials)`. Refused → typed reason; no Google call.
+7. **Token.** `refreshYouTubeAccountToken` with the bound store. A token that is still valid is used as it is. The step-6 `needs_reauth` value is in the snapshot.
+8. **Each Google attempt** — ownership lookup, Analytics call, title lookup, and any repeat — is exactly: **debit one budget unit → `decide(expected binding, no credentials)` → send**. A refused debit ends the attempt (`capacity_reached`). A refused decision ends it with that reason (`connection_changed`, `not_enabled`, `reconnect_required`, `missing_scope`, …) and **nothing is sent**; the debit already made is not refunded. The send follows the decision with no awaited call in between.
+9. **Validate** the answer by report (below).
+10. **Final decision.** `decide(expected binding, no credentials)` again, as the last awaited step. If it is not `ok`, the provider result is discarded and the typed reason is returned. If it is `ok`, the response is written. The success audit row is written **after** the response, not awaited.
 
-1. **Caller.** A user JWT, validated the way `youtube-resources` does it. A service-role bearer is refused.
-2. **Admission limit** for that user, covering every operation including `status` (§5.6). It runs before any other database work. A request refused here ends at once: no audit row, no second database call (§6, rule 7).
-3. **Validation.** Strict schema. A body with `user_id`, `channel_id` or any unknown key fails; so does a `video_id` that does not match the pattern.
-4. **Admission.** One call to `youtube_analytics_stage5_capability_status(caller, account_id)`. It answers ownership, the rollout policy and the binding from one snapshot.
-   - not found → `not_found`, identical for a foreign, missing, inactive and non-YouTube account;
-   - not admitted → `not_enabled`;
-   - the call fails or the policy cannot be read → `settings_unavailable`, never a quiet "off".
-   The `channel_id` and `binding_generation` it returns are the **admitted binding** for the rest of the request.
-5. **Capability.** Composio is `provider_unsupported`. `needs_reauth`, or no stored credential, is `reconnect_required`. A recorded scope list that lacks a required scope is `missing_scope`. An empty recorded list proceeds and lets Google decide (Stage 2, D5).
-   `status` ends here and returns `connection_revision`.
-6. **Per-user data limit** (§5.6).
-7. **Bound credentials.** `youtube_analytics_stage5_credentials(caller, account, admitted channel, admitted generation)`. If the channel was disconnected, reconnected or switched off since step 4, it returns no credential and the answer is `connection_changed` (or `not_enabled`). Nothing has been sent to Google.
-8. **Token**, through `refreshYouTubeAccountToken` in health-neutral mode, given the step-7 credentials as its snapshot and the **bound store** of §5.4. A token that is still valid is used as it is, and it is by construction the admitted connection's. If a refresh is needed, the helper's own credential read is again the bound function, so it cannot read a replacement connection. A refusal is `reconnect_required`, `connection_changed` or `upstream_unavailable`, in the response only.
-9. **Video ownership**, only when `video_id` is present. Before the request: one unit is debited from the Data budget (§5.6). Then `videos.list?part=snippet&id=<video>`, 15-second timeout.
-   - A valid `200` that contains that ID with `snippet.channelId` equal to the admitted channel → continue.
-   - A valid `200` without such an item → **`video_not_found`**, identical for a missing video and another channel's video. This is the only path to it.
-   - `401` → see "The `401` rule" below.
-   - A quota refusal → `quota_exceeded`. An insufficient-permission refusal → `missing_scope`. A timeout, a network failure, a `5xx`, an unrecognised error or a malformed body → `upstream_unavailable`.
-   - After any outcome other than "continue", **no Analytics request is made**.
-10. **One Analytics request.** Before it: one unit is debited from the Analytics budget. `ids=channel==<the admitted channel ID>`, 15-second timeout. The channel ID comes from the admission answer, never from the browser.
-11. **Validate the answer** by report (table below). Anything that does not fit is `upstream_unavailable`.
-12. **Titles** (`top_videos` only), §5.5, after one more Data debit.
-13. **Final recheck.** `youtube_analytics_stage5_admits(caller, account, admitted channel, admitted generation)`, as the last step before the response is written. If it answers no, **the provider result is discarded**: `connection_changed` when the binding moved, `not_enabled` when the rollout was withdrawn, `settings_unavailable` when the call failed.
+**The `401` rule.** It applies to the ownership lookup and the Analytics call only; **the title lookup is exempt** (§5.5).
 
-**The `401` rule.** A request may force **one** token refresh in total, and only for a token it did not itself obtain by refreshing.
+- A `401` on a token that this request did not itself refresh, and with no forced refresh yet used → one forced refresh through the bound store, then one repeat (which is a new attempt with its own debit and decision).
+- Any other `401` — a token this request just refreshed, a second `401`, a `401` when the forced refresh was spent on the ownership lookup — is **`reconnect_required`** with no further Google call.
+- A forced refresh the bound store refuses is `connection_changed` or the typed reason, and nothing is repeated.
 
-- `401` on a token that step 8 returned without refreshing, and no forced refresh used yet → force a refresh through the bound store, then repeat that one Google call once (after its own budget debit).
-- `401` in any other case → **`reconnect_required`**, with no further Google call. That covers: a token this request has just refreshed; a second `401` after the repeat; and a `401` from the Analytics call when the forced refresh was already spent on the ownership lookup.
-
-A forced refresh that finds the binding changed returns `connection_changed` and repeats nothing.
+**Ownership lookup.** `videos.list?part=snippet&id=<video>`. A valid `200` containing that ID with `snippet.channelId` equal to the admitted channel → continue. A valid `200` without it, **or a `404` whose reason is `videoNotFound`** (documented for this method, [V per the plan debate](https://developers.google.com/youtube/data/reference/rest/v3/videos/list)) → `video_not_found`. Quota → `quota_exceeded`; insufficient permission → `missing_scope`; timeout, network failure, `5xx`, any other `404`, an unrecognised error or a malformed body → `upstream_unavailable`. After anything but "continue", no Analytics request is made.
 
 #### Row validation, per report
 
-| Report | Column headers must be exactly | Each row | Other rules |
+| Report | Column headers exactly | Each row | Other rules |
 |---|---|---|---|
-| `summary` | the eight metric names, in the requested order | At most one row. Eight cells. Each a finite number ≥ 0, or an explicit JSON `null`. | No `rows` → every metric is `null` and the block shows "no numbers". |
-| `daily` | `day`, then the four metric names | `day` is a `YYYY-MM-DD` calendar date inside the requested window, with no duplicates. Four metric cells as above. | No `rows` → empty series. A day missing from the answer is simply absent from `rows`; nothing is filled in on the wire. |
-| `top_videos` | `video`, then the four metric names of §5.5 | `video` is a **string** matching the video-ID pattern, with no duplicates. Four metric cells as above. At most ten rows. | No `rows` → empty list, and no title lookup. |
+| `summary` | the eight metric names, requested order | At most one row; eight cells, each a finite number ≥ 0 or an explicit JSON `null`. | No `rows` → every metric `null`, "no numbers". |
+| `daily` | `day`, then four metric names | `day` a `YYYY-MM-DD` date inside the requested window, no duplicates; four metric cells as above. | No `rows` → empty series. A missing day is absent from `rows`; nothing is filled in. |
+| `top_videos` | `video`, then four metric names (§5.5) | `video` is a **string** matching the ID pattern, no duplicates; four metric cells as above; at most ten rows. | No `rows` → empty list and no title lookup. |
 
-A row with the wrong number of cells, a non-numeric metric, a negative number, a malformed date, a date outside the window or an ID that fails the pattern makes the whole answer `upstream_unavailable`. An explicit `null` cell becomes `value: null` and is shown as "—". A missing cell is never turned into `null` or zero.
+Anything else — wrong width, non-numeric or negative metric, malformed or out-of-window date, an ID failing the pattern — makes the whole answer `upstream_unavailable`. An explicit `null` is shown as "—"; a missing cell is never turned into `null` or zero.
 
 #### Error codes
 
-Each has a fixed HTTP status and fixed English and Arabic copy. The response never carries Google's text.
+Fixed HTTP status and fixed English and Arabic copy; never Google's text. **Page scope** says what the browser does with it (§5.7).
 
-| Code | HTTP | When | Scope in the page |
+| Code | HTTP | When | Page scope |
 |---|---|---|---|
-| `invalid_request` | 400 | Not JSON, fails the schema, unknown key, unsupported period, malformed `video_id`. | This request |
+| `invalid_request` | 400 | Not JSON, fails the schema, malformed `video_id` or `window_end`, unsupported period. | Block |
+| `window_stale` | 409 | `window_end` is not an accepted end date. | Block (Refresh) |
 | `unauthorized` | 401 | Missing, invalid or service-role bearer. | Session |
-| `not_enabled` | 403 | The rollout policy does not admit this account, at step 4, 7 or 13. | **Account** |
-| `missing_scope` | 403 | The recorded scopes lack a required one, or Google refuses for insufficient permission. | **Account** |
+| `not_enabled` | 403 | Rollout (or, under branch B, consent) does not admit the account. | **Account** |
+| `missing_scope` | 403 | Recorded scopes lack a required one, or Google refuses for permission. Carries `detail: "grant_not_effective"` when the recorded list *includes* the scope but Google still refuses (§7.4). | **Account** (provider-confirmed: latch) |
 | `not_found` | 404 | Account not owned, not YouTube, inactive or absent. | **Account** |
-| `video_not_found` | 404 | A **successful** ownership lookup found no owned video. | **This video only** |
-| `method_not_allowed` | 405 | Anything other than `POST` and `OPTIONS`. | — |
-| `provider_unsupported` | 409 | The caller's own account is Composio-managed. | **Account** |
-| `reconnect_required` | 409 | `needs_reauth`, no refresh token, or a `401` that may not be retried. | **Account** |
-| `connection_changed` | 409 | The channel was disconnected or reconnected while the request was running. | **Account** |
-| `rate_limited` | 429 | Postora's own per-user limits; carries `retry_after_seconds`. | This block |
-| `capacity_reached` | 429 | Postora's shared daily budget for a Google API is spent (§5.6). | This block |
-| `quota_exceeded` | 429 | Google refuses for quota. | This block |
-| `settings_unavailable` | 503 | The rollout functions or a limit counter could not be read. | This block (§5.7) |
-| `upstream_unavailable` | 502 | Timeout, network failure, Google `5xx`, an unrecognised Google error (including `The query is not supported` and "API not enabled"), or an answer that fails validation. | This block |
-| `internal_error` | 500 | An unexpected exception. | This block |
+| `video_not_found` | 404 | A successful ownership lookup found no owned video. | **This video only** |
+| `method_not_allowed` | 405 | Anything but `POST` and `OPTIONS`. | — |
+| `provider_unsupported` | 409 | Composio-managed account. | **Account** |
+| `reconnect_required` | 409 | `needs_reauth`, no credentials, or a `401` that may not be repeated. | **Account**; latch when Google confirmed it |
+| `connection_changed` | 409 | Disconnected or reconnected while the request ran. | **Account** |
+| `rate_limited` | 429 | A per-user limit; carries `retry_after_seconds`. | Block |
+| `capacity_reached` | 429 | A shared daily budget is spent. | Block |
+| `quota_exceeded` | 429 | Google refuses for quota. | Block |
+| `settings_unavailable` | 503 | The decision, a limiter or the budget could not be read. | Block; `status`: lease not renewed |
+| `upstream_unavailable` | 502 | Timeout, network failure, `5xx`, an unrecognised Google error (including `The query is not supported` and "API not enabled"), or a failed validation. | Block |
+| `internal_error` | 500 | Unexpected exception. | Block |
 
-Only the codes marked **Account** make the page drop that account's reports (§5.7). A stale or foreign video link does not.
+#### Requests each outcome must show
 
-#### Provider calls each outcome must show
+"Token" counts requests to Google's token endpoint. Every Data and Analytics request is preceded by exactly one budget debit, and by one decision with no credentials. The token state is fixed for each row.
 
-"Token calls" are requests to Google's token endpoint. Each Data and Analytics call below is preceded by exactly one budget debit.
+| # | Case (token state at the start) | Token | Data | Analytics | Outcome |
+|---|---|---|---|---|---|
+| 1 | Any refusal at steps 1–7 (incl. credentials and a refused bound acquire), any token state; `status` | 0 | 0 | 0 | the reason |
+| 2 | `summary`/`daily`, valid | 0 | 0 | 1 | data |
+| 3 | same, expired, refresh succeeds | 1 | 0 | 1 | data |
+| 4 | same, expired, Google refuses the refresh | 1 | 0 | 0 | `reconnect_required` or `upstream_unavailable` |
+| 5 | same, expired, refreshed, Analytics `401` | 1 | 0 | 1 | `reconnect_required` (no repeat) |
+| 6 | valid, Analytics `401`, forced refresh ok, repeat ok | 1 | 0 | 2 | data |
+| 7 | valid, `401`, forced refresh ok, repeat `401` | 1 | 0 | 2 | `reconnect_required` |
+| 8 | valid, `401`, bound acquire refuses (binding changed) | 0 | 0 | 1 | `connection_changed` |
+| 9 | valid, `401`, forced refresh ok, repeat's debit refused | 1 | 0 | 1 | `capacity_reached` |
+| 10 | debit refused before the first Google call | 0 | 0 | 0 | `capacity_reached` |
+| 11 | decision refuses after the debit (withdrawal during the debit) | 0 | 0 | 0 | the reason; one debit spent |
+| 12 | with video, valid, owned | 0 | 1 | 1 | data |
+| 13 | with video, not owned or `videoNotFound` | 0 | 1 | 0 | `video_not_found` |
+| 14 | with video, lookup fails (quota, permission, timeout, `5xx`, malformed) | 0 | 1 | 0 | that failure's code |
+| 15 | with video, expired, refreshed; lookup and Analytics ok | 1 | 1 | 1 | data |
+| 16 | with video, valid, lookup `401`, forced refresh ok, lookup ok, Analytics ok | 1 | 2 | 1 | data |
+| 17 | same, then Analytics `401` (refresh already spent) | 1 | 2 | 1 | `reconnect_required` |
+| 18 | with video, lookup ok, Analytics debit refused | 0 | 1 | 0 | `capacity_reached` |
+| 19 | `top_videos`, valid, titles ok | 0 | 1 | 1 | data |
+| 20 | `top_videos`, title lookup fails for **any** reason, incl. `401` | 0 | 1 | 1 | data, `titles: "unavailable"`, no refresh |
+| 21 | `top_videos`, Data debit refused before titles | 0 | 0 | 1 | data, `titles: "unavailable"` |
+| 22 | `top_videos`, no rows | 0 | 0 | 1 | empty list |
+| 23 | any success whose final decision (step 10) refuses | as its row | as its row | as its row | the reason; **no data returned** |
 
-| Outcome | Token | Data API | Analytics |
-|---|---|---|---|
-| Any refusal at steps 1–7, and `status` | 0 | 0 | 0 |
-| Binding changed before a needed refresh (step 8) | 0 | 0 | 0 |
-| Refresh needed and refused by Google | 1 | 0 | 0 |
-| Budget spent before the first Google call | 0 or 1 | 0 | 0 |
-| `summary` or `daily`, valid token, success | 0 | 0 | 1 |
-| `summary` or `daily`, refreshed token, success | 1 | 0 | 1 |
-| Same, refreshed token, then `401` → `reconnect_required` | 1 | 0 | 1 |
-| Valid token, `401`, forced refresh, success | 1 | 0 | 2 |
-| Valid token, `401`, forced refresh, `401` → `reconnect_required` | 1 | 0 | 2 |
-| Valid token, `401`, binding changed at the forced refresh → `connection_changed` | 0 | 0 | 1 |
-| With video: lookup succeeds, video not owned → `video_not_found` | 0 | 1 | 0 |
-| With video: lookup fails (quota, permission, timeout, `5xx`, malformed) | 0 | 1 | 0 |
-| With video: lookup `401`, forced refresh, lookup ok, Analytics ok | 1 | 2 | 1 |
-| With video: lookup `401`, forced refresh, lookup ok, Analytics `401` → `reconnect_required` | 1 | 2 | 1 |
-| With video: lookup ok, Analytics budget spent → `capacity_reached` | 0 | 1 | 0 |
-| With video, success | 0 | 1 | 1 |
-| Analytics refusal (quota, permission, unsupported query, `5xx`) | 0 | 0 or 1 | 1 |
-| `top_videos`, success | 0 | 1 | 1 |
-| `top_videos`, title lookup fails, or the Data budget is spent before it | 0 | 1 or 0 | 1 |
-| `top_videos`, no rows | 0 | 0 | 1 |
-| Final recheck says no (step 13) | as above | as above | as above, **and no number is returned** |
-
-### 5.4 Credentials, refresh and what they may change
-
-Analytics is an optional read. A problem with it must never break publishing or comments, and it must never use or refresh a connection other than the one that was admitted.
-
-**Why a bound store.** The shared helper reads credentials by account ID alone (`supabase/functions/_shared/youtubeTokenRefresh.ts:440-449`) and reads them again under the lease just before it calls Google (`:712-718`, exchange at `:786-792`). If the owner reconnected between admission and that read, the helper would send the *new* connection's refresh token to Google and store the result. A recheck afterwards could protect the report but could not undo that exchange.
-
-The helper takes its store as a parameter (`store: YouTubeRefreshStore`, same file `:157`). Stage 5 passes a store that is the standard one (`createSupabaseYouTubeRefreshStore`) with a single method replaced: `readAccount` calls `youtube_analytics_stage5_credentials` with the admitted channel and generation. Consequences:
-
-- A reconnect or disconnect **before** the helper's read → the read returns nothing → the helper answers "account not found" → **no token exchange is started**. The handler reports `connection_changed`.
-- A reconnect **during** an exchange that was started for the admitted connection → that exchange cannot be recalled, but its result is not stored: a credential change deletes the refresh lease (`delete_youtube_refresh_lease_on_credential_change`, `supabase/migrations/20261120130000_youtube_refresh_lease_fixes.sql:377-411`), so the store call fails as a stale lease and writes nothing. The helper's follow-up read is again the bound function and returns nothing.
-- The shared helper file is not edited.
-
-**Generation.** `social_accounts.binding_generation` (`supabase/migrations/20261122130000_youtube_stage4_comment_operations.sql:361`) advances on every disconnect, reactivation, re-consent and provider switch, never decreases, and stays unchanged only for the trusted refresh functions (`docs/specs/2026-11-22-youtube-stage4-comments.md`, §6.2). The health-neutral store is one of those functions, so an analytics refresh does not advance it.
-
-**What an analytics request may write:**
-
-- the refresh lease row, taken and released;
-- on a successful refresh, `access_token`, `token_expires_at`, a rotated `refresh_token` if Google sends one, and `updated_at`, through `store_youtube_refreshed_token_with_lease_neutral` (same migration, `:201-276`).
-
-**What it never writes:** `needs_reauth`, `failure_count`, `last_refresh_error`, `account_metadata.granted_scopes`. It never calls `dropGrantedScope`. A `403` from either Google API is shown to the owner and nothing is recorded; otherwise a late refusal could remove a grant that publishing or comments rely on (Stage 4's finding F7).
-
-**Residuals, stated plainly.**
-
-- The neutral store does not check `is_active`. A browser-side disconnect only clears that flag (`src/hooks/useSocialAccounts.tsx:73-77`) and deletes no lease, so a refresh already in flight can still store a token on the just-disconnected row. That is existing behaviour for every caller of the helper; Stage 5 does not change it, and the final recheck discards the report.
-- Between the final recheck and the bytes leaving the server there is a window of milliseconds that no check can close (§5.7).
 
 ### 5.5 The top-videos report: one metric list, and titles
-
-**One definition, used by the query, the validator, the fixtures and the table:**
 
 ```text
 dimensions = video
@@ -465,41 +479,41 @@ sort       = -views
 maxResults = 10
 ```
 
-This is the documented sample, read word for word (§3.2). There is no wider set and no fallback. `averageViewDuration` and `comments` per video are a later option. The table columns are: title · views · watch time · likes · subscribers gained (with the watch-page note of §4.1).
+This is the documented sample ([Sample requests](https://developers.google.com/youtube/analytics/sample-requests), [V]). Google's general rule for this report is up to 200 rows with `sort` required; some examples say 10; ten satisfies both ([Channel reports](https://developers.google.com/youtube/analytics/channel_reports), [D]). The general table also lists `comments` and `averageViewDuration` for this report [D]; they stay out of the first release as a later option (§4.2). The query, the validator, the fixtures and the table all use the list above and nothing else. Columns: title · views · watch time · likes · subscribers gained (with the watch-page note of §4.1).
 
-**Titles.** The Analytics API returns video IDs only. Titles come from one `videos.list?part=snippet&id=<up to 10 validated IDs>` call. A row is given a title only when Google returns that ID with `snippet.channelId` equal to the admitted channel. A row without a match is shown as "Video unavailable" with its numbers; Google states that deleted items stay in totals but not in per-video rows ([Data model](https://developers.google.com/youtube/analytics/data_model), [V]). If the title call fails for any reason, or the Data budget is spent before it, the list is still returned with IDs and a `titles: "unavailable"` marker: the Analytics call has already been made and paid for, so its numbers are not withheld.
+**Titles are optional enrichment.** One `videos.list?part=snippet&id=<up to 10 validated IDs>`, preceded by its own debit and decision. A row gets a title only if Google returns that ID with `snippet.channelId` equal to the admitted channel; otherwise it shows "Video unavailable" with its numbers (deleted videos stay in totals but not in per-video rows, [Data model](https://developers.google.com/youtube/analytics/data_model), [V]). **Any failure of this call — `401`, `403`, `404`, quota, timeout, malformed body, a refused debit or decision — returns the list with IDs and `titles: "unavailable"`. A title `401` triggers no token refresh and no repeat.** The Analytics call has already been made and paid for, so its numbers are not withheld, and a failure here never becomes an account-wide error. How many IDs one call accepts is not documented (§3.4); the design sends at most ten and, if Google refuses the list, does not retry with a smaller one in the first release.
 
 ### 5.6 Limits and the shared Google quota
 
-All limiters use the existing `check_rate_limit` database function (`supabase/manual-sql/20260627213616_rate_limit_buckets.sql:36`), which increments a counter atomically under a row lock. All **fail closed**: if the counter cannot be read, the request is refused (`settings_unavailable`), following Stage 4's limiter (`supabase/functions/comment-manager/stage4/rateLimit.ts`) and not the shared helper, which lets traffic through when its database call fails (`supabase/functions/_shared/rate-limiter.ts:40-49`).
+All limiters use `check_rate_limit`, which increments atomically under a row lock (`supabase/manual-sql/20260627213616_rate_limit_buckets.sql:36-101`; the function and the table are also in the harness baseline, `supabase/tests/baseline_schema.sql:892`, `:7830`). All **fail closed**, following `supabase/functions/comment-manager/stage4/rateLimit.ts` and not the shared helper, which lets traffic through on a database error (`supabase/functions/_shared/rate-limiter.ts:40-49`).
 
 | Limiter | Counted | Limit | Purpose |
 |---|---|---|---|
-| Admission, per user | Once per request, every operation including `status` | 120 a minute | Bounds the database work one signed-in user can cause. |
-| Data, per user | Once per `summary`, `daily` or `top_videos` request | 60 per 10 minutes and 300 per day | Bounds one user's share. |
-| **Shared daily budget, whole project** | **Once immediately before every actual Google request**: each ownership lookup, each Analytics call, each title lookup, **and each repeat after a `401`** | **Data API: 1,000 a day. Analytics API: 2,000 a day.** (decision D8) | Caps what Stage 5 as a whole can draw. |
+| Admission, per user | Once per request, every operation | 120 a minute | Bounds the database work one user can cause. |
+| Data, per user | Once per `summary`, `daily`, `top_videos` | 60 per 10 minutes, 300 per 24 hours | Bounds one user's share. A per-user guard; its window is not meant to match Google's day. |
+| **Shared budget, project-wide** | **Immediately before every Google request: each lookup, Analytics call, title lookup and repeat** | **Data API: 1,000 units per Pacific day. Analytics: 2,000 attempts per Pacific day.** (D8) | Caps Stage 5's own draw. |
 
-**The debit is per attempt, not per operation.** A request is never admitted for "the calls it will probably make". Each Google call asks for its own unit just before it is sent, so a repeat after a `401` cannot pass a spent ceiling, and a title lookup that never happens is never charged. When a debit is refused:
+**The budget day is the Pacific calendar day.** Google's Data API quota "resets at midnight Pacific Time" ([Quota costs](https://developers.google.com/youtube/v3/determine_quota_cost), [V] in Stage 2 §5.1); for the Analytics API Google states no reset, and 2,000 is Postora's own ceiling on request **attempts**, not a Google limit. Both ceilings use the same Pacific day.
 
-- before the first Google call of the request → `capacity_reached`, nothing sent;
-- after the ownership lookup but before the Analytics call → `capacity_reached`; the lookup's unit is spent and nothing is returned;
-- before the title lookup → the report is returned with `titles: "unavailable"`.
+`check_rate_limit` starts a window at the first call and resets it after the window length (`:69-81`), so a 24-hour window can reset in the middle of a Google day and let the project spend twice its ceiling. The budget therefore does not use a rolling window:
 
-Token-endpoint calls are not debited; they do not use YouTube API quota.
+- The bucket key contains the Pacific date: `youtube-analytics:budget:<data|analytics>:<YYYY-MM-DD>`, identifier `project`. The date is computed from the clock with the `America/Los_Angeles` zone, which handles both daylight-saving changes.
+- The window length is **48 hours**, longer than any Pacific day (23, 24 or 25 hours), so a bucket never resets inside its own day, and `cleanup_rate_limit_buckets` deletes only rows already past `expires_at` (baseline `:1268-1276`). A new date is a new bucket.
+- **A debit counts only if** the result is `allowed: true` **and** `count` is at least 1 and at most the ceiling. The RPC's guard branch returns `allowed: true` with `count: 0` when its row vanishes between the insert and the locked read (`:64-67`); that result is a refusal (`settings_unavailable`), never a free debit. Any RPC error is a refusal.
+- Each budget has its own key; the SQL suite proves that `anon` and `authenticated` cannot insert, update or delete `rate_limit_buckets` (row security is enabled on it, `baseline_schema.sql:20077`).
+- A unit debited for an attempt that the decision then refuses, or that fails, is not refunded.
 
-**What the ceiling does and does not do.** It limits **Stage 5's own contribution** to the shared pools. The Data API allowance is one pool of 10,000 units a day by default for the whole Google project (§3.4), shared with the comment poller, browse, video edits and comment writes. The ceiling means analytics can never spend more than 1,000 of it. It does **not** guarantee that publishing or comments have quota left: if they have already used 9,900 units, analytics may still spend the last 100. Protecting existing traffic absolutely would need a project-wide ledger that every feature debits, which is out of scope. Before the feature is opened to everyone, both ceilings are reviewed against the real limits in the Cloud Console **and** against the observed daily peak of the existing features, leaving explicit headroom (decision D8).
+**What the ceiling does and does not do.** It limits Stage 5's own contribution. The Data API default is one pool of 10,000 units a day for the whole project, shared with the comment poller, browse, video edits and comment writes (§3.4). The ceiling means analytics cannot spend more than 1,000 of it in a Pacific day. It does not guarantee that other features have quota left: if they have used 9,900, analytics may still spend 100. A project-wide reservation would need a ledger every feature debits, which is out of scope. Before `mode: "all"`, both ceilings are reviewed against the real limits in the Cloud Console and against the existing features' observed daily peak, with explicit headroom (D8).
 
-Whether `check_rate_limit` exists in production with the behaviour assumed here was **not** checked for this document; plan step 0 confirms it read-only.
-
-**Honest quota errors.** A Google quota refusal is `quota_exceeded`. Nothing is repeated automatically, on the server or in the browser (§5.7).
+Whether `check_rate_limit` exists in production as in the baseline was not checked; plan step 0 confirms it read-only.
 
 ### 5.7 Frontend
 
 ```text
 src/features/youtube-analytics/
 ├── domain/          types.ts (re-exports contracts.ts), errors.ts, format.ts, trendSeries.ts
-├── application/     ports.ts, queryKeys.ts, useYouTubeAnalyticsStatus.ts, useYouTubeAnalyticsSummary.ts,
-│                    useYouTubeAnalyticsDaily.ts, useYouTubeTopVideos.ts, useAccessLease.ts
+├── application/     ports.ts, queryKeys.ts, useYouTubeAnalyticsStatus.ts, useAccessLease.ts,
+│                    useYouTubeAnalyticsSummary.ts, useYouTubeAnalyticsDaily.ts, useYouTubeTopVideos.ts
 ├── infrastructure/  supabaseYouTubeAnalyticsGateway.ts        (the only file that imports the Supabase client)
 ├── ui/              YouTubeAnalyticsScreen.tsx, OverviewCards.tsx, DailyTrend.tsx, TopVideosTable.tsx,
 │                    VideoAnalyticsPanel.tsx, AnalyticsNotice.tsx
@@ -507,319 +521,300 @@ src/features/youtube-analytics/
 └── index.ts
 ```
 
-- Dependency direction per ARCHITECTURE §§3–4: `ui → application → domain`; `infrastructure → application ports and domain`. The screen takes the gateway as an optional prop with the Supabase gateway as default.
-- **Real consumer** (ARCHITECTURE §1): page `src/pages/analytics/YouTubeAnalytics.tsx`, route `/analytics/youtube` in `src/components/AnimatedRoutes.tsx`, sidebar child in the Analytics group of `src/components/layout/DashboardLayout.tsx`, shown when `flags.analyticsYoutube` is on. With the flag off the page redirects to `/dashboard`. The YouTube Channel page's video detail (`src/features/youtube-management/ui/YouTubeVideoDetail.tsx`) gains a "View analytics" link to `/analytics/youtube?account=…&video=…`, shown only when the flag is on. That is a frontend-only change; the `youtube-resources` function and its contract are untouched.
-- The flag `feature_analytics_youtube` is added to `src/hooks/useFeatureFlags.tsx` beside the other four, default `false`. The code default applies when the row is absent, so the flag needs no migration.
-- The chart uses `recharts`, the library the saved-report trend already uses (`src/features/analytics-contract/ui/SavedAnalyticsReport.tsx:69-71`). No new dependency.
+Layering per ARCHITECTURE §§3–4; the screen takes the gateway as an optional prop. **Real consumer** (ARCHITECTURE §1): page `src/pages/analytics/YouTubeAnalytics.tsx`, route `/analytics/youtube` in `src/components/AnimatedRoutes.tsx`, sidebar child in the Analytics group of `src/components/layout/DashboardLayout.tsx` when `flags.analyticsYoutube` is on (otherwise the page redirects to `/dashboard`), and a "View analytics" link in `src/features/youtube-management/ui/YouTubeVideoDetail.tsx`, shown only with the flag on (frontend only; `youtube-resources` is untouched). The flag `feature_analytics_youtube` is added beside the other four in `src/hooks/useFeatureFlags.tsx`, default `false`. The chart uses `recharts` (`src/features/analytics-contract/ui/SavedAnalyticsReport.tsx:69-71`).
 
-**Caching.** No server cache. In the browser, React Query memory only, `staleTime` 30 minutes for the three data operations.
+**Query keys.** Every data query key is
 
-**Query keys carry the connection.** Every data query key is `[user, account, connection_revision, period, video]`. `connection_revision` comes from `status`. A data query does not run until `status` has answered "available" with a revision. When a later `status` returns a different revision, every cached report under the old revision is removed, even though the account is still "available". A data response whose own `connection_revision` differs from the key it was requested under is dropped.
+```text
+["youtube-analytics", user, account, connection_revision, operation, window_end, period_days, video | null]
+```
 
-**No request the owner did not ask for.** The application default retries a failed query once (`src/App.tsx:27`). The library is `@tanstack/react-query` 5.x (`package.json:52`). For every Stage 5 data query:
+`operation` is `summary`, `daily` or `top_videos`, so the three blocks never share an entry (TanStack Query identifies a query by its key, not its function). `window_end` is the date `status` returned for this page load; `connection_revision` comes from `status`. A response whose revision or window differs from its key is dropped.
 
-- no automatic retry after a failure;
-- no refetch when the network returns;
-- no refetch when a block that holds an error is mounted again;
-- no refetch on window focus, and no interval.
+**Display and fetching are separate decisions.**
 
-A failed block is fetched again only when the owner presses its retry control, changes the period or channel, or presses Refresh. The behaviour is the contract; the option names (`retry`, `refetchOnReconnect`, `retryOnMount`, `refetchOnWindowFocus`) are confirmed against the installed version in plan step 6 and proved by tests that simulate a connectivity change and a remount after a refusal.
+| Decision | Depends on | Does not depend on |
+|---|---|---|
+| **May fetch** (`enabled`) | an account is selected; `status` has returned a revision; no latched denial; the owner asked (opened the page, changed channel or period, pressed Refresh or Retry) | the access lease |
+| **May show** | the access lease is valid; the revision matches the data; no latched denial | whether a fetch is running |
 
-**The access lease: reports are shown only under a recent successful check.**
+Data queries use `staleTime: Infinity`, `refetchOnMount: false`, `refetchOnWindowFocus: false`, `refetchOnReconnect: false`, `retry: false`, and stay mounted for the life of the page. They are refreshed only by Refresh, Retry, or a change of channel, period or revision. A block is hidden by *not rendering it*, never by unmounting its query, so renewing the lease at the same revision causes **zero** Google requests, however long the lapse. (Option names are confirmed against the installed `@tanstack/react-query` 5.x, `package.json:52`, in plan step 6; the behaviour is the contract. The application default retries once, `src/App.tsx:27`.)
 
-1. While the page is visible it asks `status` every 60 seconds. `status` calls no provider and spends no Google quota.
-2. Reports for an account are displayed **only while the last successful `status` for it — "available", same `connection_revision` — is at most 90 seconds old.** That is the lease.
-3. If a `status` call fails, times out, or answers `settings_unavailable`, the lease is simply not renewed. When it expires, the reports are **hidden** and the page shows "Checking access…". They stay in memory and reappear when a `status` succeeds with the same revision.
-4. If `status`, or any data operation, answers an **account-scoped** code (`not_enabled`, `not_found`, `reconnect_required`, `connection_changed`, `provider_unsupported`, `missing_scope`), the reports for that account are **removed from memory**, its in-flight requests are cancelled, and the matching state is shown. A response that arrives afterwards for that account is dropped.
-5. A hidden tab stops polling. When it becomes visible again, or the device comes back online, nothing is shown until a fresh `status` succeeds.
-6. `video_not_found` affects that video's panel only. Channel reports and other requests are untouched.
+**The access lease.** Per signed-in user and selected account the page keeps `epoch`, `lease` (`started_at`, `revision`), `latch`, and at most one status request in flight.
 
-**What this guarantees, and what it does not.**
+- **Polling.** While the tab is visible and online, `status` every 60 seconds. A status request has a 20-second deadline (below the 30-second margin between the 90-second lease and the 60-second poll).
+- **Lease clock.** A lease starts at the moment its status request was **issued**, not when the answer arrived, and is valid for 90 seconds.
+- **Epoch.** `epoch` increases on: any denial, the tab becoming hidden, going offline, a change of user, account, period or channel. A status request remembers the epoch it was issued under and is **applied only if that epoch is still current**; an older answer is discarded, and the request in flight is aborted at the same events. A late answer therefore cannot renew a lease that a denial, a hide or a resume has already ended.
+- **Resume.** Hiding the tab or going offline clears the lease. On resume, nothing is shown until a status request **issued after the resume** succeeds. Visibility, focus and online events are coalesced: while a request is in flight, they start no other.
+- **Failure.** A failed, timed-out or `settings_unavailable` status leaves the lease to run out by time (blocks are then hidden with "Checking access…" and return when a check succeeds at the same revision). Retries back off 5, 15, 45 seconds, then every 60, and honour `retry_after_seconds`.
+- **Denial.** `status` or any data operation answering an **Account**-scoped code (§5.4) removes the account's cached reports from memory, aborts its requests, bumps the epoch and shows the matching state. A new revision does the same for the old revision's entries.
+- **Latch.** A provider-confirmed refusal (`missing_scope`, `reconnect_required`, `grant_not_effective`) latches to the revision. A same-revision `status` that says "available" renews the lease **but does not clear the latch**: the notice stays, and fetching stays off. Recovery is a new revision (a reconnect) or the owner pressing Retry, which sends one data request; a success clears the latch.
+- `video_not_found`, `window_stale`, `rate_limited`, `capacity_reached`, `quota_exceeded`, `upstream_unavailable`, `internal_error` and `invalid_request` are **Block**-scoped: they change that block only.
+
+**Bounds.**
 
 | Situation | Bound |
 |---|---|
-| Rollout switched off, page open and online | New requests are refused at once. Reports leave the screen at the next `status`, at most about 60 seconds later. |
-| Rollout switched off, page open, `status` failing or device offline | Reports are hidden when the lease expires, at most 90 seconds after the last successful check. |
-| Rollout switched off, tab in the background | Nothing is shown when the tab returns until a check succeeds, and that check removes the reports. |
-| Channel reconnected or disconnected in another tab | The next successful `status` carries a new revision and the old reports are removed. |
-| Request in flight when access is withdrawn | Its result is discarded if the final recheck sees the withdrawal (§5.3, step 13). |
-| **Not guaranteed** | A response whose final recheck passed a few milliseconds before the switch is delivered. Numbers a person has already read cannot be taken back. Both are handled as incident steps (plan §6). |
+| Rollout switched off, page open, `status` working | New requests refused at once; reports leave the screen at the next check, at most about 60 seconds, and stop being shown 90 seconds after the last lease start at the latest. |
+| `status` failing, or device offline | Reports hidden when the lease runs out, at most 90 seconds after the last lease start. |
+| Tab hidden, then shown | Nothing shown until a fresh status succeeds; that status removes the reports if access was withdrawn. |
+| Reconnect or delete-and-recreate of the channel | The next `status` carries a new revision; the old reports are removed. |
+| A response in flight at the withdrawal | Discarded if the server's final decision sees the withdrawal (§5.4, step 10). |
+| **Not guaranteed** | A response whose final decision passed a few milliseconds before the switch is delivered; so is a `status` decided before the switch and answered after it (its lease starts at issue, so it extends nothing beyond 90 seconds from then). Numbers already read cannot be taken back (plan §6). |
 
-States, each distinct, none rendered as an empty report:
+States, each distinct, none rendered as an empty report: loading (skeletons per block; blocks independent); checking access; no YouTube channel (link to Profiles); not enabled ("not switched on for this channel yet", no reconnect prompt); managed connection; reconnect needed (link to `/profiles`); permission missing, and, with `detail: "grant_not_effective"`, "Google did not keep this permission. Disconnect the channel on Profiles and connect it again"; connection changed ("reload"); video not found (in the video panel only); empty ("YouTube has no numbers for this period yet"); days not returned (§5.8); Google quota; Postora capacity; rate limited ("try again in N minutes"); period moved on (`window_stale`: "Refresh to load the latest period"); temporary failure (retry control and request reference); video unavailable (a top-video row). None repeats a request by itself.
 
-| State | Shown |
-|---|---|
-| Loading | Skeletons per block. Blocks load independently; one failing block does not hide the others. |
-| Checking access | Reports hidden; "Checking access…". Shown while the lease is expired and unrenewed. |
-| No YouTube channel | Empty state with a link to Profiles. |
-| Not enabled | "YouTube analytics is not switched on for this channel yet." No reconnect prompt: reconnecting cannot change rollout. |
-| Managed connection | "This channel is connected through the managed connector, which does not provide analytics." |
-| Reconnect needed | "Reconnect this channel on Profiles", linking to `/profiles`. |
-| Permission missing | "Reconnect this channel and allow access to YouTube analytics", linking to `/profiles`. Under branch B it is shown only when the consent gate admits the user (§7.4); otherwise the account is "not enabled". |
-| Connection changed | "This channel was reconnected or disconnected. Reload to continue." |
-| Video not found | In the video panel only: "This video is not available on this channel." |
-| Empty | "YouTube has no numbers for this period yet." Typical for a new channel or new video. |
-| Days not returned | The trend shows gaps, and a note says: "YouTube did not return daily numbers for <n> day(s) of this period." |
-| Google quota | "YouTube's daily limit was reached. Try again tomorrow." |
-| Postora capacity | "Analytics is busy today. Try again tomorrow." |
-| Rate limited | "Too many requests. Try again in N minutes." |
-| Temporary failure | "YouTube analytics could not be loaded", with a retry control and the request reference. |
-| Video unavailable | A top-video row whose title could not be confirmed. |
-
-English is inline; Arabic is added under a `youtube` group in `src/i18n/locales/ar/analytics.json`, and the sidebar label in `src/i18n/locales/ar/nav.json`. The page works right-to-left; numbers, dates and durations render left-to-right inside it, as the competitor screens already do (`src/features/competitor-tracking/ui/LtrValue.tsx`). Every control is keyboard reachable and the chart has a table alternative. Counters on the YouTube Channel page stay labelled as YouTube counters; they are a different source from this page and are not mixed with it.
+English is inline; Arabic is added under a `youtube` group in `src/i18n/locales/ar/analytics.json` and the sidebar label in `src/i18n/locales/ar/nav.json`. The page works right-to-left; numbers, dates and durations render left-to-right inside it (`src/features/competitor-tracking/ui/LtrValue.tsx`). Every control is keyboard reachable and the chart has a table alternative. YouTube Channel page counters stay labelled as such and are never mixed with this page.
 
 ### 5.8 The requested period and what Google actually returned
 
 Google says "The response for a query with the `day` dimension will not contain rows for the most recent days" and that processing "typically" takes 48 to 72 hours (§3.3). Ending the period three days back makes missing days unlikely, not impossible.
 
-- The **requested period** comes from the clock and is shown as "Period: <start> – <end>, Pacific time". It is labelled as the period, never as coverage.
-- The **last returned day** comes only from the `daily` answer and is shown as "Last day with daily numbers: <date>". If the `daily` block has not loaded or failed, the line is not shown.
-- **A missing row means only that Google did not return that date.** The page does not say the data is unpublished, and it does not say the totals will change: it has no evidence for either. The note is exactly "YouTube did not return daily numbers for <n> day(s) of this period."
-- **Totals carry no coverage claim.** `summary` and `top_videos` have no per-day signal, so the page never says they are complete or incomplete.
-- **On the wire the rows stay sparse**: only days Google returned. **For the chart only**, `trendSeries.ts` builds one point per requested day and sets the value to `null` for a day with no row. The line is drawn with `connectNulls={false}`, as the saved-report chart does (`SavedAnalyticsReport.tsx:71`), so a missing day breaks the line. Without the `null` points the library would join the neighbouring days and hide the gap. No missing day is ever drawn as zero, and the table alternative lists missing days as "—".
+- The **requested period** is the pinned window, shown as "Period: <start> – <end>, Pacific time". It is never labelled as coverage.
+- The **last returned day** comes only from the `daily` answer: "Last day with daily numbers: <date>". If the `daily` block has not loaded or failed, the line is absent.
+- **A missing row means only that Google did not return that date.** The note is exactly "YouTube did not return daily numbers for <n> day(s) of this period." The page does not say the data is unpublished or that totals will change; it has no evidence for either.
+- **Totals carry no coverage claim.** `summary` and `top_videos` have no per-day signal.
+- On the wire the rows stay sparse. For the chart only, `trendSeries.ts` builds one point per requested day with `null` for a day with no row; the line is drawn with `connectNulls={false}`, as the saved-report chart does (`SavedAnalyticsReport.tsx:71`), so a missing day breaks the line. Without the `null` points the library would join the neighbouring days. No missing day is ever drawn as zero; the table alternative shows it as "—".
 
 ## 6. Security and privacy
 
 1. **Identity comes only from the JWT.** Strict schemas refuse a body `user_id`; a service-role bearer is refused.
-2. **Ownership, admission and the binding are decided in SQL**, in one statement, on every request (§5.2), with the same refusal for a foreign and a missing account.
-3. **The browser cannot name a channel.** `ids=channel==…` is built from the admission answer. A browser-supplied video ID is format-checked, then ownership-checked, before it is used.
-4. **Credentials are released only for the admitted connection.** The token is read through a function that requires the admitted channel and generation, at first use and inside any refresh (§5.4). A result is returned only after a final recheck of the same conditions.
-5. **The rollout and consent keys are private by policy**, not by convention: a RESTRICTIVE policy hides them from every non-admin browser session, and the functions that read them are executable by the service role only (§5.2).
-6. **Nothing new is stored.** No analytics value, video title or provider body is written to the database or to a log. The **one permitted write of a token** is the existing one: when a token has to be refreshed, the health-neutral store saves it to the account row (§5.4), exactly as publishing and comments already do. No token is written anywhere else. No token or provider text appears in any response or log; tests assert the serialised response and log rows contain neither the fixture tokens nor the fixture provider messages.
-7. **Audit work is bounded.**
-   - Rows go to `system_logs` (`category` edge, `source` youtube-analytics) with `operation` (only if it is a known operation name, otherwise `unknown`), `code`, `request_id`, and `account_id` only once it is verified as the caller's.
-   - `unauthorized` and `method_not_allowed` write nothing, so an anonymous caller writes nothing.
-   - **A request refused by the admission limiter is a cheap terminal path:** no audit row, no further database call, and at most one console line per worker per minute. Sustained over-limit traffic therefore costs one counter call per request and nothing else.
-   - **Other refusals: at most 20 rows per user per minute**, enforced by a shared atomic bucket in `check_rate_limit`, so the bound holds across all workers. A refusal beyond it writes no row.
-   - **The count of suppressed refusals is best effort.** Stage 4 keeps its tally in the memory of one worker (`supabase/functions/comment-manager/stage4/audit.ts:38`), which cannot count across workers or restarts. Stage 5 does not promise an exact figure: each worker emits one sanitised console line per minute with its own count, and no counter row is written. What is exact is the row bound.
-   - Each **successful data operation** writes one `info` row with the same fields and no numbers, bounded by the per-user data limit. Its purpose is incident scoping.
+2. **Ownership, rollout and the connection are decided in SQL, in one statement,** at admission, at credential release, before every Google attempt and before every data response (§5.2, §5.4). The same reasons, in the same order, every time.
+3. **The browser cannot name a channel.** `ids=channel==…` is built from the admitted binding. A browser-supplied video ID is format-checked, then ownership-checked.
+4. **Credentials are released, and tokens are stored, only for the admitted connection** (§5.3): bound lease acquisition, bound store under the account row lock, no lock across Google I/O.
+5. **The rollout and consent keys are private by policy**, hidden from every non-admin session; the functions that read them are executable by the service role only.
+6. **Nothing new is stored.** No analytics value, video title or provider body reaches the database or a log. The **only permitted token write** is the existing health-neutral store saving a refreshed access token (and a rotated refresh token) to the account row, through the bound wrapper (§5.3). No token is written anywhere else, logged, or returned. Every response is `Cache-Control: no-store`.
+7. **Audit work is bounded, and every refusal that refuses work is recorded** (`AGENTS.md`, "Reviewing a pull request", rule 4: "Every early return that refuses work must write a log row").
+   - Rows go to `system_logs` (`category` edge, `source` youtube-analytics): `operation` (known name or `unknown`), `code`, `request_id`, and `account_id` only once verified as the caller's. No tokens, provider text, numbers or unverified identifiers.
+   - `unauthorized` and `method_not_allowed` write nothing; an anonymous caller writes nothing.
+   - **Admission-limiter refusals:** at most **one row per user per minute**, decided by one extra `check_rate_limit` call on an audit bucket (`max 1`, window 60 seconds); no other database call; at most one console line per worker per minute. Sustained over-limit traffic therefore costs two counter calls per request and one row per minute.
+   - **Other refusals:** at most 20 rows per user per minute through a shared bucket, so the bound holds across workers; beyond it, no row. The count of suppressed refusals is **best effort**: Stage 4 keeps its tally in one worker's memory (`supabase/functions/comment-manager/stage4/audit.ts:38`), which cannot count across workers.
+   - **Successful data operations** write one `info` row with no numbers, **not awaited** and written after the response, so no awaited I/O sits between the final decision and the response. These rows are best-effort evidence for incident scoping, not a complete record of what was delivered.
    - A failed audit write never changes the response.
-8. **Refresh is health-neutral and grant-neutral** (§5.4).
-9. **CORS** is `restrictedCorsHeaders(req)`, never the wildcard (ARCHITECTURE §25). **Every response is `Cache-Control: no-store`.**
-10. **The flag is a visibility switch only.** It does not stop the endpoint. The rollout policy is the access switch (§8).
-11. **One channel at a time.** No number from two channels is ever added together or shown side by side (§3.6).
-12. **Disconnect.** Nothing is stored, so nothing has to be deleted. Browser memory is cleared on sign-out, on account switch, on a changed connection revision and when access is withdrawn (§5.7).
+8. **Refresh is health-neutral and grant-neutral** (§5.3).
+9. **CORS** is `restrictedCorsHeaders(req)` (ARCHITECTURE §25).
+10. **The flag is a visibility switch only.** The rollout policy is the access switch (§8).
+11. **One channel at a time.** No number from two channels is added or shown side by side (§3.6).
+12. **Disconnect.** Nothing is stored, so nothing is deleted. Browser memory is cleared on sign-out, account switch, revision change and withdrawn access (§5.7).
 
-## 7. OAuth: which permission, and what it means for connected channels
+## 7. OAuth: which permission, and consent to the new purpose
 
 ### 7.1 Two branches
 
-| | **Branch A — use permissions Postora already has** | **Branch B — add the analytics permission** |
+| | **Branch A — permissions Postora already has** | **Branch B — add the analytics permission** |
 |---|---|---|
-| Scope used | Existing scopes only (`supabase/functions/youtube-oauth/handler.ts:414-417`). Exactly which of them are required is what P1 establishes (§7.2). | `https://www.googleapis.com/auth/yt-analytics.readonly` in addition. |
+| Scope used | Existing scopes only (`supabase/functions/youtube-oauth/handler.ts:414-417`). Which of them are required is what P1 establishes (§7.2). | `https://www.googleapis.com/auth/yt-analytics.readonly` in addition. |
 | Basis | Authorization guide: `youtube.readonly` "Grants `reports.query` access to non-monetary metrics" [V]; the notice on the `reports.query` page [V]. | The `reports.query` scope table lists it [V]. |
-| Code change in `youtube-oauth` | **None.** | The scope is added to the consent request **behind a server-side gate** (§7.4). |
-| Channels connected today | Channels whose recorded scopes contain the proven set work at once. Channels with no recorded scopes are tried and Google decides. No reconnect. | A channel gets analytics only after its owner reconnects and grants the new scope. Publishing and comments keep working with the old grant. |
-| Google verification | No new scope. Postora's stated use of an existing scope changes. Whether Google requires a new review for that is **not stated** on the pages fetched. | If the Cloud Console marks the scope sensitive, the app must be approved for it "before your app can start to call these APIs"; until then "your app's users will experience the unverified app screen and the app will be subject to the 100-user cap" [V] ([Google Cloud help](https://support.google.com/cloud/answer/13464018)). Google's pages disagree on how long that takes: "up to 10 days" [V] ([Sensitive scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/sensitive-scope-verification)) and "verification might require several months" [V] ([Unverified apps](https://support.google.com/cloud/answer/7454865)). |
-| Consent screen | Unchanged. | One more permission line, only for users the gate admits. Under Google's granular permissions, "Users can select which permissions they want to approve", and the app "can't assume users grant all requested scopes" [V] ([Granular permissions](https://developers.google.com/identity/protocols/oauth2/resources/granular-permissions)). |
+| Code change in `youtube-oauth` | None. | The scope is added to the consent request **behind a server-side gate** (§7.4). |
+| Channels connected today | Channels whose recorded scopes contain the proven set work at once; empty recorded lists are tried and Google decides. | A channel gets analytics only after its owner reconnects and grants the new scope. Publishing and comments keep working with the old grant. |
+| Google verification | No new scope. Whether Google requires a new review for a new *use* of an existing scope is **not stated** on the pages fetched. | If the Cloud Console marks the scope sensitive, the app must be approved "before your app can start to call these APIs"; until then "your app's users will experience the unverified app screen and the app will be subject to the 100-user cap" [V] ([Google Cloud help](https://support.google.com/cloud/answer/13464018)). Google's pages disagree on how long that takes: "up to 10 days" [V] ([Sensitive scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/sensitive-scope-verification)) and "verification might require several months" [V] ([Unverified apps](https://support.google.com/cloud/answer/7454865)). |
+| Consent screen | Unchanged. | One more permission line, only for users the gate admits. Under granular permissions the owner may untick it: "the application must check what scopes are granted by the users" [V] ([Granular permissions](https://developers.google.com/identity/protocols/oauth2/resources/granular-permissions)). |
 
-How many of the connected channels have recorded scopes, and which scopes, was **not** checked. Whether the consent screen is still in "Testing" was not checked either; if it is, only listed test users can connect at all, under either branch.
+How many connected channels have recorded scopes, which scopes, and whether the consent screen is still in "Testing" were **not** checked.
 
-### 7.2 The check that decides: probe P1
+### 7.2 Probe P1
 
-The owner decided: probe first, and add the analytics permission only if a positive test shows it is needed. The probe is a real, read-only Google request on one of the owner's channels. **Each part needs its own approval at the time it is run.** Nothing in this document authorises it.
+The owner decided (D1): probe first; add the analytics permission only if a positive test shows it is needed. The probe is real, read-only Google requests on the owner's own channels. **Each part needs its own approval when it is about to run.** Nothing here authorises it.
 
-**How the probe learns which scopes its token really carries.** The earlier revision said the refresh helper returns them. It does not, in the mode the probe must use: in health-neutral mode the helper returns `grantedScopes: null` even when Google sent a `scope` field (`supabase/functions/_shared/youtubeTokenRefresh.ts:906`), and it also returns `null` when it reuses a token another worker refreshed (`:765-771`). Running it in the normal mode instead would rewrite the recorded grants and could mark the account as needing reconnection on a refusal (`:808-816`). The probe therefore does this:
+**What P1 asks.** The four report shapes the product will send (§3.2), each over the same seven-day window ending at the current reporting end date, so that a pass proves the shipped shapes and not only the simplest:
 
-1. It obtains the access token through the helper **in health-neutral mode**, so the only possible writes are those listed in §5.4.
-2. It asks **Google's token information endpoint about that exact access token** and reads the `scope` list from the answer. The endpoint is `https://oauth2.googleapis.com/tokeninfo`; its behaviour and whether it accepts the token in a request body are **unverified** here (no Google page for it was fetched) and are read from Google's documentation before P1 is approved. This is a second read-only Google request. It uses no YouTube API quota.
-3. If that answer is not a `200` with a `scope` field, the probe is **inconclusive and stops** before any Analytics request.
+| # | Shape |
+|---|---|
+| S1 | Channel totals: the eight summary metrics, no dimension. |
+| S2 | Daily: `day` and the four trend metrics, `sort=day`. |
+| S3 | Top videos: `video` and the four metrics of §5.5, `sort=-views`, `maxResults=10`. |
+| S4 | S1 filtered to one video of the channel (`filters=video==<id>`). |
 
-**Which tokens count as evidence.** The connect flow asks for three scopes and also sets `include_granted_scopes=true` (`handler.ts:414-427`), so a token can carry grants from an older consent that today's flow would never request. If such a token succeeded, the result could be credited to the wrong scope set and every channel would then be asked for a permission the connect flow cannot give.
+A part is `ok` only if all four are `ok`. Each is classified from the fixed list: `ok`, `insufficient_permission`, `api_not_enabled`, `quota`, `unauthorized`, `unsupported_query`, `server_error`, `timeout`, `unrecognised`.
 
-- **P1-a counts only if the token's effective scopes are all among the three the connect flow requests** (`youtube.readonly`, `youtube.upload`, `youtube.force-ssl`) and do not include `yt-analytics.readonly`. Any other scope on the token → that channel is unsuitable; choose another or stop.
-- **P1-c counts only if its token's effective scopes are exactly the P1-a set plus `yt-analytics.readonly`**, with no other difference. Anything else → inconclusive.
+**How the effective scopes of a token are read.** Not from the database, and not from the refresh helper, which in health-neutral mode returns `grantedScopes: null` even when Google sends a `scope` field (`supabase/functions/_shared/youtubeTokenRefresh.ts:906`) and returns `null` again when it reuses a token another worker refreshed (`:765-771`). The probe asks Google's token information endpoint about **that exact access token**: `POST https://oauth2.googleapis.com/tokeninfo` with the token in an `Authorization: Bearer` header, reading the space-delimited `scope` field ([Google Auth Library](https://googleapis.dev/nodejs/google-auth-library/latest/classes/OAuth2Client.html), `getTokenInfo`, [D]). The token stays out of URLs, logs and recorded headers; the timeout is 10 seconds; the token endpoint, the information endpoint and the Analytics requests are counted separately. If the answer is not a `200` with a `scope` field, the part is **inconclusive and stops**.
 
-| Part | Token | Result | What it establishes |
+**Which tokens count.** The connect flow requests three scopes and sets `include_granted_scopes=true` (`handler.ts:414-427`), so a token can carry grants from older consents, and Google "combines previous grants at the project level" (debate; [include_granted_scopes](https://developers.google.com/identity/protocols/oauth2/web-server), [V] for the parameter). A result is attributed to a scope set only when that set is exactly the token's effective scopes and is obtainable by the normal connect flow.
+
+| Part | Where | Token (effective scopes) | Result and what it establishes |
 |---|---|---|---|
-| **P1-a** | A production token for one named channel, obtained as above, whose effective scopes pass the rule above. | `ok` | **Branch A is viable for channels that hold every scope on that token.** The required set is exactly that observed set. |
-| | | `insufficient_permission` | Branch A fails for that set. **Not yet branch B**: run P1-c. |
-| | | Anything else | **Inconclusive.** Fix the cause if it is `api_not_enabled` and repeat once; otherwise stop and report. |
-| **P1-b** (optional, only after `ok` in P1-a) | A token whose effective scopes are `youtube.readonly` and nothing else, obtained by the owner for his own channel through a separate consent. | `ok` | The required set narrows to `youtube.readonly` alone, which also covers an owner who unticked the other permissions. |
-| | | Refusal, or the token turns out wider | The required set stays at the P1-a set. |
-| **P1-c** (only after `insufficient_permission` in P1-a) | A token for the owner's own channel that passes the P1-c rule above. It must be obtained **by refreshing the stored refresh token after the re-consent**, not taken from the consent callback (see below). | `ok` | **Branch B is confirmed**, including that the stored grant can mint analytics-capable tokens. |
-| | | Refusal | Neither branch is established. Stop. |
+| **P1-a** | Production, one of the owner's own channels | A token whose scopes are a subset of the three existing ones and exclude `yt-analytics.readonly` | All four `ok` → **branch A is sufficient for exactly that set** (a proper subset is a narrower proof). `insufficient_permission` with a token that carries **all three** → candidate branch B → P1-c. A refusal with a proper subset → **inconclusive** (the owner may have declined a scope); repeat with a token that carries all three. Anything else → inconclusive. |
+| **P1-b** (optional) | Isolated (below) | `youtube.readonly` only | All four `ok` → the required set narrows to `youtube.readonly`, which also covers an owner who unticked the other permissions. Otherwise it stays at the P1-a set. |
+| **P1-c** | Isolated (below), the same channel, OAuth client and requests throughout | (i) the three existing scopes; then (ii) those three plus `yt-analytics.readonly` | (i) must be `insufficient_permission`, replicating P1-a; if it is `ok`, the two results conflict and the probe stops. (ii) all four `ok` → **branch B is necessary and sufficient**. (ii) refused → neither branch is established; stop. |
 
-**Why P1-c uses a refreshed token.** On a re-consent, if Google returns no new refresh token, the save keeps the old one (`supabase/functions/youtube-oauth/index.ts:126-128`) while recording the new scopes (`:156`). If the kept refresh token could not mint tokens with the new scope, analytics would work until the first access token expired and then fail, sending the owner round the same reconnect again. Only a token minted from the stored refresh token proves the durable grant.
+**The isolated procedure (decision D12)** does not depend on any Postora change and does not use Postora's connect flow, so it has no circular dependency on the branch B gate:
 
-**What the probe records, and only this:** the part, the date, the HTTP status of each of the two Google requests, the token's effective scope list, and **one classification from a fixed list** — `ok`, `insufficient_permission`, `api_not_enabled`, `quota`, `unauthorized`, `unsupported_query`, `server_error`, `timeout`, `unrecognised`. On success it also records the column header names and the number of rows. **It records no Google message text, no response body, no channel name, no token and no numbers.** Fixtures are written by hand; nothing copied from a production response is committed or stored in `mem0`.
+- **Recommended: a separate test OAuth client.** A Google Cloud project owned by Waleed with its own OAuth client, the YouTube Analytics and Data APIs enabled, its consent screen in Testing with himself as test user, and tokens obtained in Google's OAuth 2.0 Playground with that client's own credentials, for a channel he owns that is not a customer's. It touches nothing in Postora and nothing in Postora's Google project. **Its evidence is limited**: it shows what Google accepts for these requests and scopes, not what Postora's own project, verification state or stored refresh tokens do. That is enough for P1-b and P1-c, which ask about sufficiency; the durable-grant question is answered per connection (§7.4).
+- **Alternative:** Postora's production client in the same Playground, which needs the Playground redirect URI registered on that client. It would add the analytics grant to that account's grants for Postora's client, which later Postora reconnects by that account would pick up through incremental authorization. Not recommended unless the limited evidence above is judged insufficient.
+- In both, the client secret is entered only by Waleed, in his own browser, and is never shared with an agent or recorded.
 
-**What the probe writes:** nothing to YouTube. In Postora's database, at most what any token use writes: the refresh lease taken and released, and, if the token had to be refreshed, the token columns through the health-neutral store. No health column, no recorded grant.
+**What P1 writes.** Isolated parts write nothing to Postora. P1-a on production uses the owner's own channel, attended: if it runs after the Stage 5 code exists it uses the bound path of §5.3; if before, it uses the existing health-neutral helper, whose possible writes are the lease row, taken and released, and, when a refresh was needed, the token columns through the neutral store. No health column and no recorded grant, on success or refusal. The attended probe on a connection the owner is not touching has no concurrent reconnect to fence against; that is the stated reason the unbound helper is acceptable for this one use.
 
-**The scope question must be closed before any channel is enabled.** If P1 cannot be run before implementation, the code may be built with a provisional required set (all three existing scopes). But **no channel may be added to the rollout policy until** P1 has a recorded conclusion **and** the required-scope set on the deployed head equals it (plan §5, gate G-P1). If the conclusion differs from the provisional set, the constant is changed by a reviewed PR first.
+**What is recorded**, in the PR and in `mem0`, and nothing else: the part and date, the HTTP status of each request, the token's effective scope list, the classification, and on success the column header names and the row count. **No Google message text, no response body, no channel name, no token, no numbers.** Fixtures are written by hand.
 
-### 7.3 True under both branches
+**Gate G-P1.** No channel is added to the rollout policy until P1 has a recorded conclusion **and** the required-scope constant on the deployed head equals it (plan §5). Code may be built beforehand with a provisional set of all three existing scopes; the constant is changed by a reviewed PR if the conclusion differs.
 
-- **The capability is derived from recorded scopes against one required set**, a constant in `supabase/functions/youtube-analytics/contracts.ts`, used only by that function. Its value is what P1 proved. The `youtube-resources` capability contract is **not** changed.
-- **The public disclosure must change before any channel is enabled.** `src/pages/GoogleApiDisclosure.tsx` must list the scopes Postora really requests (it omits `youtube.force-ssl` today, `:85-87`, `:105`) and must stop saying Postora never reads YouTube Analytics (`:97-98`, `:107`). The two corrections are separate changes (plan step 6), because the first is true whatever happens to this feature. The privacy policy text in `docs/YOUTUBE-OAUTH-VERIFICATION-GUIDE.md` and on `/privacy` needs the same sentence. The wording is the owner's to approve.
-- **The YouTube Analytics API must be enabled** for the Google Cloud project.
-- **Existing refresh tokens are expected to keep working.** No fetched page says that adding a scope to future consent requests invalidates stored tokens, but none says the opposite either, so this is **unverified**.
+### 7.3 Consent to the new purpose (decision D10)
 
-### 7.4 Branch B only: the consent gate (decision D7, still open)
+Updating the public disclosure does not by itself tell an existing user that their data will be used for a purpose they did not agree to. The facts:
 
-This section applies only if P1 leads to branch B. Decision D7 has not been put to the owner, because it may never arise.
+- What users accepted: Postora uses YouTube data "solely to" upload and publish videos and "display your YouTube channel information" (`src/pages/Privacy.tsx:92-98`); the disclosure page says Postora does not read YouTube Analytics (`src/pages/GoogleApiDisclosure.tsx:97-98`, `:107`).
+- Google: an API client "must not use user data for secondary purposes that are not clearly disclosed to users" ([Developer policies](https://developers.google.com/youtube/terms/developer-policies), III.D.2 item 3, [V]) and "must require users to agree to a privacy policy before users can access" its services (III.A.2, [V], quote truncated). The plan debate reports that III.E.3 requires users to re-accept the policy before use for a purpose outside the one they accepted; **this document could not reach that passage and marks it [S]**; plan step 1 reads it word for word.
+- **No acceptance record exists to build on.** The repository holds consent records for a partner risk flow only (`supabase/migrations/20260910100000_partner_platform_tier.sql:268-270`), none for the privacy policy. An in-app acceptance gate would need new storage and a screen: a table or column, outside D6 and D2.
 
-If the scope were simply added to the list in `handler.ts`, every new connection and every reconnect would ask for it from the moment `youtube-oauth` deploys, about two minutes after the merge. Neither analytics switch touches that. A user reconnecting only to publish would see the extra permission and, if Google has not yet approved the scope, the unverified-app screen. Switching analytics off would not undo it.
+Options for the owner (D10): **A.** Enable only channels whose owners have agreed, in writing, to the new purpose, after the updated policy and disclosure are live; Waleed keeps the record and the allowlist is the enablement record. The first pilot is Waleed's own channels. Broad enablement (`mode: "all"`) is **not** covered by this delivery and needs an in-app acceptance mechanism specified separately. **B.** Build the in-app acceptance record and gate in this delivery. **C.** Treat the updated text as sufficient notice for everyone. **Recommendation: A.** Gate **G-consent** (plan §5): before P1 on a channel that is not Waleed's own, and before each channel is enabled, the agreement exists and the policy text it refers to is the one live on `/privacy`. Before P1 and enablement the manager also records which version of the privacy text each pilot owner accepted when they connected.
 
-**Recommended design: the scope is requested only when a server-side consent gate says so.**
+### 7.4 Branch B only: the consent gate and per-connection grant checks (decision D7, still open)
 
-- A second private key, `youtube_analytics_stage5_consent`, absent by default, already covered by the policy of §5.2:
+Applies only if P1-c concludes branch B. D7 has not been put to the owner because it may never arise.
 
-  ```json
-  { "version": 1, "mode": "users", "user_ids": ["<auth.users.id>"] }
-  ```
+An unconditional scope added to `handler.ts` would reach every new connection and reconnect about two minutes after the merge, ahead of Google's verification, with nothing switched off by the analytics policy. **Recommended design:**
 
-  `mode` is `off`, `users` or `all`. It is evaluated by one more service-only SQL function, `youtube_analytics_stage5_consent_admits(p_user_id)`, added by a **second small migration** in the branch B change. Absent, unreadable or malformed → **no**, and the connect flow proceeds with today's three scopes. A failure here must never block a connection.
-- The authorise action adds the analytics scope only when the gate admits the signed-in user. Everyone else gets today's request, byte for byte.
-- **Data rollout may not run ahead of consent.** While the consent gate is not `all`, the rollout policy must stay at `allowlist`, and every listed channel's owner must be in the consent gate's `user_ids`. Otherwise a user could be admitted to analytics, be told to reconnect and grant a permission, and find that the connect flow does not ask for it. This is enforced in SQL, not left to the runbook: under branch B the rollout state function reports `rollout_blocked_by_consent` (deny for everyone) when `mode` is `all` and the consent mode is not `all`; and an allow-listed account whose owner the consent gate does not admit is reported as not admitted.
-- `mode: "all"` for consent is allowed only after Google has approved the scope for the app's audience (or the Cloud Console shows the scope needs no review). Opening data to everyone comes **after** that, as its own approval.
-- Setting the gate back to `off` restores the previous consent request at the next click. Users who already granted the scope keep it harmlessly.
-- The disclosure page lists the fourth scope from the moment the gate admits anyone.
-- After the first pilot owner reconnects, the P1-c check is repeated on that account (a token minted from the stored refresh token must carry the scope) before the channel is added to the rollout policy.
+- A second private key, `youtube_analytics_stage5_consent`, absent by default and already covered by the policy of §5.2: `{ "version": 1, "mode": "off" | "users" | "all", "user_ids": [...] }`. Absent, unreadable or malformed → no, and the connect flow asks for today's three scopes. A failure to read it never blocks a connection.
+- The authorise action adds the analytics scope only when the gate admits the signed-in user; everyone else gets today's request byte for byte.
+- **The consent predicate lives in `decide`** (a second small migration replaces that one function, `CREATE OR REPLACE`). Because every use of a connection goes through `decide` (§5.2), consent is checked in the same statement, at admission, at credential release, before every Google attempt and before every response: an owner removed from the gate between two of them is refused at the next. In `allowlist` mode an allow-listed account whose owner the gate does not admit is `not_enabled`; `mode: "all"` of the rollout with consent not `all` is `not_enabled` for everyone.
+- **Data may not run ahead of consent**: rollout `all` is refused by the decision until consent is `all`, and consent `all` waits for Google's approval (or for the Console to show the scope needs none).
+- **A grant is verified per connection, not once.** A re-consent can record the new scopes while the save keeps the old refresh token (`supabase/functions/youtube-oauth/index.ts:126-128`, `:156`), and Google's page says "The `refresh_token` is only returned on the first authorization" ([web-server flow](https://developers.google.com/identity/protocols/oauth2/web-server), [V]); whether `prompt=consent` changes that is **unverified**. So: before each pilot account is added to the rollout, a token minted from **that account's stored refresh token** is checked with the token information endpoint, under approval (the procedure of P1-a, steps for effective scopes). Under `all`, the same fact is caught at run time: if the recorded scopes include the scope and Google still refuses for permission, the answer is `missing_scope` with `detail: "grant_not_effective"`, and the owner is told to disconnect the channel on Profiles and connect it again (the disconnect revokes the stored token, so the next consent starts clean). Each occurrence is audited; several of them stop the `all` step.
+- **Closing the gate does not undo a grant.** Setting it to `off` restores today's *request*. A user who already granted the scope keeps the grant until they disconnect or revoke it, and because the flow sets `include_granted_scopes=true` Google can include that earlier grant in later authorizations. The public disclosure therefore keeps describing the fourth scope for as long as any such grant can exist.
 
-**What cannot be gated.** Once a user has granted the scope, Postora holds it for that connection until the user disconnects or revokes it. And the app-level consequences of an unapproved sensitive scope in use (the 100-user cap counts users who saw the unverified screen) apply to the Google project as a whole. The gate keeps that number to the named pilot.
-
-The alternatives the owner would be offered: **(B)** no analytics scope for anyone until Google has approved it, with branch B shipping as a later change; **(C)** the scope for everyone at deploy, which is not recommended.
+The options the owner would be offered (D7): **A.** gated, as above (recommended); **B.** no analytics scope for anyone until Google has approved it, branch B shipping later; **C.** for everyone at deploy (not recommended).
 
 ## 8. Rollout
 
 **Dark by default.** After the migration and the merge nothing changes for any user until the rollout policy is set.
 
-| Switch | What it controls | Where | Default | Who may change it |
+| Switch | Controls | Where | Default | Who |
 |---|---|---|---|---|
-| **Rollout policy `youtube_analytics_stage5_rollout`** | **Access.** Whether the endpoint will call Google for a channel. | `app_settings`; hidden from non-admin sessions by the policy of §5.2; evaluated in SQL. | **Absent = off for every channel.** The migration does not seed it and asserts that it is absent. | Waleed only. |
-| Visibility flag `feature_analytics_youtube` | **Visibility.** Whether the page and its links appear. | `app_settings`, browser-readable like every `feature_*` key (`supabase/migrations/20261029170000_media_upload_limits.sql:17-39`) | Off (code default; no row needed) | Waleed, in Admin → Feature Flags |
-| Native connection with the required scopes | Whether a given channel qualifies | The account row | — | The channel's owner, by connecting |
+| **Rollout policy `youtube_analytics_stage5_rollout`** | **Access.** Whether the endpoint will call Google for a channel. | `app_settings`, hidden from non-admin sessions by the policy of §5.2, evaluated by `decide`. | **Absent = off for every channel.** The migration does not seed it and asserts it is absent. | Waleed only |
+| Flag `feature_analytics_youtube` | **Visibility.** Whether the page and links appear. | `app_settings`, browser-readable like every `feature_*` key (`supabase/migrations/20261029170000_media_upload_limits.sql:17-39`) | Off | Waleed, in Admin → Feature Flags |
+| Native connection with the required scopes | Whether a channel qualifies | The account row | — | The owner, by connecting |
 | *Branch B only:* consent gate | Whether the consent screen asks for the analytics scope | `app_settings`, private by the same policy | Absent = off | Waleed only |
 
-**The policy is the access switch.** The flag is read by the browser and enforced nowhere on the server. The moment the policy lists a channel, the endpoint serves that channel's owner, whether or not the flag is on. Therefore:
+**The policy is the access switch.** The flag is read by the browser and enforced nowhere on the server. The moment the policy lists a channel, the endpoint serves that channel's owner whether or not the flag is on. Approving a policy change **is** the go-live approval for that channel; turning the flag off hides the page and stops nothing. The flag-off, policy-on state is tested.
 
-- approving the policy change **is** the go-live approval for that channel;
-- turning the flag off hides the page and does **not** stop access; only the policy does;
-- the flag-off, policy-on state is tested explicitly (§9.1).
+`decide` is evaluated at the start of every request, before credentials are released, **before every Google attempt**, and as the last step before a data response. Nothing is cached across requests. A change therefore takes effect at the next attempt, in running instances too. An attempt already authorized when the switch is thrown is in flight and cannot be recalled; a response whose final decision passed a moment earlier is delivered. Those are the stated residuals.
 
-The policy is evaluated in SQL at the start of every request, again when credentials are released, and again as the last step before a data response is written. Nothing is cached across requests. So a change takes effect at the next click in running instances; a request in flight has its result discarded if its final recheck sees the change; an open page hides or removes its reports within the bounds of §5.7. The few milliseconds after a final recheck are the stated residual.
+**Order of enablement**, each step a separate approval by Waleed, each able to fail at its own stage:
 
-**Order of enablement**, each step a separate approval by Waleed:
-
-1. P1 (§7.2), before implementation if it can be run.
-2. The production snapshot, then the migration, **before the merge** (plan §5).
-3. The merge.
-4. **Gate G-P1:** a recorded P1 conclusion, and the deployed required-scope set equal to it. Without it, step 5 does not happen.
-5. The rollout policy with one named channel. **This is the go-live for that channel.**
-6. The flag on, so the page is visible. Rehearsal R1 (§9.5).
-7. The remaining pilot channels, by adding their IDs.
-8. `mode: "all"`, only after both Google limits have been read in the Cloud Console, the two ceilings have been reviewed against them and against the existing features' observed peak (§5.6), and the disclosure text is live. Under branch B, also only after the consent gate is `all` (§7.4).
-
-No capability is implied by a merge or by an earlier approval.
+| # | Step | Evidence required |
+|---|---|---|
+| 0 | Preconditions: Console readings, consent text check, `check_rate_limit` and Stage 4 objects confirmed read-only in production. | Recorded in the PR |
+| 1 | P1 (§7.2), each part when approved. | Recorded classification and scope lists |
+| 2 | Implementation, guards, review, CI green on the exact head. | CI links |
+| 3 | The owner's card: merge, migration hash and object list, disclosure wording, D10 and D11. | Approval |
+| 4 | Production snapshot; apply the migration; verify it. | Snapshot receipt; verification output |
+| 5 | Merge. **Deployment checkpoint:** the frontend deployed; the Edge Functions Sync schedule ran **for the merge commit and did not park it** (`docs/runbooks/deploy-edge-function.md`, "Automatic deploy" and the parked-commit notes); SHA-256 of the synced `youtube-analytics` files equals `git show <merge>:<path>`; a smoke test on the deployed route: `status` for a random account ID answers `not_found` with `Cache-Control: no-store`, and for an owned channel `not_enabled`. | Schedule log, hashes, smoke output |
+| 6 | Dark verification: other features and every other setting unchanged; connect flow asks for the same three scopes; disclosure live; page not visible. | Checklist |
+| **G-P1**, **G-consent** | The scope question is closed and deployed; every enabled owner has agreed (§7.3). Under branch B also **G-B**: the per-connection grant check (§7.4). | Recorded conclusions |
+| 7 | (a) Policy `allowlist` with one named channel — **go-live**; (b) flag on; (c) rehearsal R1; (d) further pilot channels; (e) `mode: "all"` — **not part of this delivery's approval** (D10): it needs a separate approval after the Console readings, the ceilings review (§5.6) and an in-app acceptance mechanism. | Per step |
 
 ## 9. Testing
 
-All automated evidence is offline: fake provider, synthetic accounts, disposable database, no public egress.
+All automated evidence is offline: fake provider, synthetic accounts, disposable database, no public egress. The real refresh helper is exercised against the real SQL functions in the local journey (§9.4); CI covers the SQL functions and the Deno logic with fakes, and the PR says so.
 
 ### 9.1 Deno
 
 | Suite | Proves |
 |---|---|
-| `contracts.test.ts` | Every error code has a status and a page scope; metric keys, units, periods, limits, ceilings, the video-ID pattern and the single top-videos metric list match this document. |
-| `window.test.ts` | The requested Pacific-time window for each period, across both daylight-saving changes and the year boundary; the end is three days back; a clock at 23:59 and at 00:01 Pacific. |
-| `rollout.test.ts` | The adapter maps each SQL answer to the right code, and a failed call to `settings_unavailable`, never to "off". It contains no policy logic of its own. |
-| `limits.test.ts` | Each limiter refuses when the counter call fails. **The shared budget is debited once before every Google call, including a repeat after `401` and a title lookup.** With one unit left: the first call is sent and the repeat is refused; a budget spent after the ownership lookup answers `capacity_reached` with no Analytics call; a budget spent before the title lookup returns the report without titles; a title lookup that does not happen is not debited. |
-| `credentials.test.ts` | The bound store's `readAccount` calls the credentials function with the admitted channel and generation; when that returns nothing, the helper starts **no** token exchange. |
-| `analyticsReadClient.test.ts` | Exact request URL and parameters per operation, built from structured parameters; `ids` from the admission answer. **Per-report validation:** a non-empty top-videos answer with string IDs is accepted; an ID that fails the pattern, a duplicate ID, a non-numeric or negative metric, a wrong row width, a header mismatch → `upstream_unavailable`; an explicit `null` cell → `value: null`; a daily answer missing its latest requested day and one missing a middle day are accepted with the right coverage and no filled-in rows; a day outside the window is rejected; missing `rows` → empty. Each error class; no provider text in any result; titles only for rows whose channel matches. |
-| `handler.test.ts` (fake ports) | Unauthenticated; service role; unknown key including `user_id` and `channel_id`; malformed `video_id`; each admission answer; Composio; `needs_reauth`; recorded scopes without a required one; empty recorded scopes proceeds; the handler has no flag input at all; each limiter. **Every row of the provider-call table in §5.3, with the token, Data and Analytics counters and the number of budget debits all asserted**, including the three `401` cases that end in `reconnect_required` without a repeat. A successful ownership lookup with no owned video is `video_not_found`; a quota refusal, a timeout, a `5xx` and a malformed body in that lookup are each their own code. **Every response, success or refusal, carries `Cache-Control: no-store`.** No token in any response. |
-| Binding races | With a fake store that changes the account between steps: disconnect, reconnect on the same row, and switch to Composio, each injected (a) after admission and before the credentials read, (b) after the credentials read and before a needed refresh, (c) during a token exchange, (d) at a forced refresh, (e) after the Analytics answer. Expected: (a), (b), (d) → `connection_changed` with **zero token-endpoint calls and zero YouTube calls after the change**; (c) → the exchange in flight completes, **nothing is stored**, `connection_changed`; (e) → `connection_changed` with the result discarded. A token refresh alone does not trip any check. |
-| Revocation in flight | The policy is switched off while the provider call is pending → `not_enabled`, result discarded. A switch after the final recheck is delivered; the test documents that residual instead of pretending it away. |
-| Audit bound | With **two handler instances** sharing one bucket: 30 refusals by one user in a minute write 20 rows in total. A request refused by the admission limiter writes no row and makes no second database call; 500 such requests produce 500 counter calls, zero rows and at most one console line per worker. Anonymous refusals write none. A successful data operation writes one `info` row with no numbers. No row contains a token, provider text or an unverified identifier. A failed insert leaves the response unchanged. |
-| Health neutrality | After every failure path — `401`, `403` insufficient permission, `403` unknown, quota, `invalid_grant` on refresh — the fake store shows **no** write to `needs_reauth`, `failure_count`, `last_refresh_error` or `granted_scopes`. A request with an expired token stores the refreshed token through the neutral store and writes nothing else. `dropGrantedScope` is never imported by the function. |
-| Compatibility | The `youtube-resources` capability and handler suites, the `youtube-oauth` suite and the refresh-lease suite pass unchanged; none of those files is edited. |
-| Composition | `index.ts` builds the real handler with real ports. |
+| `contracts`, `window` | Every error code has a status and a page scope. The Pacific reporting end date, the accepted window set, and the budget-day key across both daylight-saving changes, the year boundary, and clocks at 23:59 and 00:01 Pacific; `window_stale` for an end date outside the set. |
+| `decision` adapter | Each `decide` answer maps to the right code; **an RPC error is `settings_unavailable`, never `ok` and never "off"**; precedence in §5.2. |
+| `limits` | Each limiter refuses when its counter cannot be read. The budget key contains the Pacific date; the window is 48 hours; **a result with `allowed: true` and `count: 0` is refused**; a debit just before and just after a Pacific midnight lands in two buckets; ceiling `N` allows `N` debits and refuses `N+1`; a repeat after `401` and a title lookup each debit; a decision that refuses after the debit does not refund it. |
+| `analyticsReadClient` | URL and parameters built structurally; `ids` from the admitted binding. **Per-report validation:** a non-empty top-videos answer with string IDs is accepted; a bad or duplicate ID, a non-numeric or negative metric, a wrong width, a header mismatch → `upstream_unavailable`; explicit `null` → `value: null`; a daily answer missing its latest day, and one missing a middle day, are accepted with the right coverage and no filled-in rows; an out-of-window day is rejected; missing `rows` → empty. Ownership: `200` owned, `200` without it, `404 videoNotFound` → `video_not_found`; any other `404` → `upstream_unavailable`. |
+| `handler` (fake ports) | Unauthenticated; service role; unknown keys; malformed `video_id`/`window_end`; each admission reason; Composio; the order of checks. **Every row of the requests table of §5.4 with the token, Data, Analytics and debit counters asserted and the token state pinned**, including rows 5, 7, 8, 9, 11, 17, 20, 21 and 23. A failed ownership lookup is never `video_not_found`. A title `401` causes no token request and no repeat. `Cache-Control: no-store` on every response. No token in any response. A refusal decided after a debit does not send. |
+| `credentials` (bound store) | `readAccount`, `acquireLease`, `storeTokenWithLease` call the bound RPCs with the admitted binding; a refusal sets `lastDenial` and the handler prefers it to the helper's outcome; `recordFailureWithLease` is never called; `needs_reauth` in the bound read reaches the helper's refusal path. |
+| Binding races (fake store, then real SQL in the journey) | Change injected: (a) after admission, before credentials; (b) after credentials, before a needed refresh; (c) during a token exchange, **by the browser path (`is_active = false` only)** and, separately, by a reconnect that changes a token; (d) at a forced refresh; (e) while a debit is pending; (f) after the Analytics answer. Expected: (a), (b), (d), (e) → no Google request after the change; (c) → the exchange completes, the bound store **refuses** and writes nothing, in both disconnect paths; (f) → result discarded. Withdrawal of the **rollout** at (c) is different by design: the token **is** stored (§5.3), the next attempt is refused. |
+| Audit | Two handler instances sharing the buckets: 30 refusals by one user in a minute write 20 rows; 500 admission-limiter refusals write one row and cost 1,000 counter calls, no other database call, one console line per worker; anonymous refusals write none; a success writes its `info` row after the response and never before it; no row holds a token, provider text or numbers; a failed insert changes nothing. |
+| Health neutrality | After every failure path no write to `needs_reauth`, `failure_count`, `last_refresh_error` or `granted_scopes`; an expired token leads to one write, through the bound store; `dropGrantedScope` is never imported. |
+| Compatibility, composition | `youtube-resources`, `youtube-oauth` and refresh-lease suites pass unchanged and none of their files is edited; `index.ts` builds the real handler with real ports. |
 
 ### 9.2 SQL harness
 
-A new suite, `supabase/tests/youtube_analytics_stage5_rollout.sql`, registered in `SUITES` in `scripts/db-harness.sh` (`:107`), run on the baseline plus every migration in the disposable database. Concurrency cases use two real sessions over `dblink`, the pattern of the Stage 4 suite.
+New suite `supabase/tests/youtube_analytics_stage5_rollout.sql`, registered in `SUITES` in `scripts/db-harness.sh` (`:107`), on the baseline plus every migration, with two real sessions over `dblink` as in the Stage 4 suite.
 
 | Area | Assertion |
 |---|---|
-| Old-code compatibility | With the migration applied and no new code: every existing suite stays green; `app_settings` reads and writes of every other key behave as before for `anon`, `authenticated`, an admin and the service role. |
-| Privacy | With either key present, `anon` and a non-admin `authenticated` session read zero rows for it and cannot insert, update or delete it; an admin can; `service_role` can. The read allow-list is unchanged. |
-| Privileges | `anon` and `authenticated` cannot execute any of the four functions; `service_role` can; each is `SECURITY DEFINER` with the pinned `search_path`. |
-| Policy parsing | Absent → `rollout_missing`; not an object, wrong version, unknown mode, `account_ids` not an array, a non-UUID entry, 201 entries → `rollout_invalid`; `off`; `allowlist` listed and not listed; `all`. All non-`ok` states deny every account. An unreadable key raises. |
-| Tenant isolation | Two owners; one owner with two accounts; crossed owner and account IDs; a foreign, a missing, an inactive and a non-YouTube account all return the identical "not found". An admin owner gets no bypass. |
-| Binding | Credentials and `admits` refuse when the expected channel or generation differs; after a disconnect, a reactivation, a native re-consent, a switch to Composio and back, the generation has advanced and both refuse. After a trusted token refresh, with and without a rotated refresh token, both still accept. |
-| No credential leak | `capability_status` never returns a token; the credentials function returns none on any refusal. |
-| One snapshot | Session A evaluates while session B, in an open transaction, removes the account from the policy and reconnects it: A's answer is entirely "before" or entirely "after", never admitted-with-the-new-generation. |
+| Old-code compatibility | With the migration applied and no new code, every existing suite stays green; every other `app_settings` key behaves as before for `anon`, `authenticated`, an admin and the service role, **including an admin acting through `authenticated`**, and renaming a row into or out of either protected key. |
+| Privacy | With either key present, `anon` and a non-admin `authenticated` session read zero rows for it and cannot insert, update, delete or rename into it; an admin can; `service_role` can. The read allow-list is unchanged. |
+| Privileges | Browser roles cannot execute the new functions; `service_role` can execute `decide`, `acquire_lease`, `store_token`; the parser is executable by none. Each is `SECURITY DEFINER` with the pinned `search_path`; the closing assertions of the migration hold. The narrow role still owns exactly the three Stage 4 functions. |
+| Incarnation | An insert ignores a client-supplied value; an update cannot change it; a platform switch to YouTube assigns one; **delete and re-insert with the same `id`, owner and channel yields a different incarnation and a different `connection_revision`**; existing rows read as the all-zero value. |
+| `decide` | Policy parsing (`missing`, `invalid`, `off`, `not_listed`, `ok`, 200 vs 201 entries, non-UUID); the reason order of §5.2 for every pair of simultaneous conditions; tenant isolation (two owners, one owner with two accounts, crossed IDs; identical `not_found`); `needs_reauth`; scopes (empty recorded list passes, missing scope refuses); expected values all-or-none; no credential in any refusal; credentials only when `ok` and requested. |
+| Snapshot | **Discriminating:** a test-only two-statement variant with a barrier between its two reads, committed against by session B, returns an incoherent answer; the same barrier technique run against `decide` cannot interleave, and `decide`'s source is asserted to be one statement reading each of the two tables once. The suite fails if the production function is replaced by the variant. |
+| Bound lease and store | Real interleavings: (i) session A holds the account row lock with an uncommitted `is_active = false` while B calls `store_token` → B waits, then refuses `connection_changed`, nothing written; (ii) a reconnect (token change) before `acquire_lease` → refused; (iii) a disconnect without a token change before `acquire_lease` → refused, and the lease table is untouched; (iv) publishing holds the lease → `lease_held`, no second lease; two Stage 5 acquirers → exactly one token; (v) rollout withdrawn between acquire and store → the store **succeeds**; (vi) `needs_reauth` set between → the store succeeds, `decide` refuses afterwards; (vii) no lock is held after either function returns; (viii) the narrow role's generation trigger still preserves the generation on a Stage 5 store. |
+| Budget buckets | Against the real RPC: exact exhaustion; the Pacific-day key on both sides of midnight and of both daylight-saving transitions; a row deleted between the insert and the locked read yields `count: 0` and the debit helper refuses; `cleanup_rate_limit_buckets` run during a day leaves the live bucket; browser roles cannot alter `rate_limit_buckets`; the two budgets and the per-user buckets have separate keys. |
 | Seeding | Neither key exists after the migration. |
 
 ### 9.3 Vitest and Testing Library
 
-Formatting (minutes to hours, seconds to minutes, zero and null); the gateway sends each request body in a shared fixture and maps each error code, with an unknown code falling back to `upstream_unavailable`; **switching account never shows the previous account's numbers, including while the new one loads**; one failing block does not hide the others; every state in §5.7 renders its own message and none renders as an empty report; subscribers gained and lost are separate and no net figure appears; the top-videos table has exactly the four metric columns of §5.5.
+Formatting; the gateway sends each request in a shared fixture and maps each code; account switch never shows the previous account's numbers; one failing block does not hide the others; every state renders its own message and none renders as an empty report; subscribers gained and lost are separate; the top-videos table has the four columns of §5.5.
 
-- **Connection revision.** Query keys contain the revision; no data query runs before `status` returns one; a `status` with a new revision removes the old revision's reports while the account stays "available" — tested with a reconnect that completes between two polls and **no data request in flight**; a data response with a different revision is dropped.
-- **Access lease.** Reports are shown only within 90 seconds of a successful `status`; a failing, timed-out or `settings_unavailable` `status` hides them when the lease expires and a later success with the same revision shows them again; a tab that was hidden shows nothing until a check succeeds; going offline hides them at expiry; each account-scoped code removes them.
-- **Video scope.** `video_not_found` changes the video panel only; channel reports stay, and no other request is cancelled.
-- **No request the owner did not ask for.** With the real query client configuration: after a `quota_exceeded`, `capacity_reached`, `rate_limited`, `missing_scope` or `not_enabled` answer there is exactly one gateway call; a simulated network return causes none; unmounting and remounting the failed block causes none; pressing the retry control causes one.
-- **Trend.** `trendSeries` yields one point per requested day with `null` for a day not returned; the rendered line is broken at that day; no zero appears; the note reads "did not return".
+- **Keys.** The three channel operations have **distinct** keys; the video variants differ from the channel ones; the key contains the revision, the window and the period.
+- **Real `QueryClient`, with the Stage 5 options:** a lapse longer than 30 minutes (stale time would have expired under the old design) followed by a successful status at the same revision causes **zero** gateway data calls and shows the cached reports; a quota, capacity, rate-limit, permission or not-enabled answer causes exactly one call, also after a simulated network return and after unmounting and remounting the block; Retry causes exactly one.
+- **Access lease.** Reports show only within 90 seconds of the **issue** of a successful status; an old status answer arriving after a denial, a hide, an offline period or a channel change is discarded and renews nothing; concurrent visibility, focus and online events produce one status request; a request issued before a hide cannot paint after the resume; failure backs off 5, 15, 45 seconds and honours `retry_after_seconds`; a status in flight when access is withdrawn is applied only up to its issue time.
+- **Latch.** After a provider-confirmed `missing_scope` or `reconnect_required`, a same-revision `status` "available" renews the lease, keeps the notice and starts no data request; a new revision, or Retry followed by a success, clears it.
+- **Revision and window.** A reconnect that completes between two polls, with no data request in flight, removes the old revision's reports; a block's response with a different window or revision is dropped; the three blocks of one load share one window across a simulated Pacific midnight; `window_stale` shows the refresh message and sends nothing.
+- **Scope.** `video_not_found` changes the video panel only.
+- **Trend.** One point per requested day, `null` where not returned, line broken, no zero, note reads "did not return".
 
-Also: Arabic and right-to-left; the route and sidebar entry follow the flag; `tests/architecture.test.ts` for the layering; the "View analytics" link appears only with the flag on. One shared request fixture is accepted by the Deno handler and sent by the Vitest gateway.
+Also Arabic and right-to-left; route and sidebar follow the flag; layering test; the "View analytics" link only with the flag on; a shared request fixture accepted by the Deno handler and sent by the gateway.
 
-### 9.4 Journey with a fake provider
+### 9.4 Journey with a fake provider (local evidence)
 
-`scripts/stage5-e2e.mjs`, modelled on `scripts/stage4-e2e.mjs`, starts the disposable harness database **with the Stage 5 migration applied**, a local server (`e2e/fixtures/youtubeStage5Server.ts`) that composes the **real** `youtube-analytics` handler and the **real SQL functions** with a fake provider that counts requests separately for the token endpoint and the two YouTube hosts, and the app built with its real query client configuration. `e2e/youtube-stage5.spec.ts` runs in English and Arabic:
+`scripts/stage5-e2e.mjs`, modelled on `scripts/stage4-e2e.mjs`: the disposable database with the Stage 5 migration applied, a local server (`e2e/fixtures/youtubeStage5Server.ts`) composing the **real** handler, the **real refresh helper with the bound store** and the **real SQL functions**, with a fake provider counting requests separately for the token endpoint, the information endpoint and the two YouTube hosts; the app built with its real query client. `e2e/youtube-stage5.spec.ts`, English and Arabic:
 
-1. policy absent → "not switched on"; all provider counts are zero;
-2. policy admits the channel → overview, trend and top videos appear; counts are 3 Analytics and 1 Data;
-3. change the period → the period line and numbers change; counts rise by 3 and 1;
-4. open an owned video → its cards and trend; counts rise by 2 and 2. Another channel's video ID in the URL shows "not available on this channel" **in the video panel while the channel reports stay on screen**; counts rise by 0 Analytics and 2 Data;
-5. a channel with no data → the empty state, not an error;
-6. a daily answer missing its last two days and one middle day → three breaks in the line, the last-returned-day line, and the "did not return" note;
-7. the provider answers with a permission refusal → the reconnect notice, exactly one request per block, and the account row's health columns and recorded scopes are unchanged in the database;
-8. the provider answers with a quota refusal → the quota message and exactly one request per block, also after the browser goes offline and online again;
-9. the shared budget is exhausted → the capacity message and zero provider requests;
-10. the policy is switched off while the page is open → the reports disappear at the next status check and "not switched on" shows; no further provider request;
-11. the status endpoint is made to fail while the page is open → the reports are hidden at lease expiry with "Checking access…", and return when it recovers;
-12. the channel is reconnected in a second tab with no request in flight → at the next status check the first tab removes the old reports and loads again under the new revision;
-13. the channel is reconnected while a request is pending → "connection changed", no numbers shown;
-14. switch to a second channel mid-load → nothing of the first channel is shown;
-15. a second user with a channel not in the policy sees nothing of the first user's data;
-16. with the flag off and the policy on, a direct call to the endpoint by the owner is served, and the page is not reachable.
+1. policy absent → "not switched on"; every provider count zero;
+2. admitted channel → overview, trend, top videos; counts 3 Analytics, 1 Data;
+3. period change → new window and numbers; counts +3, +1;
+4. owned video → +2 Analytics, +2 Data; another channel's video ID → "not available on this channel" in the video panel, **channel reports stay**, +0 Analytics, +2 Data;
+5. a channel with no data → empty state;
+6. a daily answer missing its last two days and one middle day → three breaks, last-returned-day line, "did not return" note;
+7. permission refusal → reconnect notice, exactly one request per block, health columns and recorded scopes unchanged, a same-revision status does not clear it, Retry sends one request;
+8. quota refusal → one request per block, also across an offline/online cycle and a remount;
+9. shared budget exhausted → capacity message, zero provider requests;
+10. policy switched off with the page open → reports disappear at the next status check; no further request;
+11. status endpoint failing → reports hidden at lease expiry, back when it recovers, **zero data requests on recovery**;
+12. a status answer delayed past a withdrawal is discarded;
+13. reconnect in a second tab, no request in flight → old reports removed at the next status; a **delete and re-insert of the row with the same id** does the same;
+14. reconnect during a pending request → "connection changed", no numbers;
+15. **browser disconnect (`is_active = false`) during a token exchange** → the bound store refuses, no token written, "connection changed"; the same with the rollout withdrawn instead → token stored, next attempt refused;
+16. title `401` → list without titles, no token request;
+17. a window pinned before Pacific midnight and loaded after → all three blocks cover the same dates;
+18. channel switched mid-load → nothing of the first channel shown;
+19. a second user, channel not in the policy → nothing of the first user's data;
+20. flag off, policy on → a direct call by the owner is served, the page is not reachable.
 
-The run fails on any unexpected external request. Playwright is not a CI job in this repository, so this is local evidence recorded in the PR with the command, head SHA and result, as in Stage 4.
+The run fails on any unexpected external request. Playwright is not a CI job here (Stage 4 precedent), so this is local evidence recorded in the PR with command, head SHA and result.
 
 ### 9.5 What cannot be proven without a real channel
 
 | Unknown | Settled by |
 |---|---|
-| Which scope set Google accepts for `reports.query`. | P1 (§7.2). |
-| That the token information endpoint reports the scopes of an access token as assumed. | Google's documentation, read before P1 is approved; then P1 itself. |
-| The real shape of a permission refusal. | P1-a, only if it happens to be refused. Otherwise **stays unverified**. |
-| The real shapes of an exhausted quota, an API that is not enabled, and an expired token. | **Not rehearsed.** They stay unverified; the classifier treats what it does not recognise as a temporary failure, and the fixtures are written by hand. |
-| Under branch B: that a re-consent leaves a refresh token able to mint analytics-capable tokens. | P1-c, and the repeat of it on the first pilot account. |
-| That `channel==<ID>` behaves as documented for a Google account with more than one channel. | R1, if the pilot account has more than one; otherwise unverified. |
-| How often recent days are not returned, and whether three days back is right. | R1: the last-returned-day line. |
-| What a small channel gets when data is below Google's thresholds. | R1 on a small channel, if one is available. |
-| The real daily limits of both Google APIs, and the existing features' daily peak. | The owner reads them in the Cloud Console. |
-| That the numbers match YouTube Studio for the same Pacific-time range. | R1: the owner compares one period by eye. |
+| Which scope set Google accepts for the four shapes. | P1 (§7.2). |
+| Token information endpoint behaviour as assumed. | Google's library documentation [D]; P1 itself. |
+| The real shape of a permission refusal. | P1, only if one occurs. Otherwise **unverified**. |
+| Exhausted quota, "API not enabled", expired token shapes. | **Not rehearsed**; stay unverified; hand-written fixtures; unknown means a temporary failure. |
+| Under branch B: that a re-consent leaves a refresh token able to mint analytics-capable tokens; whether `prompt=consent` returns a new refresh token. | The per-connection check (§7.4); P1-c tests sufficiency only. |
+| `channel==<ID>` for an account with more than one channel; thresholds for a small channel; how often recent days are missing. | R1, if the pilot allows; otherwise unverified. |
+| The real limits of both APIs and the existing features' peak. | The owner, in the Cloud Console. |
+| That the numbers match YouTube Studio for the same Pacific range. | R1: the owner compares one period by eye. |
+| What users accepted at sign-up and connection. | The manager's read of the shipped text (plan step 0); never inferred from the code alone. |
 
-**Rehearsal R1**: read-only, the one pilot channel, after the first enablement, approved separately. It opens the page for each period and one video, and records **only what was actually observed**: which blocks loaded, the requested period and the last returned day, the provider request counts, and the owner's yes or no on the Studio comparison. It does not try to cause errors. It writes nothing to YouTube and records no numbers and no Google text.
+**Rehearsal R1**: read-only, the pilot channel, after the first enablement, separately approved. It records only what was observed: blocks loaded, requested window, last returned day, provider counts, the owner's yes or no on the Studio comparison. It does not try to cause errors, writes nothing to YouTube, and records no numbers or Google text.
 
 ## 10. Risks and open questions
 
 | # | Risk or question | Handling |
 |---|---|---|
-| R-1 | The scope question is unresolved until P1, and P1 needs its own approval. | Two branches designed; the required set is one constant; **gate G-P1 blocks the first enablement** until the conclusion is recorded and deployed. |
-| R-2 | Google's policy on derived metrics and stored data was not read word for word (§3.6). | The first release stores and derives nothing. Plan step 1 re-reads the page. |
-| R-3 | The Analytics API has no documented error table, and most error shapes will stay unobserved. | Classify by status; unknown is a temporary failure, never a health change and never "not found"; hand-written fixtures. |
-| R-4 | The limits of both Google APIs for this project are unknown, and the ceiling caps analytics without reserving quota for other features. | Per-attempt, fail-closed ceilings (§5.6); pilot by allowlist; `mode: "all"` only after the Console readings and the peak review. |
-| R-5 | The migration adds a RESTRICTIVE policy to `app_settings`, a table every feature flag and setting lives in. A mistake in its expression could hide or block other keys. | The expression names two keys and nothing else; the SQL suite proves every other key behaves as before for every role; snapshot before applying; the same shape has been in production since Stage 4. |
-| R-6 | The code is useless without the migration, and a merge deploys within two minutes. | Migration before merge (plan §5). If the functions are missing, every request answers `settings_unavailable` and nothing is sent to Google. |
-| R-7 | The public disclosure page is already inaccurate and becomes more so. | Corrected in this delivery in two separate changes; live before any channel is enabled; the copy needs the owner's approval. |
-| R-8 | Under branch B, Google verification may be required, and an ungated scope would change consent for everyone. | §7.4; decision D7, still open. |
-| R-9 | Numbers will differ from the YouTube Channel page counters and from Studio's default local-time view. `views` changed meaning on 30 April 2025 and 16 November 2026. | The page states the source, the requested period, the last returned day and the Pacific time zone; one fixed footnote links to YouTube's explanation; the two sources are never mixed. |
-| R-10 | A response whose final recheck passed just before a withdrawal is delivered; a report already read cannot be withdrawn. | Stated (§5.7). The audit row of each successful read lets an incident be scoped (plan §6). |
-| R-11 | The access lease hides reports when the status check fails for 90 seconds, so a brief outage of the status call blanks a working page. | Accepted: hiding private numbers on doubt is the safer failure. Reports return without a new Google call when the check recovers. |
-| R-12 | The verification guide says the consent screen is in "Testing". If still true, only test users can connect. | Not checked; the owner confirms in the Cloud Console before the pilot. |
-| R-13 | A refresh in flight can store a token on a row that a browser-side disconnect has just deactivated. | Existing behaviour of the shared helper for every caller (§5.4); not changed here; the report is discarded. |
+| R-1 | The scope question is open until P1, and each part needs approval. | Two branches designed; one constant; **G-P1 blocks the first enablement**. |
+| R-2 | Google's policy on stored and derived data and on consent (III.E.2–4) was not read word for word. | Nothing is stored or derived; plan step 1 reads it; D10 covers consent. |
+| R-3 | Without D11, a deleted and re-inserted row is not distinguishable from the original. | D11 recommends the incarnation column; if declined, the residual is the same owner, the same channel and nothing stored. |
+| R-4 | Both Google APIs' limits are unknown; the ceiling caps analytics but reserves nothing for other features. | Per-attempt, fail-closed, Pacific-day ceilings (§5.6); pilot by allowlist; `all` only after readings and a peak review. |
+| R-5 | The migration adds a RESTRICTIVE policy on `app_settings` and a column and trigger on `social_accounts`, both shared by every feature. | The policy names two keys only; the suite proves other keys unchanged for every role and rename; the column is nullable with no rewrite; the trigger touches YouTube rows only; snapshot first; the Stage 4 shape has been in production since 2026-11-24. |
+| R-6 | The code is useless without the migration, and a merge deploys within two minutes. | Migration before merge. Without the functions every request answers `settings_unavailable` and sends nothing. |
+| R-7 | The disclosure is inaccurate and becomes more so; users have not agreed to the new purpose. | Two separate corrections; D10; G-consent. |
+| R-8 | Branch B: verification, consent for everyone, grants that closing the gate cannot undo. | §7.4; D7. |
+| R-9 | Numbers differ from the YouTube Channel page counters and from Studio's local-time view; `views` changed meaning on 30 April 2025 and 16 November 2026. | Source, window, last returned day and time zone stated; one footnote; the sources are never mixed. |
+| R-10 | Residuals that no check can close: an attempt already authorized when access is withdrawn; a response whose final decision passed milliseconds earlier; a status answered just after a withdrawal. | Stated in §5.7 and §8; one-event-loop-turn window, no awaited I/O after the decision; audit rows are best-effort evidence; recovery steps in plan §6. |
+| R-11 | The access lease blanks a working page when status fails for 90 seconds. | Accepted: hiding private numbers on doubt is the safer failure; reports return with no Google call. |
+| R-12 | The consent screen may still be in "Testing". | Owner confirms in the Cloud Console before the pilot. |
+| R-13 | A unit debited for an attempt that the decision then refuses is not refunded. | Accepted; it happens only in a withdrawal race. |
+| R-14 | The helper-to-SQL composition is proved locally, not in CI. | The PR says so; the SQL functions and the Deno logic are in CI. |
+
+Open question that needs no decision: how many IDs one `videos.list` call accepts (plan step 1).
 
 ## 11. Decided, and still open
 
@@ -829,89 +824,87 @@ The run fails on any unexpected external request. Playwright is not a CI job in 
 |---|---|---|
 | D1 | Which Google permission? | **Probe first.** Add `yt-analytics.readonly` only if a positive test shows it is needed. The probe is a gated step with its own approval when run. |
 | D2 | Store, or read on demand? | **Read on demand, store nothing.** |
-| D3 | First release content | **Channel overview cards, daily trend, top ten videos, and the same cards and trend for one video.** |
+| D3 | First release | **Channel overview cards, daily trend, top ten videos, and the same cards and trend for one video.** |
 | D4 | Periods | **7, 14, 30, 90 days.** |
-| D5 | Where the page is | **Analytics menu at `/analytics/youtube`, plus a "View analytics" link from each video on the YouTube Channel page.** |
-| D6 | How the per-channel switch is protected | **As in Stage 4: a small migration with a policy that hides the key and SQL functions that evaluate it; no table.** This was not the option this document first recommended. It is now the design (§5.2), and it also carries the binding checks. |
-| D8 | Shared allowance | **Ceilings of 1,000 Data API units and 2,000 Analytics requests a day for all users, reviewed against the real limits before opening to everyone.** |
+| D5 | Where | **Analytics menu at `/analytics/youtube`, plus a "View analytics" link from each video on the YouTube Channel page.** |
+| D6 | Per-channel switch | **As in Stage 4: a small migration with a policy that hides the key and SQL functions that evaluate it; no table.** The migration also carries the bound wrappers (§5.3) and, subject to D11, the incarnation column. |
+| D8 | Shared allowance | **1,000 Data API units and 2,000 Analytics request attempts per Pacific day for all users together**, reviewed against the real limits and the existing features' peak before opening to everyone. |
 | D9 | CI registration | **Recorded exception:** the test step and the SQL suite are registered in the product PR, with the measurements of plan §4. |
 
 Also settled: the merge needs the owner's card; the migration is applied before the merge, after a production snapshot.
 
 ### Still open
 
-| # | Question | When it must be answered | Recommendation |
-|---|---|---|---|
-| **D7** | If P1 shows the analytics permission is needed: when does the consent screen start asking for it? Options: **A.** only for users named in a private server-side gate, then for everyone once Google has approved it (§7.4); **B.** for nobody until Google has approved it; **C.** for everyone at deploy. | Only if P1 leads to branch B, and before any branch B code is written. | A |
-| **P1 approvals** | Each part of the probe (P1-a, and P1-b or P1-c if they arise) is a real request to Google on the owner's channel, plus one token-information request. | When each part is about to be run. | Run P1-a before implementation starts. |
+| # | Question | When | Options | Recommendation |
+|---|---|---|---|---|
+| **D10** | Users accepted a policy that says YouTube data is used "solely" for publishing and showing channel information. How do they agree to the analytics purpose? (§7.3) | Before the first enablement of a channel that is not Waleed's own, and before P1 on one. | **A.** Enable only owners who agreed in writing; Waleed keeps the record; `all` needs a separate in-app mechanism. **B.** Build the in-app acceptance record in this delivery. **C.** Treat the updated text as sufficient. | **A** |
+| **D11** | Give every YouTube connection a non-reusable identity: a nullable column on `social_accounts` plus one trigger (§5.2). | Before the migration is written. | **A.** Add it. **B.** Do not; accept that a row deleted and re-inserted with the same id, owner and channel is treated as the same connection. | **A.** The debate marked this blocking; the real harm is narrow, the cost is a catalogue-only change of the Stage 4 shape. |
+| **D7** | Only if P1-c concludes branch B: when does the consent screen start asking for the analytics permission? (§7.4) | Before any branch B code. | **A.** Only for users named in a private gate, then everyone after Google approves. **B.** For nobody until Google approves. **C.** For everyone at deploy. | **A** |
+| **D12** | Only if P1-a refuses with all three scopes: how is the isolated sufficiency test run? (§7.2) | When P1-c is about to run. | **A.** A separate test OAuth client and project, a channel Waleed owns. **B.** Postora's production client in the Playground. | **A** |
+| **P1 approvals** | Each part is a real request to Google on the owner's channel. | When each is about to run. | — | Run P1-a before implementation starts. |
 
-Recorded assumptions, not owner decisions, unless the owner objects: native connections only; no revenue; no agent, n8n or MCP access; no comparison with the previous period until the Google policy has been read in full.
+Recorded assumptions unless the owner objects: native connections only; no revenue; no agent, n8n or MCP access; no comparison with the previous period until the Google policy has been read in full.
 
 ## 12. Verification performed for this document
 
-- Baseline: `main` at `f7d49921`. `git diff --stat 44b426cc f7d49921` over `supabase`, `src`, `scripts` and `.github` is empty: the commits since the Stage 4 merge are documents only, so every code citation holds at `f7d49921`. The manager confirmed on 2026-11-24 that the Stage 4 migration is applied in production and that a real token refresh succeeded through the health-neutral store; this document did not check production.
-- Read through `git show` for this revision, in addition to the earlier list: the Stage 4 migration's policy, state reader, capability status, evaluator, grants, closing assertions and neutral store (`:196-276`, `:722-742`, `:745-1082`, `:1895-1907`, `:2095-2150`); `_shared/youtubeTokenRefresh.ts` in full for the refresh path (`:120-166`, `:600-935`); `youtube-oauth/index.ts:96-160`; `comment-manager/stage4/handler.ts:183-200`; `supabase/manual-sql/20260627213616_rate_limit_buckets.sql` (signature and locking); `SavedAnalyticsReport.tsx:66-73`; `package.json:52`; the lease trigger in `20261120130000_youtube_refresh_lease_fixes.sql:377-421`.
-- Earlier list, unchanged: `ARCHITECTURE.md` §§12–17, 22–28, 37–38; the Stage 2 specification; the Stage 4 specification and plan; `youtube-oauth/handler.ts`; `_shared/youtubeGrantedScopes.ts`, `_shared/youtubeCommentCapability.ts`, `_shared/rate-limiter.ts`; `youtube-resources/capabilities.ts`, `contracts.ts`, handler and index wiring; `comment-manager/stage4/rollout.ts`, `audit.ts`, `rateLimit.ts`; `scripts/stage4-e2e.mjs`; `.github/workflows/ci.yml` step list; `src/App.tsx`; `docs/YOUTUBE-OAUTH-VERIFICATION-GUIDE.md`; `src/pages/GoogleApiDisclosure.tsx`; the analytics contract, schema, calendar, gateway, flags, routes and sidebar lines of §2.2.
-- The Meta pipeline was mapped in one research pass; its line numbers for the collection, retention, cron and readiness files were not individually re-read.
-- Google pages fetched on 2026-11-23 are the ones linked in §3 and §7. None was re-fetched for either review round.
-- **Not verified:** everything marked [S]; Google's token information endpoint (no page fetched); the sensitivity class of either scope; both Google APIs' real daily limits; the Analytics error shapes; whether a scope-limited consent yields a scope-limited token; whether a re-consent returns a new refresh token; the exact TanStack Query option names for the installed version; whether `check_rate_limit` behaves in production as assumed; production state other than what the manager reported.
+- Baseline `main` at `5d020ed`. `git diff --stat f7d49921 5d020ed` over `supabase`, `src`, `scripts` and `.github` is empty: the commits since are documents only, so every code citation at `f7d49921` holds. The manager confirmed on 2026-11-24 that the Stage 4 migration is applied in production and that a real refresh succeeded through the neutral store; this document did not check production.
+- Read through `git show` for this revision: `supabase/manual-sql/20260627213616_rate_limit_buckets.sql` (all of `check_rate_limit` and the cleanup); `20261120130000_youtube_refresh_lease_fixes.sql:60-200` and `:370-430` (lease acquisition, credential-change trigger); `20261120110000_youtube_refresh_lease.sql:136`; the Stage 4 migration's neutral store and ownership grants (`:196-330`), trigger (`:374-440`); `supabase/tests/youtube_comment_operations.sql:366-402` (the narrow-role pins); `_shared/youtubeTokenRefresh.ts` (the account read, `resolveFromFreshRead`, the transient-failure and tail paths, `:540-600`, `:828-1000`); `supabase/tests/baseline_schema.sql` (`social_accounts` definition and policies, `check_rate_limit`, `rate_limit_buckets`); `src/pages/Privacy.tsx`; `AGENTS.md` (rule 4). Earlier lists in §13–14 still apply.
+- Google and other pages: those linked in §3 and §7, fetched on 2026-11-23 (**[V]**); marked **[D]** where the plan debate verified a fact and this document did not re-fetch it (the token information endpoint, the top-videos general limit, the `videoNotFound` error, the quota-pool description, Analytics storage rules); PostgreSQL Read Committed read on 2026-11-24 (**[V]**); the web-server flow's `include_granted_scopes` and "only returned on the first authorization" sentences (**[V]**).
+- **Not verified:** everything **[S]**, including the passage of III.E.3 that the debate cites for re-acceptance; the sensitivity of either scope; both APIs' real limits and the existing features' peak; the Analytics error shapes; whether `prompt=consent` returns a new refresh token; whether a re-consent leaves a refresh token able to mint the new scope; whether `check_rate_limit` and its cleanup behave in production as in the baseline; the maximum IDs per `videos.list`; the exact TanStack Query option names; what each affected user accepted; production state other than what the manager reported.
 - Not done, by instruction: code, migration, branch, commit, PR, production access, any call to a Google API.
 
-## 13. Review round 1
+## 13. Review rounds 1 and 2 (condensed)
 
-Pull request #472 (documents only) received 33 automated comments from two reviewers. They reduced to 23 distinct findings, all judged real; one style note was not adopted. Section numbers below are those of this revision.
+Round 1 (33 comments on PR #472) and round 2 (21 comments, issue #473) produced the design points below. They are listed once, with where the current text answers them; rounds 1–2 changed no verdict later reversed except where round 3 says so.
 
-| # | Finding | Verdict | Where it is answered now |
+| Finding | Answered in |
+|---|---|
+| Probe used recorded grants; exported Google text; consent for everyone at deploy (round 1); effective scopes unobservable in neutral mode; no pre-pilot gate; pilot grants becoming mandatory (round 2) | §7.2, §7.4 (rewritten in round 3) |
+| Refresh and reads not bound to the connection; final recheck; cached reports tied to the connection | §5.2–5.4, §5.7 (redesigned in round 3) |
+| Ownership lookup before a token; lookup failure shown as a missing video; `video_not_found` clearing the account | §5.4 |
+| Row validation, video-ID format, one top-videos metric list, requested date shown as coverage | §5.4, §5.5, §5.8 |
+| Per-user limits do not protect shared quota; per-attempt debit; ceilings reserve nothing | §5.6 |
+| Withdrawal and loaded reports; failed status; retry and refetch; status polling undoing refusals | §5.7 (extended in round 3) |
+| Unbounded audit writes; no-store; flag does not gate access; merge gate; CI rule; disclosure rollback | §6, §8, plan §§1, 4, 6 |
+| Tests with impossible provider counts; rehearsal cannot observe error shapes | §5.4 table, §9.5 |
+
+## 14. Review round 3 and debate
+
+The plan debate (Codex, one round; verdict **proceed after changes**, seven blocking objections) and a third automated review (32 comments on PR #474) arrived together. The owner's decisions arrived in round 2 and are unchanged.
+
+### The seven blocking objections
+
+| # | Objection | Resolution | Where |
 |---|---|---|---|
-| F1 | The scope probe read recorded grants and its outcomes proved neither branch | Real | §7.2 (further corrected in round 2) |
-| F2 | The probe exported raw Google error text | Real | §7.2 fixed classification list |
-| F3 | Branch B changed consent for everyone at deploy | Real | §7.4 |
-| F4 | Token refresh and provider reads not bound to the admitted connection | Real | §5.2, §5.4 (redesigned in round 2) |
-| F5 | The ownership lookup ran before a usable token existed | Real | §5.3 steps 8–9 |
-| F6 | Any lookup failure was classified as a missing video | Real | §5.3 step 9 |
-| F7 | Row validation rejected string video IDs | Real | §5.3 row validation |
-| F8 | The video filter accepted an unbounded string | Real | §5.3 pattern |
-| F9 | Per-user limits do not protect the shared Google quota | Real | §5.6 |
-| F10 | Switching the rollout off did not clear loaded reports | Real | §5.7 (strengthened in round 2) |
-| F11 | Three different top-videos metric sets | Real | §5.5 |
-| F12 | The requested end date was presented as coverage | Real | §5.8 |
-| F13 | The browser retries once by default | Real | §5.7 |
-| F14 | Signed-in refusals could write unbounded audit rows | Real | §6 rule 7 |
-| F15 | The visibility flag does not gate provider access | Real | §8 |
-| F16 | The merge gate omitted the owner's card | Real | Plan §1 |
-| F17 | Refusal tests demanded impossible provider counts | Real | §5.3 provider-call table |
-| F18 | The rehearsal could not observe the listed error shapes | Real | §9.5 |
-| F19 | The CI rule was declared "not triggered" | Real | Decision D9; plan §4 |
-| F20 | The disclosure rollback did not match runtime behaviour | Real | Plan §6 |
-| F21 | The denied-effects gate forbade the existing token store | Real | §6 rule 6 |
-| F22 | Acceptance assumed options the owner might not pick | Settled by the decisions of §11 | Plan §7 |
-| F23 | Release steps used a flag one page option removed | Settled by decision D5 | Plan §5 |
+| 1 | Refresh can lease a replacement connection or store on a withdrawn one; replacing `readAccount` is not enough | **Resolved.** Two bound wrappers around the existing lease functions: account row `FOR UPDATE`, then the full decision, then the unchanged shared function; the neutral store is called under the same lock. No Google I/O under a lock. Shared functions, the Stage 4 neutral store, the refresh helper and every other caller are untouched; no fourth trusted writer. Persistence is bound to the connection, deliberately not to the rollout. | §5.3, §9.2 |
+| 2 | Generation restarts at 1 for a re-inserted row | **Resolved by design, owner decision D11.** The insert policy and grants leave `id` client-settable, so reuse cannot be proved impossible. A nullable `binding_incarnation`, trigger-assigned and never client-writable, joins every identity comparison and `connection_revision`. | §5.2, §9.2, D11 |
+| 3 | Final check incomplete; "zero requests after withdrawal" too wide | **Resolved.** One SQL statement returns a typed reason in a fixed order, covering owner, binding, provider, rollout, health and scopes; it runs at admission, at credential release, before **every** Google attempt (after the debit) and as the last step before a response. The residual is stated: an attempt already authorized is in flight; no awaited I/O follows the final decision. | §5.2, §5.4, §8, R-10 |
+| 4 | Branch B circular; closing the gate does not undo a grant | **Resolved.** P1-c runs in an isolated, separately approved setting that does not use Postora's connect flow; P1-a eligibility and refusal rules; grants verified per connection; rollback no longer claims to restore the grant state. | §7.2, §7.4, D12 |
+| 5 | Disclosure text does not cover user consent to the new purpose | **Resolved as an owner decision, D10.** Facts and options written; no acceptance record exists to reuse; recommended: written agreement per owner for the pilot, in-app mechanism before `all`; gate G-consent. | §7.3, D10 |
+| 6 | The 24-hour limiter window can spend twice the ceiling; a lost row must refuse | **Resolved.** Budgets are keyed by Pacific date with a 48-hour window; a debit counts only with `allowed` and `count ≥ 1`; tests against the real RPC for exhaustion, both daylight-saving changes and cleanup. | §5.6, §9.2 |
+| 7 | Query keys identical across operations; lease renewal can restart reports | **Resolved.** Namespace and operation in every key; display and fetching are separate decisions; queries never depend on the lease and never auto-refetch; status is single-flight with epoch, deadline, backoff and `Retry-After`; resume requires a status issued after it. | §5.7, §9.3 |
 
-## 14. Review round 2
+Non-blocking points taken in: the `app_settings` policy tests (admin through `authenticated`, renames into and out of the keys); discriminating snapshot and provider-count tests with the token state pinned and the title `401` row; explicit release checkpoints (deployment evidence, matching SHA, smoke test on the deployed route); audit rows treated as partial evidence; Google corrections (the top-videos limit, the quota-pool description, `videos.list` ID limits, `videoNotFound`).
 
-A second automated review of the revised documents left 21 comments (GitHub issue #473): 8 marked HIGH, 13 MEDIUM. Two are the same finding, giving 20 distinct findings. The owner's decisions arrived in the same round. Verdicts are this document's.
+### The automated comments that were not duplicates of the debate
 
-| # | Finding (reviewer's label) | Verdict | What changed |
-|---|---|---|---|
-| G1 | P1 cannot observe the token's effective scopes through a health-neutral refresh (HIGH) | **Real.** Confirmed at `youtubeTokenRefresh.ts:906` and `:765-771`. | §7.2: the probe keeps health-neutral mode and reads the scopes of the exact token from Google's token information endpoint; inconclusive if that fails; its possible writes are listed. |
-| G2 | If P1 cannot run, nothing stops the pilot starting with the scope unresolved (HIGH) | **Real** | §7.2 last paragraph; §8 step 4; plan §5 gate G-P1 and acceptance gate. |
-| G3 | On branch B, broad rollout came before broad consent (HIGH) | **Real** | §7.4: data rollout may not run ahead of consent, enforced in SQL; §8 step 8; plan step 7 and §5. |
-| G4 | Budget admission was per operation, not per attempt (HIGH) | **Real** | §5.6: one debit immediately before every Google call, including repeats and title lookups, with the answer for a mid-request refusal; §5.3 steps 9, 10, 12; `limits.test.ts`. |
-| G5 | The binding was checked after the helper could already have refreshed a replacement connection (HIGH) | **Real.** Confirmed at `youtubeTokenRefresh.ts:712-718` and `:786-792`. | §5.2 credentials function; §5.4 bound store: the helper's own credential read requires the admitted generation, so no exchange starts for a replacement. The in-flight case is separated and its result is not stored. Race tests (a)–(e). |
-| G6 | Cached reports were not tied to the connection generation (HIGH), and `status` could not reveal a binding change (MEDIUM) | **Real** (one finding, two comments) | `connection_revision` in `status` and in every data response; in every query key; old revision purged (§5.3, §5.7). |
-| G7 | A failed status check left private reports visible (HIGH) | **Real** | §5.7 access lease: reports are shown only within 90 seconds of a successful check; hidden tabs and offline devices show nothing until revalidated. |
-| G8 | A pilot token's historical grants could become mandatory for every channel (HIGH) | **Real.** `handler.ts:426` sets `include_granted_scopes`. | §7.2: P1-a counts only if the effective scopes are within the three the connect flow requests; P1-c only if the difference is exactly the analytics scope. |
-| G9 | CI timing compared non-equivalent run cohorts (MEDIUM) | **Real** | Plan §4: the rule's own measurement — five comparable first-attempt code PR runs before and after, main and reruns kept apart, runner minutes, failures and retries, an owner and a due date, a two-week report. |
-| G10 | The journey required a capacity state that option D8-B removes (MEDIUM) | **Settled by decision D8.** The option no longer exists. | Alternatives removed from tests, gates and release steps. |
-| G11 | The first `401` that may not be retried had no outcome (MEDIUM) | **Real** | §5.3 "The `401` rule"; three new rows in the provider-call table. |
-| G12 | Containment promised more than the final recheck can guarantee (MEDIUM) | **Real** | The final recheck is the last step before the response; §5.7 table states the residual; plan §6. |
-| G13 | Private responses lacked a no-store requirement (MEDIUM) | **Real** | `Cache-Control: no-store` on every response (§5.3, §6 rule 9); asserted in the handler test and on the deployed route (plan §5). |
-| G14 | Turning off retry does not turn off automatic refetch (MEDIUM) | **Real** | §5.7 "No request the owner did not ask for"; tests for network return and remount. |
-| G15 | A Stage 5 cap does not prevent shared-quota exhaustion (MEDIUM) | **Real as a wording fault.** The design is unchanged and decision D8 stands. | §5.6 now says the ceiling limits Stage 5's contribution and guarantees nothing to other features; the review before `all` includes their observed peak. |
-| G16 | A video "not found" revoked account-wide report access (MEDIUM) | **Real** | New code `video_not_found`, scoped to the video panel; error table has a page-scope column. |
-| G17 | Missing daily rows were treated as proof of unpublished data, and sparse rows would be joined by the chart (MEDIUM) | **Real.** Confirmed at `SavedAnalyticsReport.tsx:69-71`. | §5.8: the note says only that Google did not return the days; chart-only `null` points break the line. |
-| G18 | Stage 4's audit tally cannot count across workers (MEDIUM) | **Real.** Confirmed at `stage4/audit.ts:38`. | §6 rule 7: the row bound is exact through a shared bucket; the suppressed count is declared best effort; tested with two handler instances. |
-| G19 | Admission refusals could still trigger unbounded audit work (MEDIUM) | **Real** | §6 rule 7: an admission refusal is a terminal path with no audit row and no second database call. |
-| G20 | A reconnect can leave the old refresh grant in place (MEDIUM) | **Real, branch B only.** Confirmed at `youtube-oauth/index.ts:126-128`. Whether Google returns a new refresh token is unverified. | §7.2: P1-c must use a token minted from the stored refresh token; §7.4: repeated on the first pilot account before it is enabled. |
+| Comment (reviewer's label) | Verdict | Where |
+|---|---|---|
+| Probe assumes the consent change it gates; P1-c needs a grant the flow cannot request (HIGH, several) | Real; = objection 4 | §7.2 |
+| Partial grant cannot establish that the analytics scope is needed (HIGH) | Real | §7.2: a refusal counts toward branch B only with all three existing scopes |
+| Scope gate proves only the simplest report (MEDIUM) | Real | §7.2: the probe sends the four shipped shapes |
+| Branch B omits consent from credential and final checks (HIGH, several) | Real | §7.4: the consent predicate lives in the one `decide` |
+| First-pilot verification leaves later reconnects unverified (MEDIUM) | Real | §7.4: per-connection check; `grant_not_effective` at run time |
+| Binding not rechecked before provider dispatch (MEDIUM) | Real | §5.4 step 8 |
+| Bound refresh reads omit account health (MEDIUM) | Real | `decide` returns `needs_reauth`; bound read passes it to the helper |
+| Boolean admission result loses the reason (MEDIUM, several) | Real | One typed decision, fixed order |
+| Title lookup has conflicting 401 and failure rules (MEDIUM, several) | Real | Title lookup is exempt; table rows 20–21 |
+| Quota debit can report success without charging (MEDIUM) | Real | A debit needs `count ≥ 1` |
+| Period length does not identify requested dates (MEDIUM) | Real | Server-pinned `window_end` in every key and request |
+| Access lease has no stale-status guard (MEDIUM) | Real | Epoch and issue-time lease clock |
+| Status polling can undo provider-confirmed denials (MEDIUM, several) | Real | Latch to the revision |
+| Preserve bounded logging for admission refusals (P1, AGENTS.md rule 4) | Real | §6 rule 7: one row per user per minute |
+| Recheck admission before `status` returns, or state the residual (Minor) | Real, residual stated | §5.7 table, R-10; the lease starts at issue |
+| Refresh-race test assumes disconnect invalidates the lease (MEDIUM, several) | Real | Both disconnect paths tested; the browser path is fenced by the bound store (§9.1, §9.4 step 15) |
 
-**Did moving the evaluation into SQL answer some of these?** Yes, three. G5: the credential read and the admission decision are now one statement with the expected generation, and the refresh helper reads through it. G12, in part: admission and binding are rechecked together, from one snapshot, as the last step. G3: the consent-before-data rule is a condition inside the state function, not a line in a runbook. It did not help with G6 and G7, which are about what the browser already holds, or with G4, which is about when a counter is debited.
+All were judged real; none was rejected. Two are answered by a stated residual rather than a guarantee: the `status` response decided just before a withdrawal, and the attempt already authorized when access is withdrawn.
