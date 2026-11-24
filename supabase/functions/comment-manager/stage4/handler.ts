@@ -1798,44 +1798,69 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
       if (inp.text === undefined) {
         observation = "unavailable";
       } else {
-        const unreadable = () => refusal(deps, 503, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
+        // The observation is optional. Anything that stops it (the capability
+        // answers false, the settings cannot be read, the credential cannot be
+        // prepared) returns the receipt unobserved, after the binding was read
+        // again: a binding read that FAILS is the only 503, and a changed
+        // binding is the same not_found as everywhere else.
         const blocked = await capabilityRefusal(deps.admin, accountId, "read");
-        if (blocked?.status === 503) return unreadable();
         if (blocked) {
-          // The capability answered false. It may be false BECAUSE of a
-          // reconnect, so the binding is read again before the receipt goes out.
+          // The capability may be false BECAUSE of a reconnect, so the binding
+          // is read again before the receipt goes out.
           const afterGate = await bindingCheck();
           if (!afterGate.ok) return afterGate.response;
           observation = "unavailable";
         } else {
-          const tok = await prepareToken(first.account, deps);
-          // `read` is checked again right before the provider read: a
-          // withdrawal while the credential was being prepared must stop it.
-          const stillAllowed = await capabilityRefusal(deps.admin, accountId, "read");
-          if (stillAllowed?.status === 503) return unreadable();
-          // After EVERY credential preparation, a failed one included.
-          const afterToken = await bindingCheck();
-          if (!afterToken.ok) return afterToken.response;
-          if (tok.ok && !stillAllowed) {
-            const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
-            const afterRead = await bindingCheck();
-            if (!afterRead.ok) return afterRead.response;
-            const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
-            // Only the comment the receipt targets is an observation: a provider
-            // answer for any other id says nothing about this edit.
-            const text = citem && String(citem.id ?? "") === String(observedTargetId) && citem.snippet?.textOriginal
-              ? String(citem.snippet.textOriginal)
-              : null;
-            if (text === null) {
+          // The credential is prepared from a row read AFTER the capability
+          // answer, never from the first snapshot: a reconnect that landed
+          // during the capability check must not start a refresh with the
+          // superseded refresh token.
+          const fresh = await bindingCheck();
+          if (!fresh.ok) return fresh.response;
+          const tok = await prepareToken(fresh.account, deps);
+          if (!tok.ok) {
+            // After EVERY credential preparation, a failed one included.
+            const afterToken = await bindingCheck();
+            if (!afterToken.ok) return afterToken.response;
+            observation = "unavailable";
+          } else {
+            // The send boundary. Binding and capability are asked together and
+            // are the last awaited work before the provider request starts; a
+            // withdrawal, a changed binding or an unreadable setting stops it.
+            // (An SQL call and an HTTP call share no transaction, so the window
+            // cannot be zero: the same two questions are asked again below and
+            // the observation is discarded if either answer changed.)
+            const [boundary, allowed] = await Promise.all([
+              bindingCheck(),
+              capabilityRefusal(deps.admin, accountId, "read"),
+            ]);
+            if (!boundary.ok) return boundary.response;
+            if (allowed) {
               observation = "unavailable";
             } else {
-              observedText = text;
-              observation = normaliseText(text) === normaliseText(inp.text)
-                ? "requested_text_observed"
-                : "different_text_observed";
+              const cres = await provider.readComment({ fetcher: deps.fetcher }, tok.token, String(observedTargetId));
+              const [afterRead, stillAllowed] = await Promise.all([
+                bindingCheck(),
+                capabilityRefusal(deps.admin, accountId, "read"),
+              ]);
+              if (!afterRead.ok) return afterRead.response;
+              const citem = cres.kind === "success" ? ((cres.body as YtList<YtComment>)?.items ?? [])[0] : null;
+              // Only the comment the receipt targets is an observation: a provider
+              // answer for any other id says nothing about this edit.
+              const text = citem && String(citem.id ?? "") === String(observedTargetId) && citem.snippet?.textOriginal
+                ? String(citem.snippet.textOriginal)
+                : null;
+              if (text === null || stillAllowed) {
+                // A read capability withdrawn (or unreadable) while the provider
+                // was being read drops the text that was read.
+                observation = "unavailable";
+              } else {
+                observedText = text;
+                observation = normaliseText(text) === normaliseText(inp.text)
+                  ? "requested_text_observed"
+                  : "different_text_observed";
+              }
             }
-          } else {
-            observation = "unavailable";
           }
         }
       }

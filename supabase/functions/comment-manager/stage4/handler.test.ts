@@ -2486,3 +2486,151 @@ Deno.test("an edit status read with no draft returns the receipt at once: no set
     "no rollout settings read either",
   );
 });
+
+// ---- T4: the edit-status observation (B2, M4, M5) --------------------------------------------------------
+
+/** Runs `change(n)` on the n-th (1-based) account read the handler makes from now on, before the row is returned. */
+function onAccountRead(world: World, change: (n: number) => void) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.from.bind(fake);
+  let n = 0;
+  fake.from = (table: string) => {
+    const builder = original(table) as { maybeSingle?: () => Promise<unknown> };
+    if (table !== "social_accounts" || typeof builder.maybeSingle !== "function") return builder;
+    const inner = builder.maybeSingle.bind(builder);
+    builder.maybeSingle = () => {
+      n += 1;
+      change(n);
+      return inner();
+    };
+    return builder;
+  };
+}
+
+/** The n-th (1-based) account read from now on fails like a database error. */
+function failAccountReadAt(world: World, failing: number) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.from.bind(fake);
+  let n = 0;
+  fake.from = (table: string) => {
+    const builder = original(table) as { maybeSingle?: () => Promise<unknown> };
+    if (table !== "social_accounts" || typeof builder.maybeSingle !== "function") return builder;
+    const inner = builder.maybeSingle.bind(builder);
+    builder.maybeSingle = () => {
+      n += 1;
+      return n === failing ? Promise.resolve({ data: null, error: { message: "database unavailable" } }) : inner();
+    };
+    return builder;
+  };
+}
+
+/** The n-th (1-based) call of the RPC `fn` from now on answers with a database error. */
+function failRpcAt(world: World, fn: string, failing: number) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.rpc.bind(fake);
+  let n = 0;
+  fake.rpc = (name: string, params: Record<string, unknown>) => {
+    if (name === fn) {
+      n += 1;
+      if (n === failing) return Promise.resolve({ data: null, error: { message: "unreadable" } });
+    }
+    return original(name, params);
+  };
+}
+
+const withdrawRead = (world: World) =>
+  world.setPolicy({ [nativeAccount().id]: { read: false, held: false, write: false, ban: false } });
+
+Deno.test("T4.1 read withdrawn during the binding read right before the provider read: no provider read at all", async () => {
+  const { world, op } = await editedWorld();
+  // From the third account read on (the last one before the provider request in the old order),
+  // the capability is withdrawn. The capability must be asked AFTER that read, not before it.
+  onAccountRead(world, (n) => { if (n >= 3) withdrawRead(world); });
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 200);
+  const status = await jsonOf(res);
+  assertEquals(world.reads.length, 0, "no provider read after the withdrawal");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals(status.data.state, "confirmed", "the receipt itself still goes out under the unchanged binding");
+});
+
+Deno.test("T4.1b read withdrawn exactly at the send boundary: no provider read", async () => {
+  const { world, op } = await editedWorld();
+  // Account reads of one status call: the handler's own (1), the first binding check (2), the fresh
+  // read before the credential (3), the boundary read (4). The provider read must not follow a
+  // withdrawal that lands during the boundary read.
+  onAccountRead(world, (n) => { if (n === 4) withdrawRead(world); });
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
+  assertEquals(world.reads.length, 0);
+  assertEquals(status.data.observation, "unavailable");
+});
+
+Deno.test("T4.2 read withdrawn during the provider read: the text that was read is dropped", async () => {
+  const { world, op } = await editedWorld();
+  afterCommentRead(world, () => withdrawRead(world));
+  const status = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
+  assertEquals(world.reads.length, 1, "the provider was read once, before the withdrawal");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals((status.data as { observed_text?: unknown }).observed_text ?? null, null, "no observed text crosses the withdrawal");
+});
+
+Deno.test("T4.3a a settings read error at the first capability check is not a 503: the receipt goes out unobserved", async () => {
+  const { world, op } = await editedWorld();
+  failRpcAt(world, "youtube_comments_stage4_admits", 1);
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 200);
+  const status = await jsonOf(res);
+  assertEquals(status.data.state, "confirmed");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals(world.reads.length, 0, "no provider read");
+});
+
+Deno.test("T4.3b a settings read error at the send boundary is not a 503 either", async () => {
+  const { world, op } = await editedWorld();
+  failRpcAt(world, "youtube_comments_stage4_admits", 2);
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 200);
+  const status = await jsonOf(res);
+  assertEquals(status.data.state, "confirmed");
+  assertEquals(status.data.observation, "unavailable");
+  assertEquals(world.reads.length, 0, "no provider read");
+});
+
+Deno.test("T4.3c a failed BINDING read at those points is still a 503", async () => {
+  for (const failing of [2, 3, 4]) {
+    const { world, op } = await editedWorld();
+    failAccountReadAt(world, failing);
+    const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+    assertEquals(res.status, 503, `the account read number ${failing} failing is a temporary refusal`);
+    assertEquals((await jsonOf(res)).reason, "upstream");
+  }
+});
+
+Deno.test("T4.4 a reconnect landing during the first capability check: no credential is prepared from the old row", async () => {
+  const { world, op } = await editedWorld();
+  // The stored credential is expired, so preparing it would start a refresh (a lease RPC) with
+  // the row the handler read BEFORE the reconnect.
+  const account = world.accounts.get(nativeAccount().id)!;
+  account.token_expires_at = new Date(Date.now() - 1000).toISOString();
+  afterRpc(world, "youtube_comments_stage4_admits", () => reconnect(world));
+  world.rpcLog.length = 0;
+  const res = await world.calls("youtube_operation_status", { operation_id: op, text: "edited" });
+  assertEquals(res.status, 404);
+  assertEquals("data" in (await res.json()), false, "no field of the old receipt crosses the reconnect");
+  assertEquals(
+    world.rpcLog.filter((c) => c.fn.includes("refresh") || c.fn.includes("lease")).length,
+    0,
+    "no refresh was started from the superseded snapshot",
+  );
+  assertEquals(world.reads.length, 0);
+});
+
+Deno.test("T4.5 the unchanged paths: a matching and a differing draft give the two observed values", async () => {
+  const { world, op } = await editedWorld();
+  const same = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "edited" }));
+  assertEquals(same.data.observation, "requested_text_observed");
+  assertEquals((same.data as { observed_text?: unknown }).observed_text, "edited");
+  const other = await jsonOf(await world.calls("youtube_operation_status", { operation_id: op, text: "something else" }));
+  assertEquals(other.data.observation, "different_text_observed");
+  assertEquals(world.reads.length, 2, "one provider read per observation");
+});
