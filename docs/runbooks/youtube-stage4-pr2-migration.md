@@ -91,9 +91,9 @@ select count(*) from public.youtube_comment_operations o
  where not ((o.action in ('create_thread','reply') and o.digest_key_version = o.intent_key_version)
          or (o.action in ('edit','moderate') and o.digest_key_version = 0));
 -- The rollback receipt says the watermark was kept: expected regclass non-NULL,
--- and last_version equal to the value recorded by that receipt.
-select to_regclass('public.youtube_comment_digest_key_watermark'), last_version
-  from public.youtube_comment_digest_key_watermark;
+-- then confirm last_version equals the value recorded by that receipt.
+select to_regclass('public.youtube_comment_digest_key_watermark');
+select last_version from public.youtube_comment_digest_key_watermark;
 -- K1 FK and CHECK: expected no rows. K1 index: expected NULL.
 select conname from pg_constraint
  where conname in ('youtube_comment_operations_key_versions_check','youtube_comment_operations_intent_key_version_fkey');
@@ -156,7 +156,8 @@ select l.relation::regclass as target, l.mode, l.granted,
   from pg_locks l
   join pg_stat_activity a on a.pid = l.pid
   join ddl_targets t on l.relation = any(t.relations)
- where a.pid <> pg_backend_pid();
+ where l.database = (select oid from pg_database where datname = current_database())
+   and a.pid <> pg_backend_pid();
 ```
 
 **The stop condition is zero rows: no held (`granted = true`) or waiting (`granted = false`) lock on any exact DDL target.** A count of visible receipt rows cannot show an uncommitted claim, which is why the lock view is used instead. `pg_stat_activity.query` shows only the session's last statement, not necessarily the statement that took the lock; use it with `pid`, `usename` and `application_name` only to identify the holder, and use `l.mode` to identify the lock. The rollback's own 5 s `lock_timeout` aborts it cleanly if something still holds a lock: wait for the holder to finish and retry.

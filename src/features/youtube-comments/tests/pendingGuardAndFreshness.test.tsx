@@ -438,12 +438,15 @@ describe("submit cancellation during recovery", () => {
     // Call 1: stale submit; call 2: round-trip mount recovery effect; call 3: fresh submit.
     expect(operationStatus).toHaveBeenCalledTimes(3);
 
+    const threadPage = gateway.threadPage as ReturnType<typeof vi.fn>;
+    const threadLoadsBefore = threadPage.mock.calls.length;
     let staleOutcome: unknown = null;
     await act(async () => {
       recovery.resolve(status("confirmed", { operation_id: "op-earlier" }));
       staleOutcome = await stale;
     });
     expect(staleOutcome).toEqual({ kind: "cancelled" });
+    expect(threadPage.mock.calls.length).toBe(threadLoadsBefore);
   });
 });
 
@@ -514,5 +517,7 @@ describe("concurrent submit operation identities", () => {
       recovery.resolve(status("confirmed", { operation_id: "op-earlier", action: "reply" }));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    expect(await screen.findByText(/Your earlier action was accepted by YouTube/)).toBeInTheDocument();
+    expect(reply).not.toHaveBeenCalled();
   });
 });

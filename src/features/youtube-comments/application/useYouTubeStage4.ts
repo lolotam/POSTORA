@@ -67,6 +67,14 @@ export interface RecoveredOperation {
   inFlight: boolean;
 }
 
+/** One submit's claim on a target while it runs. */
+interface SubmitLock {
+  /** The operation this submit minted; null while it is still recovering earlier ones. */
+  operationId: string | null;
+  /** The context epoch the lock was taken in. */
+  epoch: number;
+}
+
 export interface Stage4PageState<Item> {
   items: Item[];
   nextCursor: string | null;
@@ -311,11 +319,15 @@ export function useYouTubeStage4(params: {
   // One entry per target while a submit for it runs. The id stays null until
   // this submit mints its own operation; object identity and epoch protect a
   // newer submit's lock after a rapid context switch.
-  const submitsInFlight = useRef(new Map<string, { operationId: string | null; epoch: number }>());
+  const submitsInFlight = useRef(new Map<string, SubmitLock>());
   const aliveRef = useRef(true);
   const context = `${userId}:${accountId}`;
   const contextRef = useRef(context);
   const contextEpochRef = useRef(0);
+  // The epoch moves DURING the render, not in an effect: a submit that waits
+  // for a recovery must notice a switch that happened between two awaits, and
+  // an effect would run too late for it (a switch back to the account it came
+  // from would look like no switch at all).
   if (contextRef.current !== context) {
     contextRef.current = context;
     contextEpochRef.current += 1;
@@ -339,7 +351,7 @@ export function useYouTubeStage4(params: {
       operationId?: string;
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
-      const submitContext = contextRef.current;
+      const submitContext = `${userId}:${accountId}`;
       const submitEpoch = contextEpochRef.current;
       const isStillCurrent = () => aliveRef.current
         && contextRef.current === submitContext
@@ -364,12 +376,8 @@ export function useYouTubeStage4(params: {
       // still recovering or sending is answered as pending and sends nothing.
       // Recovery has no NEW operation id to check yet.
       const existingLock = submitsInFlight.current.get(guardKey);
-      if (existingLock && (existingLock.operationId !== null || existingLock.epoch === submitEpoch)) {
-        return existingLock.operationId
-          ? { kind: "pending", operationId: existingLock.operationId }
-          : { kind: "pending" };
-      }
-      const submitLock: { operationId: string | null; epoch: number } = { operationId: null, epoch: submitEpoch };
+      if (existingLock && blocksNewSubmit(existingLock, submitEpoch)) return pendingOutcomeFor(existingLock);
+      const submitLock: SubmitLock = { operationId: null, epoch: submitEpoch };
       try {
         submitsInFlight.current.set(guardKey, submitLock);
         // An earlier submit for this target blocks a new one only while it may
@@ -419,15 +427,7 @@ export function useYouTubeStage4(params: {
         try {
           receipt = await input.run(operationId);
         } catch (error) {
-          const reason = error instanceof YouTubeCommentsError ? error.code
-            : error instanceof Error && error.message ? error.message
-            : "upstream";
-          // A transport failure after the claim is indeterminate unless the
-          // server said otherwise; the local identity stays until status is read.
-          if (isShownRefusal(reason)) {
-            return { kind: "refused", reason, draftKept: true, operationId };
-          }
-          return { kind: "error", reason, draftKept: true, operationId };
+          return failedOutcome(error, operationId);
         }
 
         // The identity is NOT cleared here. Only a surface that shows the
@@ -437,11 +437,7 @@ export function useYouTubeStage4(params: {
         if (receipt.state === "confirmed" && isStillCurrent()) {
           void threads.reload();
         }
-        if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
-        if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
-        if (receipt.state === "indeterminate") return { kind: "indeterminate", receipt, operationId };
-        // claimed/dispatched: the browser lost the answer before settlement.
-        return { kind: "indeterminate", receipt, operationId };
+        return outcomeForReceipt(receipt, operationId);
       } finally {
         if (submitsInFlight.current.get(guardKey) === submitLock) submitsInFlight.current.delete(guardKey);
       }
@@ -654,6 +650,38 @@ export function useYouTubeStage4(params: {
       clearPendingOperationsForAccount(userId, accountId);
     },
   };
+}
+
+/**
+ * A lock of a context that is gone does not block a submit in this one: only a
+ * lock of this context, or one that already minted an operation, does.
+ */
+function blocksNewSubmit(lock: SubmitLock, epoch: number): boolean {
+  return lock.operationId !== null || lock.epoch === epoch;
+}
+
+/** The answer a blocked submit gets: the operation to check, when one is known. */
+function pendingOutcomeFor(lock: SubmitLock): SubmissionOutcome {
+  return lock.operationId ? { kind: "pending", operationId: lock.operationId } : { kind: "pending" };
+}
+
+/** The outcome of a call that never returned a receipt. */
+function failedOutcome(error: unknown, operationId: string): SubmissionOutcome {
+  // A transport failure after the claim is indeterminate unless the server
+  // said otherwise; the local identity stays until status is read.
+  const reason = error instanceof YouTubeCommentsError ? error.code
+    : error instanceof Error && error.message ? error.message
+    : "upstream";
+  if (isShownRefusal(reason)) return { kind: "refused", reason, draftKept: true, operationId };
+  return { kind: "error", reason, draftKept: true, operationId };
+}
+
+/** The outcome a receipt maps to; every state but a refusal is an unknown settlement. */
+function outcomeForReceipt(receipt: Stage4ReceiptPayload, operationId: string): SubmissionOutcome {
+  if (receipt.state === "confirmed") return { kind: "confirmed", receipt, operationId };
+  if (receipt.state === "refused") return { kind: "refused", reason: receipt.reason ?? "upstream", draftKept: true, operationId };
+  // claimed, dispatched or indeterminate: the browser lost the answer before settlement.
+  return { kind: "indeterminate", receipt, operationId };
 }
 
 /** Reasons whose refusal is definite and was shown, so the identity may go.
