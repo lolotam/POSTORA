@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent, act, within } from "@testing-librar
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { YouTubeCommentsScreen, Stage4RecoveredOperations } from "../ui/YouTubeCommentsScreen";
+import i18n from "@/i18n";
 import type { YouTubeCommentsGateway } from "../application/ports";
 import type {
   Stage4CapabilitiesPayload,
@@ -266,6 +267,63 @@ describe("YouTubeCommentsScreen", () => {
     expect(screen.queryByRole("option", { name: "Cooking #Shorts" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("yt-stage4-video-filter-all"));
     expect(screen.getByRole("option", { name: "Cooking #Shorts" })).toBeInTheDocument();
+  });
+  it("formats Studio dates with the active app language, supports listbox arrow navigation, and keeps page-2 selection across Refresh", async () => {
+    const publishedAt = "2026-01-02T00:00:00Z";
+    const expectedArabicDate = new Date(publishedAt).toLocaleDateString("ar");
+    const expectedArabicTimestamp = new Date("2026-01-02T00:00:00Z").toLocaleString("ar");
+    const { gateway } = makeGateway({ threads: [row()] });
+    (gateway.videoPage as ReturnType<typeof vi.fn>).mockImplementation(async (_accountId: string, cursor?: string) => (
+      cursor === "vp-2"
+        ? {
+          account_id: ACCOUNT,
+          channel_id: "UC-x",
+          items: [{ id: "vid-2", title: "Page two upload", published_at: publishedAt, thumbnail_url: "https://img.youtube.com/vi/vid-2/hqdefault.jpg" }],
+          next_cursor: null,
+        }
+        : {
+          account_id: ACCOUNT,
+          channel_id: "UC-x",
+          items: [{ id: "vid-1", title: "Page one upload", published_at: publishedAt, thumbnail_url: null }],
+          next_cursor: "vp-2",
+        }
+    ));
+
+    try {
+      await act(async () => {
+        await i18n.changeLanguage("ar");
+      });
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+        </QueryClientProvider>,
+      );
+
+      const firstOption = await screen.findByRole("option", { name: "Page one upload" });
+      expect(firstOption).toHaveTextContent(expectedArabicDate);
+      expect(await screen.findByText("a top-level comment")).toBeInTheDocument();
+      expect(screen.getByText(new RegExp(expectedArabicTimestamp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /تحميل المزيد من الفيديوهات|Load more uploads/ }));
+      const secondOption = await screen.findByRole("option", { name: "Page two upload" });
+      firstOption.focus();
+      fireEvent.keyDown(screen.getByRole("listbox"), { key: "ArrowDown" });
+      await waitFor(() => expect(secondOption).toHaveAttribute("aria-selected", "true"));
+      expect(document.activeElement).toBe(secondOption);
+
+      const draftBox = screen.getByLabelText(/انشر تعليقًا باسم قناتك|Post a comment as your channel/) as HTMLTextAreaElement;
+      fireEvent.change(draftBox, { target: { value: "draft kept after refresh" } });
+
+      fireEvent.click(screen.getAllByRole("button", { name: /تحديث|Refresh/ })[0]);
+      await waitFor(() => expect(screen.queryByRole("option", { name: "Page two upload" })).not.toBeInTheDocument());
+      expect(screen.getByTestId("yt-stage4-active-video-bar")).toHaveTextContent("Page two upload");
+      expect((screen.getByLabelText(/انشر تعليقًا باسم قناتك|Post a comment as your channel/) as HTMLTextAreaElement).value).toBe("draft kept after refresh");
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage("en");
+      });
+    }
   });
   it("hides the Held tab when the held capability is off", async () => {
     renderScreen({ caps: capabilities({ held: false }), threads: [row()] });

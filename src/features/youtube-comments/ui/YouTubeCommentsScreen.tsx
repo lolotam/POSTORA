@@ -280,7 +280,17 @@ function RecoveredBannerList(props: {
 
 function ActiveVideoBar({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4> }): JSX.Element | null {
   const { t } = useTranslation("automation");
-  const activeVideo = stage4.videos.items.find((video) => video.id === stage4.effectiveVideoId);
+  type ActiveVideo = ReturnType<typeof useYouTubeStage4>["videos"]["items"][number];
+  const lastVideoRef = useRef<{ accountId: string; video: ActiveVideo } | null>(null);
+  const currentMatch = stage4.videos.items.find((video) => video.id === stage4.effectiveVideoId);
+  if (currentMatch) {
+    lastVideoRef.current = { accountId: stage4.accountId, video: currentMatch };
+  }
+  const activeVideo = currentMatch
+    ?? (lastVideoRef.current?.accountId === stage4.accountId
+      && lastVideoRef.current.video.id === stage4.effectiveVideoId
+      ? lastVideoRef.current.video
+      : undefined);
   if (!activeVideo) return null;
   return (
     <div className="flex min-w-0 items-center gap-3" data-testid="yt-stage4-active-video-bar">
@@ -430,7 +440,8 @@ function CommentCard(params: {
   inlineReplies?: Stage4CommentRow[];
 }): JSX.Element {
   const { stage4, row, videoId, onNotice, reply = false, inlineReplies = [] } = params;
-  const { t } = useTranslation("automation");
+  const { t, i18n } = useTranslation("automation");
+  const locale = i18n.resolvedLanguage ?? i18n.language;
   // The editors read what they hold from the draft store: this card can leave the
   // screen (a Refresh returns the reply chain to page one) and come back.
   const generation = stage4.threads.bindingGeneration ?? 0;
@@ -497,7 +508,7 @@ function CommentCard(params: {
             </div>
             <p className="text-sm mt-1 whitespace-pre-wrap break-words">{row.text}</p>
             <p className="text-xs text-muted-foreground mt-1">
-              {new Date(row.published_at).toLocaleString()} · {t("youtubeStage4.row.likes", "{{count}} likes", { count: row.like_count })}
+              {new Date(row.published_at).toLocaleString(locale)} · {t("youtubeStage4.row.likes", "{{count}} likes", { count: row.like_count })}
             </p>
           </div>
         </div>

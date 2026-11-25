@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { type KeyboardEvent, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ type Stage4Video = Stage4Controller["videos"]["items"][number];
 type VideoFilter = "all" | "videos" | "shorts";
 
 function isShorts(video: Stage4Video): boolean {
+  if (typeof video.is_short === "boolean") return video.is_short;
   return /#shorts?\b/i.test(video.title);
 }
 
@@ -131,12 +132,13 @@ function PickerColumns(): JSX.Element {
 }
 
 function VideoDate({ video }: { video: Stage4Video }): JSX.Element {
-  const { t } = useTranslation("automation");
+  const { t, i18n } = useTranslation("automation");
+  const locale = i18n.resolvedLanguage ?? i18n.language;
   const publishDate = validPublishDate(video.published_at);
   return (
     <span className="hidden sm:block text-xs text-muted-foreground">
       <span className="block text-foreground">
-        {publishDate ? <time dateTime={publishDate.toISOString()}>{publishDate.toLocaleDateString()}</time> : "—"}
+        {publishDate ? <time dateTime={publishDate.toISOString()}>{publishDate.toLocaleDateString(locale)}</time> : "—"}
       </span>
       <span className="mt-0.5 block">
         {publishDate
@@ -212,9 +214,36 @@ function PickerResults({ stage4, visibleVideos, onReset }: {
   onReset: () => void;
 }): JSX.Element {
   const { t } = useTranslation("automation");
+  const handleListboxKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (visibleVideos.length === 0) return;
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+    const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]'));
+    const activeElement = document.activeElement as HTMLElement | null;
+    const domIndex = activeElement ? options.indexOf(activeElement as HTMLButtonElement) : -1;
+    const selectedIndex = visibleVideos.findIndex((video) => video.id === stage4.effectiveVideoId);
+    const baseIndex = domIndex >= 0 ? domIndex : selectedIndex;
+    let nextIndex = 0;
+    if (event.key === "ArrowDown") {
+      nextIndex = baseIndex < 0 ? 0 : Math.min(baseIndex + 1, visibleVideos.length - 1);
+    } else if (event.key === "ArrowUp") {
+      nextIndex = baseIndex <= 0 ? 0 : baseIndex - 1;
+    } else if (event.key === "End") {
+      nextIndex = visibleVideos.length - 1;
+    }
+    event.preventDefault();
+    const target = visibleVideos[nextIndex];
+    if (!target) return;
+    stage4.setSelectedVideoId(target.id);
+    options[nextIndex]?.focus();
+  };
   return (
     <>
-      <div role="listbox" aria-label={t("youtubeStage4.picker.title", "Your uploads")} className="divide-y max-h-[340px] overflow-y-auto">
+      <div
+        role="listbox"
+        aria-label={t("youtubeStage4.picker.title", "Your uploads")}
+        onKeyDown={handleListboxKeyDown}
+        className="divide-y max-h-[340px] overflow-y-auto"
+      >
         {visibleVideos.map((video) => (
           <VideoRow
             key={video.id}
