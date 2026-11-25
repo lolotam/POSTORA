@@ -7,7 +7,7 @@
 //   T1  a settled identity leaves the in-memory guard even when storage is blocked;
 //   T2  one submit per target: a second click while the first reads status sends nothing.
 
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -645,6 +645,69 @@ describe("Issue #485 composer cancellation and unmount during a submit", () => {
       operationId: sent.operationId,
       targetCommentId: "c-mine",
     })]);
+  });
+
+  it("RejectDialog Back clears busy during ban recovery and lets plain Reject submit cleanly", async () => {
+    const on = { allowed: true, reason: null };
+    const banRecovery = deferred<Stage4OperationStatusPayload>();
+    const operationStatus = vi.fn()
+      .mockImplementationOnce(() => banRecovery.promise)
+      .mockRejectedValueOnce(new YouTubeCommentsError("not_found"));
+    const banConfirmation = vi.fn(async () => ({
+      confirmation: "ban-tok",
+      expires_in_seconds: 120,
+      author_channel_id: "UC-own",
+      author_name: "Own channel",
+    }));
+    const gateway = makeGateway({
+      capabilities: vi.fn(async () => ({
+        account_id: ACCOUNT,
+        capabilities: { read: on, held: on, write: on, ban: on },
+      })),
+      banConfirmation,
+      operationStatus,
+    });
+    const moderateMock = gateway.moderate as ReturnType<typeof vi.fn>;
+
+    render(withClient(<YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Reject" }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByLabelText("Also ban this author"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    const rejectAndBanBtn = await within(dialog).findByRole("button", { name: "Reject and ban" });
+
+    savePendingOperation(USER, {
+      operationId: "op-earlier",
+      accountId: ACCOUNT,
+      videoId: "vid-1",
+      action: "moderate",
+      targetCommentId: "c-mine",
+      createdAt: Date.now(),
+    });
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + 200_000);
+
+    fireEvent.click(rejectAndBanBtn);
+    await waitFor(() => expect(operationStatus).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    const plainRejectBtn = within(dialog).getByRole("button", { name: "Reject" });
+    expect(plainRejectBtn).toBeEnabled();
+    expect(moderateMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(plainRejectBtn);
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(moderateMock).toHaveBeenCalledTimes(1);
+    expect(moderateMock.mock.calls[0][0]).toMatchObject({ status: "rejected" });
+    expect((moderateMock.mock.calls[0][0] as { banConfirmation?: string }).banConfirmation).toBeUndefined();
+
+    await act(async () => {
+      banRecovery.resolve(status("confirmed", { operation_id: "op-earlier", action: "moderate" }));
+      await banRecovery.promise;
+    });
+    expect(moderateMock).toHaveBeenCalledTimes(1);
   });
 });
 

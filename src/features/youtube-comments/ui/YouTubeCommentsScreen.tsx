@@ -1105,6 +1105,8 @@ function RejectDialog(params: {
     if (!next) generationRef.current += 1;
     setAlsoBan(false);
     setBanInfo(null);
+    setBanError(null);
+    setBusy(false);
     setStep("reject");
     onOpenChange(next);
   };
@@ -1233,6 +1235,9 @@ function RejectDialog(params: {
                 generationRef.current += 1;
                 setAlsoBan(false);
                 setBanInfo(null);
+                setBanError(null);
+                setBusy(false);
+                operationIdRef.current = mintOperationIdDialog();
                 setStep("reject");
               }}>
                 {t("common:back", "Back")}
