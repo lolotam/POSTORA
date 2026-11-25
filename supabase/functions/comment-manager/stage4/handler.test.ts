@@ -2379,22 +2379,58 @@ function scriptedLimiter(world: World, plan: (endpoint: string) => boolean | "ha
 function hangingAuditInserts(world: World) {
   const fake = world.deps.admin as unknown as FakeAdmin;
   const original = fake.from.bind(fake);
-  let started = 0;
+  const reasons: string[] = [];
   const hung: Array<() => void> = [];
   fake.from = (table: string) => {
     if (table !== "system_logs") return original(table);
     return {
-      insert: () => {
-        started += 1;
+      insert: (row: Record<string, unknown>) => {
+        reasons.push(String((row.metadata as Record<string, unknown>).reason));
         return new Promise((resolve) => hung.push(() => resolve({ error: null })));
       },
     };
   };
   return {
-    started: () => started,
+    started: () => reasons.length,
+    count: (reason: string) => reasons.filter((candidate) => candidate === reason).length,
     releaseAll: () => {
       while (hung.length) hung.shift()!();
     },
+  };
+}
+
+/** Holds only the first matching audit row; later rows use the real fake. */
+function hangingFirstAuditRow(world: World, reason: string) {
+  const fake = world.deps.admin as unknown as FakeAdmin;
+  const original = fake.from.bind(fake);
+  let started = 0;
+  let releaseFirst: ((outcome: "success" | "insert_error" | "reject") => void) | undefined;
+  fake.from = (table: string) => {
+    if (table !== "system_logs") return original(table);
+    return {
+      insert: (row: Record<string, unknown>) => {
+        if ((row.metadata as Record<string, unknown>).reason !== reason || started > 0) {
+          return (original(table) as {
+            insert: (row: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+          }).insert(row);
+        }
+        started += 1;
+        return new Promise<{ error: { message: string } | null }>((resolve, reject) => {
+          releaseFirst = (outcome) => {
+            if (outcome === "reject") {
+              reject(new Error("audit insert rejected"));
+              return;
+            }
+            if (outcome === "success") world.auditRows.push(row);
+            resolve({ error: outcome === "success" ? null : { message: "audit insert failed" } });
+          };
+        });
+      },
+    };
+  };
+  return {
+    started: () => started,
+    release: (outcome: "success" | "insert_error" | "reject") => releaseFirst?.(outcome),
   };
 }
 
@@ -2495,13 +2531,91 @@ Deno.test("T1.2c a hung admitted anonymous audit insert is bounded and never dou
   assertEquals(inserts.started(), 1);
 
   assertEquals((await anonymous(world)).status, 401);
-  assertEquals(inserts.started(), 1, "a request that finds the slot taken skips its insert and counts as suppressed");
+  assertEquals(inserts.count("unauthorized"), 1, "a request that finds the slot taken skips its insert and counts as suppressed");
 
   inserts.releaseAll();
   await settleMicrotasks();
   await anonymous(world);
-  assertEquals(inserts.started(), 2, "the slot is free again once the insert settled");
+  assertEquals(inserts.count("unauthorized"), 2, "the slot is free again once the insert settled");
   inserts.releaseAll();
+});
+
+Deno.test("Issue #479 a late successful counter insert reconciles its snapshot without double-counting", async () => {
+  let mono = 1_000;
+  const world = createWorld({ monotonicNow: () => mono });
+  scriptedLimiter(world, (endpoint) => endpoint.includes("stage4_audit_counter"));
+  const inserts = hangingFirstAuditRow(world, "audit_suppressed");
+
+  await anonymous(world);
+  assertEquals(inserts.started(), 1, "the first counter insert outlived the request bound");
+  inserts.release("success");
+  await settleMicrotasks();
+
+  mono += 61_000;
+  await anonymous(world);
+  const counters = world.auditRows.filter((row) => (row.metadata as Record<string, unknown>).reason === "audit_suppressed");
+  assertEquals(counters.map((row) => (row.metadata as Record<string, unknown>).suppressed), [1, 1]);
+});
+
+Deno.test("Issue #479 a late failed counter insert keeps its snapshot for the next counter row", async () => {
+  for (const outcome of ["insert_error", "reject"] as const) {
+    let mono = 1_000;
+    const world = createWorld({ monotonicNow: () => mono });
+    scriptedLimiter(world, (endpoint) => endpoint.includes("stage4_audit_counter"));
+    const inserts = hangingFirstAuditRow(world, "audit_suppressed");
+
+    await anonymous(world);
+    inserts.release(outcome);
+    await settleMicrotasks();
+
+    mono += 61_000;
+    await anonymous(world);
+    const counters = world.auditRows.filter((row) => (row.metadata as Record<string, unknown>).reason === "audit_suppressed");
+    assertEquals(counters.length, 1, outcome);
+    assertEquals((counters[0].metadata as Record<string, unknown>).suppressed, 2, outcome);
+  }
+});
+
+Deno.test("Issue #479 a late pre-reset success cannot subtract from a fresh suppression tally", async () => {
+  resetAnonRefusalGate();
+  const row = { action: "youtube_reply", reason: "rate_limited", requestId: "req-reset", userId: null };
+  const unused = {} as unknown as SupabaseClient;
+  let reconcilePrevious: () => void = () => undefined;
+  await writeRefusalAudit(unused, row, {
+    rateLimitBucket: () => Promise.resolve(false),
+    counterSink: (_suppressed, { reconcile }) => {
+      reconcilePrevious = reconcile;
+      return Promise.resolve(false);
+    },
+  });
+
+  resetAnonRefusalGate();
+  const seen: number[] = [];
+  const counterSink = (suppressed: number) => {
+    seen.push(suppressed);
+    return Promise.resolve(false);
+  };
+  await writeRefusalAudit(unused, row, { rateLimitBucket: () => Promise.resolve(false), counterSink });
+  reconcilePrevious();
+  await writeRefusalAudit(unused, row, { rateLimitBucket: () => Promise.resolve(false), counterSink });
+  assertEquals(seen, [1, 2]);
+});
+
+Deno.test("Issue #479 busy admitted audit inserts flush suppression while the shared bucket stays open", async () => {
+  const world = createWorld();
+  const limiter = scriptedLimiter(world, () => true);
+  const inserts = hangingFirstAuditRow(world, "unauthorized");
+
+  await anonymous(world);
+  assertEquals(inserts.started(), 1, "the admitted audit insert is still running");
+  await anonymous(world);
+
+  assertEquals(limiter.count("stage4_audit_counter"), 1);
+  const counters = world.auditRows.filter((row) => (row.metadata as Record<string, unknown>).reason === "audit_suppressed");
+  assertEquals(counters.length, 1);
+  assertEquals((counters[0].metadata as Record<string, unknown>).suppressed, 1);
+  inserts.release("success");
+  await settleMicrotasks();
 });
 
 Deno.test("T1.3 the cool-down follows the monotonic clock, not the wall clock", async () => {

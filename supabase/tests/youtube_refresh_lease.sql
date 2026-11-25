@@ -891,8 +891,9 @@ BEGIN
       v_row.acquired_at, v_b_send);
   ASSERT v_row.expires_at > clock_timestamp(),
     'L9 race3 the takeover lease is born live, never pre-expired';
+  -- ON CONFLICT DO UPDATE evaluates clock_timestamp() separately for both stamps.
   ASSERT v_row.expires_at - v_row.acquired_at >= interval '55 seconds'
-     AND v_row.expires_at - v_row.acquired_at <= interval '60 seconds',
+     AND v_row.expires_at - v_row.acquired_at <= interval '60 seconds' + interval '1 second',
     'L9 race3 the requested ttl is honored from the post-lock clock';
 END
 $l9_race3$;
@@ -980,8 +981,9 @@ BEGIN
       v_row.acquired_at, v_b_send);
   ASSERT v_row.expires_at > clock_timestamp(),
     'L9 race4 the lease is born LIVE, never pre-expired by a rolled-back rival';
+  -- ON CONFLICT DO UPDATE evaluates clock_timestamp() separately for both stamps.
   ASSERT v_row.expires_at - v_row.acquired_at >= interval '55 seconds'
-     AND v_row.expires_at - v_row.acquired_at <= interval '60 seconds',
+     AND v_row.expires_at - v_row.acquired_at <= interval '60 seconds' + interval '1 second',
     'L9 race4 the requested ttl is honored from the post-lock clock';
 END
 $l9_race4$;

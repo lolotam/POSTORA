@@ -330,11 +330,6 @@ export function useYouTubeStage4(params: {
     recoveredRef.current = next;
     setRecoveredState(next);
   }, []);
-  // The identity of every submission this view started, kept in memory beside
-  // the stored one. Storage can be unavailable (a locked-down profile, a full
-  // quota); a status check must still know what the operation was. Removed
-  // when a surface acknowledges the outcome, and when the account is discarded.
-  const liveOperations = useRef(new Map<string, PendingStage4Operation>());
   // One entry per target while a submit for it runs. The id stays null until
   // this submit mints its own operation; object identity and epoch protect a
   // newer submit's lock after a rapid context switch.
@@ -395,20 +390,10 @@ export function useYouTubeStage4(params: {
       if (!isStillCurrent()) return { kind: "cancelled" };
       const targetCommentId = input.targetCommentId ?? "";
       const guardKey = `${accountId}|${input.videoId}|${action}|${targetCommentId}`;
-      // Storage can be blocked or full, so a stored list can miss an operation;
-      // the in-memory identities are the same ones, so the guard reads both.
       const pendingForTarget = (): PendingStage4Operation[] => {
         const loadedRows = threads.items.map((item) => item.row);
-        const stored = findPendingOperations(userId, { accountId, videoId: input.videoId, action })
+        return findPendingOperations(userId, { accountId, videoId: input.videoId, action })
           .filter((op) => matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, input.targetThreadId, loadedRows));
-        const seen = new Set(stored.map((op) => op.operationId));
-        const live = [...liveOperations.current.values()].filter((op) =>
-          op.accountId === accountId
-          && op.videoId === input.videoId
-          && op.action === action
-          && matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, input.targetThreadId, loadedRows)
-          && !seen.has(op.operationId));
-        return [...stored, ...live];
       };
       // One submit per target at a time: a second click while the first is
       // still recovering or sending is answered as pending and sends nothing.
@@ -441,10 +426,7 @@ export function useYouTubeStage4(params: {
             };
           }
           // Unreadable for good (the binding changed): there is nothing to show.
-          if (recovery.settled) {
-            liveOperations.current.delete(earlier.operationId);
-            clearPendingOperation(userId, earlier.operationId);
-          }
+          if (recovery.settled) clearPendingOperation(userId, earlier.operationId);
         }
 
         if (!isStillCurrent()) return { kind: "cancelled" };
@@ -459,7 +441,6 @@ export function useYouTubeStage4(params: {
           ...(action === "reply" && input.targetIsCanonicalParent ? { targetIsCanonicalParent: true } : {}),
           createdAt: Date.now(),
         };
-        liveOperations.current.set(operationId, identity);
         savePendingOperation(userId, identity);
 
         let receipt: Stage4ReceiptPayload;
@@ -487,7 +468,6 @@ export function useYouTubeStage4(params: {
   /** A surface that has shown this operation's outcome forgets its identity. */
   const acknowledge = useCallback(
     (operationId: string) => {
-      liveOperations.current.delete(operationId);
       clearPendingOperation(userId, operationId);
     },
     [userId],
@@ -574,11 +554,10 @@ export function useYouTubeStage4(params: {
       // the pre-claim grace window and keeps the identity; a settled answer is
       // definite. The local identity says what the operation was, which decides
       // whether the draft is sent along for the edit comparison.
-      // The live submission first, then storage. With neither, nothing is
-      // invented: the status is read with no draft (the action is unknown, so
-      // an edit comparison cannot be asked for) and a miss stays temporary.
-      const operation: PendingStage4Operation | undefined = liveOperations.current.get(operationId)
-        ?? listPendingOperations(userId, accountId).find((op) => op.operationId === operationId);
+      // The shared identity store covers both durable storage and its memory
+      // fallback. With neither, nothing is invented: the status is read with no
+      // draft (the action is unknown) and a miss stays temporary.
+      const operation = listPendingOperations(userId, accountId).find((op) => op.operationId === operationId);
       const result = operation
         ? await recoverOperation(gateway, accountId, operation, operation.action === "edit" ? draftText : undefined)
         : await readOperationStatus(gateway, accountId, operationId, undefined, false);
@@ -693,9 +672,6 @@ export function useYouTubeStage4(params: {
       clearSettled(userId, [next]);
     },
     discardAccountContext: () => {
-      for (const [operationId, operation] of liveOperations.current) {
-        if (operation.accountId === accountId) liveOperations.current.delete(operationId);
-      }
       clearPendingOperationsForAccount(userId, accountId);
     },
   };

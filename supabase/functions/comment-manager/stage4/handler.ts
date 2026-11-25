@@ -49,12 +49,13 @@ import {
 import { normaliseText, computeIntentDigests, computeLogicalDigests, type DigestKeys } from "./digests.ts";
 import * as provider from "./provider.ts";
 import type { Stage4ProviderClass } from "./provider.ts";
-import { writeRefusalAudit, sanitiseAction } from "./audit.ts";
+import { writeRefusalAudit, sanitiseAction, resetAnonAuditCounter } from "./audit.ts";
 import { readCapabilities, admitsCapability, SettingsReadError } from "./rollout.ts";
 import { STAGE4_HOLD_FROM_PUBLISHED } from "./contractTypes.ts";
 import {
   stage4RateLimit,
   STAGE4_RATE_LIMITS,
+  isAnonymousSlotBusy,
   resetAnonymousSlots,
   runInAnonymousSlot,
 } from "./rateLimit.ts";
@@ -125,6 +126,7 @@ export function resetAnonRefusalGate(): void {
   anonBucketClosedUntil = 0;
   anonCounterNextAt = 0;
   resetAnonymousSlots();
+  resetAnonAuditCounter();
 }
 
 /**
@@ -182,13 +184,19 @@ async function refusal(
     operationId: audit.operationVerified === true ? audit.operationId : null,
   }, {
     rateLimitBucket: () => anonBucketAdmits(deps),
-    counterSink: async (suppressed) => {
-      // At most one counter attempt per interval per instance, and only once
-      // the shared bucket has actually refused (a request that merely found a
-      // probe in flight is not a refusal): the tally stays in memory
-      // (returning false keeps it) and costs no database work.
+    counterSink: async (suppressed, { cause, reconcile }) => {
+      // At most one counter attempt per interval per instance. Bucket-caused
+      // suppression pays for a counter only after the bucket actually refused;
+      // a busy admitted audit insert may flush its tally while it stays open.
       const now = deps.monotonicNow();
-      if (now >= anonBucketClosedUntil || now < anonCounterNextAt) return false;
+      if (
+        (cause === "bucket" && now >= anonBucketClosedUntil)
+        || now < anonCounterNextAt
+        || isAnonymousSlotBusy("counter_probe")
+        || isAnonymousSlotBusy("counter_insert")
+      ) {
+        return false;
+      }
       anonCounterNextAt = now + ANON_COUNTER_INTERVAL_MS;
       // The counter probe holds a slot of its own: while one is running this
       // worker starts no second one, and the request waits at most the bound
@@ -212,10 +220,11 @@ async function refusal(
           request_id: "",
           suppressed: suppressed,
         },
-      }));
-      // An insert that is still running past the bound may land after the
-      // response has gone out; the tally stays in memory and the suppression
-      // console event remains the trace either way.
+      }), (outcome) => {
+        if (outcome.kind === "settled" && !(outcome.value && outcome.value.error)) reconcile();
+      });
+      // An insert that outlives the bound reconciles its snapshot only if its
+      // eventual result confirms the row landed; failure keeps the tally.
       if (insertOutcome.kind === "busy" || insertOutcome.kind === "bound") return false;
       if (insertOutcome.kind === "failed") {
         console.warn("comment-manager stage4 audit counter insert failed: cause=exception");
