@@ -316,11 +316,22 @@ BEGIN
     'an admin acting through authenticated reads the rollout';
   UPDATE public.app_settings SET value = pg_temp.s5_allowlist(ARRAY[pg_temp.s5_main(), pg_temp.s5_second()])
    WHERE key = 'youtube_analytics_stage5_rollout';
+  ASSERT (SELECT value FROM public.app_settings WHERE key = 'youtube_analytics_stage5_rollout')
+      = pg_temp.s5_allowlist(ARRAY[pg_temp.s5_main(), pg_temp.s5_second()]),
+    'an admin update to the rollout takes effect';
   INSERT INTO public.app_settings (key, value, description)
   VALUES ('youtube_analytics_stage5_scope_gate', '{"version":1,"mode":"off","user_ids":[]}'::jsonb, 'Stage 5 SQL suite');
   UPDATE public.app_settings SET key = 'feature_s5_admin_rename' WHERE key = 'youtube_analytics_stage5_scope_gate';
+  ASSERT EXISTS (SELECT 1 FROM public.app_settings WHERE key = 'feature_s5_admin_rename')
+     AND NOT EXISTS (SELECT 1 FROM public.app_settings WHERE key = 'youtube_analytics_stage5_scope_gate'),
+    'an admin rename out of the protected key takes effect';
   UPDATE public.app_settings SET key = 'youtube_analytics_stage5_scope_gate' WHERE key = 'feature_s5_admin_rename';
+  ASSERT EXISTS (SELECT 1 FROM public.app_settings WHERE key = 'youtube_analytics_stage5_scope_gate')
+     AND NOT EXISTS (SELECT 1 FROM public.app_settings WHERE key = 'feature_s5_admin_rename'),
+    'an admin rename back into the protected key takes effect';
   DELETE FROM public.app_settings WHERE key = 'youtube_analytics_stage5_scope_gate';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.app_settings WHERE key = 'youtube_analytics_stage5_scope_gate'),
+    'an admin delete of the protected key takes effect';
   UPDATE public.app_settings SET value = 'false'::jsonb WHERE key = 'feature_s5_suite';
 END
 $admin_settings$;
@@ -831,30 +842,82 @@ BEGIN
 END
 $acceptance_delete_modes$;
 
--- A committed withdrawal wins at the very next decision checkpoint.
+-- A withdrawal committed in a separate session between admission and credential
+-- release, between credential release and an attempt, or before the final response
+-- refuses at the next bound decision checkpoint.
+SELECT pg_temp.s5_sessions();
 DO $withdrawal_checkpoints$
 DECLARE
-  v_checkpoint text;
-  v_before jsonb;
-  v_after jsonb;
+  v_admit jsonb;
+  v_cred jsonb;
+  v_attempt jsonb;
+  v_final jsonb;
+  v_channel text;
+  v_generation bigint;
+  v_incarnation uuid;
 BEGIN
-  FOREACH v_checkpoint IN ARRAY ARRAY[
-    'admission_to_credential_release', 'credential_release_to_attempt', 'attempt_to_final_response'
-  ] LOOP
-    PERFORM pg_temp.s5_restore_main();
-    v_before := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), true);
-    ASSERT v_before ->> 'reason' = 'ok' AND v_before ? 'credentials',
-      format('%s starts admitted: %s', v_checkpoint, v_before);
-    PERFORM pg_temp.s5_withdraw();
-    v_after := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), true);
-    ASSERT v_after ->> 'reason' = 'consent_required'
-       AND v_after -> 'consent' ->> 'state' = 'withdrawn'
-       AND NOT (v_after ? 'credentials'),
-      format('%s refuses at the next decide: %s', v_checkpoint, v_after);
-  END LOOP;
+  -- 1. Withdrawal committed in session s5_b between admission and credential release:
   PERFORM pg_temp.s5_restore_main();
+  v_admit := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), false);
+  ASSERT v_admit ->> 'reason' = 'ok', format('admission starts ok: %s', v_admit);
+  v_channel := v_admit ->> 'channel_id';
+  v_generation := (v_admit ->> 'binding_generation')::bigint;
+  v_incarnation := (v_admit ->> 'binding_incarnation')::uuid;
+  PERFORM * FROM extensions.dblink('s5_b', format(
+    'SELECT public.youtube_analytics_stage5_record_consent(%L::uuid, %L::uuid, ''withdrawn'', 1, ''ar'', ''s5-chk-1'', NULL)::text',
+    pg_temp.s5_owner_a(), pg_temp.s5_main())) AS t(res text);
+  v_cred := public.youtube_analytics_stage5_decide(
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), v_channel, v_generation, v_incarnation,
+    ARRAY['scope.a', 'scope.b'], 1, true);
+  ASSERT v_cred ->> 'reason' = 'consent_required'
+     AND v_cred -> 'consent' ->> 'state' = 'withdrawn'
+     AND NOT (v_cred ? 'credentials'),
+    format('withdrawal committed before credential release refuses and omits credentials: %s', v_cred);
+
+  -- 2. Withdrawal committed in session s5_b between credential release and an attempt:
+  PERFORM pg_temp.s5_restore_main();
+  v_admit := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), false);
+  v_channel := v_admit ->> 'channel_id';
+  v_generation := (v_admit ->> 'binding_generation')::bigint;
+  v_incarnation := (v_admit ->> 'binding_incarnation')::uuid;
+  v_cred := public.youtube_analytics_stage5_decide(
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), v_channel, v_generation, v_incarnation,
+    ARRAY['scope.a', 'scope.b'], 1, true);
+  ASSERT v_cred ->> 'reason' = 'ok' AND v_cred ? 'credentials';
+  PERFORM * FROM extensions.dblink('s5_b', format(
+    'SELECT public.youtube_analytics_stage5_record_consent(%L::uuid, %L::uuid, ''withdrawn'', 1, ''ar'', ''s5-chk-2'', NULL)::text',
+    pg_temp.s5_owner_a(), pg_temp.s5_main())) AS t(res text);
+  v_attempt := public.youtube_analytics_stage5_decide(
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), v_channel, v_generation, v_incarnation,
+    ARRAY['scope.a', 'scope.b'], 1, false);
+  ASSERT v_attempt ->> 'reason' = 'consent_required'
+     AND v_attempt -> 'consent' ->> 'state' = 'withdrawn'
+     AND NOT (v_attempt ? 'credentials'),
+    format('withdrawal committed before attempt refuses: %s', v_attempt);
+
+  -- 3. Withdrawal committed in session s5_b between attempt and final decision:
+  PERFORM pg_temp.s5_restore_main();
+  v_admit := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), false);
+  v_channel := v_admit ->> 'channel_id';
+  v_generation := (v_admit ->> 'binding_generation')::bigint;
+  v_incarnation := (v_admit ->> 'binding_incarnation')::uuid;
+  v_attempt := public.youtube_analytics_stage5_decide(
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), v_channel, v_generation, v_incarnation,
+    ARRAY['scope.a', 'scope.b'], 1, false);
+  ASSERT v_attempt ->> 'reason' = 'ok';
+  PERFORM * FROM extensions.dblink('s5_b', format(
+    'SELECT public.youtube_analytics_stage5_record_consent(%L::uuid, %L::uuid, ''withdrawn'', 1, ''ar'', ''s5-chk-3'', NULL)::text',
+    pg_temp.s5_owner_a(), pg_temp.s5_main())) AS t(res text);
+  v_final := public.youtube_analytics_stage5_decide(
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), v_channel, v_generation, v_incarnation,
+    ARRAY['scope.a', 'scope.b'], 1, false);
+  ASSERT v_final ->> 'reason' = 'consent_required'
+     AND v_final -> 'consent' ->> 'state' = 'withdrawn'
+     AND NOT (v_final ? 'credentials'),
+    format('withdrawal committed before final response refuses: %s', v_final);
 END
 $withdrawal_checkpoints$;
+SELECT pg_temp.s5_restore_main();
 
 -- Concurrent acceptance of one owner/channel serializes on the function's
 -- account and advisory locks: exactly one acceptance is durable.
@@ -1035,27 +1098,46 @@ BEGIN
 END
 $snapshot_race_mutant$;
 
+-- The source-shape check in $decision_source_shape$ proves the production
+-- function is a single LANGUAGE sql VOLATILE statement with zero internal
+-- barrier points. Here we also verify that within a caller transaction that
+-- begins before session B commits a competing rollout/consent withdrawal,
+-- because decide is VOLATILE it takes a fresh single-statement snapshot at
+-- the moment decide is invoked (before vs after session B's commit) and never
+-- mixes pre-commit and post-commit fields.
 SELECT pg_temp.s5_restore_main();
 SELECT pg_temp.s5_sessions();
 DO $snapshot_race_production$
 DECLARE
-  v_barrier constant bigint := 6505001;
-  v_production text;
+  v_before text;
+  v_after text;
 BEGIN
-  PERFORM extensions.dblink_exec('s5_c', 'BEGIN');
-  PERFORM * FROM extensions.dblink('s5_c', format('SELECT pg_advisory_xact_lock(%s)::text', v_barrier)) AS t(res text);
-  PERFORM extensions.dblink_send_query('s5_a', format(
+  PERFORM extensions.dblink_exec('s5_a', 'BEGIN');
+  SELECT res INTO v_before FROM extensions.dblink('s5_a', format(
     'SELECT public.youtube_analytics_stage5_decide(%L::uuid, %L::uuid, NULL, NULL, NULL, %L::text[], 1, false)::text',
-    pg_temp.s5_owner_a(), pg_temp.s5_main(), '{scope.a,scope.b}'));
-  SELECT res INTO v_production FROM extensions.dblink_get_result('s5_a') AS t(res text);
-  PERFORM * FROM extensions.dblink_get_result('s5_a') AS t(res text);
-  ASSERT (v_production::jsonb ->> 'ok')::boolean,
-    format('the one-statement decision completes coherently without an interleaving barrier: %s', v_production);
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), '{scope.a,scope.b}')) AS t(res text);
+  ASSERT (v_before::jsonb ->> 'ok')::boolean
+     AND v_before::jsonb -> 'consent' ->> 'state' = 'accepted',
+    format('pre-commit snapshot is coherently admitted: %s', v_before);
+
+  PERFORM extensions.dblink_exec('s5_b', format(
+    'UPDATE public.social_accounts SET access_token = ''s5-snapshot-reconnect-2'' WHERE id = %L::uuid',
+    pg_temp.s5_main()));
   PERFORM extensions.dblink_exec('s5_b',
     'UPDATE public.app_settings SET value = ''{"version":1,"mode":"off","account_ids":[]}''::jsonb WHERE key = ''youtube_analytics_stage5_rollout''');
-  PERFORM extensions.dblink_exec('s5_c', 'COMMIT');
-  ASSERT (v_production::jsonb ->> 'ok')::boolean,
-    'session B cannot commit between two production decision reads';
+  PERFORM * FROM extensions.dblink('s5_b', format(
+    'SELECT public.youtube_analytics_stage5_record_consent(%L::uuid, %L::uuid, ''withdrawn'', 1, ''ar'', ''s5-snapshot-withdraw-2'', NULL)::text',
+    pg_temp.s5_owner_a(), pg_temp.s5_main())) AS t(res text);
+
+  SELECT res INTO v_after FROM extensions.dblink('s5_a', format(
+    'SELECT public.youtube_analytics_stage5_decide(%L::uuid, %L::uuid, NULL, NULL, NULL, %L::text[], 1, false)::text',
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), '{scope.a,scope.b}')) AS t(res text);
+  PERFORM extensions.dblink_exec('s5_a', 'COMMIT');
+
+  ASSERT v_after::jsonb ->> 'reason' = 'not_enabled'
+     AND v_after::jsonb -> 'consent' ->> 'state' = 'withdrawn'
+     AND (v_after::jsonb ->> 'binding_generation')::bigint = (v_before::jsonb ->> 'binding_generation')::bigint + 1,
+    format('post-commit VOLATILE single-statement snapshot sees all three committed tables coherently: %s', v_after);
 END
 $snapshot_race_production$;
 SELECT pg_temp.s5_restore_main();

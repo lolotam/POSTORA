@@ -189,10 +189,16 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 DECLARE
-  v_account  public.social_accounts%ROWTYPE;
-  v_latest   public.youtube_analytics_purpose_consents%ROWTYPE;
-  v_policy   jsonb;
-  v_revision text;
+  v_owner_id            uuid;
+  v_platform            text;
+  v_channel_id          text;
+  v_is_active           boolean;
+  v_auth_provider       text;
+  v_binding_generation  bigint;
+  v_binding_incarnation uuid;
+  v_latest              public.youtube_analytics_purpose_consents%ROWTYPE;
+  v_policy              jsonb;
+  v_revision            text;
 BEGIN
   IF p_owner_id IS NULL OR p_account_id IS NULL
      OR p_event IS NULL OR p_event NOT IN ('accepted', 'withdrawn')
@@ -202,25 +208,45 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_request');
   END IF;
 
-  SELECT sa.* INTO v_account
+  SELECT u.id INTO v_owner_id
+    FROM auth.users AS u
+   WHERE u.id = p_owner_id
+   FOR KEY SHARE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'not_found');
+  END IF;
+
+  SELECT sa.platform,
+         sa.platform_user_id,
+         sa.is_active,
+         sa.auth_provider,
+         sa.binding_generation,
+         sa.binding_incarnation
+    INTO v_platform,
+         v_channel_id,
+         v_is_active,
+         v_auth_provider,
+         v_binding_generation,
+         v_binding_incarnation
     FROM public.social_accounts AS sa
    WHERE sa.id = p_account_id
      AND sa.user_id = p_owner_id
    FOR UPDATE;
 
-  IF NOT FOUND OR v_account.platform <> 'youtube'
-     OR v_account.platform_user_id IS NULL
-     OR btrim(v_account.platform_user_id) = '' THEN
+  IF NOT FOUND OR v_platform <> 'youtube'
+     OR v_channel_id IS NULL
+     OR btrim(v_channel_id) = '' THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'not_found');
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtextextended(
-    'yt_stage5_consent:' || p_owner_id::text || ':' || v_account.platform_user_id, 0));
+    'yt_stage5_consent:' || p_owner_id::text || ':' || v_channel_id, 0));
 
   v_revision := substr(encode(sha256(convert_to(
     p_account_id::text || ':'
-    || COALESCE(v_account.binding_incarnation, '00000000-0000-0000-0000-000000000000'::uuid)::text
-    || ':' || v_account.binding_generation::text, 'utf8')), 'hex'), 1, 32);
+    || COALESCE(v_binding_incarnation, '00000000-0000-0000-0000-000000000000'::uuid)::text
+    || ':' || v_binding_generation::text, 'utf8')), 'hex'), 1, 32);
 
   IF p_expected_revision IS NOT NULL
      AND v_revision IS DISTINCT FROM p_expected_revision THEN
@@ -228,11 +254,11 @@ BEGIN
   END IF;
 
   IF p_event = 'accepted' THEN
-    IF NOT COALESCE(v_account.is_active, false) THEN
+    IF NOT COALESCE(v_is_active, false) THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'not_found');
     END IF;
 
-    IF COALESCE(v_account.auth_provider, 'native') <> 'native' THEN
+    IF COALESCE(v_auth_provider, 'native') <> 'native' THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'provider_unsupported');
     END IF;
 
@@ -248,7 +274,7 @@ BEGIN
   SELECT c.* INTO v_latest
     FROM public.youtube_analytics_purpose_consents AS c
    WHERE c.owner_id = p_owner_id
-     AND c.channel_id = v_account.platform_user_id
+     AND c.channel_id = v_channel_id
    ORDER BY c.created_at DESC, c.id DESC
    LIMIT 1;
 
@@ -257,7 +283,7 @@ BEGIN
     RETURN jsonb_build_object(
       'ok', true,
       'recorded', false,
-      'channel_id', v_account.platform_user_id,
+      'channel_id', v_channel_id,
       'connection_revision', v_revision,
       'consent', jsonb_build_object('state', p_event, 'version', p_purpose_version)
     );
@@ -267,7 +293,7 @@ BEGIN
     owner_id, channel_id, social_account_id, event, purpose_version,
     locale, request_id, created_at
   ) VALUES (
-    p_owner_id, v_account.platform_user_id, p_account_id, p_event, p_purpose_version,
+    p_owner_id, v_channel_id, p_account_id, p_event, p_purpose_version,
     p_locale, p_request_id,
     GREATEST(
       clock_timestamp(),
@@ -278,7 +304,7 @@ BEGIN
   RETURN jsonb_build_object(
     'ok', true,
     'recorded', true,
-    'channel_id', v_account.platform_user_id,
+    'channel_id', v_channel_id,
     'connection_revision', v_revision,
     'consent', jsonb_build_object('state', p_event, 'version', p_purpose_version)
   );
