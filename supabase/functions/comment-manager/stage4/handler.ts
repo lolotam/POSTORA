@@ -530,12 +530,16 @@ function parseVideoVisibility(value: unknown): Stage4VideoVisibility | null {
 
 function deriveVideoDateKind(
   visibility: Stage4VideoVisibility | null,
-  hasActualStartTime: boolean,
   hasPublishedAt: boolean,
+  existingDateKind?: Stage4VideoDateKind | null,
 ): Stage4VideoDateKind {
   if (visibility === "private" || visibility === "unlisted") return "uploaded";
-  if (hasActualStartTime) return "premiered";
+  if (existingDateKind === "premiered") return "premiered";
   return hasPublishedAt ? "published" : "uploaded";
+}
+
+function isDetailRecord(value: unknown): value is YtVideoDetail {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function trimDescription(value: unknown): string | null {
@@ -554,7 +558,7 @@ function uploadRow(upload: YtUpload): Stage4VideoRow {
     thumbnail_url: pickThumbnail(upload.snippet?.thumbnails),
     description: trimDescription(upload.snippet?.description),
     visibility,
-    date_kind: deriveVideoDateKind(visibility, false, publishedAt !== null),
+    date_kind: deriveVideoDateKind(visibility, publishedAt !== null),
     duration_iso: null,
     view_count: null,
     comment_count: null,
@@ -577,8 +581,8 @@ function enrichedUploadRow(row: Stage4VideoRow, detail: YtVideoDetail): Stage4Vi
     visibility,
     date_kind: deriveVideoDateKind(
       visibility,
-      nonEmptyString(detail.liveStreamingDetails?.actualStartTime) !== null,
       publishedAt !== null,
+      row.date_kind,
     ),
     duration_iso: nonEmptyString(detail.contentDetails?.duration),
     view_count: parseVideoCount(detail.statistics?.viewCount),
@@ -590,6 +594,7 @@ function enrichedUploadRow(row: Stage4VideoRow, detail: YtVideoDetail): Stage4Vi
 function enrichUploadRows(rows: Stage4VideoRow[], details: YtVideoDetail[], channelId: string): Stage4VideoRow[] {
   const detailsById = new Map<string, YtVideoDetail>();
   for (const detail of details) {
+    if (!isDetailRecord(detail)) continue;
     const id = nonEmptyString(detail.id);
     const detailChannel = nonEmptyString(detail.snippet?.channelId);
     if (id && (!detailChannel || detailChannel === channelId)) detailsById.set(id, detail);
@@ -1092,8 +1097,8 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
         items.map((video) => video.id),
       );
       if (detailRes.kind === "success") {
-        const details = listItems<YtVideoDetail>(detailRes.body);
-        if (details) {
+        const details = listItems<unknown>(detailRes.body);
+        if (details && details.every(isDetailRecord)) {
           items = enrichUploadRows(items, details, account.platform_user_id);
         } else {
           console.warn("comment-manager stage4 video details unavailable: outcome=malformed_response");

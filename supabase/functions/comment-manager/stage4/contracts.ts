@@ -8,6 +8,11 @@
 // imports the types from here, so the two sides cannot drift.
 
 import { z } from "https://esm.sh/zod@3.25.76";
+import type {
+  Stage4VideoDateKind,
+  Stage4VideoRow,
+  Stage4VideoVisibility,
+} from "./contractTypes.ts";
 
 export const STAGE4_ACTIONS = [
   "youtube_stage4_capabilities",
@@ -251,22 +256,11 @@ export interface Stage4CapabilitiesPayload {
   capabilities: Record<Stage4Capability, Stage4CapabilityState>;
 }
 
-export type Stage4VideoVisibility = "public" | "unlisted" | "private";
-export type Stage4VideoDateKind = "published" | "uploaded" | "premiered";
-
-export interface Stage4VideoRow {
-  id: string;
-  title: string;
-  published_at: string | null;
-  thumbnail_url: string | null;
-  description?: string | null;
-  visibility?: Stage4VideoVisibility | null;
-  date_kind?: Stage4VideoDateKind | null;
-  duration_iso?: string | null;
-  view_count?: number | null;
-  comment_count?: number | null;
-  is_short?: boolean | null;
-}
+export type {
+  Stage4VideoDateKind,
+  Stage4VideoRow,
+  Stage4VideoVisibility,
+};
 
 export interface Stage4VideoPagePayload {
   account_id: string;

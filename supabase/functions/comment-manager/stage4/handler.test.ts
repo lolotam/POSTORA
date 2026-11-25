@@ -820,7 +820,7 @@ Deno.test("a video page enriches uploads with Studio metadata from videos.list",
   assertEquals(video.thumbnail_url, "https://img.example/medium.jpg");
   assertEquals(video.description, "Premiere description");
   assertEquals(video.visibility, "public");
-  assertEquals(video.date_kind, "premiered");
+  assertEquals(video.date_kind, "published", "a broadcast start time alone uses the published-date fallback, not premiered");
   assertEquals(video.duration_iso, "PT9M19S");
   assertEquals(video.view_count, 1300);
   assertEquals(video.comment_count, 20);
@@ -828,7 +828,11 @@ Deno.test("a video page enriches uploads with Studio metadata from videos.list",
 });
 
 Deno.test("a videos.list failure or malformed response leaves the base video page successful", async () => {
-  for (const answer of [{ status: 500, body: null }, { status: 200, body: { items: "malformed" } }]) {
+  for (const answer of [
+    { status: 500, body: null },
+    { status: 200, body: { items: "malformed" } },
+    { status: 200, body: { items: [null] } },
+  ]) {
     const world = createWorld({
       provider: (call) => call.path === "videos" ? answer : undefined,
     });

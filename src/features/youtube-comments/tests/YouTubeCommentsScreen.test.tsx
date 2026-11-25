@@ -260,6 +260,8 @@ describe("YouTubeCommentsScreen", () => {
       threads: [row()],
     });
     const option = await screen.findByRole("option", { name: "Studio short" });
+    expect(option).toHaveAttribute("aria-describedby", "yt-stage4-video-meta-vid-1");
+    expect(document.getElementById("yt-stage4-video-meta-vid-1")).toHaveTextContent(/Visibility: Public .* 9:19 .* Views: 1\.3K .* Comments: 20/);
     const listbox = screen.getByRole("listbox");
     expect(listbox).toHaveClass("xl:grid-cols-5");
     expect(screen.getByTestId("yt-stage4-grid-cols-5")).toHaveAttribute("aria-pressed", "true");

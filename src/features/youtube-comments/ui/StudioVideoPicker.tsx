@@ -92,6 +92,39 @@ function DateKindLabel({ video, publishDate }: {
   return <>{t("youtubeStage4.picker.dateUnset", "Uploaded")}</>;
 }
 
+function VideoOptionDescription({ id, video, exactCounts = false }: {
+  id: string;
+  video: Stage4Video;
+  exactCounts?: boolean;
+}): JSX.Element {
+  const { t, i18n } = useTranslation("automation");
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const publishDate = validPublishDate(video.published_at);
+  const dateText = publishDate ? publishDate.toLocaleDateString(locale) : "\u2014";
+  const dateKind = video.date_kind ?? (publishDate ? "published" : "uploaded");
+  const dateKindText = dateKind === "premiered"
+    ? t("youtubeStage4.picker.datePremiered", "Premiered")
+    : dateKind === "published"
+      ? t("youtubeStage4.picker.datePublished", "Published")
+      : t("youtubeStage4.picker.dateUnset", "Uploaded");
+  const visibilityText = video.visibility === "public"
+    ? t("youtubeStage4.picker.visibilityPublic", "Public")
+    : video.visibility === "unlisted"
+      ? t("youtubeStage4.picker.visibilityUnlisted", "Unlisted")
+      : video.visibility === "private"
+        ? t("youtubeStage4.picker.visibilityPrivate", "Private")
+        : "\u2014";
+  const durationLabel = formatVideoDuration(video.duration_iso);
+  const formatCountValue = exactCounts ? formatExactCount : formatCompactCount;
+  const viewsText = formatCountValue(video.view_count, locale);
+  const commentsText = formatCountValue(video.comment_count, locale);
+  return (
+    <span id={id} className="sr-only">
+      {`${t("youtubeStage4.picker.colVisibility", "Visibility")}: ${visibilityText} \u00b7 ${dateKindText}: ${dateText}${durationLabel ? ` \u00b7 ${durationLabel}` : ""} \u00b7 ${t("youtubeStage4.picker.colViews", "Views")}: ${viewsText} \u00b7 ${t("youtubeStage4.picker.colComments", "Comments")}: ${commentsText}`}
+    </span>
+  );
+}
+
 function VideoDate({ video, withVisibility = false, className = "" }: {
   video: Stage4Video;
   withVisibility?: boolean;
@@ -345,17 +378,20 @@ function VideoRow({ video, selected, onSelect }: {
 }): JSX.Element {
   const { t, i18n } = useTranslation("automation");
   const locale = i18n.resolvedLanguage ?? i18n.language;
+  const descriptionId = `yt-stage4-video-meta-${video.id}`;
   return (
     <button
       type="button"
       role="option"
       aria-selected={selected}
       aria-label={video.title}
+      aria-describedby={descriptionId}
       onClick={() => onSelect(video.id)}
       className={`w-full grid grid-cols-1 ${TABLE_COLUMNS} items-center gap-3 border-s-2 px-4 py-2.5 text-start transition-colors ${
         selected ? "bg-primary/5 border-s-primary" : "border-s-transparent hover:bg-muted/40"
       }`}
     >
+      <VideoOptionDescription id={descriptionId} video={video} exactCounts />
       <VideoSummaryCell video={video} />
       <span className="hidden md:flex items-center gap-1.5 text-xs">
         <VisibilityIcon visibility={video.visibility} />
@@ -386,17 +422,20 @@ function VideoCard({ video, selected, onSelect }: {
 }): JSX.Element {
   const { i18n } = useTranslation("automation");
   const locale = i18n.resolvedLanguage ?? i18n.language;
+  const descriptionId = `yt-stage4-video-meta-${video.id}`;
   return (
     <button
       type="button"
       role="option"
       aria-selected={selected}
       aria-label={video.title}
+      aria-describedby={descriptionId}
       onClick={() => onSelect(video.id)}
       className={`h-full flex flex-col overflow-hidden rounded-lg border bg-card text-start transition-colors ${
         selected ? "border-primary ring-1 ring-primary" : "hover:border-primary/40 hover:bg-muted/20"
       }`}
     >
+      <VideoOptionDescription id={descriptionId} video={video} />
       <Stage4VideoThumbnail
         video={video}
         className="aspect-video w-full rounded-none border-0"
