@@ -222,7 +222,13 @@ export function useYouTubeStage4(params: {
       return {
         account_id: page.account_id,
         next: page.next_cursor,
-        page: page.items.map((v) => ({ key: v.id, id: v.id, title: v.title, published_at: v.published_at })),
+        page: page.items.map((v) => ({
+          key: v.id,
+          id: v.id,
+          title: v.title,
+          published_at: v.published_at ?? null,
+          thumbnail_url: v.thumbnail_url ?? null,
+        })),
       };
     },
   });

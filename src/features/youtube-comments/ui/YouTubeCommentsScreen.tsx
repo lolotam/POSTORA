@@ -20,6 +20,7 @@ import { draftKey, type DraftKind } from "../application/stage4Drafts";
 import { defaultYouTubeCommentsGateway } from "../infrastructure/supabaseYouTubeCommentsGateway";
 import { YouTubeCommentsGateway } from "../application/ports";
 import { isRebindReason, isStaleContextReason } from "../domain/errors";
+import { Stage4VideoThumbnail, StudioVideoPicker } from "./StudioVideoPicker";
 
 /** The translation function shape the reason labels need. */
 type Translate = TFunction<"automation">;
@@ -169,11 +170,8 @@ export function YouTubeCommentsScreen(props: YouTubeCommentsScreenProps): JSX.El
         <p role="status" className="text-xs text-muted-foreground" data-testid="yt-stage4-notice">{notice.text}</p>
       )}
       <RecoveredBanners stage4={stage4} />
-      <VideoPicker stage4={stage4} />
-      <ListTabs stage4={stage4} />
-      {/* Composer drafts, open editors and reply panels live below this key,
-          so they are discarded with the user, account or video they belong to. */}
-      <ThreadList key={contextKey} stage4={stage4} onNotice={noticeForThisContext} />
+      <StudioVideoPicker stage4={stage4} />
+      <CommentsWorkspace stage4={stage4} contextKey={contextKey} onNotice={noticeForThisContext} />
     </div>
   );
 }
@@ -278,51 +276,55 @@ function RecoveredBannerList(props: {
   );
 }
 
-// ---- the video picker -----------------------------------------------------------
+// ---- the comments workspace -------------------------------------------------------
 
-function VideoPicker({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4> }): JSX.Element {
+function ActiveVideoBar({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4> }): JSX.Element | null {
+  const { t } = useTranslation("automation");
+  const activeVideo = stage4.videos.items.find((video) => video.id === stage4.effectiveVideoId);
+  if (!activeVideo) return null;
+  return (
+    <div className="flex min-w-0 items-center gap-3" data-testid="yt-stage4-active-video-bar">
+      <Stage4VideoThumbnail video={activeVideo} className="h-12 w-20" />
+      <div className="min-w-0">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          {t("youtubeStage4.workspace.title", "Video comments")}
+        </p>
+        <p className="truncate text-sm font-semibold">{activeVideo.title}</p>
+      </div>
+    </div>
+  );
+}
+
+function CommentsWorkspace({ stage4, contextKey, onNotice }: {
+  stage4: ReturnType<typeof useYouTubeStage4>;
+  contextKey: string;
+  onNotice: (text: string | null) => void;
+}): JSX.Element {
   const { t } = useTranslation("automation");
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-medium">{t("youtubeStage4.picker.title", "Your uploads")}</p>
-        <Button size="sm" variant="outline" onClick={stage4.videos.reload} disabled={stage4.videos.loading}>
-          {stage4.videos.loading ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
-          {t("common:refresh", "Refresh")}
-        </Button>
-      </div>
-      {stage4.videos.error && (
-        <p className="text-sm text-destructive">{t("youtubeStage4.picker.error", "Couldn't load your uploads.")}</p>
-      )}
-      <div className="flex flex-wrap gap-2" role="listbox" aria-label={t("youtubeStage4.picker.title", "Your uploads")}>
-        {stage4.videos.items.map((video) => (
-          <button
-            key={video.id}
-            type="button"
-            role="option"
-            aria-selected={video.id === stage4.effectiveVideoId}
-            onClick={() => stage4.setSelectedVideoId(video.id)}
-            className={
-              "max-w-[260px] truncate rounded-lg border px-3 py-2 text-start text-sm transition-colors " +
-              (video.id === stage4.effectiveVideoId
-                ? "border-primary bg-primary/10 font-medium"
-                : "border-border hover:border-primary/50")
-            }
-            title={video.title}
+    <section data-testid="yt-stage4-studio-workspace" className="rounded-xl border bg-card shadow-sm overflow-hidden">
+      <div className="space-y-4 border-b px-4 pt-4 sm:px-5">
+        <ActiveVideoBar stage4={stage4} />
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <ListTabs stage4={stage4} />
+          <Button
+            size="sm"
+            variant="outline"
+            className="mb-2"
+            onClick={stage4.threads.reload}
+            disabled={!stage4.effectiveVideoId || stage4.threads.loading}
           >
-            {video.title}
-          </button>
-        ))}
+            {stage4.threads.loading ? <Loader2 className="h-4 w-4 animate-spin me-1.5" /> : <RefreshCw className="h-4 w-4 me-1.5" />}
+            {t("youtubeStage4.list.refresh", "Refresh comments")}
+          </Button>
+        </div>
       </div>
-      {stage4.videos.nextCursor && (
-        <Button size="sm" variant="ghost" onClick={stage4.videos.loadMore} disabled={stage4.videos.loading}>
-          {t("youtubeStage4.picker.loadMore", "Load more uploads")}
-        </Button>
-      )}
-      {stage4.videos.items.length === 0 && !stage4.videos.loading && (
-        <p className="text-sm text-muted-foreground">{t("youtubeStage4.picker.empty", "No uploads found for this channel.")}</p>
-      )}
-    </div>
+      <div className="p-4 sm:p-5">
+        {/* Composer drafts, open editors and reply panels live below this key,
+            so they are discarded with the user, account or video they belong to. */}
+        <ThreadList key={contextKey} stage4={stage4} onNotice={onNotice} />
+      </div>
+    </section>
   );
 }
 
@@ -331,13 +333,13 @@ function VideoPicker({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4> }
 function ListTabs({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4> }): JSX.Element {
   const { t } = useTranslation("automation");
   return (
-    <div role="tablist" aria-label={t("youtubeStage4.lists.aria", "Comment lists")} className="flex gap-2">
+    <div role="tablist" aria-label={t("youtubeStage4.lists.aria", "Comment lists")} className="flex gap-5">
       <button
         type="button"
         role="tab"
         aria-selected={stage4.listMode === "published"}
         onClick={() => stage4.setListMode("published")}
-        className={"rounded-lg border px-3 py-1.5 text-sm " + (stage4.listMode === "published" ? "border-primary bg-primary/10 font-medium" : "border-border")}
+        className={"-mb-px border-b-2 px-1 pb-2.5 pt-1 text-sm transition-colors " + (stage4.listMode === "published" ? "border-primary text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground")}
       >
         {t("youtubeStage4.lists.published", "Published")}
       </button>
@@ -347,7 +349,7 @@ function ListTabs({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4> }): 
           role="tab"
           aria-selected={stage4.listMode === "heldForReview"}
           onClick={() => stage4.setListMode("heldForReview")}
-          className={"rounded-lg border px-3 py-1.5 text-sm " + (stage4.listMode === "heldForReview" ? "border-primary bg-primary/10 font-medium" : "border-border")}
+          className={"-mb-px border-b-2 px-1 pb-2.5 pt-1 text-sm transition-colors " + (stage4.listMode === "heldForReview" ? "border-primary text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground")}
         >
           {t("youtubeStage4.lists.held", "Held for review")}
         </button>
@@ -365,14 +367,7 @@ function ThreadList({ stage4, onNotice }: { stage4: ReturnType<typeof useYouTube
   if (!videoId) return <></>;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-end">
-        <Button size="sm" variant="outline" onClick={stage4.threads.reload} disabled={stage4.threads.loading}>
-          {stage4.threads.loading ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
-          {t("youtubeStage4.list.refresh", "Refresh comments")}
-        </Button>
-      </div>
-
+    <div className="space-y-5">
       {stage4.canWrite && <TopLevelComposer stage4={stage4} videoId={videoId} onNotice={onNotice} />}
 
       {stage4.threads.error && (
@@ -478,10 +473,10 @@ function CommentCard(params: {
   const showReject = canModerate;
 
   return (
-    <Card className="p-0">
-      <CardContent className="p-4 space-y-2">
+    <Card className={reply ? "border-0 bg-muted/20 shadow-none" : "border-border/80 shadow-sm"}>
+      <CardContent className={reply ? "p-4 space-y-2.5" : "p-4 space-y-3"}>
         <div className="flex items-start gap-3">
-          <Avatar className="h-8 w-8">
+          <Avatar className="h-9 w-9 ring-1 ring-border/50">
             <AvatarImage src={row.author_avatar_url ?? ""} />
             <AvatarFallback>{row.author_name.slice(0, 1).toUpperCase()}</AvatarFallback>
           </Avatar>
@@ -507,7 +502,7 @@ function CommentCard(params: {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-1 sm:ms-12">
           {stage4.canWrite && composer === "none" && (
             <Button size="sm" variant="outline" onClick={() => openComposer("reply")}>
               {t("youtubeStage4.actions.reply", "Reply")}
@@ -697,7 +692,7 @@ function ReplyBlock(params: {
     );
   }
   return (
-    <div className="space-y-2 ms-6 border-s ps-3" data-testid="yt-stage4-replies">
+    <div className="space-y-2.5 ms-6 sm:ms-11 border-s-2 border-border/70 ps-3.5" data-testid="yt-stage4-replies">
       {heldHiddenNotice}
       {waitingDrafts.length > 0 && (
         <p className="text-xs text-muted-foreground" data-testid="yt-stage4-draft-waiting">
@@ -883,12 +878,12 @@ function Composer(params: {
   };
 
   return (
-    <div className="space-y-2 rounded-lg border p-3" data-testid="yt-stage4-composer">
+    <div className="space-y-2.5 rounded-xl border bg-muted/20 p-3.5" data-testid="yt-stage4-composer">
       <label className="sr-only" htmlFor={inputId}>{params.placeholder}</label>
       <textarea
         id={inputId}
         ref={inputRef}
-        className="w-full min-h-[70px] rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+        className="w-full min-h-[76px] resize-y rounded-lg border bg-background px-3 py-2.5 text-sm outline-none transition-shadow focus:ring-2 focus:ring-ring"
         placeholder={params.placeholder}
         value={text}
         onChange={(event) => {

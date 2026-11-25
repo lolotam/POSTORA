@@ -462,7 +462,28 @@
       "title": "الفيديوهات التي رفعتها",
       "error": "تعذّر تحميل فيديوهاتك.",
       "loadMore": "تحميل المزيد من الفيديوهات",
-      "empty": "لا توجد فيديوهات مرفوعة لهذه القناة."
+      "empty": "لا توجد فيديوهات مرفوعة لهذه القناة.",
+      "loadedCount": "تم تحميل {{count}}",
+      "filterAll": "الكل",
+      "filterVideos": "فيديوهات",
+      "filterShorts": "فيديوهات قصيرة",
+      "filterPlaceholder": "ابحث في الفيديوهات...",
+      "filterAria": "تصفية الفيديوهات",
+      "colVideo": "الفيديو",
+      "colType": "النوع",
+      "colDate": "التاريخ",
+      "colComments": "التعليقات",
+      "typeShorts": "فيديو قصير",
+      "typeVideo": "فيديو",
+      "datePublished": "منشور",
+      "dateUnset": "مرفوع",
+      "activeVideo": "محدّد",
+      "selectComments": "عرض",
+      "noMatch": "لا توجد فيديوهات تطابق عوامل التصفية هذه.",
+      "resetFilters": "إعادة ضبط عوامل التصفية"
+    },
+    "workspace": {
+      "title": "تعليقات الفيديو"
     },
     "lists": {
       "aria": "قوائم التعليقات",

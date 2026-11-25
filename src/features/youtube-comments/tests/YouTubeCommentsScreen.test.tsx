@@ -68,7 +68,7 @@ function receipt(overrides: Partial<Stage4ReceiptPayload> = {}): Stage4ReceiptPa
 
 interface GatewayScript {
   caps?: Stage4CapabilitiesPayload;
-  videos?: Array<{ id: string; title: string }>;
+  videos?: Array<{ id: string; title: string; published_at?: string | null; thumbnail_url?: string | null }>;
   threads?: Stage4CommentRow[];
   threadError?: string;
   replies?: Stage4CommentRow[];
@@ -97,7 +97,10 @@ function makeGateway(script: GatewayScript) {
       account_id: ACCOUNT,
       channel_id: "UC-x",
       items: (script.videos ?? [{ id: "vid-1", title: "First upload", published_at: null, thumbnail_url: null }]).map((v) => ({
-        id: v.id, title: v.title, published_at: null, thumbnail_url: null,
+        id: v.id,
+        title: v.title,
+        published_at: v.published_at ?? null,
+        thumbnail_url: v.thumbnail_url ?? null,
       })),
       next_cursor: null,
     })),
@@ -209,11 +212,61 @@ beforeEach(() => {
 describe("YouTubeCommentsScreen", () => {
   it("renders the picker and the Published list with the Held tab on", async () => {
     renderScreen({ threads: [row()] });
-    expect(await screen.findByText("First upload")).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "First upload" })).toBeInTheDocument();
     expect(await screen.findByText("a top-level comment")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Held for review" })).toBeInTheDocument();
   });
 
+  it("renders Studio thumbnails, publish dates, and the active video context", async () => {
+    const publishedAt = "2026-01-02T00:00:00Z";
+    const thumbnailUrl = "https://img.youtube.com/vi/vid-1/hqdefault.jpg";
+    renderScreen({
+      videos: [{ id: "vid-1", title: "Studio upload", published_at: publishedAt, thumbnail_url: thumbnailUrl }],
+      threads: [row()],
+    });
+    await screen.findByText("a top-level comment");
+    const option = screen.getByRole("option", { name: "Studio upload" });
+    expect(option.querySelector("img")).toHaveAttribute("src", thumbnailUrl);
+    expect(option).toHaveTextContent(new Date(publishedAt).toLocaleDateString());
+    expect(option).toHaveTextContent("Published");
+    const activeVideoBar = screen.getByTestId("yt-stage4-active-video-bar");
+    expect(activeVideoBar).toHaveTextContent("Studio upload");
+    expect(activeVideoBar.querySelector("img")).toHaveAttribute("src", thumbnailUrl);
+  });
+
+  it("filters and searches uploads without losing option selection", async () => {
+    renderScreen({
+      videos: [
+        { id: "vid-1", title: "Daily upload" },
+        { id: "vid-2", title: "Cooking #Shorts" },
+        { id: "vid-3", title: "Studio tutorial" },
+        { id: "vid-4", title: "Board shorts haul" },
+      ],
+      threads: [row()],
+    });
+    await screen.findByRole("option", { name: "Daily upload" });
+    const search = screen.getByTestId("yt-stage4-video-search");
+    fireEvent.change(search, { target: { value: "tutorial" } });
+    expect(screen.getByRole("option", { name: "Studio tutorial" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Daily upload" })).not.toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("yt-stage4-video-filter-shorts"));
+    const shortsOption = screen.getByRole("option", { name: "Cooking #Shorts" });
+    expect(screen.queryByRole("option", { name: "Daily upload" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Board shorts haul" })).not.toBeInTheDocument();
+    fireEvent.click(shortsOption);
+    await waitFor(() => expect(shortsOption).toHaveAttribute("aria-selected", "true"));
+    fireEvent.change(search, { target: { value: "no matching upload" } });
+    expect(screen.getByTestId("yt-stage4-picker-no-match")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
+    expect(screen.getByRole("option", { name: "Cooking #Shorts" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByTestId("yt-stage4-video-filter-videos"));
+    expect(screen.getByRole("option", { name: "Daily upload" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Board shorts haul" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Cooking #Shorts" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("yt-stage4-video-filter-all"));
+    expect(screen.getByRole("option", { name: "Cooking #Shorts" })).toBeInTheDocument();
+  });
   it("hides the Held tab when the held capability is off", async () => {
     renderScreen({ caps: capabilities({ held: false }), threads: [row()] });
     await screen.findByText("a top-level comment");
