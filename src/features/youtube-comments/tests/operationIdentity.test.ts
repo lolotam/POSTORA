@@ -132,8 +132,12 @@ describe("durable operation identity", () => {
     try {
       savePendingOperation(USER, second);
       expect(listPendingOperations(USER, ACCOUNT)).toEqual([first, second]);
+      sessionStorage.clear();
+      expect(listPendingOperations(USER, ACCOUNT)).toEqual([first, second]);
       clearPendingOperation(USER, first.operationId);
       expect(listPendingOperations(USER, ACCOUNT)).toEqual([second]);
+      clearPendingOperation(USER, second.operationId);
+      expect(listPendingOperations(USER, ACCOUNT)).toEqual([]);
     } finally {
       Storage.prototype.setItem = nativeSetItem;
     }

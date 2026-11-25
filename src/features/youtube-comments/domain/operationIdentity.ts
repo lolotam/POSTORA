@@ -30,17 +30,12 @@ const PREFIX = "postora:yt-stage4:ops";
 const inMemoryByUser = new Map<string, Map<string, PendingStage4Operation>>();
 const unsyncedUsers = new Set<string>();
 
-if (typeof Storage !== "undefined" && typeof Storage.prototype?.clear === "function") {
-  const nativeClear = Storage.prototype.clear;
-  Storage.prototype.clear = function clearWithStage4Memory(this: Storage): void {
-    inMemoryByUser.clear();
-    unsyncedUsers.clear();
-    return nativeClear.call(this);
-  };
-}
-
 function storageKey(userId: string): string {
   return `${PREFIX}:${userId}`;
+}
+
+function unsyncedKey(userId: string): string {
+  return `${PREFIX}:unsynced:${userId}`;
 }
 
 function safeStorage(): Storage | null {
@@ -85,9 +80,18 @@ function validOperations(parsed: unknown): PendingStage4Operation[] {
 }
 
 function readAll(userId: string): PendingStage4Operation[] {
-  if (unsyncedUsers.has(userId)) return memoryOperations(userId);
   const storage = safeStorage();
   if (!storage) return memoryOperations(userId);
+  if (unsyncedUsers.has(userId)) {
+    try {
+      if (storage.getItem(unsyncedKey(userId)) === "1") {
+        return memoryOperations(userId);
+      }
+    } catch {
+      return memoryOperations(userId);
+    }
+    unsyncedUsers.delete(userId);
+  }
   let raw: string | null;
   try {
     raw = storage.getItem(storageKey(userId));
@@ -111,17 +115,26 @@ function writeAll(userId: string, ops: PendingStage4Operation[]): void {
   replaceMemory(userId, ops);
   const storage = safeStorage();
   if (!storage) {
-    if (ops.length > 0) unsyncedUsers.add(userId);
-    else unsyncedUsers.delete(userId);
+    unsyncedUsers.add(userId);
     return;
   }
   try {
     storage.setItem(storageKey(userId), JSON.stringify(memoryOperations(userId)));
     unsyncedUsers.delete(userId);
+    try {
+      storage.removeItem(unsyncedKey(userId));
+    } catch {
+      // Ignore marker cleanup failure after the authoritative list write succeeded.
+    }
   } catch {
-    // A full or blocked storage never blocks the submit itself; memory stays authoritative.
-    if (ops.length > 0) unsyncedUsers.add(userId);
-    else unsyncedUsers.delete(userId);
+    // A full or blocked storage never blocks the submit itself; memory stays authoritative,
+    // including when the new list is empty so stale stored entries cannot reappear.
+    unsyncedUsers.add(userId);
+    try {
+      storage.setItem(unsyncedKey(userId), "1");
+    } catch {
+      // Storage is completely unwritable; safeStorage() will return null while blocked.
+    }
   }
 }
 

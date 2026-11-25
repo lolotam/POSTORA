@@ -55,6 +55,7 @@ import { STAGE4_HOLD_FROM_PUBLISHED } from "./contractTypes.ts";
 import {
   stage4RateLimit,
   STAGE4_RATE_LIMITS,
+  isAnonymousSlotBusy,
   resetAnonymousSlots,
   runInAnonymousSlot,
 } from "./rateLimit.ts";
@@ -188,7 +189,14 @@ async function refusal(
       // suppression pays for a counter only after the bucket actually refused;
       // a busy admitted audit insert may flush its tally while it stays open.
       const now = deps.monotonicNow();
-      if ((cause === "bucket" && now >= anonBucketClosedUntil) || now < anonCounterNextAt) return false;
+      if (
+        (cause === "bucket" && now >= anonBucketClosedUntil)
+        || now < anonCounterNextAt
+        || isAnonymousSlotBusy("counter_probe")
+        || isAnonymousSlotBusy("counter_insert")
+      ) {
+        return false;
+      }
       anonCounterNextAt = now + ANON_COUNTER_INTERVAL_MS;
       // The counter probe holds a slot of its own: while one is running this
       // worker starts no second one, and the request waits at most the bound

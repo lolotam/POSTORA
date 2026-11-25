@@ -91,6 +91,11 @@ export function resetAnonymousSlots(): void {
   anonymousSlots.clear();
 }
 
+/** Whether a slot currently has an in-flight call. */
+export function isAnonymousSlotBusy(name: AnonymousSlotName): boolean {
+  return anonymousSlots.has(name);
+}
+
 /**
  * How one anonymous call ended, as far as the request that started it can tell.
  *   busy     another call holds the slot: nothing was started
