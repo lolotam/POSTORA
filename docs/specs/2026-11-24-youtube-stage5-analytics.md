@@ -362,7 +362,7 @@ One new function, `supabase/functions/youtube-analytics/`. It is not added to `y
 | Operation | Input | Success |
 |---|---|---|
 | `status` | `account_id` | Availability or one reason; `connection_revision`; `reporting_end_date`; `consent` state and the current purpose version; periods and limits. No provider call. |
-| `consent_accept` | `account_id`, `purpose_version`, `locale` | Records an acceptance (§7.3). No provider call, no credential read. |
+| `consent_accept` | `account_id`, `purpose_version`, `locale`, `connection_revision` (forwarded as `p_expected_revision`) | Records an acceptance bound to the displayed connection revision (§7.3). On `connection_changed`, the panel reloads and asks again. No provider call, no credential read. |
 | `consent_withdraw` | `account_id` | Records a withdrawal (§7.3). No provider call, no credential read. |
 | `summary` | `account_id`, `period_days` (7, 14, 30, 90), `window_end`, optional `video_id` | One value per metric. |
 | `daily` | same | One row per day Google returned, four metrics, plus observed coverage (§5.8). |
@@ -689,7 +689,7 @@ A part is `ok` only if all four are `ok`. Each is classified from the fixed list
 | `id uuid` primary key | |
 | `owner_id uuid NOT NULL` → `auth.users` ON DELETE CASCADE | Who accepted or withdrew. From the JWT, never from the request body. |
 | `channel_id text NOT NULL` | The YouTube channel, copied from the owned account row by the server. |
-| `social_account_id uuid` → `social_accounts(id)` ON DELETE SET NULL | The connection it was given under; for reference only. |
+| `social_account_id uuid` | The connection it was given under; immutable historical reference without a foreign key, so deleting or recreating the account row never mutates historical consent events. |
 | `event text NOT NULL` | `accepted` or `withdrawn`. |
 | `purpose_version integer NOT NULL` | Which version of the purpose text was on screen. |
 | `locale text NOT NULL` | `en` or `ar`: the language it was shown in. |
@@ -703,7 +703,7 @@ A part is `ok` only if all four are `ok`. Each is classified from the fixed list
 - **Row security:** enabled, **no policies**; `REVOKE ALL` from `PUBLIC`, `anon`, `authenticated` and `service_role`. Nothing reads or writes the table except two `SECURITY DEFINER` functions with a pinned `search_path`, executable by the service role only: `decide` reads it, `record_consent` inserts into it. No function updates or deletes a row.
 - **Retention:** for the life of the user account. Rows are removed only when the user is deleted (the cascade). A withdrawal does not delete the earlier acceptance; it is itself a row. There is no clean-up job; the volume is a few rows per channel.
 
-**`youtube_analytics_stage5_record_consent(p_owner, p_account, p_event, p_purpose_version, p_locale, p_request_id)`** is one statement, `INSERT … SELECT` from the owner-filtered account row joined to the rollout setting:
+**`youtube_analytics_stage5_record_consent(p_owner_id, p_account_id, p_event, p_purpose_version, p_locale, p_request_id, p_expected_revision DEFAULT NULL)`** locks the owner row in `auth.users` (`FOR KEY SHARE`) and the owner-filtered account row (`FOR UPDATE`), takes a transaction-scoped advisory lock on `(p_owner_id, channel_id)` to serialize concurrent transitions for the same owner and channel, verifies `p_expected_revision` (supplied by `consent_accept` from the panel's `connection_revision`, answering `connection_changed` on mismatch so the panel reloads and asks again) against the current `connection_revision`, reads the latest event under that lock, and inserts the new event with a strictly increasing timestamp:
 
 - `accepted` requires an owned, active, native YouTube account that the rollout policy admits. Otherwise `not_found`, `provider_unsupported` or `not_enabled`, and nothing is inserted: Postora does not collect acceptances for a feature it is not offering.
 - `withdrawn` requires only an owned YouTube account row, active or not, so an owner can always withdraw.

@@ -7667,6 +7667,7 @@ export type Database = {
           alerts_snoozed: boolean | null
           auth_provider: string
           avatar_url: string | null
+          binding_incarnation: string | null
           connected_at: string | null
           connection_id: string | null
           connection_mode: string | null
@@ -7694,6 +7695,7 @@ export type Database = {
           alerts_snoozed?: boolean | null
           auth_provider?: string
           avatar_url?: string | null
+          binding_incarnation?: string | null
           connected_at?: string | null
           connection_id?: string | null
           connection_mode?: string | null
@@ -7721,6 +7723,7 @@ export type Database = {
           alerts_snoozed?: boolean | null
           auth_provider?: string
           avatar_url?: string | null
+          binding_incarnation?: string | null
           connected_at?: string | null
           connection_id?: string | null
           connection_mode?: string | null
@@ -7756,6 +7759,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      youtube_analytics_purpose_consents: {
+        Row: {
+          channel_id: string
+          created_at: string
+          event: string
+          id: string
+          locale: string
+          method: string
+          owner_id: string
+          purpose_version: number
+          request_id: string
+          social_account_id: string | null
+        }
+        Insert: {
+          channel_id: string
+          created_at?: string
+          event: string
+          id?: string
+          locale: string
+          method?: string
+          owner_id: string
+          purpose_version: number
+          request_id: string
+          social_account_id?: string | null
+        }
+        Update: {
+          channel_id?: string
+          created_at?: string
+          event?: string
+          id?: string
+          locale?: string
+          method?: string
+          owner_id?: string
+          purpose_version?: number
+          request_id?: string
+          social_account_id?: string | null
+        }
+        Relationships: []
       }
       instagram_account_capabilities: {
         Row: {
@@ -14162,6 +14204,58 @@ export type Database = {
       write_ai_health_catalog: {
         Args: { p_holder: string; p_rows: Json; p_stamp_key: string; p_at: string }
         Returns: undefined
+      }
+      youtube_analytics_stage5_decide: {
+        Args: {
+          p_owner_id: string
+          p_account_id: string
+          p_expected_channel?: string | null
+          p_expected_generation?: number | null
+          p_expected_incarnation?: string | null
+          p_required_scopes?: string[]
+          p_purpose_version?: number
+          p_with_credentials?: boolean
+        }
+        Returns: Json
+      }
+      youtube_analytics_stage5_record_consent: {
+        Args: {
+          p_owner_id: string
+          p_account_id: string
+          p_event: string
+          p_purpose_version: number
+          p_locale: string
+          p_request_id: string
+          p_expected_revision?: string | null
+        }
+        Returns: Json
+      }
+      youtube_analytics_stage5_acquire_lease: {
+        Args: {
+          p_owner_id: string
+          p_account_id: string
+          p_expected_channel: string
+          p_expected_generation: number
+          p_expected_incarnation: string
+          p_required_scopes: string[]
+          p_purpose_version: number
+          p_ttl_seconds?: number
+        }
+        Returns: Json
+      }
+      youtube_analytics_stage5_store_token: {
+        Args: {
+          p_owner_id: string
+          p_account_id: string
+          p_expected_channel: string
+          p_expected_generation: number
+          p_expected_incarnation: string
+          p_lease_token: string
+          p_new_access_token: string
+          p_new_token_expires_at: string
+          p_new_refresh_token?: string | null
+        }
+        Returns: Json
       }
       mark_ai_provider_health_notified: {
         Args: {
