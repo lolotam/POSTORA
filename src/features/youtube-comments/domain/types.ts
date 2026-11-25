@@ -9,6 +9,8 @@ export type {
   Stage4Capability,
   Stage4CapabilitiesPayload,
   Stage4VideoRow,
+  Stage4VideoVisibility,
+  Stage4VideoDateKind,
   Stage4VideoPagePayload,
   Stage4CommentRow,
   Stage4ThreadPagePayload,

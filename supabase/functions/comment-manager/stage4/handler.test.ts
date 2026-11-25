@@ -113,6 +113,15 @@ interface AnswerItem {
   thread_id: string;
   video_id: string;
   canonical_parent_id: string;
+  published_at?: string | null;
+  thumbnail_url?: string | null;
+  description?: string | null;
+  visibility?: string | null;
+  date_kind?: string | null;
+  duration_iso?: string | null;
+  view_count?: number | null;
+  comment_count?: number | null;
+  is_short?: boolean | null;
 }
 
 /** The parsed JSON answer of the handler: the envelope and the payload fields the tests read. */
@@ -753,6 +762,113 @@ Deno.test("a video page lists uploads including ones with zero threads", async (
   assertEquals(body.data.items[0].id, "vid-empty");
   assertEquals(body.data.items[0].title, "No comments yet");
   assertEquals(body.data.next_cursor, null);
+});
+
+Deno.test("a video page enriches uploads with Studio metadata from videos.list", async () => {
+  const world = createWorld({
+    provider: (call) => {
+      if (call.path === "playlistItems") {
+        return {
+          status: 200,
+          body: {
+            items: [{
+              snippet: {
+                ...playlistItem("vid-studio", "Playlist title").snippet,
+                description: "Playlist description",
+                thumbnails: { default: { url: "https://img.example/default.jpg" } },
+              },
+              contentDetails: { videoPublishedAt: "2026-01-03T00:00:00Z" },
+              status: { privacyStatus: "public" },
+            }],
+          },
+        };
+      }
+      if (call.path === "videos") {
+        return {
+          status: 200,
+          body: {
+            items: [{
+              id: "vid-studio",
+              snippet: {
+                channelId: "UC-handler-test",
+                title: "Studio premiere #Shorts",
+                publishedAt: "2026-01-04T00:00:00Z",
+                description: "Premiere description",
+                thumbnails: {
+                  medium: { url: "https://img.example/medium.jpg" },
+                  high: { url: "https://img.example/high.jpg" },
+                },
+              },
+              contentDetails: { duration: "PT9M19S" },
+              status: { privacyStatus: "public" },
+              statistics: { viewCount: "1300", commentCount: "20" },
+              liveStreamingDetails: { actualStartTime: "2026-01-04T01:00:00Z" },
+            }],
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  const res = await world.calls("youtube_video_page");
+  const body = await jsonOf(res);
+  assertEquals(res.status, 200);
+  const video = body.data.items[0];
+  assertEquals(video.id, "vid-studio");
+  assertEquals(video.title, "Studio premiere #Shorts");
+  assertEquals(video.published_at, "2026-01-04T00:00:00Z");
+  assertEquals(video.thumbnail_url, "https://img.example/medium.jpg");
+  assertEquals(video.description, "Premiere description");
+  assertEquals(video.visibility, "public");
+  assertEquals(video.date_kind, "published", "a broadcast start time alone uses the published-date fallback, not premiered");
+  assertEquals(video.duration_iso, "PT9M19S");
+  assertEquals(video.view_count, 1300);
+  assertEquals(video.comment_count, 20);
+  assertEquals(video.is_short, true);
+});
+
+Deno.test("a videos.list failure or malformed response leaves the base video page successful", async () => {
+  for (const answer of [
+    { status: 500, body: null },
+    { status: 200, body: { items: "malformed" } },
+    { status: 200, body: { items: [null] } },
+  ]) {
+    const world = createWorld({
+      provider: (call) => call.path === "videos" ? answer : undefined,
+    });
+    const res = await world.calls("youtube_video_page");
+    const body = await jsonOf(res);
+    assertEquals(res.status, 200);
+    assertEquals(body.data.items[0].id, "vid-1");
+    assertEquals(body.data.items[0].title, "First upload");
+    assertEquals(body.data.items[0].published_at, "2026-01-01T00:00:00Z");
+    assertEquals(body.data.items[0].duration_iso, null);
+    assertEquals(body.data.items[0].view_count, null);
+    assertEquals(body.data.items[0].comment_count, null);
+  }
+});
+
+Deno.test("videos.list metadata from another channel never changes an upload row", async () => {
+  const world = createWorld({
+    provider: (call) => {
+      if (call.path !== "videos") return undefined;
+      return {
+        status: 200,
+        body: {
+          items: [{
+            id: "vid-1",
+            snippet: { channelId: "UC-someone-else", title: "Foreign title" },
+            statistics: { viewCount: "999999" },
+          }],
+        },
+      };
+    },
+  });
+  const res = await world.calls("youtube_video_page");
+  const body = await jsonOf(res);
+  assertEquals(res.status, 200);
+  assertEquals(body.data.items[0].title, "First upload");
+  assertEquals(body.data.items[0].view_count, null);
 });
 
 Deno.test("thread pages keep thread and top-level ids apart and seal handles", async () => {

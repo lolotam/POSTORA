@@ -20,6 +20,7 @@ import { draftKey, type DraftKind } from "../application/stage4Drafts";
 import { defaultYouTubeCommentsGateway } from "../infrastructure/supabaseYouTubeCommentsGateway";
 import { YouTubeCommentsGateway } from "../application/ports";
 import { isRebindReason, isStaleContextReason } from "../domain/errors";
+import { formatVideoDuration } from "../domain/formatVideoMeta";
 import { Stage4VideoThumbnail, StudioVideoPicker } from "./StudioVideoPicker";
 
 /** The translation function shape the reason labels need. */
@@ -294,7 +295,11 @@ function ActiveVideoBar({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4
   if (!activeVideo) return null;
   return (
     <div className="flex min-w-0 items-center gap-3" data-testid="yt-stage4-active-video-bar">
-      <Stage4VideoThumbnail video={activeVideo} className="h-12 w-20" />
+      <Stage4VideoThumbnail
+        video={activeVideo}
+        className="h-12 w-20"
+        durationLabel={formatVideoDuration(activeVideo.duration_iso)}
+      />
       <div className="min-w-0">
         <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           {t("youtubeStage4.workspace.title", "Video comments")}

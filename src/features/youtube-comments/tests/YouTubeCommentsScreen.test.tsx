@@ -9,6 +9,7 @@ import type {
   Stage4CommentRow,
   Stage4OperationStatusPayload,
   Stage4ReceiptPayload,
+  Stage4VideoRow,
 } from "../domain/types";
 import { YouTubeCommentsError } from "../domain/errors";
 
@@ -69,7 +70,7 @@ function receipt(overrides: Partial<Stage4ReceiptPayload> = {}): Stage4ReceiptPa
 
 interface GatewayScript {
   caps?: Stage4CapabilitiesPayload;
-  videos?: Array<{ id: string; title: string; published_at?: string | null; thumbnail_url?: string | null }>;
+  videos?: Array<Pick<Stage4VideoRow, "id" | "title"> & Partial<Stage4VideoRow>>;
   threads?: Stage4CommentRow[];
   threadError?: string;
   replies?: Stage4CommentRow[];
@@ -102,6 +103,13 @@ function makeGateway(script: GatewayScript) {
         title: v.title,
         published_at: v.published_at ?? null,
         thumbnail_url: v.thumbnail_url ?? null,
+        description: v.description ?? null,
+        visibility: v.visibility ?? null,
+        date_kind: v.date_kind ?? null,
+        duration_iso: v.duration_iso ?? null,
+        view_count: v.view_count ?? null,
+        comment_count: v.comment_count ?? null,
+        is_short: v.is_short ?? null,
       })),
       next_cursor: null,
     })),
@@ -233,6 +241,151 @@ describe("YouTubeCommentsScreen", () => {
     const activeVideoBar = screen.getByTestId("yt-stage4-active-video-bar");
     expect(activeVideoBar).toHaveTextContent("Studio upload");
     expect(activeVideoBar.querySelector("img")).toHaveAttribute("src", thumbnailUrl);
+  });
+
+  it("defaults to a five-column Studio grid with duration and compact metadata, and switches column counts", async () => {
+    renderScreen({
+      videos: [{
+        id: "vid-1",
+        title: "Studio short",
+        published_at: "2026-01-02T00:00:00Z",
+        thumbnail_url: "https://img.youtube.com/vi/vid-1/mqdefault.jpg",
+        visibility: "public",
+        date_kind: "published",
+        duration_iso: "PT9M19S",
+        view_count: 1300,
+        comment_count: 20,
+        is_short: true,
+      }],
+      threads: [row()],
+    });
+    const option = await screen.findByRole("option", { name: "Studio short" });
+    expect(option).toHaveAttribute("aria-describedby", "yt-stage4-video-meta-vid-1");
+    expect(document.getElementById("yt-stage4-video-meta-vid-1")).toHaveTextContent(/Visibility: Public .* 9:19 .* Views: 1\.3K .* Comments: 20/);
+    const listbox = screen.getByRole("listbox");
+    expect(listbox).toHaveClass("xl:grid-cols-5");
+    expect(screen.getByTestId("yt-stage4-grid-cols-5")).toHaveAttribute("aria-pressed", "true");
+    expect(within(option).getByText("9:19")).toBeInTheDocument();
+    expect(within(option).getByText("1.3K")).toBeInTheDocument();
+    expect(within(option).getByText("20")).toBeInTheDocument();
+    expect(within(option).getByText("Shorts")).toBeInTheDocument();
+    expect(screen.getByTestId("yt-stage4-active-video-bar")).toHaveTextContent("9:19");
+
+    fireEvent.click(screen.getByTestId("yt-stage4-grid-cols-4"));
+    expect(listbox).toHaveClass("lg:grid-cols-4");
+    expect(listbox).not.toHaveClass("xl:grid-cols-5");
+    expect(screen.getByTestId("yt-stage4-grid-cols-4")).toHaveAttribute("aria-pressed", "true");
+    expect(localStorage.getItem("ytStage4VideoGridColumns")).toBe("4");
+
+    fireEvent.click(screen.getByTestId("yt-stage4-grid-cols-6"));
+    expect(listbox).toHaveClass("xl:grid-cols-6");
+    expect(screen.getByTestId("yt-stage4-grid-cols-6")).toHaveAttribute("aria-pressed", "true");
+    expect(localStorage.getItem("ytStage4VideoGridColumns")).toBe("6");
+  });
+
+  it("switches from View all to the full Studio table and back to Grid view", async () => {
+    renderScreen({
+      videos: [
+        {
+          id: "vid-public",
+          title: "Public upload",
+          description: "A detailed Studio description",
+          published_at: "2026-01-02T00:00:00Z",
+          visibility: "public",
+          date_kind: "published",
+          duration_iso: "PT3M39S",
+          view_count: 1300,
+          comment_count: 20,
+        },
+        {
+          id: "vid-unlisted",
+          title: "Unlisted upload",
+          published_at: "2026-01-03T00:00:00Z",
+          visibility: "unlisted",
+          date_kind: "uploaded",
+        },
+        {
+          id: "vid-private",
+          title: "Private premiere",
+          published_at: "2026-01-04T00:00:00Z",
+          visibility: "private",
+          date_kind: "premiered",
+          view_count: 0,
+          comment_count: 1,
+        },
+        { id: "vid-missing", title: "Missing metadata" },
+      ],
+      threads: [row()],
+    });
+    await screen.findByRole("option", { name: "Public upload" });
+    fireEvent.click(screen.getByTestId("yt-stage4-view-all"));
+
+    expect(screen.getByTestId("yt-stage4-view-table")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("yt-stage4-table-columns")).toHaveTextContent("Video");
+    expect(screen.getByTestId("yt-stage4-table-columns")).toHaveTextContent("Visibility");
+    expect(screen.getByTestId("yt-stage4-table-columns")).toHaveTextContent("Date");
+    expect(screen.getByTestId("yt-stage4-table-columns")).toHaveTextContent("Views");
+    expect(screen.getByTestId("yt-stage4-table-columns")).toHaveTextContent("Comments");
+
+    const publicRow = screen.getByRole("option", { name: "Public upload" });
+    expect(within(publicRow).getAllByText("Public").length).toBeGreaterThan(0);
+    expect(within(publicRow).getAllByText("Published").length).toBeGreaterThan(0);
+    expect(within(publicRow).getByText("A detailed Studio description")).toBeInTheDocument();
+    expect(within(publicRow).getByText("3:39")).toBeInTheDocument();
+    expect(within(publicRow).getByText("1,300")).toBeInTheDocument();
+    expect(within(publicRow).getAllByText("20").length).toBeGreaterThan(0);
+    expect(within(publicRow).getByText("Selected")).toBeInTheDocument();
+
+    const unlistedRow = screen.getByRole("option", { name: "Unlisted upload" });
+    expect(within(unlistedRow).getAllByText("Unlisted").length).toBeGreaterThan(0);
+    expect(within(unlistedRow).getAllByText("Uploaded").length).toBeGreaterThan(0);
+    expect(within(unlistedRow).getAllByText("\u2014").length).toBeGreaterThanOrEqual(2);
+
+    const privateRow = screen.getByRole("option", { name: "Private premiere" });
+    expect(within(privateRow).getAllByText("Private").length).toBeGreaterThan(0);
+    expect(within(privateRow).getAllByText("Premiered").length).toBeGreaterThan(0);
+    expect(within(privateRow).getAllByText("0").length).toBeGreaterThan(0);
+    expect(within(privateRow).getAllByText("1").length).toBeGreaterThan(0);
+
+    const missingRow = screen.getByRole("option", { name: "Missing metadata" });
+    expect(within(missingRow).getByText("vid-missing")).toBeInTheDocument();
+    expect(within(missingRow).getAllByText("\u2014").length).toBeGreaterThanOrEqual(4);
+
+    fireEvent.click(screen.getByTestId("yt-stage4-view-grid"));
+    expect(screen.getByTestId("yt-stage4-view-grid")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("yt-stage4-table-columns")).not.toBeInTheDocument();
+    expect(screen.getByRole("listbox")).toHaveClass("xl:grid-cols-5");
+  });
+
+  it("localizes the new grid, table, column, and visibility labels in Arabic", async () => {
+    try {
+      await act(async () => {
+        await i18n.changeLanguage("ar");
+      });
+      renderScreen({
+        videos: [{
+          id: "vid-1",
+          title: "فيديو الاختبار",
+          published_at: "2026-01-02T00:00:00Z",
+          visibility: "public",
+          date_kind: "published",
+        }],
+        threads: [row()],
+      });
+      await screen.findByRole("option", { name: "فيديو الاختبار" });
+      expect(screen.getByTestId("yt-stage4-view-grid")).toHaveAttribute("aria-label", "عرض شبكي");
+      expect(screen.getByTestId("yt-stage4-view-table")).toHaveAttribute("aria-label", "عرض جدولي");
+      expect(screen.getByTestId("yt-stage4-grid-cols-4")).toHaveAttribute("aria-label", "4 في كل صف");
+
+      fireEvent.click(screen.getByTestId("yt-stage4-view-all"));
+      expect(screen.getByTestId("yt-stage4-table-columns")).toHaveTextContent("إمكانية المشاهدة");
+      expect(screen.getByTestId("yt-stage4-table-columns")).toHaveTextContent("المشاهدات");
+      expect(screen.getByRole("option", { name: "فيديو الاختبار" })).toHaveTextContent("عام");
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage("en");
+      });
+    }
   });
 
   it("filters and searches uploads without losing option selection", async () => {
