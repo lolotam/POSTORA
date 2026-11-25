@@ -209,7 +209,14 @@ export function useYouTubeStage4(params: {
 
   // ---- the video picker ------------------------------------------------------
 
-  const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const [selectedVideoState, setSelectedVideoState] = useState<{ accountId: string; videoId: string | null } | null>(null);
+  const selectedVideoId = selectedVideoState?.accountId === accountId ? selectedVideoState.videoId : null;
+  const setSelectedVideoId = useCallback(
+    (videoId: string | null) => {
+      setSelectedVideoState({ accountId, videoId });
+    },
+    [accountId],
+  );
   const [listMode, setListMode] = useState<"published" | "heldForReview">("published");
 
   const videos = usePagedList({
@@ -222,14 +229,19 @@ export function useYouTubeStage4(params: {
       return {
         account_id: page.account_id,
         next: page.next_cursor,
-        page: page.items.map((v) => ({ key: v.id, id: v.id, title: v.title, published_at: v.published_at })),
+        page: page.items.map((v) => ({
+          key: v.id,
+          id: v.id,
+          title: v.title,
+          published_at: v.published_at ?? null,
+          thumbnail_url: v.thumbnail_url ?? null,
+          is_short: (v as { is_short?: boolean | null }).is_short ?? null,
+        })),
       };
     },
   });
 
-  const effectiveVideoId = selectedVideoId && videos.items.some((v) => v.id === selectedVideoId)
-    ? selectedVideoId
-    : videos.items[0]?.id ?? null;
+  const effectiveVideoId = selectedVideoId ?? videos.items[0]?.id ?? null;
 
   const threads = usePagedList({
     userId,
@@ -616,7 +628,7 @@ export function useYouTubeStage4(params: {
 
   // An account switch discards every cached list, draft and open context.
   useEffect(() => {
-    setSelectedVideoId(null);
+    setSelectedVideoState(null);
     setListMode("published");
     setReplyTargetsOpen({});
   }, [accountId]);
