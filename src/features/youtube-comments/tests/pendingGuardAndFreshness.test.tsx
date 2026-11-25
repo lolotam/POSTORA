@@ -181,6 +181,36 @@ describe("G1: the guard also sees an operation storage could not keep", () => {
     expect(edit).toHaveBeenCalledTimes(1);
     expect(operationStatus.mock.calls.map((call) => (call[0] as { operationId: string }).operationId)).toContain(firstOperationId);
   });
+
+  it("Issue #480: a lost edit survives a screen remount while storage stays blocked", async () => {
+    const gateway = makeGateway({
+      operationStatus: vi.fn(async () => status("claimed", { action: "edit" })),
+    });
+    const edit = gateway.edit as ReturnType<typeof vi.fn>;
+    const operationStatus = gateway.operationStatus as ReturnType<typeof vi.fn>;
+    edit.mockRejectedValueOnce(new Error("Failed to fetch"));
+    const firstView = render(withClient(<YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Edit your comment"), { target: { value: "first text" } });
+
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage denied"); });
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("storage denied"); });
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("storage denied"); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save" })); });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/did not get YouTube's answer/));
+    const firstOperationId = (edit.mock.calls[0][0] as { operationId: string }).operationId;
+
+    firstView.unmount();
+    render(withClient(<YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />));
+    expect(await screen.findByTestId("yt-stage4-recovered")).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Edit your comment"), { target: { value: "must not resend" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save" })); });
+
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(operationStatus.mock.calls.map((call) => (call[0] as { operationId: string }).operationId)).toContain(firstOperationId);
+  });
 });
 
 describe("F1: a duplicate row keeps the copy read last", () => {

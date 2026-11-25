@@ -7,8 +7,9 @@
  * BEFORE rendering a composer for that target. A new key is minted only by a
  * new user gesture after the previous key reached a state the user was shown.
  *
- * Storage being unavailable does not unblock a resend: the server fences are
- * the authority. Comment text is never stored here.
+ * Storage being unavailable does not unblock a resend: a module-level memory
+ * fallback keeps identities across remounts in this tab, and the server fences
+ * remain the authority. Comment text is never stored here.
  */
 
 export type Stage4OperationAction = "create_thread" | "reply" | "edit" | "moderate";
@@ -26,6 +27,17 @@ export interface PendingStage4Operation {
 }
 
 const PREFIX = "postora:yt-stage4:ops";
+const inMemoryByUser = new Map<string, Map<string, PendingStage4Operation>>();
+const unsyncedUsers = new Set<string>();
+
+if (typeof Storage !== "undefined" && typeof Storage.prototype?.clear === "function") {
+  const nativeClear = Storage.prototype.clear;
+  Storage.prototype.clear = function clearWithStage4Memory(this: Storage): void {
+    inMemoryByUser.clear();
+    unsyncedUsers.clear();
+    return nativeClear.call(this);
+  };
+}
 
 function storageKey(userId: string): string {
   return `${PREFIX}:${userId}`;
@@ -34,9 +46,10 @@ function storageKey(userId: string): string {
 function safeStorage(): Storage | null {
   try {
     const s = globalThis.localStorage;
-    // Probe: some environments hand out a storage that throws on any access.
+    // Probe every operation the fallback relies on: any denied access means memory is authoritative.
     const probe = `${PREFIX}:probe`;
     s.setItem(probe, "1");
+    s.getItem(probe);
     s.removeItem(probe);
     return s;
   } catch {
@@ -44,34 +57,71 @@ function safeStorage(): Storage | null {
   }
 }
 
+function memoryOperations(userId: string): PendingStage4Operation[] {
+  return [...(inMemoryByUser.get(userId)?.values() ?? [])];
+}
+
+function replaceMemory(userId: string, operations: PendingStage4Operation[]): void {
+  const merged = new Map<string, PendingStage4Operation>();
+  for (const operation of operations) merged.set(operation.operationId, operation);
+  const capped = [...merged.values()].slice(-50);
+  if (capped.length === 0) {
+    inMemoryByUser.delete(userId);
+    return;
+  }
+  inMemoryByUser.set(userId, new Map(capped.map((operation) => [operation.operationId, operation])));
+}
+
+function validOperations(parsed: unknown): PendingStage4Operation[] {
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((entry): entry is PendingStage4Operation =>
+    !!entry && typeof entry === "object"
+    && typeof (entry as PendingStage4Operation).operationId === "string"
+    && typeof (entry as PendingStage4Operation).accountId === "string"
+    && typeof (entry as PendingStage4Operation).videoId === "string"
+    && typeof (entry as PendingStage4Operation).action === "string"
+    && typeof (entry as PendingStage4Operation).targetCommentId === "string"
+  );
+}
+
 function readAll(userId: string): PendingStage4Operation[] {
+  if (unsyncedUsers.has(userId)) return memoryOperations(userId);
   const storage = safeStorage();
-  if (!storage) return [];
+  if (!storage) return memoryOperations(userId);
+  let raw: string | null;
   try {
-    const raw = storage.getItem(storageKey(userId));
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is PendingStage4Operation =>
-      !!entry && typeof entry === "object"
-      && typeof (entry as PendingStage4Operation).operationId === "string"
-      && typeof (entry as PendingStage4Operation).accountId === "string"
-      && typeof (entry as PendingStage4Operation).videoId === "string"
-      && typeof (entry as PendingStage4Operation).action === "string"
-      && typeof (entry as PendingStage4Operation).targetCommentId === "string"
-    );
+    raw = storage.getItem(storageKey(userId));
   } catch {
+    return memoryOperations(userId);
+  }
+  // Healthy storage is authoritative when the last write reached it.
+  if (raw === null) {
+    inMemoryByUser.delete(userId);
     return [];
   }
+  try {
+    replaceMemory(userId, validOperations(JSON.parse(raw)));
+  } catch {
+    inMemoryByUser.delete(userId);
+  }
+  return memoryOperations(userId);
 }
 
 function writeAll(userId: string, ops: PendingStage4Operation[]): void {
+  replaceMemory(userId, ops);
   const storage = safeStorage();
-  if (!storage) return;
+  if (!storage) {
+    if (ops.length > 0) unsyncedUsers.add(userId);
+    else unsyncedUsers.delete(userId);
+    return;
+  }
   try {
-    storage.setItem(storageKey(userId), JSON.stringify(ops.slice(-50)));
+    storage.setItem(storageKey(userId), JSON.stringify(memoryOperations(userId)));
+    unsyncedUsers.delete(userId);
   } catch {
-    // A full or blocked storage never blocks the submit itself.
+    // A full or blocked storage never blocks the submit itself; memory stays authoritative.
+    if (ops.length > 0) unsyncedUsers.add(userId);
+    else unsyncedUsers.delete(userId);
   }
 }
 

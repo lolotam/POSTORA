@@ -108,11 +108,13 @@ export type AnonymousCall<T> =
  * Run one anonymous database call in its slot and wait for it at most
  * ANON_PROBE_TIMEOUT_MS. `start` is called only when the slot was free. The
  * call keeps running when the bound passes, and the slot is freed by the call
- * settling, never by the bound.
+ * settling, never by the bound. `onSettled` observes the actual outcome even
+ * when the caller stopped waiting at the bound.
  */
 export async function runInAnonymousSlot<T>(
   name: AnonymousSlotName,
   start: () => PromiseLike<T>,
+  onSettled?: (outcome: AnonymousCall<T>) => void,
 ): Promise<AnonymousCall<T>> {
   if (anonymousSlots.has(name)) return { kind: "busy" };
   const token = Symbol(name);
@@ -129,8 +131,13 @@ export async function runInAnonymousSlot<T>(
   }
   // Attached before the race below, so the slot is already free when the
   // request that waited for this call carries on.
-  call.then(() => {
+  call.then((outcome) => {
     if (anonymousSlots.get(name) === token) anonymousSlots.delete(name);
+    try {
+      onSettled?.(outcome);
+    } catch {
+      // A settlement observer must never turn a slot release into an unhandled rejection.
+    }
   });
 
   let timer: ReturnType<typeof setTimeout> | undefined;

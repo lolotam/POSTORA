@@ -37,6 +37,13 @@ const KNOWN_ACTIONS = new Set<string>(STAGE4_ACTIONS);
 
 /** In-memory tally of suppressed anonymous refusals since the last counter row. */
 let anonAuditSuppressedCount = 0;
+let anonAuditGeneration = 0;
+
+/** Forget the tally and fence off late inserts from an earlier worker generation. */
+export function resetAnonAuditCounter(): void {
+  anonAuditSuppressedCount = 0;
+  anonAuditGeneration += 1;
+}
 
 export function sanitiseAction(action: unknown): string {
   return typeof action === "string" && KNOWN_ACTIONS.has(action) ? action : "unknown";
@@ -52,7 +59,10 @@ export async function writeRefusalAudit(
      * counter row. Resolves true only when that count was durably recorded, so
      * a throttled or failed write keeps the tally for the next attempt.
      */
-    counterSink?: (suppressed: number) => Promise<boolean>;
+    counterSink?: (
+      suppressed: number,
+      options: { cause: "bucket" | "busy_insert"; reconcile: () => void },
+    ) => Promise<boolean>;
   },
 ): Promise<void> {
   const action = sanitiseAction(row.action);
@@ -79,7 +89,7 @@ export async function writeRefusalAudit(
   // Anonymous bucket. A single counter row per minute records how many were
   // suppressed; each suppressed refusal still emits a sanitised console event.
   if (!userId) {
-    const suppress = async (): Promise<void> => {
+    const suppress = async (cause: "bucket" | "busy_insert"): Promise<void> => {
       anonAuditSuppressedCount += 1;
       console.warn(
         `comment-manager stage4 refusal suppressed: action=${action} reason=${row.reason} request_id=${row.requestId}`,
@@ -88,12 +98,18 @@ export async function writeRefusalAudit(
       // in-memory count carries the tally between counter rows.
       if (opts.counterSink) {
         // Only the snapshot that was recorded is subtracted: refusals that
-        // arrive while the write is pending stay in the tally.
+        // arrive while the write is pending stay in the tally. A late success
+        // reconciles once, and never against a newer worker generation.
         const snapshot = anonAuditSuppressedCount;
+        const generation = anonAuditGeneration;
+        let reconciled = false;
+        const reconcile = () => {
+          if (reconciled || generation !== anonAuditGeneration) return;
+          reconciled = true;
+          anonAuditSuppressedCount = Math.max(0, anonAuditSuppressedCount - snapshot);
+        };
         try {
-          if (await opts.counterSink(snapshot)) {
-            anonAuditSuppressedCount = Math.max(0, anonAuditSuppressedCount - snapshot);
-          }
+          if (await opts.counterSink(snapshot, { cause, reconcile })) reconcile();
         } catch {
           // Never let the counter change anything about the refusal.
         }
@@ -107,7 +123,7 @@ export async function writeRefusalAudit(
       admitted = false;
     }
     if (!admitted) {
-      await suppress();
+      await suppress("bucket");
       return;
     }
 
@@ -119,7 +135,7 @@ export async function writeRefusalAudit(
     // one and never starts a second, and is counted as suppressed.
     const outcome = await runInAnonymousSlot("audit_insert", () => admin.from("system_logs").insert(insertRow));
     if (outcome.kind === "busy") {
-      await suppress();
+      await suppress("busy_insert");
       return;
     }
     if (outcome.kind === "bound") {
