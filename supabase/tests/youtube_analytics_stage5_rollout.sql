@@ -845,19 +845,17 @@ $acceptance_delete_modes$;
 -- A withdrawal committed in a separate session between admission and credential
 -- release, between credential release and an attempt, or before the final response
 -- refuses at the next bound decision checkpoint.
+SELECT pg_temp.s5_restore_main();
 SELECT pg_temp.s5_sessions();
-DO $withdrawal_checkpoints$
+DO $withdrawal_checkpoint_1$
 DECLARE
   v_admit jsonb;
   v_cred jsonb;
-  v_attempt jsonb;
-  v_final jsonb;
   v_channel text;
   v_generation bigint;
   v_incarnation uuid;
 BEGIN
   -- 1. Withdrawal committed in session s5_b between admission and credential release:
-  PERFORM pg_temp.s5_restore_main();
   v_admit := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), false);
   ASSERT v_admit ->> 'reason' = 'ok', format('admission starts ok: %s', v_admit);
   v_channel := v_admit ->> 'channel_id';
@@ -873,9 +871,20 @@ BEGIN
      AND v_cred -> 'consent' ->> 'state' = 'withdrawn'
      AND NOT (v_cred ? 'credentials'),
     format('withdrawal committed before credential release refuses and omits credentials: %s', v_cred);
+END
+$withdrawal_checkpoint_1$;
 
+SELECT pg_temp.s5_restore_main();
+DO $withdrawal_checkpoint_2$
+DECLARE
+  v_admit jsonb;
+  v_cred jsonb;
+  v_attempt jsonb;
+  v_channel text;
+  v_generation bigint;
+  v_incarnation uuid;
+BEGIN
   -- 2. Withdrawal committed in session s5_b between credential release and an attempt:
-  PERFORM pg_temp.s5_restore_main();
   v_admit := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), false);
   v_channel := v_admit ->> 'channel_id';
   v_generation := (v_admit ->> 'binding_generation')::bigint;
@@ -894,9 +903,20 @@ BEGIN
      AND v_attempt -> 'consent' ->> 'state' = 'withdrawn'
      AND NOT (v_attempt ? 'credentials'),
     format('withdrawal committed before attempt refuses: %s', v_attempt);
+END
+$withdrawal_checkpoint_2$;
 
+SELECT pg_temp.s5_restore_main();
+DO $withdrawal_checkpoint_3$
+DECLARE
+  v_admit jsonb;
+  v_attempt jsonb;
+  v_final jsonb;
+  v_channel text;
+  v_generation bigint;
+  v_incarnation uuid;
+BEGIN
   -- 3. Withdrawal committed in session s5_b between attempt and final decision:
-  PERFORM pg_temp.s5_restore_main();
   v_admit := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), false);
   v_channel := v_admit ->> 'channel_id';
   v_generation := (v_admit ->> 'binding_generation')::bigint;
@@ -916,7 +936,7 @@ BEGIN
      AND NOT (v_final ? 'credentials'),
     format('withdrawal committed before final response refuses: %s', v_final);
 END
-$withdrawal_checkpoints$;
+$withdrawal_checkpoint_3$;
 SELECT pg_temp.s5_restore_main();
 
 -- Concurrent acceptance of one owner/channel serializes on the function's
