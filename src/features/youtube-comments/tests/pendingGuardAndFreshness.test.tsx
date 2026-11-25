@@ -94,8 +94,12 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function storedOperations(): Array<{ operationId: string; targetCommentId: string }> {
-  return JSON.parse(localStorage.getItem(STORE_KEY) ?? "[]") as Array<{ operationId: string; targetCommentId: string }>;
+function storedOperations(): Array<{ operationId: string; targetCommentId: string; targetIsCanonicalParent?: boolean }> {
+  return JSON.parse(localStorage.getItem(STORE_KEY) ?? "[]") as Array<{
+    operationId: string;
+    targetCommentId: string;
+    targetIsCanonicalParent?: boolean;
+  }>;
 }
 
 function seedEarlierOperation(action: "edit" | "reply" = "edit") {
@@ -421,6 +425,63 @@ describe("canonical-parent reply guarding", () => {
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(operationStatus).not.toHaveBeenCalled();
   });
+
+  it("Issue #485: a child reply without a canonical parent keeps its child key, guards its loaded thread, and does not block unrelated threads", async () => {
+    const childWithoutParent = { ...childRow(), canonical_parent_id: "" };
+    const otherThread: Stage4CommentRow = {
+      ...ownRow(),
+      handle: "hdl-other",
+      comment_id: "c-other",
+      thread_id: "t-other",
+    };
+    const response = deferred<Stage4ReceiptPayload>();
+    const unrelatedReceipt = receipt();
+    const replyMock = vi.fn()
+      .mockImplementationOnce(() => response.promise)
+      .mockResolvedValueOnce(unrelatedReceipt);
+    const gateway = makeGateway({
+      reply: replyMock,
+      operationStatus: vi.fn(async (params: { operationId: string }) =>
+        status("claimed", { operation_id: params.operationId, action: "reply" })),
+      threadPage: vi.fn(async () => ({
+        account_id: ACCOUNT,
+        channel_id: "UC-x",
+        binding_generation: 1,
+        video_id: "vid-1",
+        list: "published" as const,
+        items: [ownRow(), childWithoutParent, otherThread],
+        next_cursor: null,
+        inconsistent_count: 0,
+      })),
+    });
+    const { result } = renderHook(() => useYouTubeStage4({ userId: USER, accountId: ACCOUNT, gateway }), {
+      wrapper: ({ children }) => withClient(children),
+    });
+    await waitFor(() => expect(result.current.threads.items).toHaveLength(3));
+    let firstOutcome: unknown = null;
+    let guardedOutcome: unknown = null;
+    let unrelatedOutcome: unknown = null;
+
+    await act(async () => {
+      const first = result.current.reply("vid-1", childWithoutParent, "reply to child");
+      await waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1));
+      expect(storedOperations()).toEqual([expect.objectContaining({
+        targetCommentId: "c-child",
+      })]);
+      expect(storedOperations()[0]).not.toHaveProperty("targetIsCanonicalParent");
+
+      guardedOutcome = await result.current.reply("vid-1", ownRow(), "reply to parent");
+      unrelatedOutcome = await result.current.reply("vid-1", otherThread, "reply to unrelated thread");
+      response.resolve(receipt());
+      firstOutcome = await first;
+    });
+
+    const sent = replyMock.mock.calls[0][0] as { operationId: string };
+    expect(guardedOutcome).toEqual({ kind: "pending", operationId: sent.operationId });
+    expect(unrelatedOutcome).toMatchObject({ kind: "confirmed" });
+    expect(firstOutcome).toMatchObject({ kind: "confirmed", operationId: sent.operationId });
+    expect(replyMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("submit cancellation during recovery", () => {
@@ -518,6 +579,72 @@ describe("submit cancellation during recovery", () => {
     });
     expect(staleOutcome).toEqual({ kind: "cancelled" });
     expect(threadPage.mock.calls.length).toBe(threadLoadsBefore);
+  });
+});
+
+describe("Issue #485 composer cancellation and unmount during a submit", () => {
+  it("Cancel releases a recovery-only lock without a write or new identity, and an immediate reopen can submit", async () => {
+    const cancelledRecovery = deferred<Stage4OperationStatusPayload>();
+    const operationStatus = vi.fn()
+      .mockImplementationOnce(() => cancelledRecovery.promise)
+      .mockRejectedValueOnce(new YouTubeCommentsError("not_found"));
+    const gateway = makeGateway({ operationStatus });
+    const replyMock = gateway.reply as ReturnType<typeof vi.fn>;
+    render(withClient(<YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
+    fireEvent.change(screen.getByLabelText("Write a reply"), { target: { value: "cancelled reply" } });
+    seedEarlierOperation("reply");
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + 200_000);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    await waitFor(() => expect(operationStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByLabelText("Write a reply")).not.toBeInTheDocument();
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(storedOperations()).toEqual([expect.objectContaining({ operationId: "op-earlier" })]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.change(screen.getByLabelText("Write a reply"), { target: { value: "fresh reply" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    });
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    const sent = replyMock.mock.calls[0][0] as { operationId: string };
+    expect(sent.operationId).not.toBe("op-earlier");
+    expect(await screen.findByText("Accepted by YouTube.")).toBeInTheDocument();
+
+    await act(async () => {
+      cancelledRecovery.resolve(status("confirmed", { operation_id: "op-earlier", action: "reply" }));
+      await cancelledRecovery.promise;
+    });
+    expect(replyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unmounted composer leaves a confirmed write's identity stored for later recovery", async () => {
+    const response = deferred<Stage4ReceiptPayload>();
+    const gateway = makeGateway({ reply: vi.fn(() => response.promise) });
+    const replyMock = gateway.reply as ReturnType<typeof vi.fn>;
+    const view = render(withClient(<YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
+    fireEvent.change(screen.getByLabelText("Write a reply"), { target: { value: "reply before unmount" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    await waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1));
+    const sent = replyMock.mock.calls[0][0] as { operationId: string };
+    expect(storedOperations()).toEqual([expect.objectContaining({ operationId: sent.operationId })]);
+
+    view.unmount();
+    await act(async () => {
+      response.resolve(receipt());
+      await response.promise;
+    });
+
+    expect(storedOperations()).toEqual([expect.objectContaining({
+      operationId: sent.operationId,
+      targetCommentId: "c-mine",
+    })]);
   });
 });
 

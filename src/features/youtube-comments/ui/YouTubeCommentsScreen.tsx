@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import "@/i18n";
@@ -460,7 +460,7 @@ function CommentCard(params: {
   // An outcome that lands after this card is gone has nobody to show it to:
   // it must not clear the operation's identity (see runModerate).
   const mounted = useRef(true);
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
@@ -548,8 +548,8 @@ function CommentCard(params: {
             onConfirmed={() => stage4.drafts.remove(draftKeyOf("reply"))}
             placeholder={t("youtubeStage4.composer.replyPlaceholder", "Write a reply")}
             submitLabel={t("youtubeStage4.composer.replySubmit", "Reply")}
-            onSubmit={async (text) => {
-              const outcome = await stage4.reply(videoId, row, text);
+            onSubmit={async (text, isCurrent) => {
+              const outcome = await stage4.reply(videoId, row, text, () => mounted.current && isCurrent());
               return outcome;
             }}
             onCancel={() => closeComposer("reply")}
@@ -566,8 +566,8 @@ function CommentCard(params: {
             onConfirmed={() => stage4.drafts.remove(draftKeyOf("edit"))}
             placeholder={t("youtubeStage4.composer.editPlaceholder", "Edit your comment")}
             submitLabel={t("youtubeStage4.composer.editSubmit", "Save")}
-            onSubmit={async (text) => {
-              const outcome = await stage4.editComment(videoId, row, text);
+            onSubmit={async (text, isCurrent) => {
+              const outcome = await stage4.editComment(videoId, row, text, () => mounted.current && isCurrent());
               return outcome;
             }}
             onCancel={() => closeComposer("edit")}
@@ -608,7 +608,7 @@ async function runModerate(
   operationId?: string,
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
-  const outcome = await stage4.moderate(videoId, row, status, banConfirmation, operationId);
+  const outcome = await stage4.moderate(videoId, row, status, banConfirmation, operationId, isCurrent);
   if (outcome.kind === "cancelled") return;
   // Only a surface that is still there to show the outcome acknowledges it.
   if (isCurrent()) {
@@ -762,7 +762,7 @@ function TopLevelComposer(params: {
     <Composer
       placeholder={t("youtubeStage4.composer.topPlaceholder", "Post a comment as your channel")}
       submitLabel={t("youtubeStage4.composer.topSubmit", "Comment")}
-      onSubmit={async (text) => stage4.createThread(videoId, text)}
+      onSubmit={async (text, isCurrent) => stage4.createThread(videoId, text, isCurrent)}
       onNotice={onNotice}
       onCheckStatus={stage4.checkStatus}
       onAcknowledge={stage4.acknowledge}
@@ -776,7 +776,7 @@ function Composer(params: {
   initialText?: string;
   placeholder: string;
   submitLabel: string;
-  onSubmit: (text: string) => Promise<SubmissionOutcome>;
+  onSubmit: (text: string, isCurrent: () => boolean) => Promise<SubmissionOutcome>;
   onCancel?: () => void;
   onNotice?: (text: string | null) => void;
   /** Reads one operation's receipt again; never resends. Offered after a lost response or an unknown outcome. */
@@ -800,7 +800,7 @@ function Composer(params: {
   // An answer that arrives after this composer is gone has nobody to show it
   // to: it must neither update state nor acknowledge (clear) the identity.
   const mounted = useRef(true);
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
@@ -855,14 +855,17 @@ function Composer(params: {
     setBusy(true);
     setLocalOutcome(null);
     submitSeq.current += 1;
+    const submitAtStart = submitSeq.current;
+    const isSubmitCurrent = () => mounted.current && submitSeq.current === submitAtStart;
     const submittedText = text;
-    const outcome = await params.onSubmit(submittedText);
+    const outcome = await params.onSubmit(submittedText, isSubmitCurrent);
+    if (!isSubmitCurrent()) return;
     // Only an outcome of THIS submit names the operation it sent. "pending",
     // "earlier" and "cancelled" sent nothing in this invocation.
     if (outcome.kind !== "pending" && outcome.kind !== "earlier" && outcome.kind !== "cancelled") {
       sent.current = { operationId: outcome.operationId, text: submittedText };
     }
-    if (mounted.current) setBusy(false);
+    setBusy(false);
     show(outcome);
   };
 
@@ -901,7 +904,15 @@ function Composer(params: {
           {params.submitLabel}
         </Button>
         {params.onCancel && (
-          <Button size="sm" variant="ghost" onClick={params.onCancel}>
+          <Button size="sm" variant="ghost" onClick={() => {
+            submitSeq.current += 1;
+            checkSeq.current += 1;
+            if (mounted.current) {
+              setBusy(false);
+              setChecking(false);
+            }
+            params.onCancel?.();
+          }}>
             {t("common:cancel", "Cancel")}
           </Button>
         )}
@@ -1078,7 +1089,7 @@ function RejectDialog(params: {
   // started in an earlier opening can tell that it is stale when it answers.
   const generationRef = useRef(0);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     generationRef.current += 1;
     if (open) {
       setAlsoBan(false);
@@ -1090,15 +1101,26 @@ function RejectDialog(params: {
     }
   }, [open]);
 
+  const changeOpen = (next: boolean) => {
+    if (!next) generationRef.current += 1;
+    setAlsoBan(false);
+    setBanInfo(null);
+    setStep("reject");
+    onOpenChange(next);
+  };
+
   /** A plain Reject: no ban is requested and none is implied. */
   const confirmPlainReject = async () => {
     const generation = generationRef.current;
     setBusy(true);
     try {
-      await runModerate(stage4, row, videoId, "rejected", onNotice, t, undefined, undefined, isCurrent);
+      await runModerate(
+        stage4, row, videoId, "rejected", onNotice, t, undefined, undefined,
+        () => isCurrent() && generation === generationRef.current,
+      );
       // Only the opening that started this request closes: a dialog that was
       // cancelled and reopened meanwhile belongs to the owner's newer work.
-      if (generation === generationRef.current) onOpenChange(false);
+      if (generation === generationRef.current) changeOpen(false);
     } finally {
       if (generation === generationRef.current) setBusy(false);
     }
@@ -1116,8 +1138,11 @@ function RejectDialog(params: {
     try {
       // The server bound the confirmation to this operation key, so the submit
       // must use that same key (a fresh one would be refused).
-      await runModerate(stage4, row, videoId, "rejected", onNotice, t, banInfo.confirmation, banInfo.operationId, isCurrent);
-      if (generation === generationRef.current) onOpenChange(false);
+      await runModerate(
+        stage4, row, videoId, "rejected", onNotice, t, banInfo.confirmation, banInfo.operationId,
+        () => isCurrent() && generation === generationRef.current,
+      );
+      if (generation === generationRef.current) changeOpen(false);
     } finally {
       if (generation === generationRef.current) setBusy(false);
     }
@@ -1148,13 +1173,7 @@ function RejectDialog(params: {
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next) => {
-      // Cancel at either step discards the token and the selection.
-      setAlsoBan(false);
-      setBanInfo(null);
-      setStep("reject");
-      onOpenChange(next);
-    }}>
+    <Dialog open={open} onOpenChange={changeOpen}>
       <DialogContent>
         {step === "reject" ? (
           <>
@@ -1181,7 +1200,7 @@ function RejectDialog(params: {
               </div>
             )}
             <DialogFooter>
-              <Button variant="ghost" onClick={() => onOpenChange(false)}>
+              <Button variant="ghost" onClick={() => changeOpen(false)}>
                 {t("common:cancel", "Cancel")}
               </Button>
               <Button
@@ -1211,6 +1230,7 @@ function RejectDialog(params: {
             </DialogHeader>
             <DialogFooter>
               <Button variant="ghost" onClick={() => {
+                generationRef.current += 1;
                 setAlsoBan(false);
                 setBanInfo(null);
                 setStep("reject");

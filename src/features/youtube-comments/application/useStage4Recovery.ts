@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { YouTubeCommentsGateway } from "./ports";
 import { clearPendingOperation, listPendingOperations, type PendingStage4Operation } from "../domain/operationIdentity";
 import type { Stage4OperationStatusPayload } from "../domain/types";
@@ -45,7 +45,7 @@ export function useStage4Recovery(params: {
   const alive = useRef(true);
   const currentContext = useRef(`${userId}:${accountId}`);
   currentContext.current = `${userId}:${accountId}`;
-  useEffect(() => {
+  useLayoutEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;

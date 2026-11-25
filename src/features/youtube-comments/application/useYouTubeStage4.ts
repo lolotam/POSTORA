@@ -73,6 +73,7 @@ interface SubmitLock {
   operationId: string | null;
   /** The context epoch the lock was taken in. */
   epoch: number;
+  isStillCurrent: () => boolean;
 }
 
 export interface Stage4PageState<Item> {
@@ -354,12 +355,15 @@ export function useYouTubeStage4(params: {
       videoId: string;
       targetCommentId?: string;
       legacyTargetCommentId?: string;
+      targetThreadId?: string;
+      targetIsCanonicalParent?: boolean;
       targetHandle?: string;
       text?: string;
       status?: "published" | "heldForReview" | "rejected";
       banConfirmation?: string;
       /** A key already bound elsewhere (the ban confirmation); minted otherwise. */
       operationId?: string;
+      isCurrent?: () => boolean;
       run: (operationId: string) => Promise<Stage4ReceiptPayload>;
     }): Promise<SubmissionOutcome> => {
       if (activeVideoIdRef.current === null) activeVideoIdRef.current = input.videoId;
@@ -368,7 +372,8 @@ export function useYouTubeStage4(params: {
       const isStillCurrent = () => aliveRef.current
         && contextRef.current === submitContext
         && contextEpochRef.current === submitEpoch
-        && (activeVideoIdRef.current === null || activeVideoIdRef.current === input.videoId);
+        && (activeVideoIdRef.current === null || activeVideoIdRef.current === input.videoId)
+        && (input.isCurrent ? input.isCurrent() : true);
       if (!isStillCurrent()) return { kind: "cancelled" };
       const targetCommentId = input.targetCommentId ?? "";
       const guardKey = `${accountId}|${input.videoId}|${action}|${targetCommentId}`;
@@ -377,13 +382,13 @@ export function useYouTubeStage4(params: {
       const pendingForTarget = (): PendingStage4Operation[] => {
         const loadedRows = threads.items.map((item) => item.row);
         const stored = findPendingOperations(userId, { accountId, videoId: input.videoId, action })
-          .filter((op) => matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, loadedRows));
+          .filter((op) => matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, input.targetThreadId, loadedRows));
         const seen = new Set(stored.map((op) => op.operationId));
         const live = [...liveOperations.current.values()].filter((op) =>
           op.accountId === accountId
           && op.videoId === input.videoId
           && op.action === action
-          && matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, loadedRows)
+          && matchesPendingTarget(op, action, targetCommentId, input.legacyTargetCommentId, input.targetThreadId, loadedRows)
           && !seen.has(op.operationId));
         return [...stored, ...live];
       };
@@ -392,7 +397,7 @@ export function useYouTubeStage4(params: {
       // Recovery has no NEW operation id to check yet.
       const existingLock = submitsInFlight.current.get(guardKey);
       if (existingLock && blocksNewSubmit(existingLock, submitEpoch)) return pendingOutcomeFor(existingLock);
-      const submitLock: SubmitLock = { operationId: null, epoch: submitEpoch };
+      const submitLock: SubmitLock = { operationId: null, epoch: submitEpoch, isStillCurrent };
       try {
         submitsInFlight.current.set(guardKey, submitLock);
         // An earlier submit for this target blocks a new one only while it may
@@ -433,7 +438,7 @@ export function useYouTubeStage4(params: {
           videoId: input.videoId,
           action,
           targetCommentId,
-          ...(action === "reply" ? { targetIsCanonicalParent: true } : {}),
+          ...(action === "reply" && input.targetIsCanonicalParent ? { targetIsCanonicalParent: true } : {}),
           createdAt: Date.now(),
         };
         liveOperations.current.set(operationId, identity);
@@ -471,27 +476,35 @@ export function useYouTubeStage4(params: {
   );
 
   const createThread = useCallback(
-    (videoId: string, text: string) => submit("create_thread", {
+    (videoId: string, text: string, isCurrent?: () => boolean) => submit("create_thread", {
       videoId,
+      isCurrent,
       run: (operationId) => gateway.createThread({ accountId, videoId, text, operationId }),
     }),
     [submit, gateway, accountId],
   );
 
   const reply = useCallback(
-    (videoId: string, target: Stage4CommentRow, text: string) => submit("reply", {
-      videoId,
-      targetCommentId: target.canonical_parent_id.trim() || target.comment_id,
-      legacyTargetCommentId: target.comment_id,
-      run: (operationId) => gateway.reply({ accountId, targetHandle: target.handle, text, operationId }),
-    }),
+    (videoId: string, target: Stage4CommentRow, text: string, isCurrent?: () => boolean) => {
+      const canonicalParentId = target.canonical_parent_id.trim();
+      return submit("reply", {
+        videoId,
+        targetCommentId: canonicalParentId || target.comment_id,
+        targetIsCanonicalParent: target.kind === "thread" || canonicalParentId.length > 0,
+        legacyTargetCommentId: target.comment_id,
+        targetThreadId: target.thread_id.trim(),
+        isCurrent,
+        run: (operationId) => gateway.reply({ accountId, targetHandle: target.handle, text, operationId }),
+      });
+    },
     [submit, gateway, accountId],
   );
 
   const editComment = useCallback(
-    (videoId: string, target: Stage4CommentRow, text: string) => submit("edit", {
+    (videoId: string, target: Stage4CommentRow, text: string, isCurrent?: () => boolean) => submit("edit", {
       videoId,
       targetCommentId: target.comment_id,
+      isCurrent,
       run: (operationId) => gateway.edit({ accountId, targetHandle: target.handle, text, operationId }),
     }),
     [submit, gateway, accountId],
@@ -504,12 +517,13 @@ export function useYouTubeStage4(params: {
   );
 
   const moderate = useCallback(
-    (videoId: string, target: Stage4CommentRow, status: "published" | "heldForReview" | "rejected", banConfirmation?: string, operationId?: string) =>
+    (videoId: string, target: Stage4CommentRow, status: "published" | "heldForReview" | "rejected", banConfirmation?: string, operationId?: string, isCurrent?: () => boolean) =>
       submit("moderate", {
         videoId,
         targetCommentId: target.comment_id,
         status,
         operationId,
+        isCurrent,
         run: (operationId) => gateway.moderate({ accountId, targetHandle: target.handle, status, operationId, banConfirmation }),
       }),
     [submit, gateway, accountId],
@@ -675,6 +689,7 @@ function matchesPendingTarget(
   action: Stage4OperationAction,
   targetCommentId: string,
   legacyTargetCommentId: string | undefined,
+  targetThreadId: string | undefined,
   loadedRows: Stage4CommentRow[],
 ): boolean {
   if (op.targetCommentId === targetCommentId) return true;
@@ -683,17 +698,26 @@ function matchesPendingTarget(
   if (legacyTargetCommentId && op.targetCommentId === legacyTargetCommentId) return true;
   const loaded = loadedRows.find((row) => row.comment_id === op.targetCommentId);
   if (loaded) {
-    return (loaded.canonical_parent_id.trim() || loaded.comment_id) === targetCommentId;
+    const loadedCanonicalParentId = loaded.canonical_parent_id.trim() || (loaded.kind === "thread" ? loaded.comment_id : "");
+    if (loadedCanonicalParentId) return loadedCanonicalParentId === targetCommentId;
+    const loadedThreadId = loaded.thread_id.trim();
+    const resolvedTargetThreadId = targetThreadId?.trim()
+      || loadedRows.find((row) => row.comment_id === targetCommentId)?.thread_id.trim()
+      || "";
+    if (loadedThreadId && resolvedTargetThreadId) {
+      return loadedThreadId === targetCommentId || loadedThreadId === resolvedTargetThreadId;
+    }
+    return true;
   }
   return true;
 }
 
 /**
- * A lock of a context that is gone does not block a submit in this one: only a
- * lock of this context, or one that already minted an operation, does.
+ * A recovery lock blocks only while its caller and context stay current. Once
+ * an operation is minted, its lock still blocks duplicates until the call ends.
  */
 function blocksNewSubmit(lock: SubmitLock, epoch: number): boolean {
-  return lock.operationId !== null || lock.epoch === epoch;
+  return lock.operationId !== null || (lock.epoch === epoch && lock.isStillCurrent());
 }
 
 /** The answer a blocked submit gets: the operation to check, when one is known. */
