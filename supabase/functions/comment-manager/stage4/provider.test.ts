@@ -11,6 +11,7 @@ import {
   listRepliesPage,
   listThreadsPage,
   listUploads,
+  listVideosDetails,
   readComment,
   readVideo,
   setModerationStatus,
@@ -61,9 +62,22 @@ Deno.test("listUploads pages the uploads playlist with 25 per page", async () =>
   assertEquals(res.kind, "success");
   const url = new URL(calls[0].url);
   assertEquals(url.pathname, "/youtube/v3/playlistItems");
+  assertEquals(url.searchParams.get("part"), "snippet,contentDetails,status");
   assertEquals(url.searchParams.get("playlistId"), "UU-test-channel");
   assertEquals(url.searchParams.get("maxResults"), "25");
   assertEquals(url.searchParams.get("pageToken"), "pt-1");
+});
+
+Deno.test("listVideosDetails requests all Studio metadata for at most 50 videos", async () => {
+  const { calls, fetcher } = fakeFetch(() => ({ status: 200, body: { items: [] } }));
+  const videoIds = Array.from({ length: 55 }, (_, index) => `vid-${index + 1}`);
+  const res = await listVideosDetails({ fetcher }, "tok", videoIds);
+  assertEquals(res.kind, "success");
+  const url = new URL(calls[0].url);
+  assertEquals(url.pathname, "/youtube/v3/videos");
+  assertEquals(url.searchParams.get("part"), "snippet,contentDetails,status,statistics,liveStreamingDetails");
+  assertEquals(url.searchParams.get("id"), videoIds.slice(0, 50).join(","));
+  assertEquals(calls.length, 1);
 });
 
 Deno.test("listThreadsPage requests the exact moderationStatus of the list", async () => {

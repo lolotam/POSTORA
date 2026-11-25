@@ -251,11 +251,21 @@ export interface Stage4CapabilitiesPayload {
   capabilities: Record<Stage4Capability, Stage4CapabilityState>;
 }
 
+export type Stage4VideoVisibility = "public" | "unlisted" | "private";
+export type Stage4VideoDateKind = "published" | "uploaded" | "premiered";
+
 export interface Stage4VideoRow {
   id: string;
   title: string;
   published_at: string | null;
   thumbnail_url: string | null;
+  description?: string | null;
+  visibility?: Stage4VideoVisibility | null;
+  date_kind?: Stage4VideoDateKind | null;
+  duration_iso?: string | null;
+  view_count?: number | null;
+  comment_count?: number | null;
+  is_short?: boolean | null;
 }
 
 export interface Stage4VideoPagePayload {

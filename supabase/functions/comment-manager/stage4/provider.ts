@@ -155,12 +155,23 @@ export async function listUploads(
     ? `UU${account.platform_user_id.slice(2)}`
     : account.platform_user_id;
   const query: Record<string, string> = {
-    part: "snippet",
+    part: "snippet,contentDetails,status",
     playlistId,
     maxResults: "25",
   };
   if (args.pageToken) query.pageToken = args.pageToken;
   return singleRequest(deps, "GET", "playlistItems", query, undefined, token);
+}
+
+export async function listVideosDetails(
+  deps: Stage4ProviderDeps,
+  token: string,
+  videoIds: string[],
+): Promise<Stage4ProviderResult> {
+  return singleRequest(deps, "GET", "videos", {
+    part: "snippet,contentDetails,status,statistics,liveStreamingDetails",
+    id: videoIds.slice(0, 50).join(","),
+  }, undefined, token);
 }
 
 export async function listThreadsPage(

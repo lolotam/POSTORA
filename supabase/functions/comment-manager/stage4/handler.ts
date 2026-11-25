@@ -18,6 +18,8 @@ import {
   STAGE4_ACTION_CAPABILITY,
   STAGE4_ACTION_REQUIRES_HELD,
   type Stage4VideoRow,
+  type Stage4VideoDateKind,
+  type Stage4VideoVisibility,
   type Stage4CommentRow,
   type Stage4VideoPagePayload,
   type Stage4ThreadPagePayload,
@@ -475,14 +477,129 @@ interface YtVideo {
   id?: string;
   snippet?: { channelId?: string };
 }
+interface YtThumbnails {
+  default?: { url?: string };
+  medium?: { url?: string };
+  high?: { url?: string };
+}
 interface YtUpload {
   snippet?: {
     resourceId?: { videoId?: string };
     title?: string;
     publishedAt?: string;
-    thumbnails?: { default?: { url?: string } };
+    description?: string;
+    thumbnails?: YtThumbnails;
+  };
+  contentDetails?: { videoPublishedAt?: string };
+  status?: { privacyStatus?: string };
+}
+interface YtVideoDetail {
+  id?: string;
+  snippet?: {
+    channelId?: string;
+    title?: string;
+    publishedAt?: string;
+    description?: string;
+    thumbnails?: YtThumbnails;
+  };
+  contentDetails?: { duration?: string };
+  status?: { privacyStatus?: string };
+  statistics?: { viewCount?: unknown; commentCount?: unknown };
+  liveStreamingDetails?: { actualStartTime?: string };
+}
+
+function pickThumbnail(thumbnails: YtThumbnails | undefined): string | null {
+  for (const candidate of [thumbnails?.medium?.url, thumbnails?.high?.url, thumbnails?.default?.url]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return null;
+}
+
+function parseVideoCount(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+  const count = Number(value);
+  return Number.isFinite(count) && Number.isInteger(count) ? count : null;
+}
+
+function parseVideoVisibility(value: unknown): Stage4VideoVisibility | null {
+  return value === "public" || value === "unlisted" || value === "private" ? value : null;
+}
+
+function deriveVideoDateKind(
+  visibility: Stage4VideoVisibility | null,
+  hasActualStartTime: boolean,
+  hasPublishedAt: boolean,
+): Stage4VideoDateKind {
+  if (visibility === "private" || visibility === "unlisted") return "uploaded";
+  if (hasActualStartTime) return "premiered";
+  return hasPublishedAt ? "published" : "uploaded";
+}
+
+function trimDescription(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? Array.from(trimmed).slice(0, 240).join("") : null;
+}
+
+function uploadRow(upload: YtUpload): Stage4VideoRow {
+  const publishedAt = nonEmptyString(upload.contentDetails?.videoPublishedAt ?? upload.snippet?.publishedAt);
+  const visibility = parseVideoVisibility(upload.status?.privacyStatus);
+  return {
+    id: String(upload.snippet?.resourceId?.videoId ?? ""),
+    title: String(upload.snippet?.title ?? ""),
+    published_at: publishedAt,
+    thumbnail_url: pickThumbnail(upload.snippet?.thumbnails),
+    description: trimDescription(upload.snippet?.description),
+    visibility,
+    date_kind: deriveVideoDateKind(visibility, false, publishedAt !== null),
+    duration_iso: null,
+    view_count: null,
+    comment_count: null,
+    is_short: null,
   };
 }
+
+function enrichedUploadRow(row: Stage4VideoRow, detail: YtVideoDetail): Stage4VideoRow {
+  const title = nonEmptyString(detail.snippet?.title) ?? row.title;
+  const description = trimDescription(detail.snippet?.description) ?? row.description ?? null;
+  const publishedAt = nonEmptyString(detail.snippet?.publishedAt) ?? row.published_at;
+  const visibility = parseVideoVisibility(detail.status?.privacyStatus) ?? row.visibility ?? null;
+  const isShort = /#shorts?\b/i.test(`${title}\n${description ?? ""}`) ? true : row.is_short ?? null;
+  return {
+    ...row,
+    title,
+    description,
+    published_at: publishedAt,
+    thumbnail_url: pickThumbnail(detail.snippet?.thumbnails) ?? row.thumbnail_url,
+    visibility,
+    date_kind: deriveVideoDateKind(
+      visibility,
+      nonEmptyString(detail.liveStreamingDetails?.actualStartTime) !== null,
+      publishedAt !== null,
+    ),
+    duration_iso: nonEmptyString(detail.contentDetails?.duration),
+    view_count: parseVideoCount(detail.statistics?.viewCount),
+    comment_count: parseVideoCount(detail.statistics?.commentCount),
+    is_short: isShort,
+  };
+}
+
+function enrichUploadRows(rows: Stage4VideoRow[], details: YtVideoDetail[], channelId: string): Stage4VideoRow[] {
+  const detailsById = new Map<string, YtVideoDetail>();
+  for (const detail of details) {
+    const id = nonEmptyString(detail.id);
+    const detailChannel = nonEmptyString(detail.snippet?.channelId);
+    if (id && (!detailChannel || detailChannel === channelId)) detailsById.set(id, detail);
+  }
+  return rows.map((row) => {
+    const detail = detailsById.get(row.id);
+    return detail ? enrichedUploadRow(row, detail) : row;
+  });
+}
+
 /** A list response body: `items` and the next page token. */
 type YtList<T> = { items?: T[]; nextPageToken?: string } | null | undefined;
 /** A write response body: the created or updated resource, as far as the evidence check reads it. */
@@ -967,12 +1084,24 @@ export async function handleStage4(call: Stage4Call): Promise<Response> {
     if (uploads === null) {
       return refusal(deps, 502, "upstream", requestId, headers, { action, userId, accountId, operationId: null });
     }
-    const items = uploads.map((it: YtUpload) => ({
-      id: String(it?.snippet?.resourceId?.videoId ?? ""),
-      title: String(it?.snippet?.title ?? ""),
-      published_at: it?.snippet?.publishedAt ? String(it.snippet.publishedAt) : null,
-      thumbnail_url: it?.snippet?.thumbnails?.default?.url ?? null,
-    })).filter((v: Stage4VideoRow) => v.id);
+    let items = uploads.map(uploadRow).filter((video: Stage4VideoRow) => video.id);
+    if (items.length > 0) {
+      const detailRes = await provider.listVideosDetails(
+        { fetcher: deps.fetcher },
+        tok.token,
+        items.map((video) => video.id),
+      );
+      if (detailRes.kind === "success") {
+        const details = listItems<YtVideoDetail>(detailRes.body);
+        if (details) {
+          items = enrichUploadRows(items, details, account.platform_user_id);
+        } else {
+          console.warn("comment-manager stage4 video details unavailable: outcome=malformed_response");
+        }
+      } else {
+        console.warn(`comment-manager stage4 video details unavailable: outcome=${detailRes.kind}`);
+      }
+    }
     const nextProviderToken = (res.body as YtList<unknown>)?.nextPageToken ? String((res.body as YtList<unknown>)?.nextPageToken) : null;
     // A provider that hands back the token it was just given can only loop: refuse
     // it now instead of sealing the same page again with a higher hop count.
