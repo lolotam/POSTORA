@@ -82,10 +82,29 @@ For each scope, provide justification:
 
 | Scope | Purpose | User Benefit |
 |-------|---------|--------------|
-| `youtube.readonly` | Fetch channel name, avatar, and ID; read owner-accepted YouTube Analytics reports on demand | Display connected channel info and the owner's own analytics without storing the numbers |
-| `youtube.upload` | Post videos and Shorts on behalf of user | Core publishing functionality |
-| `youtube.force-ssl` | Read, reply to, hide and delete comments on the user's own videos | Comment management on owned videos |
-| `userinfo.profile` | Get user's display name | Personalize the application experience |
+| `youtube.readonly` | Identify the connected channel and check connection health; browse owned uploads and full video details on `/youtube`; read owner-accepted channel/video reports through YouTube Analytics API v2 on `/analytics/youtube` | See the correct channel, browse its content, and view on-demand analytics without Postora storing the numbers |
+| `youtube.upload` | Upload new videos and Shorts with user-chosen metadata and set an optional custom thumbnail with `thumbnails.set` | Publish new content to the owner's channel |
+| `youtube.force-ssl` | Edit published metadata with `videos.update`; read and create top-level comments and replies; edit/delete the channel's own comments; publish, hold, or reject comments, with optional `banAuthor` on rejection | Correct published details and manage/moderate discussions on owned videos |
+| `userinfo.profile` | Get user's display name during Google Sign-In only, not YouTube connection | Personalize the application experience |
+
+Postora does not replace existing video media bytes or delete videos. Published metadata editing is part of the shipped Stage 3 feature and is covered by `youtube.force-ssl`; the disclosure must not claim otherwise.
+
+### Connect and reconnect parameters
+
+The native authorize action requests exactly the three YouTube scope URLs above with:
+
+```text
+access_type=offline
+prompt=consent select_account
+```
+
+It does **not** send `include_granted_scopes`, so an earlier unrequested grant is not silently merged into a new authorization. The account chooser and permission prompt therefore appear on connection and reconnection. Google's returned scope string is recorded in `account_metadata.granted_scopes`; missing capabilities require an explicit reconnect rather than an automatic permission expansion.
+
+Analytics uses the existing three scopes and does not currently request `yt-analytics.readonly`. Google's OAuth permission is separate from Postora's in-app **Analytics Purpose Clause, Version 1, dated November 26, 2026**. An owner must accept that clause for the current `connection_revision` before any analytics read. Withdrawal stops subsequent reads without changing Google permissions, publishing, or comments. Disconnecting or reconnecting ends acceptance for the old connection; a trusted token refresh preserves it.
+
+### Disconnect and revocation
+
+**Profiles → Connected Accounts → Disconnect** invokes the authenticated `disconnect` action. Postora checks whether another active connection of the same user shares the channel grant. It skips provider revocation when such a connection remains; otherwise it calls Google's RFC 7009 endpoint at `https://oauth2.googleapis.com/revoke` with the refresh token, falling back to the access token when the refresh token is absent or already invalid. Tokens travel in the form body, never the URL. An unconfirmed required revocation fails closed and leaves local credentials untouched. After the required provider step succeeds, Postora immediately clears the stored credentials and the frontend removes the connection row. Disconnect ends analytics authorization for that connection but does not create a purpose-withdrawal event.
 
 ---
 
@@ -119,25 +138,31 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 
 ### Data We Access
 - YouTube channel information (name, ID, avatar)
+- Your uploaded videos and their full details when you browse your channel
+- Published video metadata when you instruct Postora to edit it
 - Ability to upload videos to your channel
-- Comments on your own videos for comment management
-- On-demand YouTube Analytics numbers after your in-app purpose acceptance
+- Comments on your own videos for creation, replies, editing, deletion, and moderation
+- On-demand YouTube Analytics numbers after your connection-scoped in-app purpose acceptance
 
 ### How We Use This Data
 - Display your connected YouTube channel in the dashboard
-- Publish videos and Shorts to your channel on your behalf
-- Read, reply to, hide and delete comments on your own videos when you use comment management
-- Display your own channel and video analytics to you, the signed-in owner, only where enabled and after you accept Analytics Purpose Clause Version 1 (November 26, 2026); analytics numbers are read on demand and are not stored by Postora
+- Browse your uploaded videos and their details on `/youtube`
+- Publish videos and Shorts to your channel on your behalf, with an optional custom thumbnail
+- Edit published video metadata on your instruction, without replacing video bytes or deleting videos
+- Read, create, reply to, edit, delete, and moderate comments on your own videos
+- Display your own channel and video analytics to you, the signed-in owner, only where enabled and after you accept Analytics Purpose Clause Version 1 (November 26, 2026) for the current connection; analytics numbers are read on demand and are not stored by Postora
 
 ### Data Storage
 - OAuth tokens are stored securely in our database
 - Tokens are refreshed automatically to maintain connection
 - YouTube Analytics values are read on demand for immediate display and are not stored by Postora
+- Acceptance events record the owner, channel, purpose version, locale, and connection revision, never analytics numbers
 - We do not share your YouTube data with third parties
 
 ### Data Deletion
-- You can disconnect your YouTube account at any time
-- Upon disconnection, all stored tokens are deleted
+- You can disconnect your YouTube account through Profiles → Connected Accounts → Disconnect
+- Postora clears stored OAuth credentials immediately and revokes the Google grant when no other active connection of yours shares it
+- Disconnect ends analytics authorization for that connection; reconnecting requires fresh purpose acceptance
 - Contact support@postora.cloud for data deletion requests
 
 ### Limited Use Disclosure
@@ -163,31 +188,25 @@ Limited Use requirements.
 
 ### Step 4: Video Demonstration
 
-Create a screen recording showing:
+Create a masked screen recording of these eight journeys, using an owner-controlled test channel and synthetic identifiers wherever a denial is required:
 
-1. **OAuth Flow**
-   - User clicks "Connect YouTube"
-   - Google consent screen appears
-   - User grants permissions
-   - Redirect back to Postora
-   - Success message displayed
+1. **Connect:** account chooser and permission dialog with all three scopes, followed by the Postora success state.
+2. **Channel and video browse:** `/youtube` channel summary, uploads paging, and full details for an owned video.
+3. **Published metadata edit:** change a permitted field on an existing video and show the verified result at the same watch URL; do not replace media bytes or delete a video.
+4. **New upload:** publish a new video with chosen metadata and, optionally, a custom thumbnail.
+5. **Comments and moderation:** read Published and Held for review, create/reply/edit an own comment, and demonstrate hold/publish/reject; show the separate ban confirmation only if that capability is enabled for the test account.
+6. **On-demand analytics:** accept Analytics Purpose Clause v1 at `/analytics/youtube`, show channel/video reports, withdraw, and prove no further report loads. Reconnect later to show fresh acceptance is required.
+7. **Denial:** use a synthetic foreign account/video ID and a connection with missing scope to show safe `not_found`/reconnect states with no data or write.
+8. **Disconnect and reconnect:** Profiles → Connected Accounts → Disconnect, immediate local removal and provider-revocation outcome, followed by the account chooser and permission prompt on reconnect.
 
-2. **Data Usage**
-   - Show channel info displayed in dashboard
-   - Show video upload interface
-   - Show privacy/settings options
-   - Show where tokens are managed (account settings)
-
-3. **Disconnection Flow**
-   - User clicks "Disconnect"
-   - Confirmation dialog
-   - Account removed from dashboard
+The complete actions, expected results, masking rules, and capture checklist are in `docs/reports/2026-11-26-youtube-stage6-approval-package.md`.
 
 **Video Requirements:**
 - 720p or higher resolution
 - Clear narration or text overlays
-- Under 5 minutes
+- Keep the recording as concise as the eight journeys permit
 - Upload to YouTube as unlisted
+- Never expose tokens, cookies, client secrets, customer data, private channel identifiers, or unmasked personal information
 
 ### Step 5: Security Assessment
 
@@ -359,6 +378,7 @@ Once verified:
 ### APIs & Services → Library
 
 - [ ] YouTube Data API v3: Enabled
+- [ ] YouTube Analytics API v2: Enabled (for on-demand `reports.query`)
 - [ ] Google+ API: Enabled (for userinfo.profile)
 
 ---
@@ -388,6 +408,7 @@ Once verified:
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2025-02-02 | Postora Team | Initial document |
+| 1.1 | 2026-11-26 | Postora Team | Stage 6: complete three-scope Stage 1–5 justifications, exact OAuth prompt, revocation/fallback, analytics purpose acceptance, and eight-journey demo package |
 
 ---
 

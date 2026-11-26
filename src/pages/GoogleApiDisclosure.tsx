@@ -20,9 +20,7 @@ const GoogleApiDisclosure = () => {
               <Youtube className="h-8 w-8 text-red-500" />
               <h1 className="text-4xl font-bold">Google API Services Disclosure</h1>
             </div>
-            <p className="text-muted-foreground">
-              Last updated: {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-            </p>
+            <p className="text-muted-foreground">Last updated: November 26, 2026</p>
           </div>
 
           <Alert className="border-blue-500/50 bg-blue-500/10">
@@ -37,9 +35,10 @@ const GoogleApiDisclosure = () => {
             <section className="space-y-4">
               <h2 className="text-2xl font-semibold">Overview</h2>
               <p className="text-muted-foreground">
-                Postora ("we", "us", or "our") uses Google API Services, specifically the YouTube Data API v3, 
-                to enable users to publish content to their YouTube channels. This disclosure describes how we 
-                access, use, store, and share information obtained through Google APIs.
+                Postora ("we", "us", or "our") uses Google API Services, including the YouTube Data API v3 and
+                YouTube Analytics API v2, to enable owners to publish and browse their YouTube content, edit
+                published video details, manage comments, and view on-demand analytics. This disclosure describes
+                how we access, use, store, and share information obtained through Google APIs.
               </p>
               <p className="text-muted-foreground">
                 Our use of information received from Google APIs adheres to the{" "}
@@ -86,13 +85,15 @@ const GoogleApiDisclosure = () => {
                   <code className="bg-muted px-1 rounded break-all">youtube.readonly</code>,{" "}
                   <code className="bg-muted px-1 rounded break-all">youtube.upload</code>, and{" "}
                   <code className="bg-muted px-1 rounded break-all">youtube.force-ssl</code>.
-                  Together they cover reading your channel information, publishing videos you choose, and managing comments
-                  on your own videos.
+                  Together they cover identifying your channel, browsing your uploaded videos and their details,
+                  publishing videos you choose, editing published video metadata, managing and moderating comments
+                  on your own videos, and reading on-demand analytics after your in-app purpose acceptance.
                 </li>
                 <li>
                   <strong>No broad management scope:</strong> We intentionally do not request the full{" "}
-                  <code className="bg-muted px-1 rounded">youtube</code> scope, because it would grant far more access
-                  (managing playlists, editing or deleting existing videos, channel settings) than Postora needs.
+                  <code className="bg-muted px-1 rounded">youtube</code> scope, because it would grant broader access
+                  than Postora needs. Postora edits published video metadata through the narrower force-ssl scope,
+                  but does not manage playlists or channel settings, replace existing video media bytes, or delete videos.
                 </li>
                 <li>
                   <strong>No monetization or membership data:</strong> We do not request scopes for channel memberships
@@ -102,7 +103,7 @@ const GoogleApiDisclosure = () => {
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h3 className="font-semibold mb-2">Scopes We Intentionally Do NOT Request:</h3>
                 <ul className="list-disc list-inside text-muted-foreground text-sm space-y-1">
-                  <li><code className="bg-muted px-1 rounded">youtube</code> (broad) — Full channel management is not needed for publishing</li>
+                  <li><code className="bg-muted px-1 rounded">youtube</code> (broad) — Full channel management is not needed for Postora's features</li>
                   <li><code className="bg-muted px-1 rounded">youtube.channel-memberships.creator</code> — We don't access membership data</li>
                   <li><code className="bg-muted px-1 rounded">yt-analytics.readonly</code> — The current connection flow does not request this dedicated analytics scope</li>
                   <li><code className="bg-muted px-1 rounded">youtube.partner</code> — We don't access monetization data</li>
@@ -148,7 +149,8 @@ const GoogleApiDisclosure = () => {
                       <p className="text-muted-foreground text-sm mt-2">
                         <strong>User-facing feature:</strong> When you create a post with video content and select YouTube
                         as a target platform, Postora uploads the video and optionally sets your custom thumbnail — all
-                        under your explicit instruction. This scope does not allow us to edit or delete your existing videos.
+                        under your explicit instruction. Published metadata editing uses the separate force-ssl scope.
+                        Postora does not replace existing video media bytes or delete your videos.
                       </p>
                     </div>
 
@@ -173,9 +175,15 @@ const GoogleApiDisclosure = () => {
                           be reconnected before a scheduled post fails.
                         </li>
                         <li>
-                          <strong>Read your channel and video analytics on demand</strong> through the YouTube Analytics API
-                          only after you explicitly accept the Analytics Purpose Clause inside Postora for that channel, and
-                          only where analytics is enabled, displaying the numbers solely to you without storing them.
+                          <strong>Browse your uploaded videos and full video details</strong> on the YouTube Channel page
+                          (<code className="bg-muted px-1 rounded">/youtube</code>), including metadata, privacy and
+                          Data API counters, always limited to videos owned by your connected channel.
+                        </li>
+                        <li>
+                          <strong>Read your channel and video analytics on demand</strong> through the YouTube Analytics API v2
+                          on the YouTube Analytics page (<code className="bg-muted px-1 rounded">/analytics/youtube</code>),
+                          only after you explicitly accept the Analytics Purpose Clause inside Postora for the current
+                          connection, and only where analytics is enabled, displaying the numbers solely to you without storing them.
                         </li>
                       </ul>
                     </div>
@@ -185,12 +193,29 @@ const GoogleApiDisclosure = () => {
                         <code className="bg-muted px-2 py-1 rounded text-sm break-all">https://www.googleapis.com/auth/youtube.force-ssl</code>
                       </h4>
                       <p className="text-muted-foreground text-sm mt-2">
-                        <strong>Purpose:</strong> Read, reply to, hide and delete comments on videos on your own channel
-                        when you use Postora's comment management features.
+                        <strong>Purpose:</strong> Edit published video metadata and manage comments on your own channel
+                        when you instruct Postora to use those features.
                       </p>
                       <p className="text-muted-foreground text-sm mt-2">
-                        Postora uses this scope only to manage the comments you choose. Postora does not delete your videos.
+                        <strong>Justification — what we actually do with this scope:</strong>
                       </p>
+                      <ul className="list-disc list-inside text-muted-foreground text-sm mt-2 space-y-1 ms-4">
+                        <li>
+                          <strong>Edit published video metadata</strong> on the YouTube Channel page through
+                          <code className="bg-muted px-1 rounded">videos.update</code>: title, description, tags,
+                          category, privacy, language, made-for-kids and synthetic-media declarations. Postora never
+                          replaces the existing video's media bytes and never deletes videos.
+                        </li>
+                        <li>
+                          <strong>Read and create comments</strong> on your own videos, including top-level comments
+                          and replies, and edit or delete comments written by your channel.
+                        </li>
+                        <li>
+                          <strong>Moderate comments</strong> by publishing, holding for review, or rejecting them,
+                          with an optional separately confirmed <code className="bg-muted px-1 rounded">banAuthor</code>
+                          request attached only to rejection.
+                        </li>
+                      </ul>
                     </div>
 
                     <div className="border-l-4 border-muted ps-4">
@@ -227,11 +252,19 @@ const GoogleApiDisclosure = () => {
                   <strong>Account Display:</strong> To show your YouTube channel name and profile picture within the Postora interface
                 </li>
                 <li>
+                  <strong>Channel & Video Browsing:</strong> To let you browse your uploaded videos and their full details
+                  on the YouTube Channel page, limited to your own channel
+                </li>
+                <li>
+                  <strong>Published Video Editing:</strong> To update metadata on your existing videos only when you ask,
+                  without replacing their media bytes or deleting videos
+                </li>
+                <li>
                   <strong>Authentication:</strong> To verify your identity and maintain your connected account status
                 </li>
                 <li>
-                  <strong>Comment Management:</strong> To read, reply to, hide and delete comments on your own videos
-                  when you use those features
+                  <strong>Comment Management & Moderation:</strong> To read, create, reply to, edit, delete and moderate
+                  comments on your own videos when you use those features
                 </li>
                 <li>
                   <strong>YouTube Analytics — Analytics Purpose Clause, Version 1, dated November 26, 2026:</strong>
@@ -302,8 +335,16 @@ const GoogleApiDisclosure = () => {
                 <div className="border rounded-lg p-4">
                   <h3 className="font-semibold mb-2">Option 1: Through Postora</h3>
                   <p className="text-muted-foreground text-sm">
-                    Navigate to <strong>Settings → Connected Accounts</strong> and disconnect your YouTube account. 
-                    This will delete your YouTube connection data from our systems.
+                    Navigate to <strong>Profiles → Connected Accounts → Disconnect</strong> for your YouTube account.
+                    Postora clears the connection's stored credentials immediately. It revokes the Google OAuth token
+                    when no other active connection of yours shares that grant, using the refresh token first and the
+                    access token as a fallback when needed. If Google does not confirm a required revocation, Postora
+                    reports an error instead of claiming a successful disconnect.
+                  </p>
+                  <p className="text-muted-foreground text-sm mt-2">
+                    Disconnecting ends the current connection's in-app Analytics Purpose Clause acceptance. It does not
+                    record a withdrawal event or delete historical acceptance records, but a later connection has a new
+                    connection revision and requires fresh acceptance before analytics can be read again.
                   </p>
                 </div>
 
