@@ -256,7 +256,25 @@
     "signInRequired": "يرجى تسجيل الدخول لاستخدام ميزات الذكاء الاصطناعي.",
     "writeTitleAndDesc": "اكتب عنوان ووصف عشان تاخد اقتراحات للعلامات (Tags).",
     "writeTitleFirst": "اكتب عنوان الأول عشان تولد وصف.",
-    "writeTitleOrCaption": "اكتب عنوان أو وصف عشان تاخد اقتراحات بالذكاء الاصطناعي."
+    "writeTitleOrCaption": "اكتب عنوان أو وصف عشان تاخد اقتراحات بالذكاء الاصطناعي.",
+    "chapters": {
+      "outlineLabel": "مخطط الفيديو بالتوقيتات",
+      "outlinePlaceholder": "00:00 المقدمة\n00:30 الموضوع الرئيسي\n01:30 الخاتمة",
+      "durationUnknown": "غير معروفة",
+      "duration": "مدة الفيديو: {{duration}}",
+      "timingLabel": "توقيتات الفصول",
+      "timingProvided": "استخدم توقيتاتي",
+      "timingEstimated": "قدّر التوقيتات",
+      "languageLabel": "لغة الفصول",
+      "generating": "جارٍ إنشاء الفصول…",
+      "generate": "إنشاء الفصول",
+      "invalid": "أعاد الذكاء الاصطناعي فصولًا غير صالحة. راجع المخطط وحاول مرة أخرى.",
+      "tooLong": "سيتجاوز الوصف 5000 حرف. قصّره قبل إدراج الفصول.",
+      "insertFailed": "لم يتم إدراج الفصول",
+      "previewLabel": "معاينة الفصول",
+      "insert": "إدراج الفصول",
+      "estimateWarning": "هذه التوقيتات تقديرية. راجعها مقابل الفيديو قبل النشر."
+    }
   },
   "location": {
     "connectThreadsToSearch": "اربط Threads عشان تبحث عن الأماكن.",

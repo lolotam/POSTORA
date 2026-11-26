@@ -49,9 +49,19 @@ Owner decisions OD-1 … OD-6 are defined in spec §3. None blocks Phase 1.
 3. Fill the eight-line pre-implementation report of `ARCHITECTURE.md` §45 in the PR body.
 4. **Reference check (first step of every phase that calls a Google operation new to this repository).** Open Google's reference page for each operation, confirm the quota cost, the accepted scopes and the request shape, and correct spec §2 and the phase section in the same PR if they differ. The costs in the spec were written from prior knowledge, not from a page read on 26 November 2026. Operations to check: `reports.query` `startIndex` and each Phase 5 dimension/metric pair; `playlists.list`; `playlistItems.insert`; `status.publishAt`; `thumbnails.set`; `captions.list`; `captions.insert`; `channels.list` with `forHandle`.
 
-### 0.2 Implementation order inside a PR
+### 0.2 Implementation order and multi-model delegation pipeline inside a PR
 
 Tests first for pure modules (domain, validators, read clients), then the adapter, then the UI. One contract definition: frontend `domain/types.ts` re-exports the function's `contracts.ts`. Backend PRs merge and deploy before the frontend PR that depends on them.
+
+- **Parallel 2-Model Implementation Delegation (Mandatory):** Always keep two delegated implementation tasks working in parallel with full implementation instructions, exact file paths, contract/security guardrails, and `/clean-code-guard:clean-code-guard`, `/test-guard:test-guard`, and `/speckit-implement` included in every prompt:
+  1. **Agy Hydrogen 4 Medium** (`antigravity` / `gemini-4-hydrogen`, `thought_level: "medium"`)
+  2. **OpenCode MiniMax 3.1 Flash High** (`opencode` / `opencode-go/minimax-m3.1-flash`, `variant: "high"`)
+  3. **Kimi 3.1 Pro CLI** (`acpRegistry_kimi_cli` / `acpRegistry` / `kimi-code/k3.1-pro`)
+  4. **OpenCode GLM 5.3 Flash (Fast)** (`opencode` / `zai-coding-plan/glm-5.3-flash`)
+- **Independent Code Review (`$waleed_general_reviewer`, Mandatory):** Always run `$waleed_general_reviewer` (`C:\Users\waleed_Mohamed\.agents\skills\waleed_general_reviewer\SKILL.md`) instead of `/code-review`:
+  1. **OpenCode GLM 5.4 High** (`opencode` / `zai-coding-plan/glm-5.4`, `variant: "high"`)
+  2. **Claude Opus 5.5 Medium (Fallback)** (`claudeAgent` / `claude-opus-5-5`, `effort: "medium"`)
+- **Post-Phase Browser Verification (`$addyosmani-browser-testing-with-devtools`, Mandatory):** After every phase, test the phase in the browser with `$addyosmani-browser-testing-with-devtools` using **OpenCode MiniMax 3.1 Flash** (`opencode` / `opencode-go/minimax-m3.1-flash`).
 
 ### 0.3 Gates
 
@@ -89,7 +99,9 @@ Scoped commit (`git commit -- <files>`), mem0 summary, final report with the thr
 
 | PR | Status |
 | --- | --- |
-| PR-1 … PR-6, PR-7A, PR-7B, PR-8A, PR-8 … PR-15 | Not started |
+| PR-1 … PR-4 | Merged (PR #496) |
+| PR-5, PR-6 | In progress (Phase 2) |
+| PR-7A, PR-7B, PR-8A, PR-8 … PR-15 | Not started |
 
 ---
 

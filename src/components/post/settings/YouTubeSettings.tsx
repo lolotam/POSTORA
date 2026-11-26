@@ -103,6 +103,7 @@ interface YouTubeSettingsProps {
   settings: YouTubeSettingsState;
   onSettingsChange: (settings: Partial<YouTubeSettingsState>) => void;
   hasVideo: boolean;
+  videoSourceUrl?: string | null;
   autoThumbnails: string[];
   selectedAutoThumbnail: number | null;
   onSelectAutoThumbnail: (index: number | null) => void;
@@ -178,6 +179,7 @@ export function YouTubeSettings({
   settings,
   onSettingsChange,
   hasVideo,
+  videoSourceUrl = null,
   autoThumbnails,
   selectedAutoThumbnail,
   onSelectAutoThumbnail,
@@ -441,6 +443,12 @@ export function YouTubeSettings({
           type="description"
           context={settings.title || ""}
           secondaryContext={settings.description}
+          onSelect={(val) => onSettingsChange({ description: val })}
+        />
+        <YouTubeAISuggestions
+          type="chapters"
+          currentDescription={settings.description}
+          videoSourceUrl={hasVideo ? videoSourceUrl : null}
           onSelect={(val) => onSettingsChange({ description: val })}
         />
       </div>

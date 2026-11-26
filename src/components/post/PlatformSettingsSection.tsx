@@ -543,33 +543,39 @@ export function PlatformSettingsSection({
                 )}
               </TabsContent>}
 
-              {isPlatformEligible("youtube") && isPlatformVisible("youtube") && hasPlatformSelected("youtube") && <TabsContent value="youtube" className="mt-4 space-y-6">
-                <YouTubeSettings
-                  settings={youtubeSettingsState}
-                  onSettingsChange={onYoutubeSettingsChange}
-                  hasVideo={hasVideo}
-                  autoThumbnails={platformSettings.youtubeAutoThumbnails}
-                  selectedAutoThumbnail={platformSettings.youtubeSelectedAutoThumbnail}
-                  onSelectAutoThumbnail={platformSettings.setYoutubeSelectedAutoThumbnail}
-                  onGenerateAutoThumbnails={async () => { youtubeThumbnails.generateAutoThumbnails(); }}
-                  aiGeneratedThumbnails={platformSettings.youtubeAiGeneratedThumbnails}
-                  onGenerateAiThumbnail={(prompt: string, refImage?: string) => Promise.resolve(youtubeThumbnails.generateAiThumbnail(prompt, refImage))}
-                  isGeneratingAiThumbnail={platformSettings.youtubeGeneratingAiThumbnail}
-                  onDownloadThumbnail={youtubeThumbnails.downloadThumbnail}
-                  selectedAccounts={getSelectedAccountsForPlatform("youtube")}
-                  caption={caption}
-                />
-                
-                {youtubeSettingsState.videoType === "short" && hasVideo && (
-                  <YouTubeShortsPreview
-                    title={youtubeSettingsState.title || caption}
-                    description={youtubeSettingsState.description}
-                    mediaFile={files.find(f => f.fileType === "video") ? { previewUrl: files.find(f => f.fileType === "video")!.previewUrl, fileType: "video" } : undefined}
-                    username={getAccountForPlatform("youtube")?.platform_username || t("section.yourChannelDefault", "Your Channel")}
-                    avatarUrl={getAccountForPlatform("youtube")?.avatar_url || undefined}
-                  />
-                )}
-              </TabsContent>}
+              {isPlatformEligible("youtube") && isPlatformVisible("youtube") && hasPlatformSelected("youtube") && (() => {
+                const youtubeVideoFile = files.find((f) => f.fileType === "video");
+                return (
+                  <TabsContent value="youtube" className="mt-4 space-y-6">
+                    <YouTubeSettings
+                      settings={youtubeSettingsState}
+                      onSettingsChange={onYoutubeSettingsChange}
+                      hasVideo={hasVideo}
+                      videoSourceUrl={youtubeVideoFile?.previewUrl ?? youtubeVideoFile?.cloudinaryUrl ?? null}
+                      autoThumbnails={platformSettings.youtubeAutoThumbnails}
+                      selectedAutoThumbnail={platformSettings.youtubeSelectedAutoThumbnail}
+                      onSelectAutoThumbnail={platformSettings.setYoutubeSelectedAutoThumbnail}
+                      onGenerateAutoThumbnails={async () => { youtubeThumbnails.generateAutoThumbnails(); }}
+                      aiGeneratedThumbnails={platformSettings.youtubeAiGeneratedThumbnails}
+                      onGenerateAiThumbnail={(prompt: string, refImage?: string) => Promise.resolve(youtubeThumbnails.generateAiThumbnail(prompt, refImage))}
+                      isGeneratingAiThumbnail={platformSettings.youtubeGeneratingAiThumbnail}
+                      onDownloadThumbnail={youtubeThumbnails.downloadThumbnail}
+                      selectedAccounts={getSelectedAccountsForPlatform("youtube")}
+                      caption={caption}
+                    />
+
+                    {youtubeSettingsState.videoType === "short" && hasVideo && (
+                      <YouTubeShortsPreview
+                        title={youtubeSettingsState.title || caption}
+                        description={youtubeSettingsState.description}
+                        mediaFile={youtubeVideoFile ? { previewUrl: youtubeVideoFile.previewUrl, fileType: "video" } : undefined}
+                        username={getAccountForPlatform("youtube")?.platform_username || t("section.yourChannelDefault", "Your Channel")}
+                        avatarUrl={getAccountForPlatform("youtube")?.avatar_url || undefined}
+                      />
+                    )}
+                  </TabsContent>
+                );
+              })()}
 
               {isPlatformEligible("pinterest") && isPlatformVisible("pinterest") && hasPlatformSelected("pinterest") && <TabsContent value="pinterest" className="mt-4 space-y-6">
                 <PinterestSettings
