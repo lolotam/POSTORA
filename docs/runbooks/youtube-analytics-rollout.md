@@ -92,7 +92,7 @@ Under branch B (after the Step 7 scope-gate migration replaces `youtube_analytic
 
 **G-P1 blocks every account except the probe account.** The first policy entry is Waleed's probe channel only. Do not add another account until P1-a has a recorded conclusion and the deployed `YOUTUBE_ANALYTICS_REQUIRED_SCOPES` equals that conclusion. A different conclusion requires a reviewed code change first.
 
-**G-B applies only to branch B and is per connection.** Before each account is added to the rollout, check under approval that a token minted from that account's stored refresh token carries `yt-analytics.readonly`. Never record the token, response body, channel name, or metrics. Closing the scope gate later does not remove an existing grant.
+**G-B applies only to branch B and is per connection.** Before each account is added to the rollout, and again before reads resume on each new `connection_revision` of an allowlisted account (reconnect, or delete and re-insert), check under approval that a token minted from that account's stored refresh token carries `yt-analytics.readonly`. Never record the token, response body, channel name, or metrics. Closing the scope gate later does not remove an existing grant.
 
 ## P1 procedure
 
