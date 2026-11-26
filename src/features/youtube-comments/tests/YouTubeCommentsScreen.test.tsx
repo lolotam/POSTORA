@@ -1,8 +1,10 @@
 import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
+import { FunctionsHttpError } from "@supabase/supabase-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { YouTubeCommentsScreen, Stage4RecoveredOperations } from "../ui/YouTubeCommentsScreen";
 import i18n from "@/i18n";
+import * as aiErrorHandler from "@/lib/aiErrorHandler";
 import type { YouTubeCommentsGateway, YouTubeReplySuggestionGateway } from "../application/ports";
 import type {
   Stage4CapabilitiesPayload,
@@ -1675,10 +1677,12 @@ describe("YouTubeCommentsScreen follow-up (Stage 4 issue 470)", () => {
     }));
   });
 
-  it("asks before replacing a non-empty reply draft and preserves the draft on cancel or AI failure", async () => {
+  it("asks before replacing a non-empty reply draft and preserves the draft on cancel or AI failure (including FunctionsHttpError 429)", async () => {
+    const handleAIErrorSpy = vi.spyOn(aiErrorHandler, "handleAIError");
+    const rateLimitError = new FunctionsHttpError(new Response(JSON.stringify({ error: "Rate limit exceeded" }), { status: 429 }));
     const suggestReply = vi.fn()
       .mockResolvedValueOnce("AI replacement draft")
-      .mockRejectedValueOnce(new Error("provider_error"));
+      .mockRejectedValueOnce(rateLimitError);
     const { gateway } = renderScreen(
       {
         videos: [{ id: "vid-1", title: "Studio upload" }],
@@ -1686,34 +1690,39 @@ describe("YouTubeCommentsScreen follow-up (Stage 4 issue 470)", () => {
       },
       { suggestReply },
     );
-    await screen.findByText("Can you share more details?");
-    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
-    const replyBox = screen.getByLabelText("Write a reply") as HTMLTextAreaElement;
-    fireEvent.change(replyBox, { target: { value: "My manual draft" } });
+    try {
+      await screen.findByText("Can you share more details?");
+      fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+      const replyBox = screen.getByLabelText("Write a reply") as HTMLTextAreaElement;
+      fireEvent.change(replyBox, { target: { value: "My manual draft" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Replace your current draft?")).toBeInTheDocument();
-    expect(suggestReply).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText("Replace your current draft?")).toBeInTheDocument();
+      expect(suggestReply).not.toHaveBeenCalled();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Keep my draft" }));
-    expect(replyBox.value).toBe("My manual draft");
-    expect(suggestReply).not.toHaveBeenCalled();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Keep my draft" }));
+      expect(replyBox.value).toBe("My manual draft");
+      expect(suggestReply).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
-    const dialog2 = await screen.findByRole("dialog");
-    fireEvent.click(within(dialog2).getByRole("button", { name: "Replace with AI suggestion" }));
-    await waitFor(() => expect(replyBox.value).toBe("AI replacement draft"));
-    expect(suggestReply).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
+      const dialog2 = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog2).getByRole("button", { name: "Replace with AI suggestion" }));
+      await waitFor(() => expect(replyBox.value).toBe("AI replacement draft"));
+      expect(suggestReply).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
-    const dialog3 = await screen.findByRole("dialog");
-    fireEvent.click(within(dialog3).getByRole("button", { name: "Replace with AI suggestion" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not generate a reply suggestion. Your draft was not changed.",
-    );
-    expect(replyBox.value).toBe("AI replacement draft");
-    expect(gateway.reply).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
+      const dialog3 = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog3).getByRole("button", { name: "Replace with AI suggestion" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Could not generate a reply suggestion. Your draft was not changed.",
+      );
+      expect(handleAIErrorSpy).toHaveBeenCalledWith(rateLimitError, "YouTube AI reply");
+      expect(replyBox.value).toBe("AI replacement draft");
+      expect(gateway.reply).not.toHaveBeenCalled();
+    } finally {
+      handleAIErrorSpy.mockRestore();
+    }
   });
 });
 

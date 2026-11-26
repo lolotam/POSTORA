@@ -73,7 +73,7 @@ export function handleAIError(error: unknown, context: string = "AI request") {
   console.error(`${context} error:`, error);
 
   // Check if it's a FunctionsHttpError with status
-  const status = (error as any)?.status || (error as any)?.code;
+  const status = getErrorStatus(error);
   const rawMessage = getRawErrorMessage(error);
 
   // Handle specific status codes with safe messages
@@ -115,11 +115,16 @@ export function handleAIError(error: unknown, context: string = "AI request") {
   return { isGenericError: true };
 }
 
-// Type-safe wrapper for edge function errors
+// Type-safe wrapper for edge function errors (including FunctionsHttpError.context.status)
 export function getErrorStatus(error: unknown): number | undefined {
   if (typeof error === 'object' && error !== null) {
-    if ('status' in error) return (error as any).status;
-    if ('code' in error) return (error as any).code;
+    const record = error as Record<string, unknown>;
+    if (typeof record.status === 'number') return record.status;
+    if (typeof record.code === 'number') return record.code;
+    if (typeof record.context === 'object' && record.context !== null) {
+      const ctxStatus = (record.context as Record<string, unknown>).status;
+      if (typeof ctxStatus === 'number') return ctxStatus;
+    }
   }
   return undefined;
 }

@@ -516,6 +516,18 @@ jobs:
             supabase/functions/process-scheduled-posts/youtubePostDeferral.test.ts \
             supabase/functions/refresh-tokens/youtubeProviderRefresh.test.ts
 
+      - name: Typecheck and test YouTube AI chapters and generate-caption
+        run: |
+          set -euo pipefail
+          deno check --no-config --node-modules-dir=none \
+            supabase/functions/_shared/youtubeChapters.ts \
+            supabase/functions/_shared/youtubeChapters.test.ts \
+            supabase/functions/generate-caption/handler.ts \
+            supabase/functions/generate-caption/handler.test.ts
+          deno test --no-config --allow-env --allow-read --node-modules-dir=none \
+            supabase/functions/_shared/youtubeChapters.test.ts \
+            supabase/functions/generate-caption/handler.test.ts
+
       - name: Typecheck and test AI provider health and catalogue sync
         run: |
           set -euo pipefail

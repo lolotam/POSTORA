@@ -21,18 +21,25 @@ export function useReplySuggestion(gateway?: YouTubeReplySuggestionGateway) {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
+    const externalSignal = input.signal;
+    const forwardAbort = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort();
+      else externalSignal.addEventListener("abort", forwardAbort, { once: true });
+    }
     setIsSuggesting(true);
     try {
       const suggestion = await gateway.suggestReply({
         ...input,
         videoTitle: input.videoTitle.slice(0, 100),
         commentText: input.commentText.slice(0, 2000),
-        signal: input.signal ?? controller.signal,
+        signal: controller.signal,
       });
-      return { suggestion, error: null };
+      return { suggestion: null, error: null, ...(suggestion ? { suggestion } : {}) };
     } catch (caught) {
       return { suggestion: null, error: caught };
     } finally {
+      externalSignal?.removeEventListener("abort", forwardAbort);
       if (controllerRef.current === controller) {
         setIsSuggesting(false);
       }

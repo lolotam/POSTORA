@@ -14,7 +14,7 @@ export class SupabaseReplySuggestionGateway implements YouTubeReplySuggestionGat
         }),
       },
       signal: input.signal,
-      timeout: 15000,
+      timeout: 45000,
     });
     if (error) throw error;
     if (data?.error) throw new Error(data.error);

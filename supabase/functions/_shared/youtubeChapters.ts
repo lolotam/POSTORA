@@ -3,7 +3,7 @@ export interface YouTubeChapter {
   title: string;
 }
 
-const TIMESTAMP_AT_LINE_START = /^\s*(\d+):([0-5]\d)(?::([0-5]\d))?\s*(?:[-–—]\s*)?(.*)$/;
+const TIMESTAMP_AT_LINE_START = /^\s*(\d+):([0-5]\d)(?::([0-5]\d))?(?![:\d])(?:\s+(?:[-–—]\s*)?|\s*[-–—]\s*|\s*$)(.*)$/;
 const ZERO_TIMESTAMP_AT_LINE_START = /^\s*(?:0:00|00:00|0:00:00|00:00:00)(?:\s|[-–—]|$)/;
 const TIMESTAMP_ANYWHERE = /(^|[^\d:])(\d+):([0-5]\d)(?::([0-5]\d))?(?![\d:])/g;
 

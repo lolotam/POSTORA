@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { FunctionsHttpError } from "@supabase/supabase-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { YouTubeAISuggestions } from "../YouTubeAISuggestions";
 import i18n from "@/i18n";
@@ -66,7 +67,33 @@ describe("YouTubeAISuggestions chapters", () => {
         durationSeconds: 120,
         timing: "provided",
       },
+      timeout: 45000,
     });
+  });
+
+  it("clears the chapter preview when the selected video or duration changes", async () => {
+    const { rerender } = render(
+      <YouTubeAISuggestions
+        type="chapters"
+        currentDescription="Existing description"
+        durationSeconds={120}
+        videoSourceUrl="blob:https://postora.cloud/video-1"
+        onSelect={vi.fn()}
+      />,
+    );
+    await generate();
+    expect(screen.getByLabelText("Chapter preview")).toBeInTheDocument();
+
+    rerender(
+      <YouTubeAISuggestions
+        type="chapters"
+        currentDescription="Existing description"
+        durationSeconds={60}
+        videoSourceUrl="blob:https://postora.cloud/video-2"
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText("Chapter preview")).not.toBeInTheDocument();
   });
 
   it("replaces an existing chapter block and preserves surrounding text", async () => {
@@ -99,10 +126,13 @@ describe("YouTubeAISuggestions chapters", () => {
     }));
   });
 
-  it("shows an invalid-chapters error and inserts nothing after a 422", async () => {
+  it("shows an invalid-chapters error and inserts nothing after a real FunctionsHttpError 422", async () => {
     const onSelect = renderChapters();
     fireEvent.change(screen.getByLabelText("Timed outline"), { target: { value: chapterBlock } });
-    invokeMock.mockResolvedValue({ data: null, error: { status: 422, message: "Unprocessable entity" } });
+    invokeMock.mockResolvedValue({
+      data: null,
+      error: new FunctionsHttpError(new Response(JSON.stringify({ error: "chapters_invalid" }), { status: 422 })),
+    });
     fireEvent.click(screen.getByRole("button", { name: "Generate chapters" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The AI returned invalid chapters");

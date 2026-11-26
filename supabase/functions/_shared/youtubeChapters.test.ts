@@ -42,6 +42,9 @@ Deno.test("parseChapterLines accepts JSON chapters and suggestions shapes", () =
 
 Deno.test("parseChapterLines returns null without timestamp lines", () => {
   assertEquals(parseChapterLines("No chapters here"), null);
+  assertEquals(parseChapterLines("00:00 Intro\n00:20:99 Bad seconds"), [
+    { startSeconds: 0, title: "Intro" },
+  ]);
 });
 
 Deno.test("extractInputTimestamps finds all minute and hour values", () => {

@@ -18,7 +18,7 @@ import { upsertChaptersBlock } from "../../../../supabase/functions/_shared/yout
 
 interface YouTubeAISuggestionsProps {
   type: "title" | "description" | "tags" | "chapters";
-  context: string;
+  context?: string;
   secondaryContext?: string;
   durationSeconds?: number | null;
   videoSourceUrl?: string | null;
@@ -31,7 +31,7 @@ export function YouTubeAISuggestions(props: YouTubeAISuggestionsProps) {
   return <YouTubeLegacyAISuggestions {...props} />;
 }
 
-function YouTubeLegacyAISuggestions({ type, context, secondaryContext, onSelect }: YouTubeAISuggestionsProps) {
+function YouTubeLegacyAISuggestions({ type, context = "", secondaryContext, onSelect }: YouTubeAISuggestionsProps) {
   const { t } = useTranslation("postsettings");
   const [isLoading, setIsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -233,13 +233,21 @@ function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDes
   const [language, setLanguage] = useState<"english" | "arabic">("english");
   const [timing, setTiming] = useState<"provided" | "estimated">("provided");
   const [isLoading, setIsLoading] = useState(false);
-  const [preview, setPreview] = useState<{ block: string; timing: "provided" | "estimated" } | null>(null);
+  const [previewState, setPreviewState] = useState<{
+    block: string;
+    timing: "provided" | "estimated";
+    videoKey: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const resolvedDurationSeconds = useDetectedVideoDuration(videoSourceUrl, durationSeconds);
+  const currentVideoKey = `${videoSourceUrl ?? ""}::${resolvedDurationSeconds ?? "unknown"}`;
+  const preview = previewState?.videoKey === currentVideoKey ? previewState : null;
 
   const handleGenerate = async () => {
+    const requestVideoKey = currentVideoKey;
+    const requestDurationSeconds = resolvedDurationSeconds;
     setIsLoading(true);
-    setPreview(null);
+    setPreviewState(null);
     setError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -250,9 +258,10 @@ function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDes
           platform: "youtube",
           language,
           requestType: "youtube_chapters",
-          durationSeconds: resolvedDurationSeconds ?? undefined,
+          durationSeconds: requestDurationSeconds ?? undefined,
           timing,
         },
+        timeout: 45000,
       });
       if (invokeError) {
         const status = getErrorStatus(invokeError);
@@ -276,7 +285,11 @@ function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDes
         setError(t("youtubeAI.chapters.invalid", "The AI returned invalid chapters. Check your outline and try again."));
         return;
       }
-      setPreview({ block, timing: data.timing === "estimated" ? "estimated" : timing });
+      setPreviewState({
+        block,
+        timing: data.timing === "estimated" ? "estimated" : timing,
+        videoKey: requestVideoKey,
+      });
     } catch (err) {
       handleAIError(err, "YouTube AI chapters");
     } finally {
@@ -285,7 +298,7 @@ function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDes
   };
 
   const handleInsert = () => {
-    if (!preview) return;
+    if (!preview || preview.videoKey !== currentVideoKey) return;
     const result = upsertChaptersBlock(currentDescription ?? "", preview.block, 5000);
     if (!result.ok) {
       const message = t("youtubeAI.chapters.tooLong", "The description would exceed 5,000 characters. Shorten it before inserting chapters.");
