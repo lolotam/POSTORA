@@ -398,8 +398,10 @@ const GoogleApiDisclosure = () => {
                 <li>
                   <strong>Configured AI Provider (Creator-Initiated Reply Drafting Only):</strong> When you explicitly
                   click <em>Suggest AI reply</em> on a comment, Postora sends that comment&apos;s text and the video
-                  title to the configured AI provider solely to draft a reply in your composer; the provider does not
-                  post to YouTube and Google user data is never used to train AI models
+                  title to the configured AI provider (either Postora&apos;s platform-configured provider or a provider
+                  API key you connected in your own settings, governed by that provider&apos;s applicable API terms)
+                  solely to draft a reply in your composer; the provider does not post to YouTube, and Postora itself
+                  never uses Google user data to train AI models
                 </li>
                 <li>
                   <strong>Legal Requirements:</strong> We may disclose data if required by law or to protect our rights

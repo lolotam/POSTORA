@@ -64,6 +64,18 @@ function classifyProviderStatus(status: number): YouTubeAiErrorClass {
   return "provider_error";
 }
 
+function classifyAiResultFailure(result: AiCallResult): YouTubeAiErrorClass {
+  const direct = classifyProviderStatus(result.response.status);
+  if (direct !== "provider_error" || result.tiers.length === 0) return direct;
+  const tierClasses = result.tiers
+    .map((tier) => (typeof tier.status === "number" && tier.status > 0 ? classifyProviderStatus(tier.status) : null))
+    .filter((cls): cls is YouTubeAiErrorClass => cls !== null);
+  if (tierClasses.length > 0 && tierClasses.every((cls) => cls === "rate_limit")) return "rate_limit";
+  if (tierClasses.length > 0 && tierClasses.every((cls) => cls === "timeout")) return "timeout";
+  if (tierClasses.length > 0 && tierClasses.every((cls) => cls === "auth")) return "auth";
+  return "provider_error";
+}
+
 function caughtErrorClass(error: unknown): string {
   return error instanceof Error ? error.name : "Error";
 }
@@ -182,7 +194,7 @@ async function invokeYouTubeAi(
         ...failureOptions,
         result: null,
         errorCode: AI_CONNECTION_REQUIRED,
-        errorClass: "provider_error",
+        errorClass: "auth",
       });
       return jsonResponse({ error: AI_CONNECTION_REQUIRED, message: "Connect an AI provider key or change your routing mode." }, 409);
     }
@@ -217,7 +229,7 @@ async function invokeYouTubeAi(
     }
 
     if (!aiResult.response.ok) {
-      const errorClass = classifyProviderStatus(aiResult.response.status);
+      const errorClass = classifyAiResultFailure(aiResult);
       await logYouTubeAiFailure(dependencies, {
         ...failureOptions,
         result: aiResult,

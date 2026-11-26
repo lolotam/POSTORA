@@ -242,14 +242,17 @@ Deno.test("youtube_chapters returns formatted chapters in estimated mode", async
   assertEquals(result.body.timing, "estimated");
 });
 
-Deno.test("youtube_chapters rejects oversize context before calling the provider", async () => {
+Deno.test("youtube_chapters rejects oversize context before calling the provider and logs invalid_request without leaking input", async () => {
+  const secretMarker = "OVERSIZE_CHAPTER_SECRET_400";
   const result = await runYouTubeAiRequest("youtube_chapters", {
-    context: "x".repeat(8001),
+    context: `${secretMarker}${"x".repeat(8001)}`,
     timing: "provided",
   });
   assertEquals(result.response.status, 400);
   assertEquals(result.body.error, "Invalid request body");
   assertEquals(result.providerCalls, []);
+  assert(result.logText.includes('"error_class":"invalid_request"'));
+  assert(!result.logText.includes(secretMarker));
 });
 
 Deno.test("youtube_comment_reply strips markup and control characters and caps the reply", async () => {
@@ -283,14 +286,28 @@ Deno.test("youtube_comment_reply keeps its output contract for a hostile comment
   assert(prompt.includes("untrusted data"));
 });
 
-Deno.test("youtube_comment_reply rejects invalid context JSON before calling the provider", async () => {
+Deno.test("youtube_comment_reply rejects invalid context JSON before calling the provider and logs invalid_request without leaking input", async () => {
+  const secretMarker = "INVALID_JSON_COMMENT_SECRET_400";
   const result = await runYouTubeAiRequest("youtube_comment_reply", {
-    context: "{not-json",
+    context: `{not-json:${secretMarker}`,
     language: "auto",
   });
   assertEquals(result.response.status, 400);
   assertEquals(result.body.error, "Invalid request body");
   assertEquals(result.providerCalls, []);
+  assert(result.logText.includes('"error_class":"invalid_request"'));
+  assert(!result.logText.includes(secretMarker));
+});
+
+Deno.test("youtube_comment_reply classifies an exhausted all-429 provider chain as rate_limit", async () => {
+  const result = await runYouTubeAiRequest("youtube_comment_reply", {
+    context: JSON.stringify({ video_title: "Fixture video", comment_text: "Great video!" }),
+    language: "auto",
+  }, { providerStatus: 429, providerBody: "RATE_LIMIT_BODY_SECRET" });
+  assertEquals(result.response.status, 502);
+  assertEquals(result.body.error, "rate_limit");
+  assert(result.logText.includes('"error_class":"rate_limit"'));
+  assert(!result.logText.includes("RATE_LIMIT_BODY_SECRET"));
 });
 
 for (const feature of ["youtube_chapters", "youtube_comment_reply"] as const) {

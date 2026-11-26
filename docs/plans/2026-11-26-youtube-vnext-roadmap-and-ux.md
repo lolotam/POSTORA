@@ -56,7 +56,7 @@ Tests first for pure modules (domain, validators, read clients), then the adapte
 - **Parallel 2-Model Implementation Delegation (Mandatory):** Always keep two delegated implementation tasks working in parallel with full implementation instructions, exact file paths, contract/security guardrails, and `/clean-code-guard:clean-code-guard`, `/test-guard:test-guard`, and `/speckit-implement` included in every prompt:
   1. **Agy Hydrogen 4 Medium** (`antigravity` / `gemini-4-hydrogen`, `thought_level: "medium"`)
   2. **OpenCode MiniMax 3.1 Flash High** (`opencode` / `opencode-go/minimax-m3.1-flash`, `variant: "high"`)
-  3. **OpenCode Kimi 3.1 Pro** (`opencode` / `opencode-go/kimi-k3.1-pro`)
+  3. **Kimi 3.1 Pro CLI** (`acpRegistry_kimi_cli` / `acpRegistry` / `kimi-code/k3.1-pro`)
   4. **OpenCode GLM 5.3 Flash (Fast)** (`opencode` / `zai-coding-plan/glm-5.3-flash`)
 - **Independent Code Review (`$waleed_general_reviewer`, Mandatory):** Always run `$waleed_general_reviewer` (`C:\Users\waleed_Mohamed\.agents\skills\waleed_general_reviewer\SKILL.md`) instead of `/code-review`:
   1. **OpenCode GLM 5.4 High** (`opencode` / `zai-coding-plan/glm-5.4`, `variant: "high"`)
