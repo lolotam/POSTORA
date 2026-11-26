@@ -2,6 +2,8 @@
 
 Analytics is available through the authenticated n8n API and MCP. MCP `posts:read` / `posts:write` grants remain separate from provider consent and collection eligibility. Account and watchlist IDs are scoped to the authenticated owner.
 
+YouTube analytics is read on demand through `youtube-analytics` after the owner's in-app purpose acceptance; it is not served by `get_account_analytics`.
+
 | Tool | API route | Behavior |
 | --- | --- | --- |
 | `get_account_analytics` | `GET /api/v1/analytics/account` | Stored Instagram/Facebook/Threads owner report with no collection or provider calls. The existing TikTok passthrough calls the TikTok API through `tiktok-analytics`, or serves its first-page cache. |

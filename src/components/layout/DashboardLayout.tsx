@@ -200,6 +200,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       ...(flags.analyticsInstagram ? [{ icon: Camera, label: t("sidebar.instagram", "Instagram"), path: "/analytics/instagram" }] : []),
       ...(flags.analyticsThreads ? [{ icon: AtSign, label: t("sidebar.threads", "Threads"), path: "/analytics/threads" }] : []),
       ...(flags.analyticsTiktok ? [{ icon: Video, label: t("sidebar.tiktok", "TikTok"), path: "/analytics/tiktok" }] : []),
+      ...(flags.analyticsYoutube ? [{ icon: Video, label: t("sidebar.youtube", "YouTube"), path: "/analytics/youtube" }] : []),
     ];
 
     if (analyticsChildren.length > 0) {
@@ -263,7 +264,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
     }
 
     return entries;
-  }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.commentWorkflow, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, flags.youtubeManagement, t]);
+  }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.commentWorkflow, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, flags.analyticsYoutube, flags.youtubeManagement, t]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);

@@ -47,7 +47,17 @@ const Privacy = () => {
               <li>YouTube channel profile picture/thumbnail</li>
               <li>OAuth access tokens and refresh tokens for API authentication</li>
               <li>Video upload permissions to post content on your behalf</li>
+              <li>Comments on your own videos when you use comment management features</li>
+              <li>On-demand channel and video analytics numbers after your in-app acceptance; these numbers are displayed immediately and are not stored</li>
             </ul>
+            <p className="text-muted-foreground leading-relaxed mt-4">
+              <strong>Analytics Purpose Clause, Version 1, dated November 26, 2026:</strong> After you explicitly accept
+              this purpose for a channel inside Postora, and only where analytics is enabled, Postora reads your own
+              channel and video metrics from the YouTube Analytics API on demand: views, estimated minutes watched,
+              average view duration, subscribers gained and lost, likes, comments, and shares. They are shown solely
+              to you as the signed-in channel owner and are not stored by Postora. You can stop this use immediately
+              from the analytics page without changing your Google permissions, publishing, or comments.
+            </p>
             <p className="text-muted-foreground leading-relaxed mt-4">
               Postora's use of information received from Google APIs will adhere to the{" "}
               <a 
@@ -97,6 +107,8 @@ const Privacy = () => {
               <li>Upload and publish videos to your YouTube channel on your behalf</li>
               <li>Display your YouTube channel information within the Postora interface</li>
               <li>Authenticate your identity and maintain your connected account session</li>
+              <li>Read, reply to, hide and delete comments on your own videos when you use comment management</li>
+              <li>After your in-app acceptance of Analytics Purpose Clause Version 1 (November 26, 2026), display your own channel and video analytics to you alone, on demand and without storing the numbers</li>
             </ul>
 
             <h3 className="text-xl font-semibold mt-6 mb-3">3.2 Prohibited Uses of Google User Data</h3>
@@ -168,7 +180,7 @@ const Privacy = () => {
 
             <h4 className="text-lg font-semibold mt-4 mb-2">Data We Collect from YouTube</h4>
             <p className="text-muted-foreground leading-relaxed mb-4">
-              With your authorization through Google OAuth 2.0 we read your channel name, ID and avatar, upload the videos you create in Postora, and read, reply to, hide and delete comments on your own videos when you use the Comment Manager, auto-reply rules or the AI agent. Comments are read on demand and by a scheduled check; each comment we act on is kept as YouTube returned it (its ID, text, and the commenter's public display name, channel ID and avatar URL) so the same comment is never answered twice. Postora's use of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.
+              With your authorization through Google OAuth 2.0 we read your channel name, ID and avatar, upload the videos you create in Postora, and read, reply to, hide and delete comments on your own videos when you use the Comment Manager, auto-reply rules or the AI agent. Comments are read on demand and by a scheduled check; each comment we act on is kept as YouTube returned it (its ID, text, and the commenter's public display name, channel ID and avatar URL) so the same comment is never answered twice. Under Analytics Purpose Clause Version 1, dated November 26, 2026, and only after your in-app acceptance for a channel where analytics is enabled, we also read your own channel and video analytics on demand (views, estimated minutes watched, average view duration, subscribers gained and lost, likes, comments, and shares), display them solely to you as the signed-in owner, and do not store them. Postora's use of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.
             </p>
 
             <h4 className="text-lg font-semibold mt-4 mb-2">Data We Collect from LinkedIn</h4>

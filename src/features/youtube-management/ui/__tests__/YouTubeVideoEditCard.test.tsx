@@ -7,6 +7,10 @@ import { MemoryRouter } from "react-router-dom";
 
 import { YouTubeVideoEditCard } from "../YouTubeVideoEditCard";
 
+vi.mock("@/hooks/useFeatureFlags", () => ({
+  useFeatureFlags: () => ({ flags: { analyticsYoutube: false }, isLoading: false }),
+}));
+
 const video = {
   id: "videoAAAAAAA",
   channel_id: "UCfixturechannel000000001",

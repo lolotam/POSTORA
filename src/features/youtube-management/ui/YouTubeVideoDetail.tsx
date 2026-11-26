@@ -1,11 +1,14 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { formatIsoDuration } from "../domain/formatIsoDuration";
 import type { YouTubeVideoDetails } from "../domain/types";
 
 export interface YouTubeVideoDetailProps {
   video: YouTubeVideoDetails;
   fetchedAt: string;
+  accountId?: string | null;
 }
 
 function Counter({ label, value, notAvailable }: { label: string; value: number | null; notAvailable: string }) {
@@ -18,8 +21,9 @@ function Counter({ label, value, notAvailable }: { label: string; value: number 
 }
 
 export function YouTubeVideoDetail(props: YouTubeVideoDetailProps): JSX.Element {
-  const { video, fetchedAt } = props;
+  const { video, fetchedAt, accountId } = props;
   const { t, i18n } = useTranslation("accounts");
+  const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const notAvailable = t("youtubeManagement.detail.notAvailable", "Not available");
   const duration = formatIsoDuration(video.duration_iso8601);
   const parsedAt = new Date(fetchedAt);
@@ -56,6 +60,14 @@ export function YouTubeVideoDetail(props: YouTubeVideoDetailProps): JSX.Element 
             {t("youtubeManagement.fetchedAt", "Updated {{time}}", { time: fetchedLabel })}
           </p>
         )}
+        {!flagsLoading && flags.analyticsYoutube ? (
+          <Link
+            to={`/analytics/youtube?video=${encodeURIComponent(video.id)}${accountId ? `&account=${encodeURIComponent(accountId)}` : ""}`}
+            className="block text-sm font-medium text-primary underline-offset-4 hover:underline"
+          >
+            {t("youtubeManagement.detail.viewAnalytics", "View analytics")}
+          </Link>
+        ) : null}
         <a
           href={video.url}
           target="_blank"

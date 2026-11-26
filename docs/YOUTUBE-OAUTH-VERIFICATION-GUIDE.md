@@ -82,9 +82,9 @@ For each scope, provide justification:
 
 | Scope | Purpose | User Benefit |
 |-------|---------|--------------|
-| `youtube.readonly` | Fetch channel name, avatar, and ID for account identification | Display connected channel info in dashboard |
+| `youtube.readonly` | Fetch channel name, avatar, and ID; read owner-accepted YouTube Analytics reports on demand | Display connected channel info and the owner's own analytics without storing the numbers |
 | `youtube.upload` | Post videos and Shorts on behalf of user | Core publishing functionality |
-| `youtube.force-ssl` | Manage video privacy, titles, descriptions | Allow users to customize video settings |
+| `youtube.force-ssl` | Read, reply to, hide and delete comments on the user's own videos | Comment management on owned videos |
 | `userinfo.profile` | Get user's display name | Personalize the application experience |
 
 ---
@@ -120,16 +120,19 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 ### Data We Access
 - YouTube channel information (name, ID, avatar)
 - Ability to upload videos to your channel
-- Video management (titles, descriptions, privacy settings)
+- Comments on your own videos for comment management
+- On-demand YouTube Analytics numbers after your in-app purpose acceptance
 
 ### How We Use This Data
 - Display your connected YouTube channel in the dashboard
 - Publish videos and Shorts to your channel on your behalf
-- Allow you to manage video settings before publishing
+- Read, reply to, hide and delete comments on your own videos when you use comment management
+- Display your own channel and video analytics to you, the signed-in owner, only where enabled and after you accept Analytics Purpose Clause Version 1 (November 26, 2026); analytics numbers are read on demand and are not stored by Postora
 
 ### Data Storage
 - OAuth tokens are stored securely in our database
 - Tokens are refreshed automatically to maintain connection
+- YouTube Analytics values are read on demand for immediate display and are not stored by Postora
 - We do not share your YouTube data with third parties
 
 ### Data Deletion
