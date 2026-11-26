@@ -14,7 +14,7 @@ const Terms = () => {
         </Link>
 
         <h1 className="text-4xl font-bold mb-8">Postora Terms of Service</h1>
-        <p className="text-muted-foreground mb-8">Last updated: January 8, 2026</p>
+        <p className="text-muted-foreground mb-8">Last updated: November 26, 2026</p>
 
         <div className="prose prose-neutral dark:prose-invert max-w-none space-y-8">
           <section>
@@ -54,7 +54,12 @@ const Terms = () => {
             
             <h3 className="text-xl font-semibold mt-6 mb-3">4.1 YouTube and Google Services</h3>
             <p className="text-muted-foreground leading-relaxed mb-4">
-              Postora uses YouTube API Services to enable you to upload and publish videos to your YouTube channel. By connecting your YouTube account to Postora:
+              Postora uses YouTube API Services to provide owner-authorized video and Short publishing, channel
+              and uploaded-video browsing, published video metadata editing (when enabled; currently disabled at
+              the production baseline), comment creation and moderation,
+              and on-demand channel and video analytics. Analytics is available only where enabled and after you
+              accept the current Analytics Purpose Clause inside Postora for that connection. By connecting your
+              YouTube account to Postora:
             </p>
             <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>You agree to be bound by the{" "}
