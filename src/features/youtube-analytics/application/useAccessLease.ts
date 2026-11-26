@@ -226,7 +226,7 @@ export function useAccessLease(params: {
       clearTimer();
       bumpEpoch();
     };
-  }, [identity]);
+  }, [accountId, bumpEpoch, clearTimer, identity, issueStatus, queryClient, update, userId]);
 
   useEffect(() => () => {
     mountedRef.current = false;
