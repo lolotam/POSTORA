@@ -250,6 +250,7 @@ Deno.test("ownership succeeds only for the admitted channel", async () => {
 for (const [name, status, body, code] of [
   ["200 unowned", 200, { items: [{ id: FIXTURE_VIDEO_ID, snippet: { channelId: "UCanother" } }] }, "video_not_found"],
   ["200 missing ID", 200, { items: [] }, "video_not_found"],
+  ["200 omitted snippet.channelId", 200, { items: [{ id: FIXTURE_VIDEO_ID, snippet: {} }] }, "upstream_unavailable"],
   ["404 videoNotFound", 404, ERROR_404_VIDEO_NOT_FOUND, "video_not_found"],
   ["404 other reason", 404, ERROR_404_OTHER, "upstream_unavailable"],
   ["malformed 200", 200, {}, "upstream_unavailable"],
@@ -303,7 +304,7 @@ for (const [name, status, body, code] of [
   });
 }
 
-Deno.test("network failures and malformed JSON are upstream_unavailable", async () => {
+Deno.test("network failures and malformed JSON are upstream_unavailable, while empty 401 stays unauthorized", async () => {
   const network = fakeFetch(new TypeError("offline"));
   assertEquals(await createYouTubeAnalyticsReadClient({ fetchImpl: network.fetchImpl }).readSummary("t", reportInput()), {
     ok: false,
@@ -313,5 +314,10 @@ Deno.test("network failures and malformed JSON are upstream_unavailable", async 
   assertEquals(await createYouTubeAnalyticsReadClient({ fetchImpl: malformed.fetchImpl }).readSummary("t", reportInput()), {
     ok: false,
     code: "upstream_unavailable",
+  });
+  const empty401 = fakeFetch(new Response("", { status: 401 }));
+  assertEquals(await createYouTubeAnalyticsReadClient({ fetchImpl: empty401.fetchImpl }).readSummary("t", reportInput()), {
+    ok: false,
+    code: "unauthorized",
   });
 });

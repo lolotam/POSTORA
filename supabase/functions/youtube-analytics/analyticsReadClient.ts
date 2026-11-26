@@ -133,7 +133,9 @@ async function fetchGoogle(
   try {
     body = await response.json();
   } catch {
-    return { ok: false, code: "upstream_unavailable" };
+    return response.ok
+      ? { ok: false, code: "upstream_unavailable" }
+      : classifyResponse(response.status, null, ownershipLookup);
   }
   if (!response.ok) return classifyResponse(response.status, body, ownershipLookup);
   return { ok: true, body };
@@ -257,7 +259,7 @@ export function createYouTubeAnalyticsReadClient(options: {
       const seen = new Set<string>();
       const validated: YouTubeAnalyticsDailyData["rows"] = [];
       for (const row of rows) {
-        if (!Array.isArray(row) || row.length !== 5 || typeof row[0] !== "string" ||
+        if (!Array.isArray(row) || typeof row[0] !== "string" ||
           !allowedDays.has(row[0]) || seen.has(row[0])) {
           return { ok: false, code: "upstream_unavailable" };
         }
@@ -302,7 +304,7 @@ export function createYouTubeAnalyticsReadClient(options: {
       const seen = new Set<string>();
       const validated: YouTubeAnalyticsTopVideoMetricRow[] = [];
       for (const row of rows) {
-        if (!Array.isArray(row) || row.length !== 5 || typeof row[0] !== "string" ||
+        if (!Array.isArray(row) || typeof row[0] !== "string" ||
           !YOUTUBE_ANALYTICS_VIDEO_ID_PATTERN.test(row[0]) || seen.has(row[0])) {
           return { ok: false, code: "upstream_unavailable" };
         }
@@ -317,10 +319,17 @@ export function createYouTubeAnalyticsReadClient(options: {
     async lookupVideoOwnership(accessToken, input) {
       const result = await readItems(fetchImpl, accessToken, [input.videoId], true);
       if (!result.ok) return result;
-      const owned = result.items.some((item) => {
+      let owned = false;
+      for (const item of result.items) {
         const raw = record(item);
-        return raw?.id === input.videoId && record(raw.snippet)?.channelId === input.channelId;
-      });
+        const channelId = record(raw?.snippet)?.channelId;
+        if (!raw || typeof raw.id !== "string" || typeof channelId !== "string" || channelId.length === 0) {
+          return { ok: false, code: "upstream_unavailable" };
+        }
+        if (raw.id === input.videoId && channelId === input.channelId) {
+          owned = true;
+        }
+      }
       return owned
         ? { ok: true, value: { owned: true } }
         : { ok: false, code: "video_not_found" };

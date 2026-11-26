@@ -26,8 +26,11 @@ Deno.test("composition uses health-neutral refresh and never imports dropGranted
 
 Deno.test("all Google sends follow a debit and bound decision, and success audit is not awaited", async () => {
   const handler = await source("handler.ts");
-  assert(handler.indexOf("ports.limits.debit") < handler.indexOf("const result = await send"));
-  assert(handler.indexOf("ports.decide") < handler.indexOf("const result = await send"));
+  const debitIdx = handler.indexOf("ports.limits.debit");
+  const decideIdx = handler.indexOf("ports.decide");
+  const sendIdx = handler.indexOf("const result = await send");
+  assert(debitIdx >= 0 && debitIdx < sendIdx);
+  assert(decideIdx >= 0 && decideIdx < sendIdx);
   assert(handler.includes("scheduleBackground("));
   assert(handler.includes("const finalDecision = await ports.decide"));
 });

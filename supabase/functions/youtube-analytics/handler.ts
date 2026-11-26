@@ -1,4 +1,5 @@
 import { z } from "npm:zod@3.23.8";
+import { readJsonBodyCapped } from "../_shared/cappedJsonBody.ts";
 import type { YouTubeRefreshOutcome, YouTubeStoredAccount } from "../_shared/youtubeTokenRefresh.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import type {
@@ -88,6 +89,8 @@ const RequestSchema = z.discriminatedUnion("operation", [
 ]);
 
 const USER_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_REQUEST_BODY_BYTES = 16 * 1024;
+const REQUEST_BODY_READ_TIMEOUT_MS = 2_000;
 
 export interface YouTubeAnalyticsTokenPort {
   readonly lastDenial: YouTubeAnalyticsDecisionDenial | null;
@@ -262,13 +265,13 @@ export function createYouTubeAnalyticsHandler(
       });
     }
 
-    let body: unknown;
-    let bodyParsed = true;
-    try {
-      body = await req.json();
-    } catch {
-      bodyParsed = false;
-    }
+    const bodyResult = await readJsonBodyCapped(
+      req,
+      MAX_REQUEST_BODY_BYTES,
+      AbortSignal.timeout(REQUEST_BODY_READ_TIMEOUT_MS),
+    ).catch(() => ({ ok: false as const, reason: "invalid_json" as const }));
+    const body = bodyResult.ok ? bodyResult.value : undefined;
+    const bodyParsed = bodyResult.ok;
     const requestedOperation = sanitiseYouTubeAnalyticsOperation(body);
     const admission = await ports.limits.admission(userId);
     if (!admission.ok) {

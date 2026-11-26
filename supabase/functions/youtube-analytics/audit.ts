@@ -122,8 +122,11 @@ export function createYouTubeAnalyticsAudit(options: {
         return;
       }
       const count = suppressed.get(entry.userId) ?? 0;
+      if (count > 0) suppressed.delete(entry.userId);
       const written = await insert(entry, "warn", count > 0 ? { suppressed: count } : undefined);
-      if (written && count > 0) suppressed.delete(entry.userId);
+      if (!written && count > 0) {
+        suppressed.set(entry.userId, (suppressed.get(entry.userId) ?? 0) + count);
+      }
     },
 
     async success(entry) {

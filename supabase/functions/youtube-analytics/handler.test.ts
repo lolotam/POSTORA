@@ -128,8 +128,11 @@ function fixture(options: FixtureOptions = {}) {
     consent: 0,
     auditRefusals: [] as Array<{ code: string; kind: string; accountId?: string }>,
     auditSuccess: [] as Array<{ operation: string; accountId?: string }>,
+    decisionInputs: [] as Array<{ withCredentials?: boolean; expected?: YouTubeAnalyticsBinding }>,
+    consentInputs: [] as Array<Parameters<YouTubeAnalyticsPorts["consent"]["record"]>[0]>,
   };
-  const decisionInputs: Array<{ withCredentials?: boolean; expected?: YouTubeAnalyticsBinding }> = [];
+  const decisionInputs = calls.decisionInputs;
+  const consentInputs = calls.consentInputs;
   const forceFlags: boolean[] = [];
   let tokenPort: YouTubeAnalyticsTokenPort | null = null;
   const defaultAudit: YouTubeAnalyticsAudit = {
@@ -219,19 +222,20 @@ function fixture(options: FixtureOptions = {}) {
       },
     },
     consent: {
-      record: () => {
+      record: (input) => {
         calls.consent += 1;
+        consentInputs.push(input);
         return Promise.resolve(options.consentResult ?? {
           ok: true,
           recorded: true,
           connectionRevision: REVISION,
-          consent: { state: "accepted", version: 1 },
+          consent: { state: input.event, version: 1 },
         });
       },
     },
     audit: options.audit ?? defaultAudit,
   };
-  return { handler: createYouTubeAnalyticsHandler(ports), calls, decisionInputs, forceFlags, tokenPort };
+  return { handler: createYouTubeAnalyticsHandler(ports), calls, decisionInputs, consentInputs, forceFlags, tokenPort };
 }
 
 function body(operation = "summary", extra: Record<string, unknown> = {}) {
@@ -381,12 +385,18 @@ Deno.test("status success and refusal carry revision, reporting window, consent 
 });
 
 Deno.test("consent accept and withdraw never read credentials or call Google and each audit once", async () => {
-  for (const operation of ["consent_accept", "consent_withdraw"]) {
+  for (const [operation, expectedEvent] of [
+    ["consent_accept", "accepted"],
+    ["consent_withdraw", "withdrawn"],
+  ] as const) {
     const f = fixture();
     const response = await f.handler(request(body(operation)));
     assertEquals(response.status, 200);
     assertEquals(response.headers.get("Cache-Control"), "no-store");
     assertEquals(f.calls.consent, 1);
+    assertEquals(f.consentInputs[0].event, expectedEvent);
+    const payload = await json(response);
+    assertEquals(((payload.data as { consent: { state: string } }).consent).state, expectedEvent);
     assertEquals(f.calls.decide, 0);
     assertEquals(f.calls.auditSuccess.length, 1);
     assertCounts(f.calls, { token: 0, data: 0, analytics: 0 });
