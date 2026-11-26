@@ -86,6 +86,7 @@ export interface FeatureFlags {
   analyticsInstagram: boolean;
   analyticsThreads: boolean;
   analyticsTiktok: boolean;
+  analyticsYoutube: boolean;
   // YouTube channel management page (stage 2c)
   youtubeManagement: boolean;
 }
@@ -168,6 +169,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   analyticsInstagram: false,
   analyticsThreads: false,
   analyticsTiktok: false,
+  analyticsYoutube: false,
   youtubeManagement: false,
 };
 
@@ -248,6 +250,7 @@ export const FLAG_KEYS = [
   "feature_analytics_instagram",
   "feature_analytics_threads",
   "feature_analytics_tiktok",
+  "feature_analytics_youtube",
   "feature_youtube_management",
 ];
 
@@ -323,6 +326,7 @@ export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
   feature_analytics_instagram: "analyticsInstagram",
   feature_analytics_threads: "analyticsThreads",
   feature_analytics_tiktok: "analyticsTiktok",
+  feature_analytics_youtube: "analyticsYoutube",
   feature_youtube_management: "youtubeManagement",
 };
 
@@ -410,6 +414,7 @@ const FEATURE_DISPLAY_NAMES: Record<keyof FeatureFlags, string> = {
   analyticsInstagram: "Analytics: Instagram",
   analyticsThreads: "Analytics: Threads",
   analyticsTiktok: "Analytics: TikTok",
+  analyticsYoutube: "Analytics: YouTube",
   youtubeManagement: "YouTube Channel",
 };
 
@@ -486,6 +491,7 @@ const ALL_FLAGS_ENABLED: FeatureFlags = {
   analyticsInstagram: true,
   analyticsThreads: true,
   analyticsTiktok: true,
+  analyticsYoutube: true,
   youtubeManagement: true,
 };
 
@@ -609,6 +615,7 @@ export function useFeatureFlags() {
         analyticsInstagram: globalFlagMap["feature_analytics_instagram"] ?? DEFAULT_FLAGS.analyticsInstagram,
         analyticsThreads: globalFlagMap["feature_analytics_threads"] ?? DEFAULT_FLAGS.analyticsThreads,
         analyticsTiktok: globalFlagMap["feature_analytics_tiktok"] ?? DEFAULT_FLAGS.analyticsTiktok,
+        analyticsYoutube: globalFlagMap["feature_analytics_youtube"] ?? DEFAULT_FLAGS.analyticsYoutube,
         youtubeManagement: globalFlagMap["feature_youtube_management"] ?? DEFAULT_FLAGS.youtubeManagement,
       };
 
@@ -663,6 +670,8 @@ export function useFeatureFlags() {
     // platform write youtube rows that the CHECK constraints admit only once the migration is
     // applied by hand, while the merge auto-deploys this frontend.
     "youtubeComments",
+    // YouTube Analytics stays dark for admins too until its rollout flag is explicitly enabled.
+    "analyticsYoutube",
     "platformAccess",
     "freePlatforms",
     "tiktokOAuthDebug",

@@ -1,10 +1,14 @@
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { YouTubeVideoDetail } from "../YouTubeVideoDetail";
+
+vi.mock("@/hooks/useFeatureFlags", () => ({
+  useFeatureFlags: () => ({ flags: { analyticsYoutube: false }, isLoading: false }),
+}));
 
 async function renderUi(ui: ReactElement) {
   const i18n = createInstance();

@@ -84,7 +84,7 @@ export function YouTubeVideoEditCard({
 
   return (
     <div className="space-y-2">
-      <YouTubeVideoDetail video={video} fetchedAt={fetchedAt} />
+      <YouTubeVideoDetail video={video} fetchedAt={fetchedAt} accountId={accountId} />
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"

@@ -200,6 +200,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       ...(flags.analyticsInstagram ? [{ icon: Camera, label: t("sidebar.instagram", "Instagram"), path: "/analytics/instagram" }] : []),
       ...(flags.analyticsThreads ? [{ icon: AtSign, label: t("sidebar.threads", "Threads"), path: "/analytics/threads" }] : []),
       ...(flags.analyticsTiktok ? [{ icon: Video, label: t("sidebar.tiktok", "TikTok"), path: "/analytics/tiktok" }] : []),
+      ...(flags.analyticsYoutube ? [{ icon: Video, label: t("sidebar.youtube", "YouTube"), path: "/analytics/youtube" }] : []),
     ];
 
     if (analyticsChildren.length > 0) {

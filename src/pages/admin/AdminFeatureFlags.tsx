@@ -90,6 +90,7 @@ const FEATURE_FLAGS = [
   { key: "feature_analytics_instagram", label: "Analytics: Instagram", description: "Show Instagram entry in the Analytics dropdown in the sidebar", icon: Instagram },
   { key: "feature_analytics_threads", label: "Analytics: Threads", description: "Show Threads entry in the Analytics dropdown in the sidebar", icon: MessageCircle },
   { key: "feature_analytics_tiktok", label: "Analytics: TikTok", description: "Show TikTok entry in the Analytics dropdown in the sidebar", icon: Music },
+  { key: "feature_analytics_youtube", label: "Analytics: YouTube", description: "Show YouTube entry in the Analytics dropdown in the sidebar", icon: Youtube },
   { key: "feature_youtube_management", label: "YouTube Channel", description: "Show the YouTube channel browser in the sidebar", icon: Youtube },
   // Ad Manager dropdown
   { key: "feature_ad_manager", label: "Ad Manager", description: "Show Ad Manager entry in the Ad Manager dropdown in the sidebar", icon: Megaphone },
@@ -159,6 +160,7 @@ const DEFAULT_CATEGORIES: Record<string, string> = {
   feature_analytics_instagram: "Analytics",
   feature_analytics_threads: "Analytics",
   feature_analytics_tiktok: "Analytics",
+  feature_analytics_youtube: "Analytics",
   // Ad Manager dropdown
   feature_ad_manager: "Ad Manager",
   feature_ad_analytics: "Ad Manager",

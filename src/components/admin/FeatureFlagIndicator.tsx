@@ -78,6 +78,7 @@ const FLAG_LABELS: Record<keyof FeatureFlags, string> = {
   analyticsInstagram: "Analytics: Instagram",
   analyticsThreads: "Analytics: Threads",
   analyticsTiktok: "Analytics: TikTok",
+  analyticsYoutube: "Analytics: YouTube",
   youtubeManagement: "YouTube Channel",
 };
 
