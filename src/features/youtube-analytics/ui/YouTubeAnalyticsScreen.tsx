@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -18,9 +19,11 @@ import type { YouTubeAnalyticsGateway } from "../application/ports";
 import { useYouTubeAnalyticsStatus } from "../application/useYouTubeAnalyticsStatus";
 import { useYouTubeAnalyticsSummary } from "../application/useYouTubeAnalyticsSummary";
 import { useYouTubeAnalyticsDaily } from "../application/useYouTubeAnalyticsDaily";
-import { useYouTubeTopVideos } from "../application/useYouTubeTopVideos";
+import { trimTopVideosToFirstPage, useYouTubeTopVideos } from "../application/useYouTubeTopVideos";
 import { usePurposeConsent } from "../application/usePurposeConsent";
 import { startDateForWindow } from "../domain/format";
+import { asYouTubeAnalyticsClientError } from "../domain/errors";
+import { mergeTopVideoPages } from "../domain/topVideosView";
 import { getAnalyticsPurposeText } from "../domain/purposeText";
 import {
   YOUTUBE_ANALYTICS_PERIOD_DAYS,
@@ -33,7 +36,7 @@ import { PurposeAcceptancePanel } from "./PurposeAcceptancePanel";
 import { OverviewCards } from "./OverviewCards";
 import { DailyTrend } from "./DailyTrend";
 import { TopVideosTable } from "./TopVideosTable";
-import { VideoAnalyticsPanel } from "./VideoAnalyticsPanel";
+import { VideoAnalyticsSheet } from "./VideoAnalyticsSheet";
 
 export interface YouTubeAnalyticsAccount {
   id: string;
@@ -60,12 +63,14 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
     gateway = defaultYouTubeAnalyticsGateway,
   } = props;
   const { t, i18n } = useTranslation("analytics");
+  const queryClient = useQueryClient();
   const locale = i18n.language.startsWith("ar") ? "ar" : "en";
   const purposeText = getAnalyticsPurposeText(locale);
   const [pickedAccountId, setPickedAccountId] = useState<string | null>(initialAccountId);
   const [periodDays, setPeriodDays] = useState<YouTubeAnalyticsPeriodDays>(30);
   const [pickedVideo, setPickedVideo] = useState<{ accountId: string; videoId: string } | null>(null);
   const initialVideoApplied = useRef(false);
+  const videoOpenerRef = useRef<HTMLElement | null>(null);
 
   const activeAccountId = pickedAccountId && accounts.some((account) => account.id === pickedAccountId)
     ? pickedAccountId
@@ -94,6 +99,10 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
   const summary = useYouTubeAnalyticsSummary(reportParams);
   const daily = useYouTubeAnalyticsDaily(reportParams);
   const topVideos = useYouTubeTopVideos(reportParams);
+  const topVideosKey = topVideos.queryKey;
+  useEffect(() => {
+    trimTopVideosToFirstPage(queryClient, topVideosKey);
+  }, [activeAccountId, periodDays, access.windowEnd, queryClient, topVideosKey]);
   const videoSummary = useYouTubeAnalyticsSummary({ ...reportParams, videoId: selectedVideoId, enabled: access.mayFetch && selectedVideoId !== null });
   const videoDaily = useYouTubeAnalyticsDaily({ ...reportParams, videoId: selectedVideoId, enabled: access.mayFetch && selectedVideoId !== null });
   const consent = usePurposeConsent({
@@ -113,6 +122,7 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
   } : null, [access.windowEnd, periodDays]);
 
   const refreshReports = async () => {
+    trimTopVideosToFirstPage(queryClient, topVideosKey);
     const previousWindow = access.windowEnd;
     const status = await access.refreshStatus({ advanceWindow: true });
     if (!status || status.reporting_end_date !== previousWindow || access.latchedError) return;
@@ -141,6 +151,7 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
   };
 
   const retryLatchedReports = () => {
+    trimTopVideosToFirstPage(queryClient, topVideosKey);
     access.clearLatchForRetry();
     void summary.refetch();
     void daily.refetch();
@@ -149,6 +160,26 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
       void videoSummary.refetch();
       void videoDaily.refetch();
     }
+  };
+
+  const inspectVideo = (videoId: string) => {
+    if (!activeAccountId) return;
+    videoOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPickedVideo({ accountId: activeAccountId, videoId });
+  };
+  const closeVideo = () => {
+    setPickedVideo(null);
+    setTimeout(() => videoOpenerRef.current?.focus(), 0);
+  };
+  const loadedTopVideos = useMemo(() => mergeTopVideoPages(topVideos.data?.pages ?? []), [topVideos.data?.pages]);
+  const selectedTopVideo = loadedTopVideos.find((row) => row.video_id === selectedVideoId);
+  const retryNextTopVideosPage = () => {
+    if (topVideos.error && asYouTubeAnalyticsClientError(topVideos.error).code === "window_stale") {
+      trimTopVideosToFirstPage(queryClient, topVideosKey);
+      void refreshReports();
+      return;
+    }
+    void topVideos.fetchNextPage();
   };
 
   if (accountsLoading) {
@@ -239,18 +270,18 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
           {daily.isError ? <AnalyticsNotice error={daily.error} onRetry={() => void daily.refetch()} />
             : daily.data ? <DailyTrend data={daily.data.data} requestedWindow={requestedWindow} />
               : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
-          {topVideos.isError ? <AnalyticsNotice error={topVideos.error} onRetry={() => void topVideos.refetch()} />
-            : topVideos.data ? <TopVideosTable data={topVideos.data.data} onInspect={(videoId) => activeAccountId && setPickedVideo({ accountId: activeAccountId, videoId })} />
-              : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
-          {selectedVideoId ? (
-            <VideoAnalyticsPanel
-              videoId={selectedVideoId}
-              requestedWindow={requestedWindow}
-              summary={videoSummary}
-              daily={videoDaily}
-              onClose={() => setPickedVideo(null)}
-            />
-          ) : null}
+          {topVideos.isError && !topVideos.data ? <AnalyticsNotice error={topVideos.error} onRetry={() => void topVideos.refetch()} />
+            : topVideos.data ? (
+              <TopVideosTable
+                data={topVideos.data}
+                onInspect={inspectVideo}
+                hasNextPage={topVideos.hasNextPage}
+                isFetchingNextPage={topVideos.isFetchingNextPage}
+                onLoadMore={() => void topVideos.fetchNextPage()}
+                nextPageError={topVideos.error}
+                onRetryNextPage={retryNextTopVideosPage}
+              />
+            ) : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
         </>
       ) : null}
       {access.status?.consent.state === "accepted" ? (
@@ -273,6 +304,20 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
             </AlertDialog>
           </div>
         </div>
+      ) : null}
+      {selectedVideoId && requestedWindow ? (
+        <VideoAnalyticsSheet
+          open
+          onOpenChange={(open) => {
+            if (!open) closeVideo();
+          }}
+          locale={locale}
+          title={selectedTopVideo?.title}
+          videoId={selectedVideoId}
+          requestedWindow={requestedWindow}
+          summary={videoSummary}
+          daily={videoDaily}
+        />
       ) : null}
     </div>
   );

@@ -43,6 +43,7 @@ export interface YouTubeAnalyticsReportInput {
   window: YouTubeAnalyticsRequestedWindow;
   days: string[];
   videoId?: string;
+  startIndex?: number;
 }
 
 export interface YouTubeAnalyticsReadClient {
@@ -65,7 +66,10 @@ export interface YouTubeAnalyticsReadClient {
   lookupVideoTitles(
     accessToken: string,
     input: { channelId: string; videoIds: string[] },
-  ): Promise<YouTubeAnalyticsReadResult<{ titles: Record<string, string> }>>;
+  ): Promise<YouTubeAnalyticsReadResult<{
+    titles: Record<string, string>;
+    details: Record<string, { published_at: string | null; thumbnail_url: string | null }>;
+  }>>;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -208,6 +212,25 @@ function dataVideosUrl(videoIds: string[]): URL {
   return url;
 }
 
+function ytimgThumbnail(snippet: Record<string, unknown>): string | null {
+  const thumbnails = record(snippet.thumbnails);
+  const selected = record(thumbnails?.medium) ?? record(thumbnails?.high) ?? record(thumbnails?.default);
+  if (typeof selected?.url !== "string") return null;
+  try {
+    const url = new URL(selected.url);
+    return url.protocol === "https:" && (url.hostname === "ytimg.com" || url.hostname.endsWith(".ytimg.com"))
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function publishedAt(snippet: Record<string, unknown>): string | null {
+  const value = snippet.publishedAt;
+  return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
 function googleMetricNames(
   definitions: readonly { googleMetric: string }[],
 ): string[] {
@@ -299,6 +322,7 @@ export function createYouTubeAnalyticsReadClient(options: {
       url.searchParams.set("dimensions", "video");
       url.searchParams.set("sort", "-views");
       url.searchParams.set("maxResults", "10");
+      url.searchParams.set("startIndex", String(input.startIndex ?? 1));
       const result = await fetchGoogle(fetchImpl, url, accessToken);
       if (!result.ok) return result;
       if (!exactHeaders(result.body, names)) return { ok: false, code: "upstream_unavailable" };
@@ -352,15 +376,19 @@ export function createYouTubeAnalyticsReadClient(options: {
       const result = await readItems(fetchImpl, accessToken, input.videoIds, false);
       if (!result.ok) return result;
       const titles: Record<string, string> = {};
+      const details: Record<string, { published_at: string | null; thumbnail_url: string | null }> = {};
       for (const item of result.items) {
         const raw = record(item);
         const snippet = record(raw?.snippet);
-        if (typeof raw?.id === "string" && input.videoIds.includes(raw.id) &&
-          snippet?.channelId === input.channelId && typeof snippet.title === "string") {
-          titles[raw.id] = snippet.title;
-        }
+        if (typeof raw?.id !== "string" || !input.videoIds.includes(raw.id) ||
+          snippet?.channelId !== input.channelId) continue;
+        if (typeof snippet.title === "string") titles[raw.id] = snippet.title;
+        details[raw.id] = {
+          published_at: publishedAt(snippet),
+          thumbnail_url: ytimgThumbnail(snippet),
+        };
       }
-      return { ok: true, value: { titles } };
+      return { ok: true, value: { titles, details } };
     },
   };
 }

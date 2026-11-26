@@ -1,13 +1,16 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import type { YouTubeResourceErrorCode, YouTubeVideoListItem } from "../domain/types";
 import { YouTubeResourceError } from "../domain/errors";
 import type { YouTubeAccountOption } from "../domain/accountOptions";
 import { useYouTubeCapabilities } from "../application/useYouTubeCapabilities";
 import { useYouTubeChannel } from "../application/useYouTubeChannel";
-import { useYouTubeVideos } from "../application/useYouTubeVideos";
+import { trimVideosToFirstPage, useYouTubeVideos } from "../application/useYouTubeVideos";
+import { youtubeResourceKey } from "../application/queryKeys";
+import { useAuth } from "@/hooks/useAuth";
 import { useYouTubeVideo } from "../application/useYouTubeVideo";
 import type { YouTubeResourcesGateway } from "../application/ports";
 import { defaultYouTubeResourcesGateway } from "../infrastructure/supabaseYouTubeResourcesGateway";
@@ -15,7 +18,7 @@ import { YouTubeResourceNotice } from "./YouTubeResourceNotice";
 import { YouTubeAccountPicker } from "./YouTubeAccountPicker";
 import { YouTubeChannelSummary } from "./YouTubeChannelSummary";
 import { YouTubeVideoLibrary } from "./YouTubeVideoLibrary";
-import { YouTubeVideoEditCard } from "./YouTubeVideoEditCard";
+import { YouTubeVideoDrawer } from "./YouTubeVideoDrawer";
 
 export interface YouTubeManagementScreenProps {
   accounts: readonly YouTubeAccountOption[];
@@ -31,12 +34,16 @@ export interface YouTubeManagementScreenProps {
 // infrastructure (for the default gateway), which every test replaces.
 export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JSX.Element {
   const { accounts, accountsLoading, gateway = defaultYouTubeResourcesGateway, accountsError, onRetryAccounts } = props;
-  const { t } = useTranslation("accounts");
+  const { t, i18n } = useTranslation("accounts");
+  const queryClient = useQueryClient();
+  const userId = useAuth().user?.id ?? "anonymous";
+  const locale: "en" | "ar" = i18n.language.startsWith("ar") ? "ar" : "en";
 
   const [pickedAccountId, setPickedAccountId] = useState<string | null>(null);
   // The selection is bound to the account it was made under: when the active
   // account changes (picker or fallback), the old video id must not refire.
   const [pickedVideo, setPickedVideo] = useState<{ accountId: string; videoId: string } | null>(null);
+  const videoOpenerRef = useRef<HTMLElement | null>(null);
   const activeAccountId = pickedAccountId !== null && accounts.some((account) => account.id === pickedAccountId)
     ? pickedAccountId
     : accounts[0]?.id ?? null;
@@ -81,6 +88,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
     void capabilities.refetch();
     if (canBrowse) {
       void channel.refetch();
+      trimVideosToFirstPage(queryClient, youtubeResourceKey(userId, activeAccountId, "videos"));
       void videos.refetch();
       if (selectedVideoId !== null) void video.refetch();
     }
@@ -88,6 +96,16 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
 
   const nextPageFailed = videos.isFetchNextPageError;
   const nextPageErrorCode = nextPageFailed ? errorCode(videos.error) : null;
+
+  const selectVideo = (videoId: string) => {
+    if (!activeAccountId) return;
+    videoOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPickedVideo({ accountId: activeAccountId, videoId });
+  };
+  const closeVideo = () => {
+    setPickedVideo(null);
+    setTimeout(() => videoOpenerRef.current?.focus(), 0);
+  };
 
   const loadingLine = (
     <p role="status" className="text-sm text-muted-foreground">
@@ -172,7 +190,10 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                       retryAfterSeconds={retryHint(videos.error)}
                       onRetry={
                         nextPageErrorCode === "invalid_cursor"
-                          ? () => void videos.refetch()
+                          ? () => {
+                            trimVideosToFirstPage(queryClient, youtubeResourceKey(userId, activeAccountId, "videos"));
+                            void videos.refetch();
+                          }
                           : () => void videos.fetchNextPage()
                       }
                     />
@@ -184,9 +205,10 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                     />
                   ) : null}
                   <YouTubeVideoLibrary
+                    key={activeAccountId ?? "none"}
                     videos={videoItems}
                     selectedVideoId={selectedVideoId}
-                    onSelect={(videoId) => setPickedVideo({ accountId: activeAccountId, videoId })}
+                    onSelect={selectVideo}
                     hasMore={videos.hasNextPage}
                     isLoadingMore={videos.isFetching}
                     onLoadMore={() => {
@@ -202,62 +224,48 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                 />
               ) : videos.isPending ? loadingLine : null}
 
-              {video.isError ? (
-                <YouTubeResourceNotice
-                  code={errorCode(video.error)}
-                  retryAfterSeconds={retryHint(video.error)}
-                  onRetry={() => void video.refetch()}
-                />
-              ) : video.data ? (
-                <YouTubeVideoEditCard
-                  video={video.data.data}
-                  fetchedAt={video.data.freshness.fetched_at}
-                  canEdit={capabilities.data?.data.capabilities.edit_metadata?.state === "available"}
-                  accountId={activeAccountId}
-                  region={channel.data?.data.country ?? undefined}
-                  onSnapshot={async (videoId) => {
-                    if (!activeAccountId) return null;
-                    try {
-                      const result = await gateway.getEditSnapshot({ accountId: activeAccountId, videoId });
-                      return result.data.revision;
-                    } catch {
-                      return null;
-                    }
-                  }}
-                  onSave={async ({ title, categoryId, baseRevision }) => {
-                    if (!activeAccountId || !selectedVideoId) return "outcome_unknown";
-                    try {
-                      await gateway.updateVideo({
-                        accountId: activeAccountId,
-                        videoId: selectedVideoId,
-                        baseRevision,
-                        changes: { title, ...(categoryId ? { category_id: categoryId } : {}) },
-                      });
-                      return "saved";
-                    } catch (error) {
-                      const code = (error as { code?: string }).code;
-                      return code === "edit_conflict" ? "edit_conflict" : "outcome_unknown";
-                    }
-                  }}
-                  disabledReason={editUnavailableReason === "reconnect_required"
-                    ? t(
-                      "youtubeManagement.detail.reconnectRequired",
-                      "This channel needs to be reconnected before editing is available.",
-                    )
-                    : t(
-                      "youtubeManagement.detail.editUnavailable",
-                      "Editing is not enabled until conditional write enforcement is verified.",
-                    )}
-                />
-              ) : selectedVideoId === null ? (
-                <p className="text-sm text-muted-foreground">
-                  {t("youtubeManagement.detail.select", "Select a video to see its details.")}
-                </p>
-              ) : video.isPending ? loadingLine : null}
             </div>
           )}
         </div>
       )}
+      <YouTubeVideoDrawer
+        open={selectedVideoId !== null}
+        onOpenChange={(open) => {
+          if (!open) closeVideo();
+        }}
+        locale={locale}
+        video={video}
+        canEdit={capabilities.data?.data.capabilities.edit_metadata?.state === "available"}
+        accountId={activeAccountId}
+        region={channel.data?.data.country ?? undefined}
+        onSnapshot={async (videoId) => {
+          if (!activeAccountId) return null;
+          try {
+            const result = await gateway.getEditSnapshot({ accountId: activeAccountId, videoId });
+            return result.data.revision;
+          } catch {
+            return null;
+          }
+        }}
+        onSave={async ({ title, categoryId, baseRevision }) => {
+          if (!activeAccountId || !selectedVideoId) return "outcome_unknown";
+          try {
+            await gateway.updateVideo({
+              accountId: activeAccountId,
+              videoId: selectedVideoId,
+              baseRevision,
+              changes: { title, ...(categoryId ? { category_id: categoryId } : {}) },
+            });
+            return "saved";
+          } catch (error) {
+            const code = (error as { code?: string }).code;
+            return code === "edit_conflict" ? "edit_conflict" : "outcome_unknown";
+          }
+        }}
+        disabledReason={editUnavailableReason === "reconnect_required"
+          ? t("youtubeManagement.detail.reconnectRequired", "This channel needs to be reconnected before editing is available.")
+          : t("youtubeManagement.detail.editUnavailable", "Editing is not enabled until conditional write enforcement is verified.")}
+      />
     </div>
   );
 }

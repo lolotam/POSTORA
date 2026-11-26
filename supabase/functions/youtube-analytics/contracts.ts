@@ -45,6 +45,10 @@ export const YOUTUBE_ANALYTICS_DAILY_METRICS = [
   { key: "subscribers_lost", googleMetric: "subscribersLost", unit: "count" },
 ] as const;
 
+export const YOUTUBE_ANALYTICS_TOP_VIDEOS_PAGE_SIZE = 10;
+export const YOUTUBE_ANALYTICS_TOP_VIDEOS_MAX_RESULTS = 200;
+export const YOUTUBE_ANALYTICS_TOP_VIDEOS_MAX_START_INDEX = 191;
+
 export const YOUTUBE_ANALYTICS_TOP_VIDEOS_METRICS = [
   { key: "watch_time", googleMetric: "estimatedMinutesWatched", unit: "minutes" },
   { key: "views", googleMetric: "views", unit: "count" },
@@ -160,6 +164,8 @@ export interface YouTubeAnalyticsDailyData {
 export interface YouTubeAnalyticsTopVideoRow {
   video_id: string;
   title: string | null;
+  published_at: string | null;
+  thumbnail_url?: string | null;
   link: string;
   metrics: YouTubeAnalyticsMetric[];
 }
@@ -167,6 +173,8 @@ export interface YouTubeAnalyticsTopVideoRow {
 export interface YouTubeAnalyticsTopVideosData {
   rows: YouTubeAnalyticsTopVideoRow[];
   titles: "complete" | "partial" | "unavailable";
+  has_more: boolean;
+  next_start_index: number | null;
 }
 
 export interface YouTubeAnalyticsStatusData {
@@ -230,6 +238,7 @@ export interface YouTubeAnalyticsDailyRequest extends YouTubeAnalyticsDataReques
 
 export interface YouTubeAnalyticsTopVideosRequest extends YouTubeAnalyticsDataRequestBase {
   operation: "top_videos";
+  start_index?: number;
 }
 
 export type YouTubeAnalyticsRequest =

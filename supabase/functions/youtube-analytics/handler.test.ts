@@ -98,7 +98,10 @@ interface FixtureOptions {
   dailies?: YouTubeAnalyticsReadResult<{ rows: []; coverage: { first_day: null; last_day: null; days_returned: 0; days_missing: 7 } }>[];
   topVideos?: YouTubeAnalyticsReadResult<{ rows: Array<{ videoId: string; metrics: [] }> }>[];
   ownerships?: YouTubeAnalyticsReadResult<{ owned: true }>[];
-  titles?: YouTubeAnalyticsReadResult<{ titles: Record<string, string> }>[];
+  titles?: YouTubeAnalyticsReadResult<{
+    titles: Record<string, string>;
+    details: Record<string, { published_at: string | null; thumbnail_url: string | null }>;
+  }>[];
   consentResult?: Awaited<ReturnType<YouTubeAnalyticsPorts["consent"]["record"]>>;
   audit?: YouTubeAnalyticsAudit;
   now?: Date;
@@ -218,7 +221,18 @@ function fixture(options: FixtureOptions = {}) {
       lookupVideoTitles: () => {
         calls.data += 1;
         calls.titles += 1;
-        return Promise.resolve(titles.shift() ?? { ok: true, value: { titles: { [FIXTURE_VIDEO_ID]: "Synthetic title" } } });
+        return Promise.resolve(titles.shift() ?? {
+          ok: true,
+          value: {
+            titles: { [FIXTURE_VIDEO_ID]: "Synthetic title" },
+            details: {
+              [FIXTURE_VIDEO_ID]: {
+                published_at: "2026-11-01T12:00:00Z",
+                thumbnail_url: "https://i.ytimg.com/vi/videoAAAAAAA/mqdefault.jpg",
+              },
+            },
+          },
+        });
       },
     },
     consent: {
@@ -312,6 +326,10 @@ for (const [name, payload] of [
   ["malformed window_end", body("summary", { window_end: "2026-02-30" })],
   ["unsupported period", body("summary", { period_days: 8 })],
   ["top_videos video_id", body("top_videos", { video_id: FIXTURE_VIDEO_ID })],
+  ["top_videos start_index 0", body("top_videos", { start_index: 0 })],
+  ["top_videos start_index 192", body("top_videos", { start_index: 192 })],
+  ["top_videos fractional start_index", body("top_videos", { start_index: 1.5 })],
+  ["top_videos string start_index", body("top_videos", { start_index: "1" })],
 ] as const) {
   Deno.test(`strict validation refuses ${name} after admission and before decide`, async () => {
     const f = fixture();
@@ -591,9 +609,18 @@ Deno.test("table row 19: top videos enriches titles with one Data call", async (
   const response = await f.handler(request(body("top_videos")));
   assertEquals(response.status, 200);
   const payload = await json(response);
-  const data = payload.data as { titles: string; rows: Array<{ title: string; link: string }> };
+  const data = payload.data as {
+    titles: string;
+    has_more: boolean;
+    next_start_index: number | null;
+    rows: Array<{ title: string; link: string; published_at: string | null; thumbnail_url: string | null }>;
+  };
   assertEquals(data.titles, "complete");
+  assertEquals(data.has_more, false);
+  assertEquals(data.next_start_index, null);
   assertEquals(data.rows[0].title, "Synthetic title");
+  assertEquals(data.rows[0].published_at, "2026-11-01T12:00:00Z");
+  assertEquals(data.rows[0].thumbnail_url, "https://i.ytimg.com/vi/videoAAAAAAA/mqdefault.jpg");
   assert(data.rows[0].link.includes(encodeURIComponent(FIXTURE_VIDEO_ID)));
   assertCounts(f.calls, { token: 0, data: 1, analytics: 1, dataDebits: 1, analyticsDebits: 1 });
 });
@@ -602,9 +629,14 @@ Deno.test("table row 20: title 401 returns analytics with unavailable titles and
   const f = fixture({ titles: [{ ok: false, code: "unauthorized" }] });
   const response = await f.handler(request(body("top_videos")));
   assertEquals(response.status, 200);
-  const data = (await json(response)).data as { titles: string; rows: Array<{ title: string | null }> };
+  const data = (await json(response)).data as {
+    titles: string;
+    rows: Array<{ title: string | null; published_at: string | null; thumbnail_url: string | null }>;
+  };
   assertEquals(data.titles, "unavailable");
   assertEquals(data.rows[0].title, null);
+  assertEquals(data.rows[0].published_at, null);
+  assertEquals(data.rows[0].thumbnail_url, null);
   assertCounts(f.calls, { token: 0, data: 1, analytics: 1, dataDebits: 1, analyticsDebits: 1 });
   assertEquals(f.forceFlags, [false]);
 });
@@ -625,6 +657,27 @@ Deno.test("table row 22: empty top videos skips title lookup", async () => {
   assertCounts(f.calls, { token: 0, data: 0, analytics: 1, analyticsDebits: 1 });
   assertEquals(f.calls.titles, 0);
 });
+
+for (const [name, rowCount, startIndex, hasMore, nextStartIndex] of [
+  ["full first page", 10, 1, true, 11],
+  ["full last possible page", 10, 191, false, null],
+  ["partial page", 9, 1, false, null],
+  ["empty page", 0, 191, false, null],
+] as const) {
+  Deno.test(`top videos pagination handles ${name}`, async () => {
+    const rows = Array.from({ length: rowCount }, (_, index) => ({
+      videoId: `video${String(index).padStart(7, "0")}`,
+      metrics: [] as [],
+    }));
+    const f = fixture({ topVideos: [{ ok: true, value: { rows } }] });
+    const response = await f.handler(request(body("top_videos", { start_index: startIndex })));
+    assertEquals(response.status, 200);
+    assertEquals(response.headers.get("Cache-Control"), "no-store");
+    const data = (await json(response)).data as { has_more: boolean; next_start_index: number | null };
+    assertEquals(data.has_more, hasMore);
+    assertEquals(data.next_start_index, nextStartIndex);
+  });
+}
 
 Deno.test("table row 23: final decision refusal discards provider data", async () => {
   const f = fixture({ decisions: [allow(), allow(true), allow(), deny("not_enabled")] });
@@ -847,7 +900,7 @@ Deno.test("real refresh helper forced refresh after reused token exchanges a new
       readDaily: () => Promise.resolve({ ok: false, code: "upstream_unavailable" }),
       readTopVideos: () => Promise.resolve({ ok: false, code: "upstream_unavailable" }),
       lookupVideoOwnership: () => Promise.resolve({ ok: true, value: { owned: true } }),
-      lookupVideoTitles: () => Promise.resolve({ ok: true, value: { titles: {} } }),
+      lookupVideoTitles: () => Promise.resolve({ ok: true, value: { titles: {}, details: {} } }),
     },
     consent: {
       record: () => Promise.resolve({

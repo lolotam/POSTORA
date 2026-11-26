@@ -32,7 +32,7 @@ function validDataFor(operation: string): Record<string, unknown> {
       capabilities: { browse: { state: "available" }, upload: { state: "available" }, comments: { state: "available" } },
       quota: {
         provider_quota: "not_tracked",
-        unit_costs: { channel: 1, videos_page: 1, video: 1 },
+        unit_costs: { channel: 1, videos_page: 2, video: 1 },
         per_user_burst: { limit: 30, window_seconds: 600 },
         per_user_daily: { limit: 300, window_seconds: 86400 },
       },

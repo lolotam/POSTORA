@@ -227,6 +227,13 @@ Deno.test("top videos uses the single documented metric list and accepts string 
   assertEquals(params.get("metrics"), "estimatedMinutesWatched,views,likes,subscribersGained");
   assertEquals(params.get("sort"), "-views");
   assertEquals(params.get("maxResults"), "10");
+  assertEquals(params.get("startIndex"), "1");
+});
+
+Deno.test("top videos forwards the requested start index", async () => {
+  const { fetchImpl, requests } = fakeFetch({ status: 200, body: TOP_VIDEOS });
+  await createYouTubeAnalyticsReadClient({ fetchImpl }).readTopVideos("t", { ...reportInput(), startIndex: 11 });
+  assertEquals(requests[0].url.searchParams.get("startIndex"), "11");
 });
 
 Deno.test("top videos accepts a negative net likes value", async () => {
@@ -303,7 +310,15 @@ Deno.test("title lookup validates IDs and accepts titles only from the admitted 
     status: 200,
     body: {
       items: [
-        { id: FIXTURE_VIDEO_ID, snippet: { channelId: "UCfixturechannel000000001", title: "Synthetic title" } },
+        {
+          id: FIXTURE_VIDEO_ID,
+          snippet: {
+            channelId: "UCfixturechannel000000001",
+            title: "Synthetic title",
+            publishedAt: "2026-11-01T12:00:00Z",
+            thumbnails: { medium: { url: "https://i.ytimg.com/vi/videoAAAAAAA/mqdefault.jpg" } },
+          },
+        },
         { id: FIXTURE_OTHER_VIDEO_ID, snippet: { channelId: "UCanother", title: "Not admitted" } },
       ],
     },
@@ -312,13 +327,81 @@ Deno.test("title lookup validates IDs and accepts titles only from the admitted 
   assertEquals(await client.lookupVideoTitles("t", {
     channelId: "UCfixturechannel000000001",
     videoIds: [FIXTURE_VIDEO_ID, FIXTURE_OTHER_VIDEO_ID],
-  }), { ok: true, value: { titles: { [FIXTURE_VIDEO_ID]: "Synthetic title" } } });
+  }), {
+    ok: true,
+    value: {
+      titles: { [FIXTURE_VIDEO_ID]: "Synthetic title" },
+      details: {
+        [FIXTURE_VIDEO_ID]: {
+          published_at: "2026-11-01T12:00:00Z",
+          thumbnail_url: "https://i.ytimg.com/vi/videoAAAAAAA/mqdefault.jpg",
+        },
+      },
+    },
+  });
   assertEquals(requests[0].url.searchParams.get("id"), `${FIXTURE_VIDEO_ID},${FIXTURE_OTHER_VIDEO_ID}`);
+  assertEquals(requests[0].url.searchParams.get("part"), "snippet");
   assertEquals(await client.lookupVideoTitles("t", {
     channelId: "UCfixturechannel000000001",
     videoIds: ["bad/id"],
   }), { ok: false, code: "upstream_unavailable" });
   assertEquals(requests.length, 1);
+});
+
+Deno.test("title lookup nulls invalid dates and unsafe thumbnails without another provider call", async () => {
+  const { fetchImpl, requests } = fakeFetch({
+    status: 200,
+    body: {
+      items: [{
+        id: FIXTURE_VIDEO_ID,
+        snippet: {
+          channelId: "UCfixturechannel000000001",
+          title: "Synthetic title",
+          publishedAt: "not-a-date",
+          thumbnails: {
+            medium: { url: "http://i.ytimg.com/vi/videoAAAAAAA/mqdefault.jpg" },
+            high: { url: "https://i.ytimg.com/vi/videoAAAAAAA/hqdefault.jpg" },
+          },
+        },
+      }],
+    },
+  });
+  const result = await createYouTubeAnalyticsReadClient({ fetchImpl }).lookupVideoTitles("t", {
+    channelId: "UCfixturechannel000000001",
+    videoIds: [FIXTURE_VIDEO_ID],
+  });
+  assertEquals(result, {
+    ok: true,
+    value: {
+      titles: { [FIXTURE_VIDEO_ID]: "Synthetic title" },
+      details: { [FIXTURE_VIDEO_ID]: { published_at: null, thumbnail_url: null } },
+    },
+  });
+  assertEquals(requests.length, 1);
+});
+
+Deno.test("title lookup rejects non-ytimg thumbnail hosts", async () => {
+  const { fetchImpl } = fakeFetch({
+    status: 200,
+    body: {
+      items: [{
+        id: FIXTURE_VIDEO_ID,
+        snippet: {
+          channelId: "UCfixturechannel000000001",
+          publishedAt: "2026-11-01T12:00:00Z",
+          thumbnails: { default: { url: "https://ytimg.com.attacker.example/image.jpg" } },
+        },
+      }],
+    },
+  });
+  const result = await createYouTubeAnalyticsReadClient({ fetchImpl }).lookupVideoTitles("t", {
+    channelId: "UCfixturechannel000000001",
+    videoIds: [FIXTURE_VIDEO_ID],
+  });
+  assertEquals(result.ok && result.value.details[FIXTURE_VIDEO_ID], {
+    published_at: "2026-11-01T12:00:00Z",
+    thumbnail_url: null,
+  });
 });
 
 for (const [name, status, body, code] of [

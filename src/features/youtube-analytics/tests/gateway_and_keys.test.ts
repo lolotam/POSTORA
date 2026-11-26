@@ -4,7 +4,7 @@ import { SupabaseYouTubeAnalyticsGateway } from "../infrastructure/supabaseYouTu
 import { youtubeAnalyticsQueryKey } from "../application/queryKeys";
 import { YouTubeAnalyticsClientError } from "../domain/errors";
 import { YOUTUBE_ANALYTICS_ERRORS, type YouTubeAnalyticsErrorCode } from "../domain/types";
-import { ACCOUNT_ID, PERIOD, REVISION, statusData, success, USER_ID, VIDEO_ID, WINDOW_END } from "./fixtures";
+import { ACCOUNT_ID, PERIOD, REVISION, statusData, success, topVideosData, USER_ID, VIDEO_ID, WINDOW_END } from "./fixtures";
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
@@ -55,7 +55,7 @@ describe("Supabase gateway contract fixtures", () => {
     fetchMock
       .mockResolvedValueOnce(answer(success({ metrics: [], has_data: false })))
       .mockResolvedValueOnce(answer(success({ rows: [], coverage: { first_day: null, last_day: null, days_returned: 0, days_missing: 30 } })))
-      .mockResolvedValueOnce(answer(success({ rows: [], titles: "unavailable" })));
+      .mockResolvedValueOnce(answer(success({ rows: [], titles: "unavailable", has_more: false, next_start_index: null })));
     await gateway.summary({ ...params, videoId: VIDEO_ID });
     await gateway.daily(params);
     await gateway.topVideos(params);
@@ -66,6 +66,17 @@ describe("Supabase gateway contract fixtures", () => {
       { operation: "top_videos", account_id: ACCOUNT_ID, period_days: PERIOD, window_end: WINDOW_END },
     ]);
     expect(fetchMock.mock.calls.every((call) => !("user_id" in JSON.parse(call[1].body)))).toBe(true);
+  });
+
+  it("omits start_index on page one and sends it on later pages", async () => {
+    const params = { accountId: ACCOUNT_ID, periodDays: PERIOD, windowEnd: WINDOW_END };
+    fetchMock.mockImplementation(async () => answer(success(topVideosData())));
+    await gateway.topVideos({ ...params, startIndex: 1 });
+    await gateway.topVideos({ ...params, startIndex: 11 });
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(call[1].body))).toEqual([
+      { operation: "top_videos", account_id: ACCOUNT_ID, period_days: PERIOD, window_end: WINDOW_END },
+      { operation: "top_videos", account_id: ACCOUNT_ID, period_days: PERIOD, window_end: WINDOW_END, start_index: 11 },
+    ]);
   });
 
   it("accepts negative net engagement metrics in a summary response", async () => {

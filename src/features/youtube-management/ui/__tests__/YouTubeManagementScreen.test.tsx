@@ -10,6 +10,7 @@ import type { YouTubeResourcesGateway } from "../../application/ports";
 import type { YouTubeCapabilityState } from "../../domain/types";
 import { YouTubeResourceError } from "../../domain/errors";
 import { YouTubeManagementScreen } from "../YouTubeManagementScreen";
+import { youtubeResourceKey } from "../../application/queryKeys";
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "user-a" } }) }));
 
@@ -37,7 +38,7 @@ function gateway(browse: YouTubeCapabilityState = { state: "available" }): YouTu
       capabilities: { browse, upload: { state: "available" as const }, comments: { state: "available" as const } },
       quota: {
         provider_quota: "not_tracked" as const,
-        unit_costs: { channel: 1 as const, videos_page: 1 as const, video: 1 as const },
+        unit_costs: { channel: 1 as const, videos_page: 2 as const, video: 1 as const },
         per_user_burst: { limit: 30 as const, window_seconds: 600 as const },
         per_user_daily: { limit: 300 as const, window_seconds: 86400 as const },
       },
@@ -61,15 +62,16 @@ function gateway(browse: YouTubeCapabilityState = { state: "available" }): YouTu
   };
 }
 
-async function renderScreen(ui: ReactElement) {
+async function renderScreen(ui: ReactElement, locale: "en" | "ar" = "en") {
   const i18n = createInstance();
-  await i18n.init({ lng: "en", resources: { en: { accounts: {} } }, defaultNS: "accounts" });
+  await i18n.init({ lng: locale, resources: { en: { accounts: {} }, ar: { accounts: {} } }, defaultNS: "accounts" });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(
     <MemoryRouter><QueryClientProvider client={client}><I18nextProvider i18n={i18n}>{ui}</I18nextProvider></QueryClientProvider></MemoryRouter>,
   );
   return {
     ...view,
+    client,
     rerenderWith: (next: ReactElement) => view.rerender(
       <MemoryRouter><QueryClientProvider client={client}><I18nextProvider i18n={i18n}>{next}</I18nextProvider></QueryClientProvider></MemoryRouter>,
     ),
@@ -175,7 +177,7 @@ describe("YouTubeManagementScreen", () => {
 
     await screen.findByRole("button", { name: /Video one/ });
     await userEvent.click(screen.getByRole("button", { name: "Load more" }));
-    await userEvent.click(await screen.findByRole("button", { name: /Video two/ }));
+    await screen.findByRole("button", { name: /Video two/ });
     await userEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("YouTube did not answer");
 
@@ -308,5 +310,48 @@ describe("YouTubeManagementScreen", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetryAccounts).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("YouTubeManagementScreen page trimming", () => {
+  it("loads three pages then refreshes exactly one and resets pageParams", async () => {
+    const item = (id: string) => ({ id, title: `Video ${id}`, thumbnail_url: null, published_at: null, privacy_status: "public", url: "https://www.youtube.com/watch?v=x" });
+    const listVideos = vi.fn(({ pageToken }: { pageToken?: string | null }) => Promise.resolve(envelope({
+      items: [item(pageToken ?? "one")],
+      next_page_token: pageToken === null || pageToken === undefined ? "two" : pageToken === "two" ? "three" : null,
+      total_results: 3,
+    })));
+    const fake = { ...gateway(), listVideos } as YouTubeResourcesGateway;
+    const view = await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+    await screen.findByRole("button", { name: /Video one/ });
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByRole("button", { name: /Video two/ });
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByRole("button", { name: /Video three/ });
+    expect(listVideos).toHaveBeenCalledTimes(3);
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(listVideos).toHaveBeenCalledTimes(4));
+    expect(listVideos).toHaveBeenLastCalledWith({ accountId: "acc-a", pageToken: null });
+    const key = youtubeResourceKey("user-a", "acc-a", "videos");
+    expect(view.client.getQueryData(key)).toMatchObject({ pageParams: [null] });
+    expect(view.client.getQueryData<{ pages: unknown[] }>(key)?.pages).toHaveLength(1);
+  });
+});
+
+
+describe("YouTubeManagementScreen drawer behavior", () => {
+  it("uses the locale-aware side and restores focus when closed", async () => {
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={gateway()} />, "ar");
+    const trigger = await screen.findByRole("button", { name: /Video of acc-a/ });
+    await userEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveAttribute("dir", "rtl");
+    expect(dialog.className).toContain("left-0");
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
   });
 });

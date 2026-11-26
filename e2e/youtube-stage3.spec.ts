@@ -12,10 +12,12 @@ async function openEditor(page: Page, locale: "en" | "ar" = "en") {
   await page.goto("/youtube", { waitUntil: "domcontentloaded" });
   await expect(page.getByText(VIDEO.title).first()).toBeVisible();
   await page.getByRole("button", { name: new RegExp(VIDEO.title, "i") }).click();
+  const drawer = page.getByRole("dialog");
+  await expect(drawer).toBeVisible();
   const editName = locale === "ar" ? /تعديل تفاصيل الفيديو/ : /edit video details/i;
-  await expect(page.getByRole("button", { name: editName })).toBeVisible();
-  await page.getByRole("button", { name: editName }).click();
-  await expect(page.getByLabel(locale === "ar" ? "العنوان" : "Title")).toBeVisible();
+  await expect(drawer.getByRole("button", { name: editName })).toBeVisible();
+  await drawer.getByRole("button", { name: editName }).click();
+  await expect(drawer.getByLabel(locale === "ar" ? "العنوان" : "Title")).toBeVisible();
 }
 
 test.describe("YouTube Stage 3 offline journeys", () => {

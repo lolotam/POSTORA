@@ -36,7 +36,7 @@ Deno.test("isYouTubeResourceErrorCode accepts known codes and rejects everything
 Deno.test("the quota policy is the one the specification publishes", () => {
   assertEquals(YOUTUBE_RESOURCE_QUOTA_POLICY.per_user_burst, { limit: 30, window_seconds: 600 });
   assertEquals(YOUTUBE_RESOURCE_QUOTA_POLICY.per_user_daily, { limit: 300, window_seconds: 86400 });
-  assertEquals(YOUTUBE_RESOURCE_QUOTA_POLICY.unit_costs, { channel: 1, videos_page: 1, video: 1 });
+  assertEquals(YOUTUBE_RESOURCE_QUOTA_POLICY.unit_costs, { channel: 1, videos_page: 2, video: 1 });
 });
 
 Deno.test("scope constants are the full Google scope URLs", () => {

@@ -32,5 +32,5 @@ export interface YouTubeAnalyticsGateway {
   }): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsConsentData>>;
   summary(params: YouTubeAnalyticsDataParams): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsSummaryData>>;
   daily(params: YouTubeAnalyticsDataParams): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsDailyData>>;
-  topVideos(params: YouTubeAnalyticsDataParams): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsTopVideosData>>;
+  topVideos(params: YouTubeAnalyticsDataParams & { startIndex?: number }): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsTopVideosData>>;
 }

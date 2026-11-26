@@ -42,7 +42,10 @@ function isOperationDataValid(operation: YouTubeAnalyticsRequest["operation"], d
         && typeof data.coverage.days_returned === "number"
         && typeof data.coverage.days_missing === "number";
     case "top_videos":
-      return Array.isArray(data.rows) && typeof data.titles === "string";
+      return Array.isArray(data.rows)
+        && typeof data.titles === "string"
+        && typeof data.has_more === "boolean"
+        && (data.next_start_index === null || typeof data.next_start_index === "number");
   }
 }
 
@@ -163,8 +166,12 @@ export class SupabaseYouTubeAnalyticsGateway implements YouTubeAnalyticsGateway 
     return call<YouTubeAnalyticsDailyData>({ operation: "daily", ...dataBody(params) }, params.signal);
   }
 
-  topVideos(params: YouTubeAnalyticsDataParams) {
-    return call<YouTubeAnalyticsTopVideosData>({ operation: "top_videos", ...dataBody(params) }, params.signal);
+  topVideos(params: YouTubeAnalyticsDataParams & { startIndex?: number }) {
+    return call<YouTubeAnalyticsTopVideosData>({
+      operation: "top_videos",
+      ...dataBody(params),
+      ...(params.startIndex !== undefined && params.startIndex > 1 ? { start_index: params.startIndex } : {}),
+    }, params.signal);
   }
 }
 

@@ -16,6 +16,21 @@ function fakeFetch(status: number, body: unknown) {
   return { fetchImpl, requests };
 }
 
+function fakeFetchSequence(responses: Array<{ status: number; body: unknown }>) {
+  const requests: Array<{ url: URL; authorization: string | null }> = [];
+  const queue = [...responses];
+  const fetchImpl: typeof fetch = (input, init) => {
+    requests.push({
+      url: new URL(String(input)),
+      authorization: new Headers(init?.headers).get("Authorization"),
+    });
+    const next = queue.shift();
+    if (!next) return Promise.reject(new TypeError("unexpected request"));
+    return Promise.resolve(Response.json(next.body, { status: next.status }));
+  };
+  return { fetchImpl, requests };
+}
+
 function client(fetchImpl: typeof fetch) {
   return createYouTubeReadClient({
     fetchImpl,
@@ -176,6 +191,10 @@ Deno.test("listUploads pages the channel's own uploads playlist", async () => {
   assertEquals(requests[0].url.searchParams.get("maxResults"), "25");
   assertEquals(requests[0].url.searchParams.get("pageToken"), "CAoQAA");
   assertEquals(requests[0].url.searchParams.get("part"), "snippet,contentDetails,status");
+  assertEquals(requests.length, 2);
+  assertEquals(requests[1].url.pathname, "/youtube/v3/videos");
+  assertEquals(requests[1].url.searchParams.get("part"), "snippet,contentDetails,statistics,status");
+  assertEquals(requests[1].url.searchParams.get("id"), "videoAAAAAAA");
   assertEquals(result, {
     ok: true,
     value: {
@@ -186,6 +205,9 @@ Deno.test("listUploads pages the channel's own uploads playlist", async () => {
         published_at: "2026-10-31T00:00:00Z",
         privacy_status: "unlisted",
         url: "https://www.youtube.com/watch?v=videoAAAAAAA",
+        description: null,
+        duration_iso8601: null,
+        statistics: { view_count: null, like_count: null, comment_count: null },
       }],
       next_page_token: "CAUQAA",
       total_results: 60,
@@ -197,6 +219,7 @@ Deno.test("the first page sends no pageToken and the last page has none to give"
   const { fetchImpl, requests } = fakeFetch(200, { items: [] });
   const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 50 });
   assertEquals(requests[0].url.searchParams.has("pageToken"), false);
+  assertEquals(requests.length, 1);
   assertEquals(result, { ok: true, value: { items: [], next_page_token: null, total_results: null } });
 });
 
@@ -309,4 +332,159 @@ Deno.test("a Google 404 on channels and videos is still not_found", async () => 
     await client(video.fetchImpl).getVideo("t", { channelId: CHANNEL_ID, videoId: "videoAAAAAAA" }),
     { ok: false, code: "not_found", unauthorized: false },
   );
+});
+
+
+const UPLOADS_WITH_TWO_VIDEOS = {
+  nextPageToken: "NEXTTOKEN",
+  pageInfo: { totalResults: 3 },
+  items: [
+    {
+      snippet: { title: "Owned A", resourceId: { videoId: "videoAAAAAAA" } },
+      contentDetails: { videoId: "videoAAAAAAA", videoPublishedAt: "2026-11-01T00:00:00Z" },
+    },
+    {
+      snippet: { title: "Owned B", resourceId: { videoId: "videoBBBBBBB" } },
+      contentDetails: { videoId: "videoBBBBBBB" },
+      status: { privacyStatus: "unlisted" },
+    },
+  ],
+};
+
+Deno.test("listUploads batches enrichment, truncates descriptions and ignores foreign channel entries", async () => {
+  const { fetchImpl, requests } = fakeFetchSequence([
+    { status: 200, body: UPLOADS_WITH_TWO_VIDEOS },
+    {
+      status: 200,
+      body: {
+        items: [
+          {
+            id: "videoAAAAAAA",
+            snippet: { channelId: CHANNEL_ID, description: "x".repeat(600) },
+            contentDetails: { duration: "PT4M13S" },
+            statistics: { viewCount: "120", likeCount: "8", commentCount: "3" },
+            status: { privacyStatus: "private" },
+          },
+          {
+            id: "videoBBBBBBB",
+            snippet: { channelId: "UCforeign", description: "not admitted" },
+            contentDetails: { duration: "PT1M" },
+            statistics: { viewCount: "999" },
+          },
+          { id: "videoCCCCCCC", snippet: { channelId: CHANNEL_ID, description: "not requested" } },
+        ],
+      },
+    },
+  ]);
+  const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
+  assertEquals(requests.length, 2);
+  assertEquals(requests[1].url.searchParams.get("id"), "videoAAAAAAA,videoBBBBBBB");
+  assertEquals(result, {
+    ok: true,
+    value: {
+      items: [
+        {
+          id: "videoAAAAAAA",
+          title: "Owned A",
+          thumbnail_url: null,
+          published_at: "2026-11-01T00:00:00Z",
+          privacy_status: "private",
+          url: "https://www.youtube.com/watch?v=videoAAAAAAA",
+          description: "x".repeat(500),
+          duration_iso8601: "PT4M13S",
+          statistics: { view_count: 120, like_count: 8, comment_count: 3 },
+        },
+        {
+          id: "videoBBBBBBB",
+          title: "Owned B",
+          thumbnail_url: null,
+          published_at: null,
+          privacy_status: "unlisted",
+          url: "https://www.youtube.com/watch?v=videoBBBBBBB",
+          description: null,
+          duration_iso8601: null,
+          statistics: { view_count: null, like_count: null, comment_count: null },
+        },
+      ],
+      next_page_token: "NEXTTOKEN",
+      total_results: 3,
+    },
+  });
+});
+
+for (const [name, status, body, expectedClass] of [
+  ["401", 401, { error: { errors: [{ reason: "authError" }] } }, "unauthorized"],
+  ["403", 403, { error: { errors: [{ reason: "insufficientPermissions" }] } }, "scope_missing"],
+  ["500", 500, { error: { errors: [{ reason: "backendError" }] } }, "upstream"],
+  ["bad schema", 200, { items: "bad" }, "upstream"],
+] as const) {
+  Deno.test(`listUploads enrichment ${name} degrades to nulls without losing the page`, async () => {
+    const { fetchImpl } = fakeFetchSequence([
+      { status: 200, body: UPLOADS_WITH_TWO_VIDEOS },
+      { status, body },
+    ]);
+    const warnings: unknown[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
+      assertEquals(result.ok, true);
+      if (result.ok) {
+        assertEquals(result.value.next_page_token, "NEXTTOKEN");
+        for (const item of result.value.items) {
+          assertEquals(item.description, null);
+          assertEquals(item.duration_iso8601, null);
+          assertEquals(item.statistics, { view_count: null, like_count: null, comment_count: null });
+        }
+      }
+      assertEquals(warnings, [[{ event: "youtube_resources_enrichment_degraded", class: expectedClass }]]);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+}
+
+Deno.test("listUploads enrichment network failure degrades without marking the token unauthorized", async () => {
+  let calls = 0;
+  const fetchImpl: typeof fetch = () => {
+    calls += 1;
+    return calls === 1
+      ? Promise.resolve(Response.json(UPLOADS_WITH_TWO_VIDEOS))
+      : Promise.reject(new TypeError("offline"));
+  };
+  const originalWarn = console.warn;
+  const warnings: unknown[] = [];
+  console.warn = (...args: unknown[]) => { warnings.push(args); };
+  try {
+    const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
+    assertEquals(result.ok, true);
+    assertEquals(result.ok && result.value.items[0].statistics, { view_count: null, like_count: null, comment_count: null });
+    assertEquals(warnings, [[{ event: "youtube_resources_enrichment_degraded", class: "network" }]]);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("playlistItems 401 remains unauthorized while enrichment failures never are", async () => {
+  const { fetchImpl, requests } = fakeFetch(401, { error: { errors: [{ reason: "authError" }] } });
+  const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
+  assertEquals(result, { ok: false, code: "reconnect_required", unauthorized: true });
+  assertEquals(requests.length, 1);
+});
+
+Deno.test("listUploads normalizes unparseable publishedAt values to null", async () => {
+  const { fetchImpl } = fakeFetchSequence([
+    {
+      status: 200,
+      body: {
+        items: [{
+          snippet: { title: "Bad date", publishedAt: "not-a-date", resourceId: { videoId: "videoAAAAAAA" } },
+          contentDetails: { videoId: "videoAAAAAAA", videoPublishedAt: "not-a-date" },
+        }],
+      },
+    },
+    { status: 200, body: { items: [] } },
+  ]);
+  const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
+  assertEquals(result.ok && result.value.items[0].published_at, null);
 });

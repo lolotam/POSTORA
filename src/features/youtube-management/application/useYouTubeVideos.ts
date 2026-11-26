@@ -1,8 +1,15 @@
-import { useInfiniteQuery, type InfiniteData, type UseInfiniteQueryResult } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData, type QueryClient, type QueryKey, type UseInfiniteQueryResult } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import type { YouTubeResourceSuccess, YouTubeVideosPage } from "../domain/types";
 import type { YouTubeResourcesGateway } from "./ports";
 import { YOUTUBE_RESOURCE_STALE_MS, youtubeResourceKey, youtubeResourceRetry } from "./queryKeys";
+
+export function trimVideosToFirstPage(queryClient: QueryClient, key: QueryKey): void {
+  queryClient.setQueryData<InfiniteData<YouTubeResourceSuccess<YouTubeVideosPage>, string | null>>(key, (current) => {
+    if (!current) return undefined;
+    return { pages: [current.pages[0]], pageParams: [null] };
+  });
+}
 
 export function useYouTubeVideos(options: { gateway: YouTubeResourcesGateway; accountId: string | null; enabled: boolean }): UseInfiniteQueryResult<InfiniteData<YouTubeResourceSuccess<YouTubeVideosPage>, string | null>, Error> {
   const { gateway, accountId, enabled } = options;
