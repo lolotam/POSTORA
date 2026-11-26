@@ -7,6 +7,8 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { YouTubeAnalyticsScreen } from "../ui/YouTubeAnalyticsScreen";
 import { useAccessLease } from "../application/useAccessLease";
+import { trimTopVideosToFirstPage } from "../application/useYouTubeTopVideos";
+import { youtubeAnalyticsQueryKey } from "../application/queryKeys";
 import type { YouTubeAnalyticsGateway } from "../application/ports";
 import type { YouTubeAnalyticsStatusData, YouTubeAnalyticsSuccess } from "../domain/types";
 import {
@@ -347,7 +349,7 @@ describe("video scope", () => {
     });
     await renderScreen(gateway, { initialVideoId: VIDEO_ID });
     expect(await screen.findAllByText(/not available on this channel/)).not.toHaveLength(0);
-    expect(screen.getByText("Fixture video")).toBeInTheDocument();
+    expect(screen.getAllByText("Fixture video").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Overview", { selector: "section" })).toBeInTheDocument();
     expect(screen.getByText("Daily trend")).toBeInTheDocument();
   });
@@ -457,5 +459,266 @@ describe("purpose acceptance and withdrawal", () => {
     expect(gateway.summary).toHaveBeenCalledTimes(1);
     expect(gateway.daily).toHaveBeenCalledTimes(1);
     expect(gateway.topVideos).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("top videos table, pages and drawer", () => {
+  function page(startIndex: number, hasMore: boolean, count = 10) {
+    const data = topVideosData();
+    data.rows = Array.from({ length: count }, (_, index) => ({
+      ...data.rows[0],
+      video_id: `video-${startIndex}-${index}`,
+      title: `Video ${startIndex}-${index}`,
+      published_at: "2026-11-01T12:00:00Z",
+    }));
+    data.has_more = hasMore;
+    data.next_start_index = hasMore ? startIndex + 10 : null;
+    return data;
+  }
+
+  it("persists view controls and renumbers rows after sorting with aria-sort", async () => {
+    const data = topVideosData();
+    data.rows = [
+      { ...data.rows[0], video_id: "videoAAAAAAA", title: "Alpha", metrics: data.rows[0].metrics.map((metric) => metric.key === "likes" ? { ...metric, value: 1 } : metric) },
+      { ...data.rows[0], video_id: "videoBBBBBBB", title: "Beta", metrics: data.rows[0].metrics.map((metric) => metric.key === "likes" ? { ...metric, value: 5 } : metric) },
+    ];
+    await renderScreen(makeGateway({ topVideos: vi.fn(async () => success(data)) }));
+    await screen.findByText("Alpha");
+    fireEvent.click(screen.getByRole("button", { name: "Likes" }));
+    expect(screen.getByRole("columnheader", { name: "Likes" })).toHaveAttribute("aria-sort", "descending");
+    const topVideosSection = screen.getByLabelText("Most viewed videos", { selector: "section" });
+    let rows = within(topVideosSection).getAllByRole("row").slice(1);
+    expect((rows[0] as HTMLTableRowElement).cells[0]).toHaveTextContent("1");
+    expect(rows[0]).toHaveTextContent("Beta");
+    fireEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    fireEvent.click(screen.getByRole("button", { name: "6 per row" }));
+    expect(localStorage.getItem("ytAnalyticsTopVideosView")).toBe("grid");
+    expect(localStorage.getItem("ytAnalyticsTopVideosGridColumns")).toBe("6");
+    fireEvent.click(screen.getByRole("button", { name: "Table view" }));
+    rows = within(topVideosSection).getAllByRole("row").slice(1);
+    expect(rows[0]).toHaveTextContent("Beta");
+  });
+
+  it("appends pages without duplicates and handles an empty final page", async () => {
+    const second = page(11, true);
+    second.rows[0] = { ...page(1, false).rows[0] };
+    const gateway = makeGateway({
+      topVideos: vi.fn(async ({ startIndex = 1 }) => success(
+        startIndex === 1 ? page(1, true) : startIndex === 11 ? second : page(21, false, 0),
+      )),
+    });
+    await renderScreen(gateway);
+    await screen.findByText("10 loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText("19 loaded");
+    expect(gateway.topVideos).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument());
+    expect(screen.getByText("19 loaded")).toBeInTheDocument();
+    expect(gateway.topVideos).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps loaded rows on a next-page rate limit and retries only that page", async () => {
+    const gateway = makeGateway({
+      topVideos: vi.fn()
+        .mockImplementationOnce(async () => success(page(1, true)))
+        .mockImplementationOnce(async () => { throw refusal("rate_limited"); })
+        .mockImplementationOnce(async () => success(page(11, false))),
+    });
+    await renderScreen(gateway);
+    await screen.findByText("10 loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many analytics requests");
+    expect(screen.getByText("10 loaded")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("20 loaded");
+    expect(gateway.topVideos).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(gateway.topVideos).mock.calls[2][0].startIndex).toBe(11);
+  });
+
+  it("replaces the report area when the next page loses account access", async () => {
+    const gateway = makeGateway({
+      topVideos: vi.fn()
+        .mockImplementationOnce(async () => success(page(1, true)))
+        .mockImplementationOnce(async () => { throw refusal("reconnect_required"); }),
+    });
+    await renderScreen(gateway);
+    await screen.findByText("10 loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(gateway.topVideos).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Reconnect this channel/);
+    await waitFor(() => expect(screen.queryByText("10 loaded")).not.toBeInTheDocument());
+  });
+
+  it("opens deep-linked video analytics in locale-aware sheets", async () => {
+    const english = await renderScreen(makeGateway(), { initialVideoId: VIDEO_ID });
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveAttribute("dir", "ltr");
+    expect(dialog.className).toContain("right-0");
+    english.unmount();
+    await renderScreen(makeGateway(), { initialVideoId: VIDEO_ID, locale: "ar" });
+    const arabicDialog = await screen.findByRole("dialog");
+    expect(arabicDialog).toHaveAttribute("dir", "rtl");
+    expect(arabicDialog.className).toContain("left-0");
+  });
+
+  it("trims both pages and page params and leaves an absent cache entry absent", () => {
+    const queryClient = client();
+    const key = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "top_videos", "2026-11-17", 30, null);
+    expect(trimTopVideosToFirstPage(queryClient, key)).toBeUndefined();
+    expect(queryClient.getQueryData(key)).toBeUndefined();
+    queryClient.setQueryData(key, {
+      pages: [success(page(1, true)), success(page(11, false))],
+      pageParams: [1, 11],
+    });
+    trimTopVideosToFirstPage(queryClient, key);
+    expect(queryClient.getQueryData(key)).toEqual({ pages: [success(page(1, true))], pageParams: [1] });
+  });
+});
+
+
+describe("top videos refresh cost", () => {
+  it("trims three pages on period return and refreshes only page one", async () => {
+    const queryClient = client();
+    const pageFor = (startIndex: number, windowEnd: string, periodDays: 7 | 14 | 30 | 90) => {
+      const data = topVideosData(`Page ${startIndex}`);
+      data.rows[0].video_id = `page-${startIndex}`;
+      data.has_more = startIndex < 21;
+      data.next_start_index = startIndex < 21 ? startIndex + 10 : null;
+      const response = success(data);
+      response.requested_window = { ...response.requested_window!, end_date: windowEnd, days: periodDays };
+      return response;
+    };
+    const gateway = makeGateway({
+      status: vi.fn()
+        .mockImplementationOnce(async () => success(statusData(), REVISION, false))
+        .mockImplementation(async () => success({ ...statusData(), reporting_end_date: "2026-11-18" }, REVISION, false)),
+      topVideos: vi.fn(async (params) => pageFor(params.startIndex ?? 1, params.windowEnd, params.periodDays)),
+    });
+    await renderScreen(gateway, { queryClient });
+    await screen.findByText("1 loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText("2 loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText("3 loaded");
+
+    fireEvent.change(screen.getByLabelText("Period"), { target: { value: "14" } });
+    await screen.findByText("1 loaded");
+    fireEvent.change(screen.getByLabelText("Period"), { target: { value: "30" } });
+    await screen.findByText("1 loaded");
+    const key = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "top_videos", "2026-11-17", 30, null);
+    expect(queryClient.getQueryData(key)).toMatchObject({ pageParams: [1] });
+    const callsBeforeRefresh = vi.mocked(gateway.topVideos).mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(gateway.topVideos).toHaveBeenCalledTimes(callsBeforeRefresh + 1));
+    expect(vi.mocked(gateway.topVideos).mock.calls.at(-1)?.[0]).toMatchObject({ startIndex: 1, windowEnd: "2026-11-18" });
+  });
+});
+
+
+describe("top videos stale next-page recovery", () => {
+  it("keeps rows, retries through Refresh and ends on one page", async () => {
+    const queryClient = client();
+    const first = topVideosData("First page");
+    first.has_more = true;
+    first.next_start_index = 11;
+    const gateway = makeGateway({
+      status: vi.fn()
+        .mockImplementationOnce(async () => success(statusData(), REVISION, false))
+        .mockImplementation(async () => success({ ...statusData(), reporting_end_date: "2026-11-18" }, REVISION, false)),
+      topVideos: vi.fn()
+        .mockImplementationOnce(async () => success(first))
+        .mockImplementationOnce(async () => { throw refusal("window_stale"); })
+        .mockImplementation(async (params) => {
+          const data = topVideosData("Refreshed first page");
+          const response = success(data);
+          response.requested_window = { ...response.requested_window!, end_date: params.windowEnd, days: params.periodDays };
+          return response;
+        }),
+    });
+    await renderScreen(gateway, { queryClient });
+    await screen.findByText("1 loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("reporting period moved on");
+    expect(screen.getByText("1 loaded")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Refreshed first page");
+    expect(gateway.topVideos).toHaveBeenCalledTimes(3);
+    const key = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "top_videos", "2026-11-18", 30, null);
+    expect(queryClient.getQueryData(key)).toMatchObject({ pageParams: [1] });
+  });
+});
+
+
+describe("top videos same-window refresh", () => {
+  it("refetches only the trimmed first page", async () => {
+    const queryClient = client();
+    const gateway = makeGateway({
+      topVideos: vi.fn(async () => {
+        const data = topVideosData();
+        data.has_more = true;
+        data.next_start_index = 11;
+        return success(data);
+      }),
+    });
+    await renderScreen(gateway, { queryClient });
+    await screen.findByText("1 loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(gateway.topVideos).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(gateway.topVideos).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(gateway.topVideos).mock.calls.at(-1)?.[0].startIndex).toBe(1);
+    const key = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "top_videos", "2026-11-17", 30, null);
+    expect(queryClient.getQueryData(key)).toMatchObject({ pageParams: [1] });
+  });
+
+  it("retries a failed same-window Refresh with refetch (page 1) rather than fetchNextPage (page 11)", async () => {
+    const page1 = topVideosData("Cached page 1");
+    page1.has_more = true;
+    page1.next_start_index = 11;
+    const refreshedPage1 = topVideosData("Refreshed page 1");
+    refreshedPage1.has_more = true;
+    refreshedPage1.next_start_index = 11;
+    const gateway = makeGateway({
+      topVideos: vi.fn()
+        .mockImplementationOnce(async () => success(page1))
+        .mockImplementationOnce(async () => { throw refusal("rate_limited"); })
+        .mockImplementationOnce(async () => success(refreshedPage1)),
+    });
+    await renderScreen(gateway);
+    await screen.findByText("Cached page 1");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many analytics requests");
+    expect(screen.getByText("Cached page 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Refreshed page 1");
+    expect(gateway.topVideos).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(gateway.topVideos).mock.calls[1][0].startIndex).toBe(1);
+    expect(vi.mocked(gateway.topVideos).mock.calls[2][0].startIndex).toBe(1);
+  });
+
+  it("hides the video analytics drawer while the access lease is expired and restores it once status refreshes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-20T12:00:00Z"));
+    const secondStatus = deferred<YouTubeAnalyticsSuccess<YouTubeAnalyticsStatusData>>();
+    const gateway = makeGateway({
+      status: vi.fn()
+        .mockImplementationOnce(async () => success(statusData(), REVISION, false))
+        .mockImplementationOnce(() => secondStatus.promise)
+        .mockImplementation(async () => success(statusData(), REVISION, false)),
+    });
+    await renderScreen(gateway, { initialVideoId: VIDEO_ID });
+    await flush();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(91_000); });
+    await flush();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    secondStatus.resolve(success(statusData(), REVISION, false));
+    await flush();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });

@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { formatAnalyticsDate, formatCount, formatMinutes, formatSeconds, startDateForWindow } from "../domain/format";
 import { buildTrendSeries } from "../domain/trendSeries";
 import { ANALYTICS_PURPOSE_TEXT } from "../domain/purposeText";
-import { ANALYTICS_PURPOSE_VERSION, YOUTUBE_ANALYTICS_DAILY_METRICS } from "../domain/types";
-import { requestedWindow, WINDOW_END } from "./fixtures";
+import { ANALYTICS_PURPOSE_VERSION, YOUTUBE_ANALYTICS_DAILY_METRICS, type YouTubeAnalyticsTopVideoRow } from "../domain/types";
+import { mergeTopVideoPages, sortTopVideoRows } from "../domain/topVideosView";
+import { requestedWindow, success, topVideosData, WINDOW_END } from "./fixtures";
 
 describe("analytics formatting", () => {
   it("keeps null explicit and formats units", () => {
@@ -62,5 +63,46 @@ describe("Analytics Purpose Clause version guard", () => {
       en: digest(localized.en),
       ar: digest(localized.ar),
     });
+  });
+});
+
+
+describe("top videos view", () => {
+  const row = (id: string, views: number | null, likes: number | null = 0, title: string | null = id): YouTubeAnalyticsTopVideoRow => ({
+    video_id: id,
+    title,
+    published_at: null,
+    thumbnail_url: null,
+    link: `https://www.youtube.com/watch?v=${id}`,
+    metrics: [
+      { key: "views", unit: "count", value: views },
+      { key: "watch_time", unit: "minutes", value: views },
+      { key: "likes", unit: "count", value: likes },
+      { key: "subscribers_gained", unit: "count", value: 1 },
+    ],
+  });
+
+  it("merges pages in order and keeps the first copy of each video", () => {
+    const first = topVideosData();
+    const second = topVideosData("Duplicate");
+    second.rows.push(row("videoBBBBBBB", 20));
+    const merged = mergeTopVideoPages([success(first), success(second)]);
+    expect(merged.map((item) => item.video_id)).toEqual([first.rows[0].video_id, "videoBBBBBBB"]);
+    expect(merged[0].title).toBe("Fixture video");
+  });
+
+  it("sorts every metric numerically with nulls last in both directions", () => {
+    const rows = [row("videoAAAAAAA", 10, -2), row("videoBBBBBBB", null, 4), row("videoCCCCCCC", 10, -5)];
+    expect(sortTopVideoRows(rows, "views", "ascending").map((item) => item.video_id)).toEqual(["videoAAAAAAA", "videoCCCCCCC", "videoBBBBBBB"]);
+    expect(sortTopVideoRows(rows, "views", "descending").map((item) => item.video_id)).toEqual(["videoAAAAAAA", "videoCCCCCCC", "videoBBBBBBB"]);
+    expect(sortTopVideoRows(rows, "likes", "ascending").map((item) => item.video_id)).toEqual(["videoCCCCCCC", "videoAAAAAAA", "videoBBBBBBB"]);
+  });
+
+  it("sorts titles and publication dates with stable ties", () => {
+    const rows = [row("videoAAAAAAA", 1, 0, "Beta"), row("videoBBBBBBB", 2, 0, "alpha"), row("videoCCCCCCC", 3, 0, null)];
+    expect(sortTopVideoRows(rows, "video", "ascending").map((item) => item.video_id)).toEqual(["videoBBBBBBB", "videoAAAAAAA", "videoCCCCCCC"]);
+    rows[0].published_at = "2026-01-01T00:00:00Z";
+    rows[1].published_at = "2026-02-01T00:00:00Z";
+    expect(sortTopVideoRows(rows, "published_at", "descending").map((item) => item.video_id)).toEqual(["videoBBBBBBB", "videoAAAAAAA", "videoCCCCCCC"]);
   });
 });

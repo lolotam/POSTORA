@@ -7,7 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { YouTubeVideoDetail } from "../YouTubeVideoDetail";
 
 vi.mock("@/hooks/useFeatureFlags", () => ({
-  useFeatureFlags: () => ({ flags: { analyticsYoutube: false }, isLoading: false }),
+  useFeatureFlags: () => ({ flags: { analyticsYoutube: true }, isLoading: false }),
 }));
 
 async function renderUi(ui: ReactElement) {
@@ -58,5 +58,23 @@ describe("YouTubeVideoDetail", () => {
 
     await renderUi(<YouTubeVideoDetail video={details} fetchedAt="not-a-date" />);
     expect(screen.queryByText(/^Updated /)).not.toBeInTheDocument();
+  });
+});
+
+
+describe("YouTubeVideoDetail drawer sections", () => {
+  it("renders nine metadata cells, scrollable description, tags and both links", async () => {
+    await renderUi(<YouTubeVideoDetail video={details} fetchedAt="2026-11-20T10:00:00.000Z" accountId="account-a" categoryLabel="Education" />);
+    for (const label of ["Views", "Likes", "Comments", "Duration", "Privacy", "Published date", "Category", "Default language", "Made for Kids"]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(screen.getByText("Education")).toBeInTheDocument();
+    expect(screen.getByText("ar")).toBeInTheDocument();
+    expect(screen.getByText("No")).toBeInTheDocument();
+    expect(screen.getByText("Body text")).toHaveClass("max-h-64", "overflow-y-auto", "whitespace-pre-wrap");
+    expect(screen.getByText("one")).toBeInTheDocument();
+    expect(screen.getByText("two")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open on YouTube" })).toHaveAttribute("href", details.url);
+    expect(screen.getByRole("link", { name: "View analytics" })).toHaveAttribute("href", "/analytics/youtube?video=videoAAAAAAA&account=account-a");
   });
 });

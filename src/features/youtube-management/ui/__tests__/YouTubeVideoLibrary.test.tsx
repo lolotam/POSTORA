@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
@@ -23,6 +23,7 @@ const video = (id: string) => ({
 });
 
 describe("YouTubeVideoLibrary", () => {
+  beforeEach(() => localStorage.clear());
   it("lists the videos and reports the one the user picks", async () => {
     const onSelect = vi.fn();
     await renderUi(
@@ -63,5 +64,82 @@ describe("YouTubeVideoLibrary", () => {
     expect(screen.getByText("More results are available, load the next page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("YouTubeVideoLibrary enhanced views", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("sorts with aria-sort and renumbers the visible order", async () => {
+    const rows = [
+      { ...video("a"), statistics: { view_count: 5, like_count: null, comment_count: null } },
+      { ...video("b"), statistics: { view_count: 10, like_count: null, comment_count: null } },
+    ];
+    await renderUi(<YouTubeVideoLibrary videos={rows} selectedVideoId={null} onSelect={vi.fn()} hasMore={false} isLoadingMore={false} onLoadMore={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Views" }));
+    expect(screen.getByRole("columnheader", { name: "Views" })).toHaveAttribute("aria-sort", "descending");
+    const tableRows = screen.getAllByRole("row").slice(1);
+    expect(tableRows[0]).toHaveTextContent("Title b");
+    expect((tableRows[0] as HTMLTableRowElement).cells[0]).toHaveTextContent("1");
+    await userEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    expect(screen.getByText("#1")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "6 per row" }));
+    expect(localStorage.getItem("ytManagementLibraryView")).toBe("grid");
+    expect(localStorage.getItem("ytManagementLibraryGridColumns")).toBe("6");
+  });
+
+  it("filters Shorts and searches descriptions", async () => {
+    const rows = [
+      { ...video("a"), description: "Regular upload" },
+      { ...video("b"), title: "My clip #Shorts", description: "Vertical" },
+    ];
+    await renderUi(<YouTubeVideoLibrary videos={rows} selectedVideoId={null} onSelect={vi.fn()} hasMore={false} isLoadingMore={false} onLoadMore={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Shorts" }));
+    expect(screen.getByRole("button", { name: /My clip/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Title a/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "All" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search uploads" }), "Vertical");
+    expect(screen.getByRole("button", { name: /My clip/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Title a/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the filtered empty state and resets it", async () => {
+    await renderUi(<YouTubeVideoLibrary videos={[video("a")]} selectedVideoId={null} onSelect={vi.fn()} hasMore isLoadingMore={false} onLoadMore={vi.fn()} />);
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search uploads" }), "not present");
+    expect(screen.getByText("No uploads match these filters")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reset filters" }));
+    expect(screen.getByRole("button", { name: /Title a/ })).toBeInTheDocument();
+  });
+
+  it("renders a fallback dash for unparseable published_at in both table and grid views", async () => {
+    const badRow = { ...video("bad"), published_at: "not-a-date", privacy_status: null };
+    await renderUi(<YouTubeVideoLibrary videos={[badRow]} selectedVideoId={null} onSelect={vi.fn()} hasMore={false} isLoadingMore={false} onLoadMore={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /Title bad/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    expect(screen.getByRole("button", { name: /Title bad/ })).toBeInTheDocument();
+  });
+
+  it("displays Upload order in Grid view when unsorted and activates Views sort when chosen", async () => {
+    const rows = [
+      { ...video("a"), statistics: { view_count: 5, like_count: null, comment_count: null } },
+      { ...video("b"), statistics: { view_count: 10, like_count: null, comment_count: null } },
+    ];
+    await renderUi(<YouTubeVideoLibrary videos={rows} selectedVideoId={null} onSelect={vi.fn()} hasMore={false} isLoadingMore={false} onLoadMore={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    const sortSelect = screen.getByLabelText("Sort by") as HTMLSelectElement;
+    expect(sortSelect.value).toBe("");
+    let cards = screen.getAllByRole("button", { name: /Title [ab]/ });
+    expect(cards[0]).toHaveTextContent("Title a");
+
+    await userEvent.selectOptions(sortSelect, "views");
+    expect(sortSelect.value).toBe("views");
+    cards = screen.getAllByRole("button", { name: /Title [ab]/ });
+    expect(cards[0]).toHaveTextContent("Title b");
+
+    await userEvent.selectOptions(sortSelect, "");
+    cards = screen.getAllByRole("button", { name: /Title [ab]/ });
+    expect(cards[0]).toHaveTextContent("Title a");
   });
 });

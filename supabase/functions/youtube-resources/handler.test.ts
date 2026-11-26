@@ -36,6 +36,9 @@ function pageOf(size: number, nextPageToken: string | null, total: number): YouT
       published_at: null,
       privacy_status: "public",
       url: `https://www.youtube.com/watch?v=video${String(index).padStart(6, "0")}`,
+      description: `Description ${index}`,
+      duration_iso8601: "PT1M30S",
+      statistics: { view_count: 10 + index, like_count: 2, comment_count: 1 },
     })),
     next_page_token: nextPageToken,
     total_results: total,
@@ -784,6 +787,9 @@ Deno.test("videos defaults to 25 per page for the stored channel", async () => {
   assertEquals(response.status, 200);
   const body = await response.json();
   assertEquals(body.data.items.length, 25);
+  assertEquals(body.data.items[0].description, "Description 0");
+  assertEquals(body.data.items[0].duration_iso8601, "PT1M30S");
+  assertEquals(body.data.items[0].statistics, { view_count: 10, like_count: 2, comment_count: 1 });
   assertEquals(body.data.next_page_token, "CAUQAA");
   assertEquals(uploadInputs, [{ channelId: CHANNEL_ID, pageSize: 25 }]);
 });

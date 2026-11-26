@@ -32,7 +32,7 @@ export function isYouTubeResourceErrorCode(value: unknown): value is YouTubeReso
 
 export const YOUTUBE_RESOURCE_QUOTA_POLICY = {
   provider_quota: "not_tracked",
-  unit_costs: { channel: 1, videos_page: 1, video: 1 },
+  unit_costs: { channel: 1, videos_page: 2, video: 1 },
   per_user_burst: { limit: 30, window_seconds: 600 },
   per_user_daily: { limit: 300, window_seconds: 86400 },
 } as const;
@@ -85,6 +85,7 @@ export interface YouTubeResourceFailure {
 
 export const YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE = 25;
 export const YOUTUBE_VIDEOS_MAX_PAGE_SIZE = 50;
+export const YOUTUBE_VIDEO_LIST_DESCRIPTION_MAX = 500;
 
 export interface YouTubeChannelDetails {
   id: string;
@@ -110,6 +111,13 @@ export interface YouTubeVideoListItem {
   published_at: string | null;
   privacy_status: string | null;
   url: string;
+  description?: string | null;
+  duration_iso8601?: string | null;
+  statistics?: {
+    view_count: number | null;
+    like_count: number | null;
+    comment_count: number | null;
+  };
 }
 
 // An empty page may still carry Google's next_page_token (a page of placeholder

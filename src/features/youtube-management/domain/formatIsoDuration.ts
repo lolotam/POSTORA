@@ -1,16 +1,27 @@
 // PT4M13S -> "4:13"; PT1H2M3S -> "1:02:03"; null or unparseable -> null.
-// Pure domain formatting: no React, no browser state, exported alone so the
-// component file keeps exporting only components (react-refresh rule).
-export function formatIsoDuration(value: string | null): string | null {
+// Pure domain formatting: no React and no browser state.
+function isoDurationParts(value: string | null): [number, number, number, number] | null {
   if (value === null) return null;
   const match = /^P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(value);
   if (!match) return null;
-  const [, days, hours, minutes, seconds] = match;
-  if (!days && !hours && !minutes && !seconds) return null;
-  const totalHours = (days ? Number(days) * 24 : 0) + (hours ? Number(hours) : 0);
-  const mins = minutes ? Number(minutes) : 0;
-  const secs = seconds ? Number(seconds) : 0;
-  const mm = String(mins).padStart(totalHours > 0 ? 2 : 1, "0");
-  const ss = String(secs).padStart(2, "0");
-  return totalHours > 0 ? `${totalHours}:${mm}:${ss}` : `${mins}:${ss}`;
+  const [days, hours, minutes, seconds] = match.slice(1).map((part) => part ? Number(part) : 0);
+  return match.slice(1).every((part) => part === undefined) ? null : [days, hours, minutes, seconds];
+}
+
+export function isoDurationSeconds(value: string | null): number | null {
+  const parts = isoDurationParts(value);
+  if (!parts) return null;
+  const [days, hours, minutes, seconds] = parts;
+  const total = ((days * 24 + hours) * 60 + minutes) * 60 + seconds;
+  return Number.isFinite(total) ? total : null;
+}
+
+export function formatIsoDuration(value: string | null): string | null {
+  const parts = isoDurationParts(value);
+  if (!parts) return null;
+  const [days, hours, minutes, seconds] = parts;
+  const totalHours = days * 24 + hours;
+  const mm = String(minutes).padStart(totalHours > 0 ? 2 : 1, "0");
+  const ss = String(seconds).padStart(2, "0");
+  return totalHours > 0 ? `${totalHours}:${mm}:${ss}` : `${minutes}:${ss}`;
 }

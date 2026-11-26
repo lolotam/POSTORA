@@ -15,6 +15,8 @@ import {
   YOUTUBE_ANALYTICS_REQUIRED_SCOPES,
   YOUTUBE_ANALYTICS_REVISION_PATTERN,
   YOUTUBE_ANALYTICS_SCHEMA_VERSION,
+  YOUTUBE_ANALYTICS_TOP_VIDEOS_MAX_START_INDEX,
+  YOUTUBE_ANALYTICS_TOP_VIDEOS_PAGE_SIZE,
   YOUTUBE_ANALYTICS_VIDEO_ID_PATTERN,
   type YouTubeAnalyticsConsentData,
   type YouTubeAnalyticsDataOperation,
@@ -78,6 +80,7 @@ const TopVideosRequest = z.object({
   account_id: AccountId,
   period_days: PeriodDays,
   window_end: WindowEnd,
+  start_index: z.number().int().min(1).max(YOUTUBE_ANALYTICS_TOP_VIDEOS_MAX_START_INDEX).optional(),
 }).strict();
 const RequestSchema = z.discriminatedUnion("operation", [
   StatusRequest,
@@ -577,11 +580,14 @@ export function createYouTubeAnalyticsHandler(
             channelId: binding.channelId,
             window: resolved.window,
             days: resolved.days,
+            startIndex: input.start_index ?? 1,
           }),
         );
         if (!report.ok) return await refuseAttempt(report);
         topVideoRows = report.value.rows;
+        const startIndex = input.start_index ?? 1;
         let titles: Record<string, string> = {};
+        let details: Record<string, { published_at: string | null; thumbnail_url: string | null }> = {};
         let titleState: "complete" | "partial" | "unavailable" = "unavailable";
         if (topVideoRows.length > 0) {
           const titleResult = await runAttempt(
@@ -593,6 +599,7 @@ export function createYouTubeAnalyticsHandler(
           );
           if (titleResult.ok) {
             titles = titleResult.value.titles;
+            details = titleResult.value.details;
             const matchedCount = topVideoRows.filter((row) => typeof titles[row.videoId] === "string").length;
             titleState = matchedCount === topVideoRows.length
               ? "complete"
@@ -601,14 +608,20 @@ export function createYouTubeAnalyticsHandler(
               : "unavailable";
           }
         }
+        const hasMore = topVideoRows.length === YOUTUBE_ANALYTICS_TOP_VIDEOS_PAGE_SIZE &&
+          startIndex + YOUTUBE_ANALYTICS_TOP_VIDEOS_PAGE_SIZE <= YOUTUBE_ANALYTICS_TOP_VIDEOS_MAX_START_INDEX;
         reportData = {
           rows: topVideoRows.map((row) => ({
             video_id: row.videoId,
             title: titles[row.videoId] ?? null,
+            published_at: details[row.videoId]?.published_at ?? null,
+            thumbnail_url: details[row.videoId]?.thumbnail_url ?? null,
             link: videoLink(row.videoId),
             metrics: row.metrics,
           })),
           titles: titleState,
+          has_more: hasMore,
+          next_start_index: hasMore ? startIndex + YOUTUBE_ANALYTICS_TOP_VIDEOS_PAGE_SIZE : null,
         };
       }
 

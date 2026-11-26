@@ -1,5 +1,6 @@
 import { z } from "npm:zod@3.23.8";
 import { classifyGoogleError, type YouTubeErrorClass } from "../_shared/youtubeApiErrors.ts";
+import { YOUTUBE_VIDEO_LIST_DESCRIPTION_MAX } from "./contracts.ts";
 import type {
   YouTubeChannelDetails,
   YouTubeResourceErrorCode,
@@ -48,6 +49,7 @@ interface FailedRead {
   code: YouTubeResourceErrorCode;
   unauthorized: boolean;
   status: number;
+  class: YouTubeErrorClass | "network";
 }
 
 type ReadBody =
@@ -205,12 +207,56 @@ export function createYouTubeReadClient(options: YouTubeReadClientOptions): YouT
       });
     } catch {
       // Network failure, abort or timeout: stable code, never the fetch error text.
-      return { ok: false, code: "upstream_unavailable", unauthorized: false, status: 0 };
+      return { ok: false, code: "upstream_unavailable", unauthorized: false, status: 0, class: "network" };
     }
     const body: unknown = await response.json().catch(() => null);
     if (response.ok) return { ok: true, body };
     const kind = classifyGoogleError(response.status, body);
-    return { ok: false, code: CODE_BY_CLASS[kind], unauthorized: kind === "unauthorized", status: response.status };
+    return { ok: false, code: CODE_BY_CLASS[kind], unauthorized: kind === "unauthorized", status: response.status, class: kind };
+  }
+
+  async function enrichUploads(
+    items: YouTubeVideoListItem[],
+    channelId: string,
+    accessToken: string,
+  ): Promise<YouTubeVideoListItem[]> {
+    if (items.length === 0) return items;
+    const requestedIds = new Set(items.map((item) => item.id));
+    const read = await send("videos", {
+      part: "snippet,contentDetails,statistics,status",
+      id: [...requestedIds].join(","),
+    }, accessToken);
+    if (!read.ok) {
+      console.warn({ event: "youtube_resources_enrichment_degraded", class: read.class });
+    }
+    const parsed = read.ok ? VideoListSchema.safeParse(read.body) : null;
+    if (parsed && !parsed.success) {
+      console.warn({ event: "youtube_resources_enrichment_degraded", class: "upstream" });
+    }
+    const enriched = new Map<string, z.infer<typeof VideoItemSchema>>();
+    if (parsed?.success) {
+      for (const item of parsed.data.items ?? []) {
+        if (item.id && requestedIds.has(item.id) && item.snippet?.channelId === channelId) {
+          enriched.set(item.id, item);
+        }
+      }
+    }
+    return items.map((item) => {
+      const details = enriched.get(item.id);
+      return {
+        ...item,
+        privacy_status: item.privacy_status ?? optionalString(details?.status?.privacyStatus),
+        description: typeof details?.snippet?.description === "string"
+          ? details.snippet.description.slice(0, YOUTUBE_VIDEO_LIST_DESCRIPTION_MAX)
+          : null,
+        duration_iso8601: optionalString(details?.contentDetails?.duration),
+        statistics: {
+          view_count: count(details?.statistics?.viewCount),
+          like_count: count(details?.statistics?.likeCount),
+          comment_count: count(details?.statistics?.commentCount),
+        },
+      };
+    });
   }
 
   return {
@@ -261,19 +307,24 @@ export function createYouTubeReadClient(options: YouTubeReadClientOptions): YouT
         const id = entry.contentDetails?.videoId ?? entry.snippet?.resourceId?.videoId;
         // playlistItems rows can carry promoted/deleted entries without a video id.
         if (!id) continue;
+        const rawPublishedAt = entry.contentDetails?.videoPublishedAt ?? entry.snippet?.publishedAt ?? null;
+        const publishedAt = typeof rawPublishedAt === "string" && Number.isFinite(Date.parse(rawPublishedAt))
+          ? rawPublishedAt
+          : null;
         items.push({
           id,
           title: entry.snippet?.title ?? "",
           thumbnail_url: thumbnail(entry.snippet?.thumbnails),
-          published_at: entry.contentDetails?.videoPublishedAt ?? entry.snippet?.publishedAt ?? null,
+          published_at: publishedAt,
           privacy_status: optionalString(entry.status?.privacyStatus),
           url: videoUrl(id),
         });
       }
+      const enrichedItems = await enrichUploads(items, input.channelId, accessToken);
       return {
         ok: true,
         value: {
-          items,
+          items: enrichedItems,
           next_page_token: parsed.data.nextPageToken ?? null,
           total_results: count(parsed.data.pageInfo?.totalResults),
         },

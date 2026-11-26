@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatIsoDuration } from "./formatIsoDuration";
+import { formatIsoDuration, isoDurationSeconds } from "./formatIsoDuration";
 
 describe("formatIsoDuration", () => {
   it("renders minutes and seconds", () => {
@@ -22,5 +22,12 @@ describe("formatIsoDuration", () => {
     expect(formatIsoDuration(null)).toBeNull();
     expect(formatIsoDuration("4 minutes")).toBeNull();
     expect(formatIsoDuration("PT")).toBeNull();
+  });
+
+  it("returns numeric seconds for sorting", () => {
+    expect(isoDurationSeconds("PT4M13S")).toBe(253);
+    expect(isoDurationSeconds("P1DT1H1M1S")).toBe(90061);
+    expect(isoDurationSeconds("PT")).toBeNull();
+    expect(isoDurationSeconds(null)).toBeNull();
   });
 });

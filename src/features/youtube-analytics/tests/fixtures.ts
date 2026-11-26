@@ -87,9 +87,13 @@ export function dailyData(): YouTubeAnalyticsDailyData {
 export function topVideosData(title = "Fixture video"): YouTubeAnalyticsTopVideosData {
   return {
     titles: "complete",
+    has_more: false,
+    next_start_index: null,
     rows: [{
       video_id: VIDEO_ID,
       title,
+      published_at: "2026-11-01T12:00:00Z",
+      thumbnail_url: "https://i.ytimg.com/vi/videoAAAAAAA/mqdefault.jpg",
       link: `https://www.youtube.com/watch?v=${VIDEO_ID}`,
       metrics: [
         { key: "watch_time", unit: "minutes", value: 20 },

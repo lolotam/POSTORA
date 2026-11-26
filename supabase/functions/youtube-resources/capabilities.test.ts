@@ -77,3 +77,9 @@ Deno.test("composio row: browse unsupported, upload unknown, comments by the exi
   assertEquals(result.capabilities.upload, { state: "unknown" });
   assertEquals(result.capabilities.comments, { state: "available" });
 });
+
+
+Deno.test("capabilities publish the two-unit enriched videos page cost", () => {
+  const result = deriveYouTubeCapabilities(account());
+  assertEquals(result.quota.unit_costs.videos_page, 2);
+});

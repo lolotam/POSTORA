@@ -4,7 +4,8 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { YouTubeResourceError } from "../domain/errors";
 import type { YouTubeResourcesGateway } from "./ports";
-import { useYouTubeVideos } from "./useYouTubeVideos";
+import { trimVideosToFirstPage, useYouTubeVideos } from "./useYouTubeVideos";
+import { youtubeResourceKey } from "./queryKeys";
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "user-a" } }) }));
 
@@ -81,5 +82,18 @@ describe("useYouTubeVideos", () => {
     renderHook(() => useYouTubeVideos({ gateway: gatewayWith(listVideos), accountId: null, enabled: true }), { wrapper: wrapper() });
     renderHook(() => useYouTubeVideos({ gateway: gatewayWith(listVideos), accountId: "acc-a", enabled: false }), { wrapper: wrapper() });
     expect(listVideos).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("trimVideosToFirstPage", () => {
+  it("resets both arrays and leaves absent data absent", () => {
+    const client = new QueryClient();
+    const key = youtubeResourceKey("user-a", "acc-a", "videos");
+    trimVideosToFirstPage(client, key);
+    expect(client.getQueryData(key)).toBeUndefined();
+    client.setQueryData(key, { pages: [page("A", "B"), page("B", null)], pageParams: [null, "B"] });
+    trimVideosToFirstPage(client, key);
+    expect(client.getQueryData(key)).toEqual({ pages: [page("A", "B")], pageParams: [null] });
   });
 });
