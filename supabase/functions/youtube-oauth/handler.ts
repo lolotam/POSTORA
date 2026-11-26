@@ -78,6 +78,7 @@ export interface YouTubeOAuthPorts {
     save(input: YouTubeAccountSave): Promise<void>;
     load(input: { accountId: string; userId: string }): Promise<YouTubeDisconnectAccount | null>;
     countOtherActiveGrantHolders(input: {
+      userId: string;
       channelId: string;
       excludeAccountId: string;
     }): Promise<number>;
@@ -163,6 +164,45 @@ function errorCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
+type DisconnectReason = "missing_grant" | "grant_shared" | "already_invalid" | "grant_unverifiable" | null;
+
+type RevokeGrantOutcome =
+  | { ok: true; revoked: boolean; reason: DisconnectReason }
+  | { ok: false; reason: string };
+
+async function revokeDisconnectGrant(
+  refreshToken: string | null,
+  accessToken: string | null,
+  revoke: (token: string) => Promise<GoogleRevokeResult>,
+): Promise<RevokeGrantOutcome> {
+  let refreshAlreadyInvalid = false;
+  if (refreshToken) {
+    let result: GoogleRevokeResult;
+    try {
+      result = await revoke(refreshToken);
+    } catch {
+      return { ok: false, reason: "google_revoke_failed" };
+    }
+    if (!result.ok) return { ok: false, reason: result.reason };
+    if (!result.alreadyInvalid) return { ok: true, revoked: true, reason: null };
+    refreshAlreadyInvalid = true;
+  }
+
+  if (accessToken && (!refreshToken || refreshAlreadyInvalid)) {
+    let result: GoogleRevokeResult;
+    try {
+      result = await revoke(accessToken);
+    } catch {
+      return { ok: false, reason: "google_revoke_failed" };
+    }
+    if (!result.ok) return { ok: false, reason: result.reason };
+    if (!result.alreadyInvalid) return { ok: true, revoked: true, reason: null };
+    return { ok: true, revoked: false, reason: refreshToken ? "already_invalid" : "grant_unverifiable" };
+  }
+
+  return { ok: true, revoked: false, reason: refreshAlreadyInvalid ? "already_invalid" : "missing_grant" };
+}
+
 export function createYouTubeOAuthHandler(
   ports: YouTubeOAuthPorts,
   config: YouTubeOAuthConfig,
@@ -204,7 +244,7 @@ export function createYouTubeOAuthHandler(
     }
 
     let revoked = false;
-    let reason: "missing_grant" | "grant_shared" | "already_invalid" | "grant_unverifiable" | null = null;
+    let reason: DisconnectReason = null;
     const refreshToken = account.refreshToken?.trim() || null;
     const accessToken = account.accessToken?.trim() || null;
 
@@ -214,6 +254,7 @@ export function createYouTubeOAuthHandler(
       let otherActiveCount: number;
       try {
         otherActiveCount = await ports.accounts.countOtherActiveGrantHolders({
+          userId,
           channelId: account.channelId,
           excludeAccountId: account.id,
         });
@@ -224,40 +265,12 @@ export function createYouTubeOAuthHandler(
       if (otherActiveCount > 0) {
         reason = "grant_shared";
       } else {
-        let refreshAlreadyInvalid = false;
-        if (refreshToken) {
-          let revokeResult: GoogleRevokeResult;
-          try {
-            revokeResult = await ports.google.revoke(refreshToken);
-          } catch {
-            return refuse(req, "disconnect", "google_revoke_failed", userId, 502);
-          }
-          if (!revokeResult.ok) {
-            return refuse(req, "disconnect", revokeResult.reason, userId, 502);
-          }
-          revoked = !revokeResult.alreadyInvalid;
-          refreshAlreadyInvalid = revokeResult.alreadyInvalid;
+        const revokeOutcome = await revokeDisconnectGrant(refreshToken, accessToken, ports.google.revoke);
+        if (!revokeOutcome.ok) {
+          return refuse(req, "disconnect", revokeOutcome.reason, userId, 502);
         }
-
-        if (!revoked && accessToken && (!refreshToken || refreshAlreadyInvalid)) {
-          let accessRevokeResult: GoogleRevokeResult;
-          try {
-            accessRevokeResult = await ports.google.revoke(accessToken);
-          } catch {
-            return refuse(req, "disconnect", "google_revoke_failed", userId, 502);
-          }
-          if (!accessRevokeResult.ok) {
-            return refuse(req, "disconnect", accessRevokeResult.reason, userId, 502);
-          }
-          revoked = !accessRevokeResult.alreadyInvalid;
-          if (accessRevokeResult.alreadyInvalid) {
-            reason = refreshToken ? "already_invalid" : "grant_unverifiable";
-          }
-        }
-
-        if (!revoked && refreshAlreadyInvalid && !accessToken) {
-          reason = "already_invalid";
-        }
+        revoked = revokeOutcome.revoked;
+        reason = revokeOutcome.reason;
       }
     }
 

@@ -179,13 +179,15 @@ const ports: YouTubeOAuthPorts = {
         updatedAt: (data.updated_at as string | null) ?? null,
       };
     },
-    // Another active native connection to the same channel may depend on the same
-    // Google grant, including in a different workspace. Different channels do not
-    // block revocation; a null auth_provider counts as native.
-    countOtherActiveGrantHolders: async ({ channelId, excludeAccountId }) => {
+    // Scoped to the caller (`user_id`): another tenant's browser-writable row
+    // naming the same public channel ID must never suppress this user's revoke.
+    // Within one user, two different channels have distinct channelIds and do
+    // not block each other; a null auth_provider counts as native.
+    countOtherActiveGrantHolders: async ({ userId, channelId, excludeAccountId }) => {
       const { count, error } = await admin
         .from("social_accounts")
         .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
         .eq("platform", "youtube")
         .eq("is_active", true)
         .eq("platform_user_id", channelId)

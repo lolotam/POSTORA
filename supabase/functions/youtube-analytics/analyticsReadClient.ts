@@ -154,6 +154,10 @@ function metricValue(
 ): number | null | undefined {
   if (cell === null) return null;
   if (typeof cell !== "number" || !Number.isFinite(cell)) return undefined;
+  // YouTube Analytics `reports.query` defines `likes`, `comments`, and `shares` as net
+  // changes over the period ("Note: This metric can have a negative value",
+  // https://developers.google.com/youtube/analytics/metrics; confirmed on production
+  // 90-day summary `likes = -2` and top_videos `likes = -1`).
   const canBeNetNegative = key === "likes" || key === "comments" || key === "shares";
   return canBeNetNegative || cell >= 0 ? cell : undefined;
 }

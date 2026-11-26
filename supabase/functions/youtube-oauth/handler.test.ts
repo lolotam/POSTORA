@@ -73,7 +73,7 @@ function fixture(overrides: {
   const revokedTokens: string[] = [];
   const logs: Array<{ action: string; reason: string; userId: string | null }> = [];
   const outcomeLogs: Array<{ userId: string; accountId: string; revoked: boolean; reason: string }> = [];
-  const grantCountInputs: Array<{ channelId: string; excludeAccountId: string }> = [];
+  const grantCountInputs: Array<{ userId: string; channelId: string; excludeAccountId: string }> = [];
   const saved: YouTubeAccountSave[] = [];
   const account: {
     accessToken: string | null;
@@ -466,7 +466,7 @@ Deno.test("disconnect revokes at Google then clears local credentials when last 
   assertEquals(response.status, 200);
   assertEquals(JSON.parse(text), { success: true, revoked: true, reason: null });
   assertEquals(f.calls.countOtherActiveGrantHolders, 1);
-  assertEquals(f.grantCountInputs, [{ channelId: "synthetic-channel", excludeAccountId: ACCOUNT_ID }]);
+  assertEquals(f.grantCountInputs, [{ userId: USER_ID, channelId: "synthetic-channel", excludeAccountId: ACCOUNT_ID }]);
   assertEquals(f.calls.revoke, 1);
   assertEquals(f.revokedTokens, [f.storedRefreshToken]);
   assertEquals(f.calls.clearCredentials, 1);
@@ -561,6 +561,23 @@ Deno.test("disconnect falls back to the access token after an already-invalid re
   assertEquals(f.revokedTokens, [f.storedRefreshToken, f.accessToken]);
   assertEquals(f.calls.clearCredentials, 1);
   assertEquals(f.outcomeLogs, []);
+});
+
+Deno.test("disconnect reports already_invalid when both refresh and access tokens are already invalid", async () => {
+  const f = fixture({
+    revokeResults: [
+      { ok: true, alreadyInvalid: true },
+      { ok: true, alreadyInvalid: true },
+    ],
+  });
+  const response = await f.handler(post({ action: "disconnect", account_id: ACCOUNT_ID }));
+
+  assertEquals(await response.json(), { success: true, revoked: false, reason: "already_invalid" });
+  assertEquals(f.revokedTokens, [f.storedRefreshToken, f.accessToken]);
+  assertEquals(f.calls.clearCredentials, 1);
+  assertEquals(f.outcomeLogs, [
+    { userId: USER_ID, accountId: ACCOUNT_ID, revoked: false, reason: "already_invalid" },
+  ]);
 });
 
 Deno.test("disconnect reports an invalid access-token-only grant as unverifiable", async () => {
