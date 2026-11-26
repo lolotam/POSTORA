@@ -189,8 +189,7 @@ const GoogleApiDisclosure = () => {
                         when you use Postora's comment management features.
                       </p>
                       <p className="text-muted-foreground text-sm mt-2">
-                        This scope is used only for the comments you choose to manage. It does not allow Postora to
-                        delete your videos or change your channel settings.
+                        Postora uses this scope only to manage the comments you choose. Postora does not delete your videos.
                       </p>
                     </div>
 

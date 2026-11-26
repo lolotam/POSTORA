@@ -18,14 +18,61 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isSuccess<T>(payload: unknown): payload is YouTubeAnalyticsSuccess<T> {
+function isOperationDataValid(operation: YouTubeAnalyticsRequest["operation"], data: Record<string, unknown>): boolean {
+  switch (operation) {
+    case "status":
+      return data.available === true
+        && data.reason === "ok"
+        && typeof data.connection_revision === "string"
+        && typeof data.reporting_end_date === "string"
+        && Array.isArray(data.accepted_window_ends)
+        && data.accepted_window_ends.length === 2
+        && isRecord(data.consent)
+        && typeof data.purpose_version === "number";
+    case "consent_accept":
+    case "consent_withdraw":
+      return typeof data.recorded === "boolean"
+        && isRecord(data.consent)
+        && typeof data.purpose_version === "number";
+    case "summary":
+      return Array.isArray(data.metrics) && typeof data.has_data === "boolean";
+    case "daily":
+      return Array.isArray(data.rows)
+        && isRecord(data.coverage)
+        && typeof data.coverage.days_returned === "number"
+        && typeof data.coverage.days_missing === "number";
+    case "top_videos":
+      return Array.isArray(data.rows) && typeof data.titles === "string";
+  }
+}
+
+function isSuccess<T>(payload: unknown, operation: YouTubeAnalyticsRequest["operation"]): payload is YouTubeAnalyticsSuccess<T> {
   return isRecord(payload)
     && payload.schema_version === 1
     && typeof payload.request_id === "string"
     && typeof payload.connection_revision === "string"
     && isRecord(payload.freshness)
     && typeof payload.freshness.fetched_at === "string"
-    && isRecord(payload.data);
+    && isRecord(payload.data)
+    && isOperationDataValid(operation, payload.data);
+}
+
+function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new YouTubeAnalyticsClientError("upstream_unavailable"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new YouTubeAnalyticsClientError("upstream_unavailable"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function call<T>(body: YouTubeAnalyticsRequest, signal?: AbortSignal): Promise<YouTubeAnalyticsSuccess<T>> {
@@ -36,7 +83,7 @@ async function call<T>(body: YouTubeAnalyticsRequest, signal?: AbortSignal): Pro
   const timeout = setTimeout(abort, GATEWAY_TIMEOUT_MS);
 
   try {
-    const { data: sessionData } = await supabase.auth.getSession();
+    const { data: sessionData } = await awaitWithSignal(supabase.auth.getSession(), controller.signal);
     const accessToken = sessionData.session?.access_token;
     if (!accessToken) throw new YouTubeAnalyticsClientError("unauthorized");
     const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/youtube-analytics`, {
@@ -59,7 +106,7 @@ async function call<T>(body: YouTubeAnalyticsRequest, signal?: AbortSignal): Pro
     if (isRecord(payload) && isYouTubeAnalyticsErrorCode(payload.error)) {
       throw YouTubeAnalyticsClientError.fromResponse(payload as unknown as YouTubeAnalyticsErrorResponse);
     }
-    if (!isSuccess<T>(payload)) throw new YouTubeAnalyticsClientError("upstream_unavailable");
+    if (!isSuccess<T>(payload, body.operation)) throw new YouTubeAnalyticsClientError("upstream_unavailable");
     return payload;
   } catch (error) {
     if (error instanceof YouTubeAnalyticsClientError) throw error;

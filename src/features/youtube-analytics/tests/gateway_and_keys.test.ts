@@ -28,6 +28,10 @@ beforeEach(() => {
 
 describe("Supabase gateway contract fixtures", () => {
   it("sends the shared status and consent request shapes with the session token", async () => {
+    fetchMock
+      .mockResolvedValueOnce(answer(success(statusData(), REVISION, false)))
+      .mockResolvedValueOnce(answer(success({ recorded: true, consent: { state: "accepted", version: 1 }, purpose_version: 1 }, REVISION, false)))
+      .mockResolvedValueOnce(answer(success({ recorded: true, consent: { state: "withdrawn", version: 1 }, purpose_version: 1 }, REVISION, false)));
     await gateway.status(ACCOUNT_ID);
     await gateway.acceptConsent({ accountId: ACCOUNT_ID, purposeVersion: 1, locale: "ar", connectionRevision: REVISION });
     await gateway.withdrawConsent({ accountId: ACCOUNT_ID, locale: "en" });
@@ -48,6 +52,10 @@ describe("Supabase gateway contract fixtures", () => {
 
   it("sends the three data operations and optional video ID without a user ID in the body", async () => {
     const params = { accountId: ACCOUNT_ID, periodDays: PERIOD, windowEnd: WINDOW_END };
+    fetchMock
+      .mockResolvedValueOnce(answer(success({ metrics: [], has_data: false })))
+      .mockResolvedValueOnce(answer(success({ rows: [], coverage: { first_day: null, last_day: null, days_returned: 0, days_missing: 30 } })))
+      .mockResolvedValueOnce(answer(success({ rows: [], titles: "unavailable" })));
     await gateway.summary({ ...params, videoId: VIDEO_ID });
     await gateway.daily(params);
     await gateway.topVideos(params);

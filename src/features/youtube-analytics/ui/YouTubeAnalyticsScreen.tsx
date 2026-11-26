@@ -251,28 +251,28 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
               onClose={() => setPickedVideo(null)}
             />
           ) : null}
-          {access.status?.consent.state === "accepted" ? (
-            <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
-              {consent.withdrawError ? <AnalyticsNotice error={consent.withdrawError} /> : null}
-              <div className="flex flex-wrap items-center gap-2">
-                <span>{purposeText.permissionLine}</span>
-                <AlertDialog>
-                  <AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost">{purposeText.withdrawTrigger}</Button></AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>{purposeText.withdrawTrigger}</AlertDialogTitle>
-                      <AlertDialogDescription>{purposeText.withdrawConfirmBody}</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>{purposeText.withdrawCancelAction}</AlertDialogCancel>
-                      <AlertDialogAction disabled={consent.withdrawing} onClick={() => void consent.withdraw().catch(() => {})}>{purposeText.withdrawConfirmAction}</AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </div>
-            </div>
-          ) : null}
         </>
+      ) : null}
+      {access.status?.consent.state === "accepted" ? (
+        <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
+          {consent.withdrawError ? <AnalyticsNotice error={consent.withdrawError} /> : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{purposeText.permissionLine}</span>
+            <AlertDialog>
+              <AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost">{purposeText.withdrawTrigger}</Button></AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>{purposeText.withdrawTrigger}</AlertDialogTitle>
+                  <AlertDialogDescription>{purposeText.withdrawConfirmBody}</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>{purposeText.withdrawCancelAction}</AlertDialogCancel>
+                  <AlertDialogAction disabled={consent.withdrawing} onClick={() => void consent.withdraw().catch(() => {})}>{purposeText.withdrawConfirmAction}</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </div>
       ) : null}
     </div>
   );

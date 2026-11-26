@@ -281,6 +281,11 @@ export function useAccessLease(params: {
         statusError: null,
         checking: false,
       }));
+      clearTimer();
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        void issueStatus();
+      }, YOUTUBE_ANALYTICS_STATUS_POLL_MS);
       return;
     }
     clearTimer();

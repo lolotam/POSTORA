@@ -37,7 +37,8 @@ export function useYouTubeAnalyticsReportQuery<Operation extends YouTubeAnalytic
     periodDays,
     operation === "top_videos" ? null : videoId,
   );
-  const hasCachedError = queryClient.getQueryState(queryKey)?.error !== undefined;
+  const queryState = queryClient.getQueryState(queryKey);
+  const hasCachedError = queryState?.status === "error" || (queryState?.error !== undefined && queryState.error !== null);
   const query = useQuery({
     queryKey,
     queryFn: async ({ signal }): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsDataForOperation[Operation]>> => {

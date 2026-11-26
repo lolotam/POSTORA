@@ -1,26 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { YouTubeAnalyticsClientError } from "../domain/errors";
 import { getAnalyticsPurposeText } from "../domain/purposeText";
-
-function purposeErrorMessage(error: unknown, locale: "en" | "ar"): string {
-  const code = error instanceof YouTubeAnalyticsClientError ? error.code : null;
-  const ref = error instanceof YouTubeAnalyticsClientError && error.requestId ? ` (${error.requestId})` : "";
-  if (code === "consent_version_stale") {
-    return (locale === "ar"
-      ? "تغيّر نص غرض التحليلات. حدّث الصفحة وراجع النص الجديد قبل السماح."
-      : "The analytics purpose text has been updated. Reload the page to review the current text.") + ref;
-  }
-  if (code === "connection_changed") {
-    return (locale === "ar"
-      ? "تغيّر اتصال القناة أثناء الطلب. راجع القناة المعروضة واسمح مرة أخرى."
-      : "The channel connection changed while this panel was open. Review the channel and try again.") + ref;
-  }
-  return (locale === "ar"
-    ? "تعذر تسجيل الإذن. حاول مرة أخرى."
-    : "The permission could not be recorded. Try again.") + ref;
-}
 
 export function PurposeAcceptancePanel(props: {
   channelName: string;
@@ -30,6 +13,7 @@ export function PurposeAcceptancePanel(props: {
   onAllow: () => void;
 }) {
   const { channelName, locale, busy, error, onAllow } = props;
+  const { t } = useTranslation("analytics");
   const text = getAnalyticsPurposeText(locale);
   const [declined, setDeclined] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -38,6 +22,14 @@ export function PurposeAcceptancePanel(props: {
     setDeclined(false);
     headingRef.current?.focus();
   }, [channelName, locale]);
+
+  const errorCode = error instanceof YouTubeAnalyticsClientError ? error.code : null;
+  const errorRef = error instanceof YouTubeAnalyticsClientError && error.requestId ? ` (${error.requestId})` : "";
+  const errorMessage = errorCode === "consent_version_stale"
+    ? t("youtube.notices.consent_version_stale", "The analytics purpose text has been updated. Reload the page to review the current text.") + errorRef
+    : errorCode === "connection_changed"
+      ? t("youtube.notices.connection_changed", "The channel connection changed while this panel was open. Review the channel and try again.") + errorRef
+      : t("youtube.notices.consent_record_failed", "The permission could not be recorded. Try again.") + errorRef;
 
   return (
     <section aria-labelledby="analytics-purpose-heading" className="space-y-4 rounded-lg border bg-card p-5" dir={locale === "ar" ? "rtl" : "ltr"}>
@@ -60,7 +52,7 @@ export function PurposeAcceptancePanel(props: {
         <Link className="text-primary underline" to="/google-api-disclosure">{text.disclosureLink}</Link>
       </div>
       {declined ? <p role="status" className="text-sm text-muted-foreground">{text.declinedNotice}</p> : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{purposeErrorMessage(error, locale)}</p> : null}
+      {error ? <p role="alert" className="text-sm text-destructive">{errorMessage}</p> : null}
       <div className="flex flex-wrap gap-3">
         <Button type="button" variant="outline" disabled={busy} onClick={onAllow}>{text.allowButton}</Button>
         <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclined(true)}>{text.notNowButton}</Button>

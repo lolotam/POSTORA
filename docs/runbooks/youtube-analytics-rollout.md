@@ -49,7 +49,7 @@ or, after Google's approval and the rollout review:
 { "version": 1, "mode": "all", "user_ids": [] }
 ```
 
-Rollout `all` is not admitted while the branch B scope gate is not `all`. Closing the scope gate changes future OAuth requests; it does not revoke grants already made.
+Under branch B (after the Step 7 scope-gate migration replaces `youtube_analytics_stage5_decide` to enforce `youtube_analytics_stage5_scope_gate`), rollout `all` is not admitted while the branch B scope gate is not `all`. Under branch A (the current migration), `youtube_analytics_stage5_scope_gate` is reserved and unused. Closing the scope gate under branch B changes future OAuth requests; it does not revoke grants already made.
 
 ## Migration and predeployment verification
 
