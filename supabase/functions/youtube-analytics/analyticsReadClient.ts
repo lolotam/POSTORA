@@ -148,9 +148,14 @@ function exactHeaders(body: unknown, expected: readonly string[]): boolean {
   );
 }
 
-function metricValue(cell: unknown): number | null | undefined {
+function metricValue(
+  cell: unknown,
+  key: YouTubeAnalyticsMetric["key"],
+): number | null | undefined {
   if (cell === null) return null;
-  return typeof cell === "number" && Number.isFinite(cell) && cell >= 0 ? cell : undefined;
+  if (typeof cell !== "number" || !Number.isFinite(cell)) return undefined;
+  const canBeNetNegative = key === "likes" || key === "comments" || key === "shares";
+  return canBeNetNegative || cell >= 0 ? cell : undefined;
 }
 
 function metricsFromRow(
@@ -161,7 +166,7 @@ function metricsFromRow(
   if (!Array.isArray(row) || row.length !== definitions.length + offset) return null;
   const metrics: YouTubeAnalyticsMetric[] = [];
   for (let index = 0; index < definitions.length; index += 1) {
-    const value = metricValue(row[index + offset]);
+    const value = metricValue(row[index + offset], definitions[index].key);
     if (value === undefined) return null;
     metrics.push({ key: definitions[index].key, unit: definitions[index].unit, value });
   }

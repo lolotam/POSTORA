@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   ALLOWED_SYSTEM_LOG_CATEGORIES,
+  buildDisconnectOutcomeLogRow,
   buildRefusalLogRow,
 } from "./refusalLog.ts";
 
@@ -54,4 +55,26 @@ Deno.test("buildRefusalLogRow never carries token-like fields", () => {
     );
   }
   assertEquals(Object.keys(row.metadata), ["action", "reason"]);
+});
+
+Deno.test("buildDisconnectOutcomeLogRow records a non-revoking outcome without token material", () => {
+  const userId = "0ee00001-0000-4000-8000-000000000001";
+  const accountId = "0ee20001-0000-4000-8000-000000000021";
+  const row = buildDisconnectOutcomeLogRow({
+    userId,
+    accountId,
+    revoked: false,
+    reason: "grant_shared",
+  });
+
+  assertEquals(row, {
+    level: "info",
+    category: "auth",
+    source: "youtube-oauth",
+    message: "YouTube disconnect completed without provider revoke: grant_shared",
+    user_id: userId,
+    metadata: { action: "disconnect", account_id: accountId, revoked: false, reason: "grant_shared" },
+  });
+  assert(ALLOWED_SYSTEM_LOG_CATEGORIES.includes(row.category));
+  assertEquals(Object.keys(row.metadata), ["action", "account_id", "revoked", "reason"]);
 });

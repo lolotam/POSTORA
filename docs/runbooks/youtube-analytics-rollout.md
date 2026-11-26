@@ -55,11 +55,11 @@ Under branch B (after the Step 7 scope-gate migration replaces `youtube_analytic
 
 1. Confirm CI and required reviews are green on the exact head. Record the migration's SHA-256 and object list and obtain the owner's merge/migration card.
 2. Take a production database snapshot and keep its receipt.
-3. Apply the Stage 5 migration as `supabase_admin` before merging the code that calls it. Do not edit an already-applied migration.
+3. Apply the Stage 5 migration, then `20261126120000_youtube_reauth_permission_prompt_and_consent.sql`, as `supabase_admin` before merging the code that calls them. Do not edit an already-applied migration.
 4. Verify the objects and privileges:
    - `social_accounts.binding_incarnation` and its trigger exist.
    - The rollout RESTRICTIVE policy names exactly `youtube_analytics_stage5_rollout` and `youtube_analytics_stage5_scope_gate`, with both `USING` and `WITH CHECK`.
-   - `youtube_analytics_purpose_consents` exists, is empty, has RLS enabled and no policies, and no role holds table privileges.
+   - `youtube_analytics_purpose_consents` has RLS enabled, no policies, and no role holding table privileges. Its nullable `connection_revision` column and owner/channel/revision index exist; existing events are retained, and pre-D13-B events keep a `NULL` revision.
    - Every new decision/consent/lease/store function is `SECURITY DEFINER`, has the pinned `search_path`, and is executable only by its intended service role. The parser is executable by nobody.
    - The narrow `youtube_stage4_refresh` role still owns exactly its three Stage 4 functions.
    - Neither rollout key was seeded.
@@ -85,7 +85,8 @@ Under branch B (after the Step 7 scope-gate migration replaces `youtube_analytic
 2. The owner opens `/analytics/youtube`, selects the channel, reads the eight purpose elements, and chooses either equal-weight button.
 3. `Not now` writes no event and reads no analytics. `Allow analytics for this channel` records the displayed purpose version and locale, then status and reports load.
 4. While accepted, `Analytics permission` → `Stop using analytics for this channel` opens one confirmation. Confirming removes reports immediately, records a withdrawal, and shows the acceptance panel again. The channel, publishing, comments, and Google grants are unaffected.
-5. Disconnecting is not withdrawing. Acceptance is keyed by owner and channel and survives reconnect; another owner has a separate acceptance state.
+5. Disconnecting is not withdrawing, but disconnecting or reconnecting ends acceptance for that connection. The new `connection_revision` starts with consent state `none`; another owner has a separate acceptance state. A trusted token refresh keeps both the revision and acceptance.
+6. If delete/re-insert gives a reconnected channel a new account ID while rollout is in `allowlist` mode, replace the old ID in `youtube_analytics_stage5_rollout` before asking the owner to accept again.
 
 ## Gates G-P1 and G-B
 

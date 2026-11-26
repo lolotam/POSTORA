@@ -39,3 +39,26 @@ export function buildRefusalLogRow({ action, reason, userId }: {
     metadata: { action, reason },
   };
 }
+
+export function buildDisconnectOutcomeLogRow({ userId, accountId, revoked, reason }: {
+  userId: string;
+  accountId: string;
+  revoked: boolean;
+  reason: string;
+}): {
+  level: "info";
+  category: SystemLogCategory;
+  source: "youtube-oauth";
+  message: string;
+  user_id: string;
+  metadata: { action: "disconnect"; account_id: string; revoked: boolean; reason: string };
+} {
+  return {
+    level: "info",
+    category: "auth",
+    source: "youtube-oauth",
+    message: `YouTube disconnect completed without provider revoke: ${reason}`,
+    user_id: userId,
+    metadata: { action: "disconnect", account_id: accountId, revoked, reason },
+  };
+}

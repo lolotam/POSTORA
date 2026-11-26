@@ -6,6 +6,8 @@ Code baseline: `main` at `5d020ed`. `git diff --stat f7d49921 5d020ed` over code
 
 This is the **fourth revision**. The owner's decisions are built in and the options he did not choose are gone (§11); the last two, D10 and D11, arrived after the third revision. The plan debate's seven blocking objections and the third automated review are answered in §14; rounds 1 and 2 are condensed in §13. **Stage 5 carries one database migration** (§5.2): a policy, a nullable column with a trigger on `social_accounts`, **one small table that records each owner's acceptance of the analytics purpose** (§7.3), and a small set of functions. It stores no analytics.
 
+**Revision note, 26 November 2026:** D13 is settled as **B**. Purpose events are keyed by owner, channel, and `connection_revision`; disconnecting or reconnecting requires fresh acceptance, while a trusted token refresh preserves it. Pre-D13-B events retain a `NULL` revision and do not authorize any active connection.
+
 Google pages were fetched on 2026-11-23. Each provider fact carries its URL and one of two marks:
 
 - **[V]** the sentence was read word for word on the page;
@@ -673,7 +675,7 @@ A part is `ok` only if all four are `ok`. Each is classified from the fixed list
 
 #### What is recorded, and where
 
-**A table is needed, and this is the one table of Stage 5.** The owner chose "no table" for the rollout switch (D6), and that still holds for the switch. An acceptance is a different kind of fact: a durable record that one person agreed to one text at one time, which must survive a reconnect, must not be writable by the browser, and must keep its history when it is withdrawn. Nothing existing can hold it:
+**A table is needed, and this is the one table of Stage 5.** The owner chose "no table" for the rollout switch (D6), and that still holds for the switch. An acceptance is a different kind of fact: a durable record that one person agreed to one text at one time, whose history must survive a reconnect, which must not be writable by the browser, and which must keep its history when it is withdrawn. Nothing existing can hold it:
 
 | Candidate | Why not |
 |---|---|
@@ -689,7 +691,8 @@ A part is `ok` only if all four are `ok`. Each is classified from the fixed list
 | `id uuid` primary key | |
 | `owner_id uuid NOT NULL` → `auth.users` ON DELETE CASCADE | Who accepted or withdrew. From the JWT, never from the request body. |
 | `channel_id text NOT NULL` | The YouTube channel, copied from the owned account row by the server. |
-| `social_account_id uuid` | The connection it was given under; immutable historical reference without a foreign key, so deleting or recreating the account row never mutates historical consent events. |
+| `social_account_id uuid` | The account row it was given under; immutable historical reference without a foreign key, so deleting or recreating the account row never mutates historical consent events. |
+| `connection_revision text` | The 32-hex revision of the connection it was given under. Pre-D13-B events have `NULL` and never match an active connection. |
 | `event text NOT NULL` | `accepted` or `withdrawn`. |
 | `purpose_version integer NOT NULL` | Which version of the purpose text was on screen. |
 | `locale text NOT NULL` | `en` or `ar`: the language it was shown in. |
@@ -698,12 +701,12 @@ A part is `ok` only if all four are `ok`. Each is classified from the fixed list
 
 **Not recorded:** the text itself (it lives in the repository, keyed by version), IP address, user agent, any analytics value.
 
-- **Current state** for an owner and a channel is their latest event. It is valid only if that event is `accepted` **and** its `purpose_version` equals the current one.
-- **Keyed by owner and channel**, not by the account row, so it survives a reconnect and a delete and re-insert of the row, and is never shared between two owners of the same channel ID. Disconnecting a channel is not withdrawing (open decision D13).
+- **Current state** for an owner, a channel, and the active `connection_revision` is their latest matching event. It is valid only if that event is `accepted` **and** its `purpose_version` equals the current one.
+- **Keyed by owner, channel, and connection revision.** A disconnect, a delete and re-insert, or another credential/identity change that advances the revision requires fresh acceptance. A trusted token refresh preserves the revision and acceptance. Events are never shared between two owners of the same channel ID; disconnecting is not recorded as withdrawing (D13 = B).
 - **Row security:** enabled, **no policies**; `REVOKE ALL` from `PUBLIC`, `anon`, `authenticated` and `service_role`. Nothing reads or writes the table except two `SECURITY DEFINER` functions with a pinned `search_path`, executable by the service role only: `decide` reads it, `record_consent` inserts into it. No function updates or deletes a row.
 - **Retention:** for the life of the user account. Rows are removed only when the user is deleted (the cascade). A withdrawal does not delete the earlier acceptance; it is itself a row. There is no clean-up job; the volume is a few rows per channel.
 
-**`youtube_analytics_stage5_record_consent(p_owner_id, p_account_id, p_event, p_purpose_version, p_locale, p_request_id, p_expected_revision DEFAULT NULL)`** locks the owner row in `auth.users` (`FOR KEY SHARE`) and the owner-filtered account row (`FOR UPDATE`), takes a transaction-scoped advisory lock on `(p_owner_id, channel_id)` to serialize concurrent transitions for the same owner and channel, verifies `p_expected_revision` (supplied by `consent_accept` from the panel's `connection_revision`, answering `connection_changed` on mismatch so the panel reloads and asks again) against the current `connection_revision`, reads the latest event under that lock, and inserts the new event with a strictly increasing timestamp:
+**`youtube_analytics_stage5_record_consent(p_owner_id, p_account_id, p_event, p_purpose_version, p_locale, p_request_id, p_expected_revision DEFAULT NULL)`** locks the owner row in `auth.users` (`FOR KEY SHARE`) and the owner-filtered account row (`FOR UPDATE`), takes a transaction-scoped advisory lock on `(p_owner_id, channel_id)` to serialize concurrent transitions for the same owner and channel, verifies `p_expected_revision` (supplied by `consent_accept` from the panel's `connection_revision`, answering `connection_changed` on mismatch so the panel reloads and asks again) against the current `connection_revision`, reads the latest event for that owner, channel, and revision under that lock, and inserts the new event with its revision and a strictly increasing timestamp:
 
 - `accepted` requires an owned, active, native YouTube account that the rollout policy admits. Otherwise `not_found`, `provider_unsupported` or `not_enabled`, and nothing is inserted: Postora does not collect acceptances for a feature it is not offering.
 - `withdrawn` requires only an owned YouTube account row, active or not, so an owner can always withdraw.
@@ -756,7 +759,7 @@ The two operations that record events, `consent_accept` and `consent_withdraw` (
 | `mode: "all"` | No longer waits for a separate mechanism: acceptance is already per owner and per channel. It still needs its own approval and the ceilings review (§8). |
 | Rollout switched off | Reads stop. Acceptances stay recorded, so switching it on again does not ask owners twice. |
 | Branch B | Independent of the scope gate (§7.4), which concerns Google's permission. An owner needs both: this acceptance, and the Google scope. The page asks for the acceptance first. |
-| The owner disconnects, then reconnects the same channel | The acceptance stands (D13). A different owner connecting that channel is asked on their own account. |
+| The owner disconnects, then reconnects the same channel | The new connection revision has consent state `none` and requires fresh acceptance (D13 = B). A different owner connecting that channel is asked on their own account. |
 
 ### 7.4 Branch B only: the scope gate and per-connection grant checks (decision D7, still open)
 
@@ -940,6 +943,7 @@ Open question that needs no decision: how many IDs one `videos.list` call accept
 | D9 | CI registration | **Recorded exception:** the test step and the SQL suite are registered in the product PR, with the measurements of plan §4. |
 | D10 | How owners agree to the analytics purpose | **In the product, from the start.** No analytics read for any channel, pilot included, before the owner of that channel has accepted the purpose inside Postora. A written agreement outside the app was not chosen. (§7.3) |
 | D11 | A non-reusable connection identity | **Yes:** the nullable `binding_incarnation` column and its trigger, in the Stage 5 migration. (§5.2) |
+| D13 | Does an acceptance survive a reconnect of the same channel by the same owner? | **B. No:** every new connection revision asks again; disconnecting is not withdrawing. Trusted token refresh preserves acceptance. (§7.3) |
 
 Also settled: the merge needs the owner's card; the migration is applied before the merge, after a production snapshot.
 
@@ -949,7 +953,6 @@ Also settled: the merge needs the owner's card; the migration is applied before 
 |---|---|---|---|---|
 | **D7** | Only if P1 concludes branch B: when does **Google's** consent screen start asking for the analytics permission? (§7.4) | Before any branch B code. | **A.** Only for users named in a private scope gate, then everyone after Google approves. **B.** For nobody until Google approves. **C.** For everyone at deploy. | **A** |
 | **D12** | How are the isolated probe parts (P1-i, P1-b, P1-c) run? (§7.2) | When one is about to run; P1-i is recommended before implementation. | **A.** A separate test OAuth client and project, a channel Waleed owns. **B.** Postora's production client in the Playground. | **A** |
-| **D13** | Does an acceptance survive a reconnect of the same channel by the same owner? (§7.3) | Before the migration is written. | **A.** Yes: it is keyed by owner and channel; disconnecting is not withdrawing. **B.** No: every new connection asks again. | **A** |
 | **P1 approvals** | Each part is a real request to Google on the owner's channel. | When each is about to run. | — | Run P1-i before implementation; P1-a after deployment and acceptance. |
 
 Recorded assumptions unless the owner objects: acceptance is given only by the channel's owner in the product, never by an admin on their behalf; declining records nothing; no IP address or user agent is recorded with an acceptance; native connections only; no revenue; no agent, n8n or MCP access; no comparison with the previous period until the Google policy has been read in full.

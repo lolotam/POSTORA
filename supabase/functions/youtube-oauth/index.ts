@@ -8,7 +8,7 @@ import {
   type YouTubeOAuthPorts,
 } from "./handler.ts";
 import { revokeGoogleToken } from "./revoke.ts";
-import { buildRefusalLogRow } from "./refusalLog.ts";
+import { buildDisconnectOutcomeLogRow, buildRefusalLogRow } from "./refusalLog.ts";
 
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID") ?? "";
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "";
@@ -158,7 +158,7 @@ const ports: YouTubeOAuthPorts = {
     load: async ({ accountId, userId }) => {
       const { data, error } = await admin
         .from("social_accounts")
-        .select("id, user_id, access_token, refresh_token, is_active, auth_provider, account_metadata, updated_at")
+        .select("id, user_id, platform_user_id, access_token, refresh_token, is_active, auth_provider, account_metadata, updated_at")
         .eq("id", accountId)
         .eq("user_id", userId)
         .eq("platform", "youtube")
@@ -169,6 +169,7 @@ const ports: YouTubeOAuthPorts = {
       return {
         id: data.id as string,
         userId: data.user_id as string,
+        channelId: String(data.platform_user_id ?? ""),
         accessToken: (data.access_token as string | null) ?? null,
         refreshToken: (data.refresh_token as string | null) ?? null,
         isActive: Boolean(data.is_active),
@@ -178,18 +179,16 @@ const ports: YouTubeOAuthPorts = {
         updatedAt: (data.updated_at as string | null) ?? null,
       };
     },
-    // Revoking at Google ends the whole authorization of that Google account, and two
-    // channels connected separately hold different refresh token strings for the same
-    // authorization, and a native channel may have no refresh token at all. Matching on
-    // the token would miss a sibling and break it, so any other active native channel of
-    // this user blocks the revoke (null auth_provider counts as native).
-    countOtherActiveNativeAccounts: async ({ userId, excludeAccountId }) => {
+    // Another active native connection to the same channel may depend on the same
+    // Google grant, including in a different workspace. Different channels do not
+    // block revocation; a null auth_provider counts as native.
+    countOtherActiveGrantHolders: async ({ channelId, excludeAccountId }) => {
       const { count, error } = await admin
         .from("social_accounts")
         .select("id", { count: "exact", head: true })
-        .eq("user_id", userId)
         .eq("platform", "youtube")
         .eq("is_active", true)
+        .eq("platform_user_id", channelId)
         .or("auth_provider.is.null,auth_provider.neq.composio")
         .neq("id", excludeAccountId);
       if (error || count === null) throw rpcFailure(error ?? {});
@@ -242,6 +241,12 @@ const ports: YouTubeOAuthPorts = {
         });
         throw rpcFailure(error);
       }
+    },
+    disconnectOutcome: async (input) => {
+      const { error } = await admin
+        .from("system_logs")
+        .insert(buildDisconnectOutcomeLogRow(input));
+      if (error) throw rpcFailure(error);
     },
   },
 };

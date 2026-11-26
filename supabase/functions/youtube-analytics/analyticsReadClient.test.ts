@@ -19,6 +19,8 @@ import {
   FIXTURE_VIDEO_ID,
   HEADER_MISMATCH,
   NEGATIVE_METRIC,
+  NEGATIVE_NET_TOP_VIDEOS,
+  NEGATIVE_NET_TOTALS,
   NO_ROWS,
   OUT_OF_WINDOW_DAY,
   reportInput,
@@ -80,6 +82,24 @@ Deno.test("summary builds the exact structural query and maps all eight metrics"
   assertEquals(url.searchParams.get("dimensions"), null);
   assertEquals(requests[0].authorization, "Bearer synthetic-token");
   assert(requests[0].signal instanceof AbortSignal);
+});
+
+Deno.test("summary accepts negative net likes, comments and shares", async () => {
+  const { fetchImpl } = fakeFetch({ status: 200, body: NEGATIVE_NET_TOTALS });
+  const result = await createYouTubeAnalyticsReadClient({ fetchImpl }).readSummary("t", reportInput());
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    assertEquals(result.value.metrics.map((metric) => [metric.key, metric.value]), [
+      ["views", 59],
+      ["watch_time", 10],
+      ["average_view_duration", 14],
+      ["subscribers_gained", 0],
+      ["subscribers_lost", 1],
+      ["likes", -2],
+      ["comments", -1],
+      ["shares", -3],
+    ]);
+  }
 });
 
 Deno.test("summary treats omitted, null and empty rows as no data, not zero", async () => {
@@ -207,6 +227,20 @@ Deno.test("top videos uses the single documented metric list and accepts string 
   assertEquals(params.get("metrics"), "estimatedMinutesWatched,views,likes,subscribersGained");
   assertEquals(params.get("sort"), "-views");
   assertEquals(params.get("maxResults"), "10");
+});
+
+Deno.test("top videos accepts a negative net likes value", async () => {
+  const { fetchImpl } = fakeFetch({ status: 200, body: NEGATIVE_NET_TOP_VIDEOS });
+  const result = await createYouTubeAnalyticsReadClient({ fetchImpl }).readTopVideos("t", reportInput());
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    assertEquals(result.value.rows[0].metrics.map((metric) => [metric.key, metric.value]), [
+      ["watch_time", 20],
+      ["views", 10],
+      ["likes", -1],
+      ["subscribers_gained", 2],
+    ]);
+  }
 });
 
 Deno.test("top videos missing rows is empty and needs no title call", async () => {

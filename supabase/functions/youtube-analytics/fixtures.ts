@@ -75,6 +75,14 @@ export const NEGATIVE_METRIC = {
   columnHeaders: headers(summaryNames),
   rows: [[11, -1, 3, 4, 1, 5, 2, 6]],
 };
+export const NEGATIVE_NET_TOTALS = {
+  columnHeaders: headers(summaryNames),
+  rows: [[59, 10, 14, 0, 1, -2, -1, -3]],
+};
+export const NEGATIVE_NET_TOP_VIDEOS = {
+  columnHeaders: headers(topNames),
+  rows: [[FIXTURE_VIDEO_ID, 20, 10, -1, 2]],
+};
 export const BAD_VIDEO_ID = {
   columnHeaders: headers(topNames),
   rows: [["bad/id", 20, 10, 4, 2]],
