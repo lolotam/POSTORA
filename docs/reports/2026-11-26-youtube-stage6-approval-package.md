@@ -71,7 +71,7 @@ The upload path creates a new video. It does not replace media bytes of an exist
 | 4 | Reply to a top-level comment | `comments.insert` | `supabase/functions/comment-manager/stage4/provider.ts`; fenced dispatch in `handler.ts` |
 | 4 | Edit a comment written by the connected channel | `comments.update` | `supabase/functions/comment-manager/stage4/provider.ts`; author/target checks in `handler.ts` |
 | 4 | Delete a comment written by the connected channel | `comments.delete` | `supabase/functions/_shared/youtubeComments.ts` (`deleteOwnComment`); action guard `supabase/functions/_shared/commentActions.ts` |
-| 4 | Publish, hold for review, or reject a comment; optionally request author ban only with rejection | `comments.setModerationStatus` | `supabase/functions/comment-manager/stage4/provider.ts`; separately confirmed `banAuthor` flow in `handler.ts` and `src/features/youtube-comments/application/useYouTubeStage4.ts` |
+| 4 | Publish or reject a comment (including comments already in the Held for review queue; moving a published comment to `heldForReview` is disabled at this baseline via `STAGE4_HOLD_FROM_PUBLISHED = false`); optionally request author ban only with rejection | `comments.setModerationStatus` | `supabase/functions/comment-manager/stage4/provider.ts`; separately confirmed `banAuthor` flow in `handler.ts` and `src/features/youtube-comments/application/useYouTubeStage4.ts` |
 
 Postora does not offer video deletion. The separate legacy video-delete helper is not part of the Stage 6 disclosure or demo scope.
 
@@ -93,12 +93,12 @@ Sources, read for Stage 6 on 26 November 2026:
 | `videos.update` | 3 published metadata edit | 50 shared units | Production `PUBLISHED_EDIT_WRITE_ENABLED = false`; `authorizeWrite` and `stillBound` both refuse. No numeric edit-write allowance is active at baseline |
 | `videos.insert` | 3 new upload | **1 unit/call in its own default 100-call/day bucket** | Do not subtract this from the 10,000-unit shared pool; resumable continuation does not open a replacement session after an uncertain send |
 | `thumbnails.set` | 3 optional thumbnail after upload | 50 shared units | Separate follow-up outcome; a thumbnail failure does not erase the uploaded-video receipt |
-| `commentThreads.list` | 4 Published/Held thread pages | 1 shared unit per page | Stage 4 read limiter: 120 requests/60 s per user, fail closed |
-| `comments.list` | 4 replies/target verification | 1 shared unit per call | Same Stage 4 read limiter |
-| `commentThreads.insert` | 3 first comment; 4 top-level comment | 50 shared units | Stage 4 write limiter: 20 requests/60 s per user, fail closed; durable one-send receipt |
-| `comments.insert` | 4 reply | 50 shared units | Same Stage 4 write limiter and durable receipt |
-| `comments.update` | 4 edit own comment | 50 shared units | Same Stage 4 write limiter and durable receipt |
-| `comments.setModerationStatus` | 4 publish/hold/reject; optional `banAuthor` | 50 shared units | Stage 4 write limiter; ban confirmation has a separate 5 requests/24 h limit per user |
+| `commentThreads.list` | 4 Published/Held thread pages | 1 shared unit per page | Stage 4 read limiter: 120 requests/60 s per user, per action, fail closed |
+| `comments.list` | 4 replies/target verification | 1 shared unit per call | Same Stage 4 per-action read limiter (120 requests/60 s per user, per action) |
+| `commentThreads.insert` | 3 first comment; 4 top-level comment | 50 shared units | Stage 4 write limiter: 20 requests/60 s per user, per action, fail closed; durable one-send receipt |
+| `comments.insert` | 4 reply | 50 shared units | Same Stage 4 per-action write limiter and durable receipt |
+| `comments.update` | 4 edit own comment | 50 shared units | Same Stage 4 per-action write limiter and durable receipt |
+| `comments.setModerationStatus` | 4 publish/reject (moving published to `heldForReview` is disabled at baseline); optional `banAuthor` | 50 shared units | Stage 4 per-action write limiter; ban confirmation has a separate 5 requests/24 h limit per user |
 | `comments.delete` | 4 delete own comment | 50 shared units | Existing own-author guard; repeat-safe legacy action, not a new Stage 4 receipted send |
 | Analytics v2 `reports.query` | 5 summary/daily/top-videos, channel or one video | 1 Analytics quota unit/request | Per-user admission 120/60 s; data 60/600 s and 300/86400 s; project attempt ceiling 2,000/Pacific day |
 
@@ -114,7 +114,7 @@ A normal Stage 3 edit needs one pre-read `videos.list` plus one `videos.update`:
 | Data burst limiter | `youtube-analytics:data:10m:<user_id>` | 60 data operations/600 s per user |
 | Data daily limiter | `youtube-analytics:data:24h:<user_id>` | 300 data operations/86,400 s per user |
 | Stage 2 browse limiters | `youtube-resources:burst`, `youtube-resources:day` | 30/600 s and 300/86,400 s per user. The existing shared helper fails open if its counter RPC fails; ownership checks remain independent |
-| Stage 4 limiters | `stage4:<action>:<user_id>` | Reads 120/60 s, writes 20/60 s, ban confirmation 5/86,400 s per user; all fail closed |
+| Stage 4 limiters | `stage4:<action>:<user_id>` | Per user, per action: reads 120/60 s per read action, writes 20/60 s per write action, ban confirmation 5/86,400 s per user; all fail closed |
 
 The two Stage 5 budget keys use the Pacific calendar date and a 48-hour counter window, so a counter cannot reset inside its named Pacific day. A debit requires `allowed: true` and `count >= 1`; an unreadable counter fails closed. A debit is not refunded when a later authorization check or provider attempt fails.
 
@@ -281,11 +281,11 @@ All automated provider calls in these suites use fakes/fixtures. No test should 
 
 ### Journey 5 — Comments and moderation
 
-**Actions:** Open Comments → YouTube → test account/video. Page Published and Held for review. Create a top-level test comment, reply, edit the channel's own comment, and delete it if desired. On a controlled comment, demonstrate hold/publish/reject. Only if `ban` is enabled for this account, select ban-author and complete the separate server-issued confirmation.
+**Actions:** Open Comments → YouTube → test account/video. Page Published and Held for review. Create a top-level test comment, reply, edit the channel's own comment, and delete it if desired. Using an already-held comment fixture or a controlled comment, demonstrate publish and reject (moving an already-published comment to `heldForReview` is disabled at this baseline via `STAGE4_HOLD_FROM_PUBLISHED = false`). Only if `ban` is enabled for this account, select ban-author and complete the separate server-issued confirmation.
 
 **Expected:** Reads and own-comment actions affect only the selected owned video/thread. Rejection cannot be republished through the API. `banAuthor` is sent only with rejection after separate confirmation; Postora never claims it can read or undo a ban. Indeterminate writes are not automatically resent.
 
-**Capture:** Lists, create/reply/edit states, moderation confirmation, and resulting visible state with commenter identities masked. Narrate one-unit reads and 50-unit writes, plus 120-read/minute, 20-write/minute, and 5-ban-confirmation/day limits.
+**Capture:** Lists, create/reply/edit states, moderation confirmation, and resulting visible state with commenter identities masked. Narrate one-unit reads and 50-unit writes, plus per-user, per-action 120-read/minute and 20-write/minute limits and the 5-ban-confirmation/day limit.
 
 ### Journey 6 — On-demand analytics acceptance and withdrawal
 

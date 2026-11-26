@@ -61,6 +61,7 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("Set a custom thumbnail");
     expect(text).toContain("thumbnails.set");
     expect(text).toContain("Edit published video metadata");
+    expect(text).toContain("currently disabled at the production baseline");
     expect(text).toContain("videos.update");
     expect(text).toContain("title, description, tags, category, privacy, language, made-for-kids and synthetic-media declarations");
     expect(text).toContain("Postora does not replace existing video media bytes or delete your videos.");
@@ -74,10 +75,12 @@ describe("YouTube legal disclosures", () => {
     const text = pageText(container);
 
     expect(text).toContain("Read and create comments");
+    expect(text).toContain("Published and Held for review queues");
     expect(text).toContain("top-level comments and replies");
     expect(text).toContain("edit or delete comments written by your channel");
     expect(text).toContain("Moderate comments");
-    expect(text).toContain("publishing, holding for review, or rejecting them");
+    expect(text).toContain("publishing or rejecting them");
+    expect(text).toContain("moving an already-published comment to hold is unavailable at the current baseline");
     expect(text).toContain("banAuthor");
   });
 
@@ -108,9 +111,9 @@ describe("YouTube legal disclosures", () => {
     const text = pageText(container);
 
     expect(text).toContain("Your uploaded videos and their details when you browse your channel in Postora");
-    expect(text).toContain("Published video metadata when you instruct Postora to edit details");
+    expect(text).toContain("Published video metadata when published metadata editing is enabled and you instruct Postora to edit details");
     expect(text).toContain("let you browse your uploaded videos and their full details");
-    expect(text).toContain("Edit published video metadata only when you instruct Postora to make that change");
+    expect(text).toContain("Edit published video metadata only when that feature is enabled (currently disabled at the production baseline)");
     expect(text).toContain("Read, create, reply to, edit, delete, and moderate comments");
     expect(text).toContain("Analytics Purpose Clause, Version 1, dated November 26, 2026");
     expect(text).toContain("Postora clears its stored OAuth credentials immediately");
@@ -125,7 +128,7 @@ describe("YouTube legal disclosures", () => {
 
     expect(text).toContain("video and Short publishing");
     expect(text).toContain("channel and uploaded-video browsing");
-    expect(text).toContain("published video metadata editing");
+    expect(text).toContain("published video metadata editing (when enabled; currently disabled at the production baseline)");
     expect(text).toContain("comment creation and moderation");
     expect(text).toContain("on-demand channel and video analytics");
     expect(text).toContain("accept the current Analytics Purpose Clause inside Postora for that connection");
