@@ -68,6 +68,20 @@ describe("Supabase gateway contract fixtures", () => {
     expect(fetchMock.mock.calls.every((call) => !("user_id" in JSON.parse(call[1].body)))).toBe(true);
   });
 
+  it("accepts negative net engagement metrics in a summary response", async () => {
+    const metrics = [
+      { key: "views", unit: "count", value: 59 },
+      { key: "likes", unit: "count", value: -2 },
+      { key: "comments", unit: "count", value: -1 },
+      { key: "shares", unit: "count", value: -3 },
+    ];
+    fetchMock.mockResolvedValueOnce(answer(success({ metrics, has_data: true })));
+
+    const result = await gateway.summary({ accountId: ACCOUNT_ID, periodDays: PERIOD, windowEnd: WINDOW_END });
+
+    expect(result.data.metrics).toEqual(metrics);
+  });
+
   it.each(Object.keys(YOUTUBE_ANALYTICS_ERRORS) as YouTubeAnalyticsErrorCode[])("maps %s with scope and response extras", async (code) => {
     const definition = YOUTUBE_ANALYTICS_ERRORS[code];
     fetchMock.mockResolvedValueOnce(answer({

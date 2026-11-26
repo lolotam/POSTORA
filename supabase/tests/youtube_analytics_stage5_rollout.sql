@@ -17,6 +17,7 @@ DELETE FROM public.youtube_analytics_purpose_consents;
 DELETE FROM public.app_settings
  WHERE key IN ('youtube_analytics_stage5_rollout', 'youtube_analytics_stage5_scope_gate');
 \ir ../migrations/20261125120000_youtube_stage5_analytics_rollout.sql
+\ir ../migrations/20261126120000_youtube_reauth_permission_prompt_and_consent.sql
 \endif
 
 DO $seeding$
@@ -538,16 +539,26 @@ BEGIN
            WHERE id = '6e5b0010-0000-4000-8000-000000000010') <> v_second,
     'delete/re-insert never reuses the incarnation';
   v_decision := pg_temp.s5_decide(pg_temp.s5_owner_a(), '6e5b0010-0000-4000-8000-000000000010');
-  ASSERT v_decision ->> 'reason' = 'ok' AND v_decision -> 'consent' ->> 'state' = 'accepted',
-    'acceptance survives delete/re-insert by owner and channel';
+  ASSERT v_decision ->> 'reason' = 'consent_required' AND v_decision -> 'consent' ->> 'state' = 'none',
+    'delete/re-insert requires fresh acceptance on the new connection revision';
   v_revision_second := v_decision ->> 'connection_revision';
   ASSERT v_revision_second <> v_revision_first, 'delete/re-insert changes the connection revision';
+  v_decision := pg_temp.s5_accept(pg_temp.s5_owner_a(), '6e5b0010-0000-4000-8000-000000000010', 1, v_revision_second);
+  ASSERT (v_decision ->> 'recorded')::boolean, 'acceptance succeeds on the reinserted connection';
+  ASSERT pg_temp.s5_decide(pg_temp.s5_owner_a(), '6e5b0010-0000-4000-8000-000000000010') ->> 'reason' = 'ok',
+    'the reinserted connection is admitted after fresh acceptance';
 
   UPDATE public.social_accounts SET access_token = 'inc-access-3'
    WHERE id = '6e5b0010-0000-4000-8000-000000000010';
   v_decision := pg_temp.s5_decide(pg_temp.s5_owner_a(), '6e5b0010-0000-4000-8000-000000000010');
-  ASSERT v_decision ->> 'reason' = 'ok' AND v_decision ->> 'connection_revision' <> v_revision_second,
-    'acceptance survives reconnect while the revision changes';
+  ASSERT v_decision ->> 'reason' = 'consent_required' AND v_decision -> 'consent' ->> 'state' = 'none'
+     AND v_decision ->> 'connection_revision' <> v_revision_second,
+    'an untrusted credential update requires fresh acceptance on the new revision';
+  v_revision_second := v_decision ->> 'connection_revision';
+  v_decision := pg_temp.s5_accept(pg_temp.s5_owner_a(), '6e5b0010-0000-4000-8000-000000000010', 1, v_revision_second);
+  ASSERT (v_decision ->> 'recorded')::boolean, 'acceptance succeeds after the untrusted credential update';
+  ASSERT pg_temp.s5_decide(pg_temp.s5_owner_a(), '6e5b0010-0000-4000-8000-000000000010') ->> 'reason' = 'ok',
+    'the reconnected account is admitted after fresh acceptance';
 
   ALTER TABLE public.social_accounts DISABLE TRIGGER trg_social_accounts_youtube_binding_incarnation;
   UPDATE public.social_accounts SET binding_incarnation = NULL
@@ -566,6 +577,68 @@ BEGIN
   PERFORM pg_temp.s5_restore_main();
 END
 $incarnation$;
+
+DO $consent_connection_scope$
+DECLARE
+  v_channel text;
+  v_generation bigint;
+  v_generation_after bigint;
+  v_incarnation uuid;
+  v_revision text;
+  v_stored_revision text;
+  v_decision jsonb;
+  v_lease jsonb;
+BEGIN
+  PERFORM pg_temp.s5_restore_main();
+  SELECT platform_user_id, binding_generation,
+         COALESCE(binding_incarnation, '00000000-0000-0000-0000-000000000000'::uuid)
+    INTO v_channel, v_generation, v_incarnation
+    FROM public.social_accounts WHERE id = pg_temp.s5_main();
+  v_decision := pg_temp.s5_decide();
+  v_revision := v_decision ->> 'connection_revision';
+
+  v_lease := public.youtube_analytics_stage5_acquire_lease(
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), v_channel, v_generation, v_incarnation,
+    ARRAY['scope.a', 'scope.b'], 1, 60);
+  ASSERT (v_lease ->> 'ok')::boolean, format('trusted refresh lease acquired: %s', v_lease);
+  v_decision := public.youtube_analytics_stage5_store_token(
+    pg_temp.s5_owner_a(), pg_temp.s5_main(), v_channel, v_generation, v_incarnation,
+    (v_lease ->> 'lease_token')::uuid, 's5-trusted-refresh-access',
+    clock_timestamp() + interval '1 hour', NULL);
+  ASSERT (v_decision ->> 'ok')::boolean, format('trusted refresh stored: %s', v_decision);
+  SELECT binding_generation INTO v_generation_after
+    FROM public.social_accounts WHERE id = pg_temp.s5_main();
+  ASSERT v_generation_after = v_generation, 'a trusted refresh preserves binding_generation';
+  v_decision := pg_temp.s5_decide();
+  ASSERT v_decision ->> 'connection_revision' = v_revision
+     AND v_decision ->> 'reason' = 'ok' AND v_decision -> 'consent' ->> 'state' = 'accepted',
+    'a trusted refresh preserves the connection revision and accepted consent';
+
+  DELETE FROM public.youtube_analytics_purpose_consents
+   WHERE owner_id = pg_temp.s5_owner_a() AND channel_id = 'UC-s5-main';
+  INSERT INTO public.youtube_analytics_purpose_consents (
+    owner_id, channel_id, social_account_id, connection_revision, event,
+    purpose_version, locale, request_id
+  ) VALUES (
+    pg_temp.s5_owner_a(), 'UC-s5-main', pg_temp.s5_main(), NULL, 'accepted', 1, 'en', 's5-legacy-consent'
+  );
+  v_decision := pg_temp.s5_decide();
+  ASSERT v_decision ->> 'reason' = 'consent_required' AND v_decision -> 'consent' ->> 'state' = 'none',
+    'a legacy NULL-revision event does not satisfy the active connection';
+
+  v_decision := pg_temp.s5_accept(pg_temp.s5_owner_a(), pg_temp.s5_main(), 1, v_revision);
+  ASSERT (v_decision ->> 'recorded')::boolean, 'the active revision accepts after the legacy event';
+  SELECT c.connection_revision INTO v_stored_revision
+    FROM public.youtube_analytics_purpose_consents AS c
+   WHERE c.owner_id = pg_temp.s5_owner_a() AND c.channel_id = 'UC-s5-main'
+     AND c.connection_revision IS NOT NULL
+   ORDER BY c.created_at DESC, c.id DESC
+   LIMIT 1;
+  ASSERT v_stored_revision = v_revision AND v_stored_revision = pg_temp.s5_decide() ->> 'connection_revision',
+    'a new consent event stores the revision reported by decide';
+  PERFORM pg_temp.s5_restore_main();
+END
+$consent_connection_scope$;
 
 -- Acceptance recording, state transitions, tenant isolation, and credentials.
 DO $consent_and_decide$
@@ -683,14 +756,16 @@ BEGIN
   ASSERT v_result ->> 'reason' = 'reconnect_required' AND NOT (v_result ? 'credentials');
   UPDATE public.social_accounts SET needs_reauth = false, access_token = NULL, refresh_token = NULL
    WHERE id = pg_temp.s5_main();
+  PERFORM pg_temp.s5_accept(pg_temp.s5_owner_a(), pg_temp.s5_main(), 2);
   v_result := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), true, 2);
-  ASSERT v_result ->> 'reason' = 'reconnect_required', 'two missing tokens require reconnect';
+  ASSERT v_result ->> 'reason' = 'reconnect_required', 'two missing tokens require reconnect after fresh acceptance';
   UPDATE public.social_accounts
      SET access_token = 's5-access-1', refresh_token = 's5-refresh-1',
          account_metadata = '{"granted_scopes":[]}'::jsonb
    WHERE id = pg_temp.s5_main();
+  PERFORM pg_temp.s5_accept(pg_temp.s5_owner_a(), pg_temp.s5_main(), 2);
   ASSERT pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), false, 2) ->> 'reason' = 'ok',
-    'an empty recorded scope list is unknown and passes';
+    'an empty recorded scope list is unknown and passes after fresh acceptance';
   UPDATE public.social_accounts SET account_metadata = '{"granted_scopes":["scope.a"]}'::jsonb
    WHERE id = pg_temp.s5_main();
   v_result := pg_temp.s5_decide(pg_temp.s5_owner_a(), pg_temp.s5_main(), true, 2);
@@ -698,7 +773,7 @@ BEGIN
 
   SELECT count(*) INTO v_count FROM public.youtube_analytics_purpose_consents
    WHERE owner_id = pg_temp.s5_owner_a() AND channel_id = 'UC-s5-main';
-  ASSERT v_count = 3, 'acceptance history is append-only';
+  ASSERT v_count = 5, 'acceptance history is append-only across connection revisions';
   ASSERT NOT EXISTS (
     SELECT 1 FROM (
       SELECT created_at, lag(created_at) OVER (ORDER BY created_at, id) AS previous

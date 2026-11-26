@@ -40,6 +40,7 @@ export interface YouTubeAccountSave {
 export interface YouTubeDisconnectAccount {
   id: string;
   userId: string;
+  channelId: string;
   accessToken: string | null;
   refreshToken: string | null;
   isActive: boolean;
@@ -76,8 +77,9 @@ export interface YouTubeOAuthPorts {
     findDefaultProfile(userId: string): Promise<string | null>;
     save(input: YouTubeAccountSave): Promise<void>;
     load(input: { accountId: string; userId: string }): Promise<YouTubeDisconnectAccount | null>;
-    countOtherActiveNativeAccounts(input: {
+    countOtherActiveGrantHolders(input: {
       userId: string;
+      channelId: string;
       excludeAccountId: string;
     }): Promise<number>;
     clearCredentials(input: {
@@ -91,6 +93,12 @@ export interface YouTubeOAuthPorts {
   clock: { now(): Date };
   log: {
     refusal(input: { action: string; reason: string; userId: string | null }): Promise<void>;
+    disconnectOutcome(input: {
+      userId: string;
+      accountId: string;
+      revoked: boolean;
+      reason: string;
+    }): Promise<void>;
   };
 }
 
@@ -156,6 +164,45 @@ function errorCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
+type DisconnectReason = "missing_grant" | "grant_shared" | "already_invalid" | "grant_unverifiable" | null;
+
+type RevokeGrantOutcome =
+  | { ok: true; revoked: boolean; reason: DisconnectReason }
+  | { ok: false; reason: string };
+
+async function revokeDisconnectGrant(
+  refreshToken: string | null,
+  accessToken: string | null,
+  revoke: (token: string) => Promise<GoogleRevokeResult>,
+): Promise<RevokeGrantOutcome> {
+  let refreshAlreadyInvalid = false;
+  if (refreshToken) {
+    let result: GoogleRevokeResult;
+    try {
+      result = await revoke(refreshToken);
+    } catch {
+      return { ok: false, reason: "google_revoke_failed" };
+    }
+    if (!result.ok) return { ok: false, reason: result.reason };
+    if (!result.alreadyInvalid) return { ok: true, revoked: true, reason: null };
+    refreshAlreadyInvalid = true;
+  }
+
+  if (accessToken && (!refreshToken || refreshAlreadyInvalid)) {
+    let result: GoogleRevokeResult;
+    try {
+      result = await revoke(accessToken);
+    } catch {
+      return { ok: false, reason: "google_revoke_failed" };
+    }
+    if (!result.ok) return { ok: false, reason: result.reason };
+    if (!result.alreadyInvalid) return { ok: true, revoked: true, reason: null };
+    return { ok: true, revoked: false, reason: refreshToken ? "already_invalid" : "grant_unverifiable" };
+  }
+
+  return { ok: true, revoked: false, reason: refreshAlreadyInvalid ? "already_invalid" : "missing_grant" };
+}
+
 export function createYouTubeOAuthHandler(
   ports: YouTubeOAuthPorts,
   config: YouTubeOAuthConfig,
@@ -197,16 +244,18 @@ export function createYouTubeOAuthHandler(
     }
 
     let revoked = false;
-    let reason: "missing_grant" | "grant_shared" | "already_invalid" | null = null;
+    let reason: DisconnectReason = null;
     const refreshToken = account.refreshToken?.trim() || null;
+    const accessToken = account.accessToken?.trim() || null;
 
-    if (!refreshToken) {
+    if (!refreshToken && !accessToken) {
       reason = "missing_grant";
     } else {
       let otherActiveCount: number;
       try {
-        otherActiveCount = await ports.accounts.countOtherActiveNativeAccounts({
+        otherActiveCount = await ports.accounts.countOtherActiveGrantHolders({
           userId,
+          channelId: account.channelId,
           excludeAccountId: account.id,
         });
       } catch {
@@ -216,17 +265,12 @@ export function createYouTubeOAuthHandler(
       if (otherActiveCount > 0) {
         reason = "grant_shared";
       } else {
-        let revokeResult: GoogleRevokeResult;
-        try {
-          revokeResult = await ports.google.revoke(refreshToken);
-        } catch {
-          return refuse(req, "disconnect", "google_revoke_failed", userId, 502);
+        const revokeOutcome = await revokeDisconnectGrant(refreshToken, accessToken, ports.google.revoke);
+        if (!revokeOutcome.ok) {
+          return refuse(req, "disconnect", revokeOutcome.reason, userId, 502);
         }
-        if (!revokeResult.ok) {
-          return refuse(req, "disconnect", revokeResult.reason, userId, 502);
-        }
-        revoked = true;
-        reason = revokeResult.alreadyInvalid ? "already_invalid" : null;
+        revoked = revokeOutcome.revoked;
+        reason = revokeOutcome.reason;
       }
     }
 
@@ -245,6 +289,15 @@ export function createYouTubeOAuthHandler(
         return refuse(req, "disconnect", "account_changed", userId, 409);
       }
       return refuse(req, "disconnect", "account_clear_failed", userId, 500);
+    }
+
+    if (!revoked && reason !== null) {
+      await ports.log.disconnectOutcome({
+        userId,
+        accountId: account.id,
+        revoked,
+        reason,
+      }).catch(() => console.warn({ event: "youtube_oauth_disconnect_outcome_log_failed", reason }));
     }
 
     return json(req, { success: true, revoked, reason });
@@ -422,8 +475,7 @@ export function createYouTubeOAuthHandler(
         response_type: "code",
         scope: scopes,
         access_type: "offline",
-        prompt: "consent",
-        include_granted_scopes: "true",
+        prompt: "consent select_account",
         state: nonce,
       });
       return json(req, {

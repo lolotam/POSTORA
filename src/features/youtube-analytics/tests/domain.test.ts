@@ -11,6 +11,7 @@ describe("analytics formatting", () => {
     expect(formatCount(null)).toBe("—");
     expect(formatCount(1234, "en")).toBe("1,234");
     expect(formatCount(0, "en")).toBe("0");
+    expect(formatCount(-2, "en")).toBe("-2");
     expect(formatMinutes(null)).toBe("—");
     expect(formatMinutes(125)).toBe("2h 5m");
     expect(formatMinutes(12.5)).toBe("12.5m");

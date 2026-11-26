@@ -7763,6 +7763,7 @@ export type Database = {
       youtube_analytics_purpose_consents: {
         Row: {
           channel_id: string
+          connection_revision: string | null
           created_at: string
           event: string
           id: string
@@ -7775,6 +7776,7 @@ export type Database = {
         }
         Insert: {
           channel_id: string
+          connection_revision?: string | null
           created_at?: string
           event: string
           id?: string
@@ -7787,6 +7789,7 @@ export type Database = {
         }
         Update: {
           channel_id?: string
+          connection_revision?: string | null
           created_at?: string
           event?: string
           id?: string
