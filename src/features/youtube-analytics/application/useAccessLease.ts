@@ -309,7 +309,7 @@ export function useAccessLease(params: {
       statusError: null,
       checking: false,
     }));
-  }, [accountId, bumpEpoch, clearTimer, queryClient, update, userId]);
+  }, [accountId, bumpEpoch, clearTimer, issueStatus, queryClient, update, userId]);
 
   const clearLatchForRetry = useCallback(() => {
     update((current) => ({ ...current, latch: null }));
