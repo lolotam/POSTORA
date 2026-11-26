@@ -53,9 +53,11 @@ export function YouTubeVideoLibrary(props: YouTubeVideoLibraryProps): JSX.Elemen
       },
     );
   }, [filtered, i18n.language, sortColumn, sortDirection, visibilityLabels]);
-  const selectSortColumn = (column: LibraryVideoColumn) => {
+  const selectSortColumn = (column: LibraryVideoColumn | null) => {
     setSortColumn(column);
-    setSortDirection(LIBRARY_VIDEO_COLUMNS.find((item) => item.id === column)?.defaultDirection ?? "descending");
+    if (column) {
+      setSortDirection(LIBRARY_VIDEO_COLUMNS.find((item) => item.id === column)?.defaultDirection ?? "descending");
+    }
   };
   const resetFilters = () => {
     setFilter("all");
@@ -71,7 +73,7 @@ export function YouTubeVideoLibrary(props: YouTubeVideoLibraryProps): JSX.Elemen
         filter={filter}
         query={query}
         loadedCount={videos.length}
-        sortColumn={sortColumn ?? "views"}
+        sortColumn={sortColumn}
         sortDirection={sortDirection}
         onViewMode={setViewMode}
         onGridColumns={setGridColumns}
@@ -79,7 +81,10 @@ export function YouTubeVideoLibrary(props: YouTubeVideoLibraryProps): JSX.Elemen
         onQuery={setQuery}
         onSortColumn={selectSortColumn}
         onToggleDirection={() => {
-          if (!sortColumn) selectSortColumn("views");
+          if (!sortColumn) {
+            selectSortColumn("views");
+            return;
+          }
           setSortDirection((current) => current === "ascending" ? "descending" : "ascending");
         }}
       />

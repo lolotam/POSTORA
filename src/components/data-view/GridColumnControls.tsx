@@ -1,9 +1,5 @@
 import type { GridColumns } from "./gridColumns";
 
-// eslint-disable-next-line react-refresh/only-export-components
-export { GRID_COLUMN_CLASSES } from "./gridColumns";
-export type { GridColumns } from "./gridColumns";
-
 export function GridColumnControls({ value, onChange, perRowLabel }: {
   value: GridColumns;
   onChange: (value: GridColumns) => void;

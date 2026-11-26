@@ -147,7 +147,7 @@ export interface YouTubeAnalyticsTopVideosRequest extends YouTubeAnalyticsDataRe
 }
 ```
 
-- `has_more = rows.length === 10 && startIndex + 10 <= 200`. `next_start_index = has_more ? startIndex + 10 : null`.
+- `has_more = rows.length === 10 && startIndex + 10 <= 191` (`YOUTUBE_ANALYTICS_TOP_VIDEOS_MAX_START_INDEX`). `next_start_index = has_more ? Math.min(startIndex + 10, YOUTUBE_ANALYTICS_TOP_VIDEOS_MAX_START_INDEX) : null`.
 - `start_index` is 1-based, matching Google's `startIndex`. The client only sends `1 + 10k`. The server accepts any integer in range; overlap is harmless because the client de-duplicates.
 - A final page of exactly 10 rows reports `has_more: true`; the next request returns zero rows and `has_more: false`. The client must render that without an error.
 - `schema_version` stays 1. All additions are optional or additive.
@@ -767,7 +767,7 @@ export type YouTubeBenchmarkChannelStatus = "found" | "not_found" | "unavailable
 export interface YouTubeBenchmarkChannel {
   input: string;
   status: YouTubeBenchmarkChannelStatus;
-  /** Present only when status is "unavailable". */
+  /** Present when status is "unavailable", or when status is "found" and the uploads/videos lookup failed. */
   error?: "quota_exceeded" | "reconnect_required" | "upstream_unavailable";
   channel_id: string | null;
   title: string | null;

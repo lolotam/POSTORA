@@ -14,13 +14,13 @@ export function YouTubeVideoLibraryToolbar({ viewMode, gridColumns, filter, quer
   filter: LibraryVideoFilter;
   query: string;
   loadedCount: number;
-  sortColumn: LibraryVideoColumn;
+  sortColumn: LibraryVideoColumn | null;
   sortDirection: DataViewSortDirection;
   onViewMode: (value: DataViewMode) => void;
   onGridColumns: (value: GridColumns) => void;
   onFilter: (value: LibraryVideoFilter) => void;
   onQuery: (value: string) => void;
-  onSortColumn: (value: LibraryVideoColumn) => void;
+  onSortColumn: (value: LibraryVideoColumn | null) => void;
   onToggleDirection: () => void;
 }) {
   const { t } = useTranslation("accounts");
@@ -87,12 +87,19 @@ export function YouTubeVideoLibraryToolbar({ viewMode, gridColumns, filter, quer
       {viewMode === "grid" ? (
         <div className="flex items-center gap-2">
           <label htmlFor="library-sort" className="text-sm text-muted-foreground">{t("youtubeManagement.library.sortBy", "Sort by")}</label>
-          <select id="library-sort" className="rounded-md border bg-background px-3 py-2 text-sm" value={sortColumn} onChange={(event) => onSortColumn(event.target.value as LibraryVideoColumn)}>
+          <select
+            id="library-sort"
+            className="rounded-md border bg-background px-3 py-2 text-sm"
+            value={sortColumn ?? ""}
+            onChange={(event) => onSortColumn(event.target.value ? (event.target.value as LibraryVideoColumn) : null)}
+          >
+            <option value="">{t("youtubeManagement.library.sortDefault", "Upload order")}</option>
             {LIBRARY_VIDEO_COLUMNS.map((column) => <option key={column.id} value={column.id}>{columnLabels[column.id]}</option>)}
           </select>
           <Button
             size="sm"
             variant="outline"
+            disabled={sortColumn === null}
             aria-label={sortDirection === "ascending"
               ? t("youtubeManagement.library.sortAscending", "Sort ascending")
               : t("youtubeManagement.library.sortDescending", "Sort descending")}

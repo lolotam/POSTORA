@@ -69,6 +69,7 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
   const [pickedAccountId, setPickedAccountId] = useState<string | null>(initialAccountId);
   const [periodDays, setPeriodDays] = useState<YouTubeAnalyticsPeriodDays>(30);
   const [pickedVideo, setPickedVideo] = useState<{ accountId: string; videoId: string } | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const initialVideoApplied = useRef(false);
   const videoOpenerRef = useRef<HTMLElement | null>(null);
 
@@ -122,16 +123,24 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
   } : null, [access.windowEnd, periodDays]);
 
   const refreshReports = async () => {
-    trimTopVideosToFirstPage(queryClient, topVideosKey);
-    const previousWindow = access.windowEnd;
-    const status = await access.refreshStatus({ advanceWindow: true });
-    if (!status || status.reporting_end_date !== previousWindow || access.latchedError) return;
-    await Promise.all([
-      summary.refetch(),
-      daily.refetch(),
-      topVideos.refetch(),
-      ...(selectedVideoId ? [videoSummary.refetch(), videoDaily.refetch()] : []),
-    ]);
+    setIsRefreshing(true);
+    try {
+      await queryClient.cancelQueries({ queryKey: topVideosKey });
+      trimTopVideosToFirstPage(queryClient, topVideosKey);
+      const previousWindow = access.windowEnd;
+      const status = await access.refreshStatus({ advanceWindow: true });
+      await queryClient.cancelQueries({ queryKey: topVideosKey });
+      trimTopVideosToFirstPage(queryClient, topVideosKey);
+      if (!status || status.reporting_end_date !== previousWindow || access.latchedError) return;
+      await Promise.all([
+        summary.refetch(),
+        daily.refetch(),
+        topVideos.refetch(),
+        ...(selectedVideoId ? [videoSummary.refetch(), videoDaily.refetch()] : []),
+      ]);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleAllowConsent = async () => {
@@ -151,6 +160,7 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
   };
 
   const retryLatchedReports = () => {
+    void queryClient.cancelQueries({ queryKey: topVideosKey });
     trimTopVideosToFirstPage(queryClient, topVideosKey);
     access.clearLatchForRetry();
     void summary.refetch();
@@ -173,13 +183,22 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
   };
   const loadedTopVideos = useMemo(() => mergeTopVideoPages(topVideos.data?.pages ?? []), [topVideos.data?.pages]);
   const selectedTopVideo = loadedTopVideos.find((row) => row.video_id === selectedVideoId);
+  const loadNextTopVideosPage = () => {
+    if (isRefreshing) return;
+    void topVideos.fetchNextPage();
+  };
   const retryNextTopVideosPage = () => {
+    if (isRefreshing) return;
     if (topVideos.error && asYouTubeAnalyticsClientError(topVideos.error).code === "window_stale") {
       trimTopVideosToFirstPage(queryClient, topVideosKey);
       void refreshReports();
       return;
     }
-    void topVideos.fetchNextPage();
+    if (topVideos.isFetchNextPageError) {
+      void topVideos.fetchNextPage();
+      return;
+    }
+    void topVideos.refetch();
   };
 
   if (accountsLoading) {
@@ -276,8 +295,8 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
                 data={topVideos.data}
                 onInspect={inspectVideo}
                 hasNextPage={topVideos.hasNextPage}
-                isFetchingNextPage={topVideos.isFetchingNextPage}
-                onLoadMore={() => void topVideos.fetchNextPage()}
+                isFetchingNextPage={topVideos.isFetchingNextPage || isRefreshing}
+                onLoadMore={loadNextTopVideosPage}
                 nextPageError={topVideos.error}
                 onRetryNextPage={retryNextTopVideosPage}
               />
@@ -305,7 +324,7 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
           </div>
         </div>
       ) : null}
-      {selectedVideoId && requestedWindow ? (
+      {access.mayShow && selectedVideoId && requestedWindow ? (
         <VideoAnalyticsSheet
           open
           onOpenChange={(open) => {

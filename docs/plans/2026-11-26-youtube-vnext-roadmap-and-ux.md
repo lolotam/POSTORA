@@ -80,7 +80,7 @@ deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}"
 
 - Edge Functions: `docs/runbooks/deploy-edge-function.md`. After deploy, record the SHA256 of each deployed file against `git show <merge-sha>:<path>` in the PR.
 - Frontend deploys with `main`.
-- Rollback is a revert PR plus redeploy of the functions it touched. Additive contract fields make every backend PR safe to deploy before its frontend.
+- Rollback is a revert PR plus redeploy of the functions it touched. Additive contract fields make every backend PR safe to deploy before its frontend. Exception: once PR-7B is live, PR-7A cannot be reverted until PR-7B is reverted (disabling the scheduling UI) and every stored pending post carrying `youtube_publish_at` is held or migrated (see PR-7A rollback).
 - Production migrations, secrets, server changes and any feature-flag row are Waleed's.
 
 ### 0.5 Wrap-up
@@ -263,7 +263,7 @@ Deploy `process-post` and smoke-test it **before PR-7B starts**. The UI cannot s
 
 Record the four results and the deployed-file SHA256 in the PR. That record is PR-7B's entry condition.
 
-Rollback: revert and redeploy `process-post`. Safe at any time before PR-7B merges, because nothing emits the key.
+Rollback: revert and redeploy `process-post`. Safe at any time before PR-7B merges, because nothing emits the key. After PR-7B is live, reverting PR-7A requires reverting PR-7B first (to disable the scheduling UI) and holding or migrating every stored pending post whose metadata carries `youtube_publish_at` (by setting `status = 'draft'` or clearing `youtube_publish_at` while setting `youtube_visibility = 'private'`) so no scheduled post with public visibility can reach the pre-7A backend and publish immediately.
 
 ### PR-7B — native scheduling UI (spec §7.2 "UI")
 
@@ -490,7 +490,7 @@ Exit on staging: three public channels with uploads compared for nine units (ver
 - [ ] All gates of §0.3 green on the exact head commit; new test files confirmed in the CI log.
 - [ ] Guard skills for the tier run and findings resolved; one `/code-review` by a different model.
 - [ ] A named non-test call site for every new module (Zero Dead Modules).
-- [ ] No token, provider error text or analytics number in any response, log line or stored row added by the PR.
+- [ ] No token or raw provider error text in any response, log line or stored row added by the PR; no analytics number in any log line, stored row, or non-analytics response (on-demand `Cache-Control: no-store` analytics responses in `youtube-analytics` are permitted).
 - [ ] Legal pages, their test and the verification guide match what shipped.
 - [ ] Edge Functions deployed per the runbook with SHA256 parity recorded; or the PR states why none changed.
 - [ ] Owner decision for the phase recorded with Waleed's words under `docs/decisions/`.

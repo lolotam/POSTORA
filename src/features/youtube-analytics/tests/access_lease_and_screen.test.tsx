@@ -673,4 +673,52 @@ describe("top videos same-window refresh", () => {
     const key = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "top_videos", "2026-11-17", 30, null);
     expect(queryClient.getQueryData(key)).toMatchObject({ pageParams: [1] });
   });
+
+  it("retries a failed same-window Refresh with refetch (page 1) rather than fetchNextPage (page 11)", async () => {
+    const page1 = topVideosData("Cached page 1");
+    page1.has_more = true;
+    page1.next_start_index = 11;
+    const refreshedPage1 = topVideosData("Refreshed page 1");
+    refreshedPage1.has_more = true;
+    refreshedPage1.next_start_index = 11;
+    const gateway = makeGateway({
+      topVideos: vi.fn()
+        .mockImplementationOnce(async () => success(page1))
+        .mockImplementationOnce(async () => { throw refusal("rate_limited"); })
+        .mockImplementationOnce(async () => success(refreshedPage1)),
+    });
+    await renderScreen(gateway);
+    await screen.findByText("Cached page 1");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many analytics requests");
+    expect(screen.getByText("Cached page 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Refreshed page 1");
+    expect(gateway.topVideos).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(gateway.topVideos).mock.calls[1][0].startIndex).toBe(1);
+    expect(vi.mocked(gateway.topVideos).mock.calls[2][0].startIndex).toBe(1);
+  });
+
+  it("hides the video analytics drawer while the access lease is expired and restores it once status refreshes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-20T12:00:00Z"));
+    const secondStatus = deferred<YouTubeAnalyticsSuccess<YouTubeAnalyticsStatusData>>();
+    const gateway = makeGateway({
+      status: vi.fn()
+        .mockImplementationOnce(async () => success(statusData(), REVISION, false))
+        .mockImplementationOnce(() => secondStatus.promise)
+        .mockImplementation(async () => success(statusData(), REVISION, false)),
+    });
+    await renderScreen(gateway, { initialVideoId: VIDEO_ID });
+    await flush();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(91_000); });
+    await flush();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    secondStatus.resolve(success(statusData(), REVISION, false));
+    await flush();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
 });

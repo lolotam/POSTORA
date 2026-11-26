@@ -660,6 +660,8 @@ Deno.test("table row 22: empty top videos skips title lookup", async () => {
 
 for (const [name, rowCount, startIndex, hasMore, nextStartIndex] of [
   ["full first page", 10, 1, true, 11],
+  ["full page at 181 reaches max start_index 191", 10, 181, true, 191],
+  ["full page at 182 stops before exceeding max start_index 191", 10, 182, false, null],
   ["full last possible page", 10, 191, false, null],
   ["partial page", 9, 1, false, null],
   ["empty page", 0, 191, false, null],

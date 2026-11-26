@@ -120,4 +120,26 @@ describe("YouTubeVideoLibrary enhanced views", () => {
     await userEvent.click(screen.getByRole("button", { name: "Grid view" }));
     expect(screen.getByRole("button", { name: /Title bad/ })).toBeInTheDocument();
   });
+
+  it("displays Upload order in Grid view when unsorted and activates Views sort when chosen", async () => {
+    const rows = [
+      { ...video("a"), statistics: { view_count: 5, like_count: null, comment_count: null } },
+      { ...video("b"), statistics: { view_count: 10, like_count: null, comment_count: null } },
+    ];
+    await renderUi(<YouTubeVideoLibrary videos={rows} selectedVideoId={null} onSelect={vi.fn()} hasMore={false} isLoadingMore={false} onLoadMore={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    const sortSelect = screen.getByLabelText("Sort by") as HTMLSelectElement;
+    expect(sortSelect.value).toBe("");
+    let cards = screen.getAllByRole("button", { name: /Title [ab]/ });
+    expect(cards[0]).toHaveTextContent("Title a");
+
+    await userEvent.selectOptions(sortSelect, "views");
+    expect(sortSelect.value).toBe("views");
+    cards = screen.getAllByRole("button", { name: /Title [ab]/ });
+    expect(cards[0]).toHaveTextContent("Title b");
+
+    await userEvent.selectOptions(sortSelect, "");
+    cards = screen.getAllByRole("button", { name: /Title [ab]/ });
+    expect(cards[0]).toHaveTextContent("Title a");
+  });
 });
