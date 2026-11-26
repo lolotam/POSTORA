@@ -336,10 +336,11 @@ const GoogleApiDisclosure = () => {
                   <h3 className="font-semibold mb-2">Option 1: Through Postora</h3>
                   <p className="text-muted-foreground text-sm">
                     Navigate to <strong>Profiles → Connected Accounts → Disconnect</strong> for your YouTube account.
-                    Postora clears the connection's stored credentials immediately. It revokes the Google OAuth token
-                    when no other active connection of yours shares that grant, using the refresh token first and the
-                    access token as a fallback when needed. If Google does not confirm a required revocation, Postora
-                    reports an error instead of claiming a successful disconnect.
+                    For a native YouTube connection, Postora clears the connection's stored credentials immediately and
+                    revokes the Google OAuth token when no other active connection of yours shares that grant, using the
+                    refresh token first and the access token as a fallback when needed. If Google does not confirm a
+                    required revocation, Postora reports an error instead of claiming a successful disconnect (legacy
+                    managed-connector connections are removed in Postora and can be revoked in Option 2 below).
                   </p>
                   <p className="text-muted-foreground text-sm mt-2">
                     Disconnecting ends the current connection's in-app Analytics Purpose Clause acceptance. It does not

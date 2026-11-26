@@ -86,7 +86,7 @@ describe("YouTube legal disclosures", () => {
     const text = pageText(container);
 
     expect(text).toContain("Profiles → Connected Accounts → Disconnect");
-    expect(text).toContain("clears the connection's stored credentials immediately");
+    expect(text).toContain("For a native YouTube connection, Postora clears the connection's stored credentials immediately");
     expect(text).toContain("when no other active connection of yours shares that grant");
     expect(text).toContain("using the refresh token first and the access token as a fallback");
     expect(text).toContain("ends the current connection's in-app Analytics Purpose Clause acceptance");

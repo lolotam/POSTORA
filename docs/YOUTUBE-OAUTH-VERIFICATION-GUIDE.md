@@ -87,7 +87,7 @@ For each scope, provide justification:
 | `youtube.force-ssl` | Edit published metadata with `videos.update`; read and create top-level comments and replies; edit/delete the channel's own comments; publish, hold, or reject comments, with optional `banAuthor` on rejection | Correct published details and manage/moderate discussions on owned videos |
 | `userinfo.profile` | Get user's display name during Google Sign-In only, not YouTube connection | Personalize the application experience |
 
-Postora does not replace existing video media bytes or delete videos. Published metadata editing is part of the shipped Stage 3 feature and is covered by `youtube.force-ssl`; the disclosure must not claim otherwise.
+Postora does not replace existing video media bytes or delete videos. Published metadata editing is implemented in Stage 3 (`PUBLISHED_EDIT_WRITE_ENABLED = false` at the current baseline until enabled for the target release) and is covered by `youtube.force-ssl`; the disclosure must not claim otherwise.
 
 ### Connect and reconnect parameters
 
@@ -104,7 +104,7 @@ Analytics uses the existing three scopes and does not currently request `yt-anal
 
 ### Disconnect and revocation
 
-**Profiles → Connected Accounts → Disconnect** invokes the authenticated `disconnect` action. Postora checks whether another active connection of the same user shares the channel grant. It skips provider revocation when such a connection remains; otherwise it calls Google's RFC 7009 endpoint at `https://oauth2.googleapis.com/revoke` with the refresh token, falling back to the access token when the refresh token is absent or already invalid. Tokens travel in the form body, never the URL. An unconfirmed required revocation fails closed and leaves local credentials untouched. After the required provider step succeeds, Postora immediately clears the stored credentials and the frontend removes the connection row. Disconnect ends analytics authorization for that connection but does not create a purpose-withdrawal event.
+For a native YouTube connection, **Profiles → Connected Accounts → Disconnect** invokes the authenticated `disconnect` action. Postora checks whether another active native connection of the same user shares the channel grant. It skips provider revocation when such a connection remains; otherwise it calls Google's RFC 7009 endpoint at `https://oauth2.googleapis.com/revoke` with the refresh token, falling back to the access token when the refresh token is absent or already invalid. Tokens travel in the form body, never the URL. An unconfirmed required revocation fails closed and leaves local credentials untouched. After the required provider step succeeds, Postora immediately clears the stored credentials and the frontend removes the connection row. Legacy Composio-managed connections are removed in Postora and can be revoked directly from Google Account Permissions. Disconnect ends analytics authorization for that connection but does not create a purpose-withdrawal event.
 
 ---
 
@@ -156,12 +156,12 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - OAuth tokens are stored securely in our database
 - Tokens are refreshed automatically to maintain connection
 - YouTube Analytics values are read on demand for immediate display and are not stored by Postora
-- Acceptance events record the owner, channel, purpose version, locale, and connection revision, never analytics numbers
+- Acceptance events record the owner, channel, account reference, event type, purpose version, locale, method, request ID, timestamp, and connection revision, never analytics numbers
 - We do not share your YouTube data with third parties
 
 ### Data Deletion
 - You can disconnect your YouTube account through Profiles → Connected Accounts → Disconnect
-- Postora clears stored OAuth credentials immediately and revokes the Google grant when no other active connection of yours shares it
+- For native YouTube connections, Postora clears stored OAuth credentials immediately and revokes the Google grant when no other active connection of yours shares it (legacy Composio-managed connections are removed in Postora and can be revoked from Google Account Permissions)
 - Disconnect ends analytics authorization for that connection; reconnecting requires fresh purpose acceptance
 - Contact support@postora.cloud for data deletion requests
 
@@ -192,7 +192,7 @@ Create a masked screen recording of these eight journeys, using an owner-control
 
 1. **Connect:** account chooser and permission dialog with all three scopes, followed by the Postora success state.
 2. **Channel and video browse:** `/youtube` channel summary, uploads paging, and full details for an owned video.
-3. **Published metadata edit:** change a permitted field on an existing video and show the verified result at the same watch URL; do not replace media bytes or delete a video.
+3. **Published metadata edit:** when `PUBLISHED_EDIT_WRITE_ENABLED` is enabled for the demo environment, change a permitted field on an existing video and show the verified result at the same watch URL (if that gate is `false`, show the disabled state and code/test evidence only; do not claim a live edit occurred); never replace media bytes or delete a video.
 4. **New upload:** publish a new video with chosen metadata and, optionally, a custom thumbnail.
 5. **Comments and moderation:** read Published and Held for review, create/reply/edit an own comment, and demonstrate hold/publish/reject; show the separate ban confirmation only if that capability is enabled for the test account.
 6. **On-demand analytics:** accept Analytics Purpose Clause v1 at `/analytics/youtube`, show channel/video reports, withdraw, and prove no further report loads. Reconnect later to show fresh acceptance is required.
