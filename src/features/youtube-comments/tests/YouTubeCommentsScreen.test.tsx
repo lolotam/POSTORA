@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { YouTubeCommentsScreen, Stage4RecoveredOperations } from "../ui/YouTubeCommentsScreen";
 import i18n from "@/i18n";
-import type { YouTubeCommentsGateway } from "../application/ports";
+import type { YouTubeCommentsGateway, YouTubeReplySuggestionGateway } from "../application/ports";
 import type {
   Stage4CapabilitiesPayload,
   Stage4CommentRow,
@@ -202,12 +202,12 @@ function makeGateway(script: GatewayScript) {
   return { gateway, calls };
 }
 
-function renderScreen(script: GatewayScript) {
+function renderScreen(script: GatewayScript, replySuggestionGateway?: YouTubeReplySuggestionGateway) {
   const { gateway, calls } = makeGateway(script);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} />
+      <YouTubeCommentsScreen userId={USER} accountId={ACCOUNT} gateway={gateway} replySuggestionGateway={replySuggestionGateway} />
     </QueryClientProvider>,
   );
   return { gateway, calls };
@@ -1619,6 +1619,101 @@ describe("YouTubeCommentsScreen follow-up (Stage 4 issue 470)", () => {
     });
     // The owner dismissed the banner before it showed the outcome, so the identity is still there for the next view.
     expect(storedOps()).toHaveLength(1);
+  });
+
+  it("fills an empty reply draft with an AI suggestion without sending the reply or offering AI on top-level/edit composers", async () => {
+    const suggestReply = vi.fn(async () => "Thanks for watching our Studio upload!");
+    const { gateway } = renderScreen(
+      {
+        videos: [{ id: "vid-1", title: "Studio upload" }],
+        threads: [row({ comment_id: "c-viewer", text: "Great breakdown!", is_own: true })],
+      },
+      { suggestReply },
+    );
+    await screen.findByText("Great breakdown!");
+    const topComposer = screen.getByTestId("yt-stage4-composer");
+    expect(within(topComposer).queryByRole("button", { name: "Suggest AI reply" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByRole("button", { name: "Suggest AI reply" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Write a reply") as HTMLTextAreaElement).value).toBe(
+        "Thanks for watching our Studio upload!",
+      ),
+    );
+    expect(suggestReply).toHaveBeenCalledWith(expect.objectContaining({
+      videoTitle: "Studio upload",
+      commentText: "Great breakdown!",
+      language: "auto",
+    }));
+    expect(gateway.reply).not.toHaveBeenCalled();
+  });
+
+  it("truncates long comment texts (>2000 chars) and video titles (>100 chars) before calling the reply suggestion gateway", async () => {
+    const longTitle = "T".repeat(140);
+    const longComment = "C".repeat(2500);
+    const suggestReply = vi.fn(async () => "Short reply");
+    renderScreen(
+      {
+        videos: [{ id: "vid-1", title: longTitle }],
+        threads: [row({ comment_id: "c-long", text: longComment })],
+      },
+      { suggestReply },
+    );
+    await screen.findByText(longComment);
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
+    await waitFor(() => expect(suggestReply).toHaveBeenCalledTimes(1));
+    expect(suggestReply).toHaveBeenCalledWith(expect.objectContaining({
+      videoTitle: "T".repeat(100),
+      commentText: "C".repeat(2000),
+      language: "auto",
+    }));
+  });
+
+  it("asks before replacing a non-empty reply draft and preserves the draft on cancel or AI failure", async () => {
+    const suggestReply = vi.fn()
+      .mockResolvedValueOnce("AI replacement draft")
+      .mockRejectedValueOnce(new Error("provider_error"));
+    const { gateway } = renderScreen(
+      {
+        videos: [{ id: "vid-1", title: "Studio upload" }],
+        threads: [row({ comment_id: "c-viewer", text: "Can you share more details?" })],
+      },
+      { suggestReply },
+    );
+    await screen.findByText("Can you share more details?");
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    const replyBox = screen.getByLabelText("Write a reply") as HTMLTextAreaElement;
+    fireEvent.change(replyBox, { target: { value: "My manual draft" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Replace your current draft?")).toBeInTheDocument();
+    expect(suggestReply).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep my draft" }));
+    expect(replyBox.value).toBe("My manual draft");
+    expect(suggestReply).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
+    const dialog2 = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog2).getByRole("button", { name: "Replace with AI suggestion" }));
+    await waitFor(() => expect(replyBox.value).toBe("AI replacement draft"));
+    expect(suggestReply).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest AI reply" }));
+    const dialog3 = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog3).getByRole("button", { name: "Replace with AI suggestion" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not generate a reply suggestion. Your draft was not changed.",
+    );
+    expect(replyBox.value).toBe("AI replacement draft");
+    expect(gateway.reply).not.toHaveBeenCalled();
   });
 });
 

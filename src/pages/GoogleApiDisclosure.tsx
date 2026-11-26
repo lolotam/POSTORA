@@ -212,6 +212,9 @@ const GoogleApiDisclosure = () => {
                         <li>
                           <strong>Read and create comments</strong> on your own videos, including Published and Held for
                           review queues, top-level comments and replies, and edit or delete comments written by your channel.
+                          When you explicitly click <em>Suggest AI reply</em> on a comment, Postora sends that comment&apos;s
+                          text and the video title to the configured AI provider solely to draft a reply in your composer;
+                          nothing is posted unless you review and submit the reply.
                         </li>
                         <li>
                           <strong>Moderate comments</strong> by publishing or rejecting them (including comments in the

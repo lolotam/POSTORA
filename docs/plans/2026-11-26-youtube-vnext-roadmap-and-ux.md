@@ -89,7 +89,9 @@ Scoped commit (`git commit -- <files>`), mem0 summary, final report with the thr
 
 | PR | Status |
 | --- | --- |
-| PR-1 … PR-6, PR-7A, PR-7B, PR-8A, PR-8 … PR-15 | Not started |
+| PR-1 … PR-4 | Merged (PR #496) |
+| PR-5, PR-6 | In progress (Phase 2) |
+| PR-7A, PR-7B, PR-8A, PR-8 … PR-15 | Not started |
 
 ---
 

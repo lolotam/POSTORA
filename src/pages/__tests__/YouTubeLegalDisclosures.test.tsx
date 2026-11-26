@@ -78,6 +78,8 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("Published and Held for review queues");
     expect(text).toContain("top-level comments and replies");
     expect(text).toContain("edit or delete comments written by your channel");
+    expect(text).toContain("Suggest AI reply");
+    expect(text).toContain("sends that comment's text and the video title to the configured AI provider solely to draft a reply");
     expect(text).toContain("Moderate comments");
     expect(text).toContain("publishing or rejecting them");
     expect(text).toContain("moving an already-published comment to hold is unavailable at the current baseline");
@@ -115,6 +117,7 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("let you browse your uploaded videos and their full details");
     expect(text).toContain("Edit published video metadata only when that feature is enabled (currently disabled at the production baseline)");
     expect(text).toContain("Read, create, reply to, edit, delete, and moderate comments");
+    expect(text).toContain("send that comment's text and the video title to the configured AI provider solely to draft a reply");
     expect(text).toContain("Analytics Purpose Clause, Version 1, dated November 26, 2026");
     expect(text).toContain("Postora clears its stored OAuth credentials immediately");
     expect(text).toContain("revokes the Google grant when no other active connection of yours shares it");

@@ -18,7 +18,10 @@ import { useStage4Recovery } from "../application/useStage4Recovery";
 import { mergeReplyRows } from "../application/mergeReplyRows";
 import { draftKey, type DraftKind } from "../application/stage4Drafts";
 import { defaultYouTubeCommentsGateway } from "../infrastructure/supabaseYouTubeCommentsGateway";
-import { YouTubeCommentsGateway } from "../application/ports";
+import { defaultYouTubeReplySuggestionGateway } from "../infrastructure/supabaseReplySuggestionGateway";
+import type { YouTubeCommentsGateway, YouTubeReplySuggestionGateway } from "../application/ports";
+import { useReplySuggestion } from "../application/useReplySuggestion";
+import { getErrorStatus, handleAIError } from "@/lib/aiErrorHandler";
 import { isRebindReason, isStaleContextReason } from "../domain/errors";
 import { formatVideoDuration } from "../domain/formatVideoMeta";
 import { Stage4VideoThumbnail, StudioVideoPicker } from "./StudioVideoPicker";
@@ -89,6 +92,7 @@ export interface YouTubeCommentsScreenProps {
   userId: string;
   accountId: string;
   gateway?: YouTubeCommentsGateway;
+  replySuggestionGateway?: YouTubeReplySuggestionGateway;
 }
 
 /**
@@ -172,7 +176,12 @@ export function YouTubeCommentsScreen(props: YouTubeCommentsScreenProps): JSX.El
       )}
       <RecoveredBanners stage4={stage4} />
       <StudioVideoPicker stage4={stage4} />
-      <CommentsWorkspace stage4={stage4} contextKey={contextKey} onNotice={noticeForThisContext} />
+      <CommentsWorkspace
+        stage4={stage4}
+        contextKey={contextKey}
+        onNotice={noticeForThisContext}
+        replySuggestionGateway={props.replySuggestionGateway ?? defaultYouTubeReplySuggestionGateway}
+      />
     </div>
   );
 }
@@ -310,10 +319,11 @@ function ActiveVideoBar({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4
   );
 }
 
-function CommentsWorkspace({ stage4, contextKey, onNotice }: {
+function CommentsWorkspace({ stage4, contextKey, onNotice, replySuggestionGateway }: {
   stage4: ReturnType<typeof useYouTubeStage4>;
   contextKey: string;
   onNotice: (text: string | null) => void;
+  replySuggestionGateway: YouTubeReplySuggestionGateway;
 }): JSX.Element {
   const { t } = useTranslation("automation");
   return (
@@ -337,7 +347,7 @@ function CommentsWorkspace({ stage4, contextKey, onNotice }: {
       <div className="p-4 sm:p-5">
         {/* Composer drafts, open editors and reply panels live below this key,
             so they are discarded with the user, account or video they belong to. */}
-        <ThreadList key={contextKey} stage4={stage4} onNotice={onNotice} />
+        <ThreadList key={contextKey} stage4={stage4} onNotice={onNotice} replySuggestionGateway={replySuggestionGateway} />
       </div>
     </section>
   );
@@ -375,7 +385,11 @@ function ListTabs({ stage4 }: { stage4: ReturnType<typeof useYouTubeStage4> }): 
 
 // ---- the thread list -------------------------------------------------------------
 
-function ThreadList({ stage4, onNotice }: { stage4: ReturnType<typeof useYouTubeStage4>; onNotice: (text: string | null) => void }): JSX.Element {
+function ThreadList({ stage4, onNotice, replySuggestionGateway }: {
+  stage4: ReturnType<typeof useYouTubeStage4>;
+  onNotice: (text: string | null) => void;
+  replySuggestionGateway: YouTubeReplySuggestionGateway;
+}): JSX.Element {
   const { t } = useTranslation("automation");
   const videoId = stage4.effectiveVideoId;
 
@@ -417,6 +431,7 @@ function ThreadList({ stage4, onNotice }: { stage4: ReturnType<typeof useYouTube
               row={item.row}
               videoId={videoId}
               onNotice={onNotice}
+              replySuggestionGateway={replySuggestionGateway}
               inlineReplies={stage4.threads.items
                 .filter((other) => other.row.kind === "reply" && other.row.canonical_parent_id === item.row.comment_id)
                 .map((other) => other.row)}
@@ -440,11 +455,12 @@ function CommentCard(params: {
   row: Stage4CommentRow;
   videoId: string;
   onNotice: (text: string | null) => void;
+  replySuggestionGateway: YouTubeReplySuggestionGateway;
   reply?: boolean;
   /** The thread page's inline reply preview, merged with the reply pages. */
   inlineReplies?: Stage4CommentRow[];
 }): JSX.Element {
-  const { stage4, row, videoId, onNotice, reply = false, inlineReplies = [] } = params;
+  const { stage4, row, videoId, onNotice, replySuggestionGateway, reply = false, inlineReplies = [] } = params;
   const { t, i18n } = useTranslation("automation");
   const locale = i18n.resolvedLanguage ?? i18n.language;
   // The editors read what they hold from the draft store: this card can leave the
@@ -567,6 +583,11 @@ function CommentCard(params: {
             onNotice={onNotice}
             onCheckStatus={stage4.checkStatus}
             onAcknowledge={stage4.acknowledge}
+            aiReply={{
+              gateway: replySuggestionGateway,
+              videoTitle: stage4.videos.items.find((video) => video.id === videoId)?.title ?? "",
+              commentText: row.text,
+            }}
           />
         )}
         {composer === "edit" && (
@@ -589,7 +610,14 @@ function CommentCard(params: {
         )}
 
         {!reply && (
-          <ReplyBlock stage4={stage4} parent={row} videoId={videoId} onNotice={onNotice} inlineReplies={inlineReplies} />
+          <ReplyBlock
+            stage4={stage4}
+            parent={row}
+            videoId={videoId}
+            onNotice={onNotice}
+            inlineReplies={inlineReplies}
+            replySuggestionGateway={replySuggestionGateway}
+          />
         )}
 
         <DeleteOwnDialog stage4={stage4} row={row} open={deleteOpen} onOpenChange={setDeleteOpen} onNotice={onNotice} />
@@ -657,8 +685,9 @@ function ReplyBlock(params: {
   videoId: string;
   onNotice: (text: string | null) => void;
   inlineReplies?: Stage4CommentRow[];
+  replySuggestionGateway: YouTubeReplySuggestionGateway;
 }): JSX.Element | null {
-  const { stage4, parent, videoId, onNotice, inlineReplies = [] } = params;
+  const { stage4, parent, videoId, onNotice, inlineReplies = [], replySuggestionGateway } = params;
   const { t } = useTranslation("automation");
   const open = stage4.replyTargetsOpen[parent.comment_id] === true;
   const replies = useStage4Replies({
@@ -746,7 +775,15 @@ function ReplyBlock(params: {
       )}
       {allReplies.map((item) => (
         // The generation is part of the key so a rebind remounts the card and its editors (no draft or outcome crosses a binding).
-        <CommentCard key={`${stage4.threads.bindingGeneration ?? 0}:${item.row.comment_id}`} stage4={stage4} row={item.row} videoId={videoId} onNotice={onNotice} reply />
+        <CommentCard
+          key={`${stage4.threads.bindingGeneration ?? 0}:${item.row.comment_id}`}
+          stage4={stage4}
+          row={item.row}
+          videoId={videoId}
+          onNotice={onNotice}
+          replySuggestionGateway={replySuggestionGateway}
+          reply
+        />
       ))}
       {replies.nextCursor && (
         <Button size="sm" variant="outline" onClick={replies.loadMore} disabled={replies.loading}>
@@ -798,8 +835,17 @@ function Composer(params: {
   onTextChange?: (text: string) => void;
   /** Called only when a confirmed outcome also empties the composer; newer unsent text keeps its stored draft. */
   onConfirmed?: () => void;
+  /** Present only for a reply composer, never for a new thread or an own-comment edit. */
+  aiReply?: {
+    gateway: YouTubeReplySuggestionGateway;
+    videoTitle: string;
+    commentText: string;
+  };
 }): JSX.Element {
   const { t } = useTranslation("automation");
+  const { suggestReply, isSuggesting } = useReplySuggestion(params.aiReply?.gateway);
+  const [replaceDraftOpen, setReplaceDraftOpen] = useState(false);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const inputId = useId();
   const [text, setText] = useState(params.initialText ?? "");
   const textRef = useRef(text);
@@ -893,7 +939,34 @@ function Composer(params: {
     show(outcome, true);
   };
 
+  const requestSuggestion = async () => {
+    if (!params.aiReply || isSuggesting) return;
+    setSuggestionError(null);
+    const result = await suggestReply({
+      videoTitle: params.aiReply.videoTitle,
+      commentText: params.aiReply.commentText,
+      language: "auto",
+    });
+    if (!mounted.current) return;
+    if (result.error || result.suggestion === null) {
+      const status = getErrorStatus(result.error);
+      if (status === 401 || status === 402 || status === 429) handleAIError(result.error, "YouTube AI reply");
+      setSuggestionError(t("youtubeStage4.ai.failed", "Could not generate a reply suggestion. Your draft was not changed."));
+      return;
+    }
+    textRef.current = result.suggestion;
+    setText(result.suggestion);
+    params.onTextChange?.(result.suggestion);
+    inputRef.current?.focus();
+  };
+
+  const suggest = () => {
+    if (textRef.current.trim()) setReplaceDraftOpen(true);
+    else void requestSuggestion();
+  };
+
   return (
+    <>
     <div className="space-y-2.5 rounded-xl border bg-muted/20 p-3.5" data-testid="yt-stage4-composer">
       <label className="sr-only" htmlFor={inputId}>{params.placeholder}</label>
       <textarea
@@ -907,10 +980,18 @@ function Composer(params: {
           setText(event.target.value);
           params.onTextChange?.(event.target.value);
         }}
-        disabled={busy}
+        disabled={busy || isSuggesting}
       />
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={() => void submit()} disabled={busy || !text.trim()}>
+        {params.aiReply && (
+          <Button size="sm" variant="outline" disabled={busy || isSuggesting} onClick={suggest}>
+            {isSuggesting ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : null}
+            {isSuggesting
+              ? t("youtubeStage4.ai.suggesting", "Suggesting…")
+              : t("youtubeStage4.ai.suggest", "Suggest AI reply")}
+          </Button>
+        )}
+        <Button size="sm" onClick={() => void submit()} disabled={busy || isSuggesting || !text.trim()}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : null}
           {params.submitLabel}
         </Button>
@@ -928,6 +1009,7 @@ function Composer(params: {
           </Button>
         )}
       </div>
+      {suggestionError && <p role="alert" className="text-xs text-destructive">{suggestionError}</p>}
       {localOutcome && (
         <OutcomeLine
           outcome={localOutcome}
@@ -936,6 +1018,28 @@ function Composer(params: {
         />
       )}
     </div>
+    <Dialog open={replaceDraftOpen} onOpenChange={setReplaceDraftOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("youtubeStage4.ai.replaceDraftTitle", "Replace your current draft?")}</DialogTitle>
+          <DialogDescription>
+            {t("youtubeStage4.ai.replaceDraftBody", "An AI suggestion will replace the reply you have already written. Your draft is not sent until you click Reply.")}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setReplaceDraftOpen(false)}>
+            {t("youtubeStage4.ai.keep", "Keep my draft")}
+          </Button>
+          <Button onClick={() => {
+            setReplaceDraftOpen(false);
+            void requestSuggestion();
+          }}>
+            {t("youtubeStage4.ai.replace", "Replace with AI suggestion")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 

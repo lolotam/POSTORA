@@ -110,7 +110,7 @@ const Privacy = () => {
               <li>Display your YouTube channel information and let you browse your uploaded videos and their full details</li>
               <li>Edit published video metadata only when that feature is enabled (currently disabled at the production baseline) and you instruct Postora to make that change; Postora never replaces existing video media bytes or deletes videos</li>
               <li>Authenticate your identity and maintain your connected account session</li>
-              <li>Read, create, reply to, edit, delete, and moderate comments on your own videos when you use comment management</li>
+              <li>Read, create, reply to, edit, delete, and moderate comments on your own videos when you use comment management (and, when you explicitly request an AI reply suggestion on a comment, send that comment's text and the video title to the configured AI provider solely to draft a reply in your composer without auto-sending it)</li>
               <li>After your connection-scoped in-app acceptance of Analytics Purpose Clause Version 1 (November 26, 2026), display your own channel and video analytics to you alone, on demand and without storing the numbers</li>
             </ul>
 

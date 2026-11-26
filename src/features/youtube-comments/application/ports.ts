@@ -8,6 +8,17 @@ import type {
   Stage4BanConfirmationPayload,
 } from "../domain/types";
 
+export interface YouTubeReplySuggestionInput {
+  videoTitle: string;
+  commentText: string;
+  language?: "english" | "arabic" | "auto";
+  signal?: AbortSignal;
+}
+
+export interface YouTubeReplySuggestionGateway {
+  suggestReply(input: YouTubeReplySuggestionInput): Promise<string>;
+}
+
 export interface YouTubeCommentsGateway {
   capabilities(accountId: string): Promise<Stage4CapabilitiesPayload>;
   videoPage(accountId: string, cursor?: string | null): Promise<Stage4VideoPagePayload>;

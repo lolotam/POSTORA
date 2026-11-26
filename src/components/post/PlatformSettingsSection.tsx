@@ -548,6 +548,7 @@ export function PlatformSettingsSection({
                   settings={youtubeSettingsState}
                   onSettingsChange={onYoutubeSettingsChange}
                   hasVideo={hasVideo}
+                  videoSourceUrl={files.find((f) => f.fileType === "video")?.previewUrl ?? files.find((f) => f.fileType === "video")?.cloudinaryUrl ?? null}
                   autoThumbnails={platformSettings.youtubeAutoThumbnails}
                   selectedAutoThumbnail={platformSettings.youtubeSelectedAutoThumbnail}
                   onSelectAutoThumbnail={platformSettings.setYoutubeSelectedAutoThumbnail}
