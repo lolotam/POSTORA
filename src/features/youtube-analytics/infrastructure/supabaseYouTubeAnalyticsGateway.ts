@@ -20,6 +20,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isBreakdownMetricValid(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.key === "string"
+    && typeof value.unit === "string"
+    && (value.value === null || (typeof value.value === "number" && Number.isFinite(value.value)));
+}
+
+function isBreakdownRowValid(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.key === "string"
+    && Array.isArray(value.metrics)
+    && value.metrics.every(isBreakdownMetricValid);
+}
+
+function isRetentionPointValid(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.ratio === "number"
+    && Number.isFinite(value.ratio)
+    && (value.watch_ratio === null || (typeof value.watch_ratio === "number" && Number.isFinite(value.watch_ratio)))
+    && (value.relative_performance === null || (typeof value.relative_performance === "number" && Number.isFinite(value.relative_performance)));
+}
+
 function isOperationDataValid(operation: YouTubeAnalyticsRequest["operation"], data: Record<string, unknown>): boolean {
   switch (operation) {
     case "status":
@@ -53,9 +75,12 @@ function isOperationDataValid(operation: YouTubeAnalyticsRequest["operation"], d
     case "devices":
       return typeof data.dimension === "string"
         && Array.isArray(data.rows)
+        && data.rows.every(isBreakdownRowValid)
         && typeof data.has_data === "boolean";
     case "retention":
-      return Array.isArray(data.points) && typeof data.has_data === "boolean";
+      return Array.isArray(data.points)
+        && data.points.every(isRetentionPointValid)
+        && typeof data.has_data === "boolean";
   }
 }
 

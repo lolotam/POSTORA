@@ -28,7 +28,7 @@ export interface YouTubeAnalyticsCsvExportInput {
 
 type CsvCell = string | number | null | undefined;
 
-const FORMULA_PREFIX_RE = /^[=+\-@\t\r]/;
+const FORMULA_PREFIX_RE = /^[=+\-@\t\r\n＝＋－＠]/;
 const NEEDS_QUOTING_RE = /[,"\r\n]/;
 
 export function sanitizeCsvStringCell(value: string): string {

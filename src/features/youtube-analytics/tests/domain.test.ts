@@ -137,6 +137,11 @@ describe("CSV export", () => {
     expect(sanitizeCsvStringCell("@import")).toBe("'@import");
     expect(sanitizeCsvStringCell("\thello")).toBe("'\thello");
     expect(sanitizeCsvStringCell("\rhello")).toBe("'\rhello");
+    expect(sanitizeCsvStringCell("\nhello")).toBe("'\nhello");
+    expect(sanitizeCsvStringCell("＝CMD()")).toBe("'＝CMD()");
+    expect(sanitizeCsvStringCell("＋1")).toBe("'＋1");
+    expect(sanitizeCsvStringCell("－1")).toBe("'－1");
+    expect(sanitizeCsvStringCell("＠import")).toBe("'＠import");
     expect(sanitizeCsvStringCell("Normal title")).toBe("Normal title");
   });
 

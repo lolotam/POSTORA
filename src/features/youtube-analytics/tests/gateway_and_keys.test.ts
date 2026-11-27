@@ -120,7 +120,13 @@ describe("Supabase gateway contract fixtures", () => {
     fetchMock.mockResolvedValueOnce(answer(success({ dimension: "country", has_data: false })));
     await expect(gateway.geography(params)).rejects.toBeInstanceOf(YouTubeAnalyticsClientError);
 
+    fetchMock.mockResolvedValueOnce(answer(success({ dimension: "country", has_data: true, rows: [null] })));
+    await expect(gateway.geography(params)).rejects.toBeInstanceOf(YouTubeAnalyticsClientError);
+
     fetchMock.mockResolvedValueOnce(answer(success({ has_data: true })));
+    await expect(gateway.retention({ ...params, videoId: VIDEO_ID })).rejects.toBeInstanceOf(YouTubeAnalyticsClientError);
+
+    fetchMock.mockResolvedValueOnce(answer(success({ has_data: true, points: [null] })));
     await expect(gateway.retention({ ...params, videoId: VIDEO_ID })).rejects.toBeInstanceOf(YouTubeAnalyticsClientError);
   });
 

@@ -482,6 +482,12 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
 
       {requestedWindow ? (
         <p className="text-sm text-muted-foreground">
+          {activeAccount ? (
+            <>
+              <span className="font-medium text-foreground">{t("youtube.channel", "Channel")}: {activeAccount.title}</span>
+              {" · "}
+            </>
+          ) : null}
           {t("youtube.periodLine", "Period:")} <LtrValue>{requestedWindow.start_date} – {requestedWindow.end_date}</LtrValue>, {t("youtube.pacificTime", "Pacific time")}
         </p>
       ) : null}
@@ -513,28 +519,29 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
             aria-labelledby={`youtube-analytics-tab-${activeTab}`}
             className="space-y-4"
           >
-            {activeTab === "overview" ? (
-              <>
-                {summary.isError ? <AnalyticsNotice error={summary.error} onRetry={() => void summary.refetch()} />
-                  : summary.data ? <OverviewCards data={summary.data.data} />
-                    : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
-                {daily.isError ? <AnalyticsNotice error={daily.error} onRetry={() => void daily.refetch()} />
-                  : daily.data ? <DailyTrend data={daily.data.data} requestedWindow={requestedWindow} />
-                    : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
-                {topVideos.isError && !topVideos.data ? <AnalyticsNotice error={topVideos.error} onRetry={() => void topVideos.refetch()} />
-                  : topVideos.data ? (
-                    <TopVideosTable
-                      data={topVideos.data}
-                      onInspect={inspectVideo}
-                      hasNextPage={topVideos.hasNextPage}
-                      isFetchingNextPage={topVideos.isFetchingNextPage || isRefreshing}
-                      onLoadMore={loadNextTopVideosPage}
-                      nextPageError={topVideos.error}
-                      onRetryNextPage={retryNextTopVideosPage}
-                    />
-                  ) : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
-              </>
-            ) : null}
+            <div
+              hidden={activeTab !== "overview"}
+              className={activeTab === "overview" ? "space-y-4" : "no-print hidden"}
+            >
+              {summary.isError ? <AnalyticsNotice error={summary.error} onRetry={() => void summary.refetch()} />
+                : summary.data ? <OverviewCards data={summary.data.data} />
+                  : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
+              {daily.isError ? <AnalyticsNotice error={daily.error} onRetry={() => void daily.refetch()} />
+                : daily.data ? <DailyTrend data={daily.data.data} requestedWindow={requestedWindow} />
+                  : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
+              {topVideos.isError && !topVideos.data ? <AnalyticsNotice error={topVideos.error} onRetry={() => void topVideos.refetch()} />
+                : topVideos.data ? (
+                  <TopVideosTable
+                    data={topVideos.data}
+                    onInspect={inspectVideo}
+                    hasNextPage={topVideos.hasNextPage}
+                    isFetchingNextPage={topVideos.isFetchingNextPage || isRefreshing}
+                    onLoadMore={loadNextTopVideosPage}
+                    nextPageError={topVideos.error}
+                    onRetryNextPage={retryNextTopVideosPage}
+                  />
+                ) : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
+            </div>
             {activeTab === "audience" ? (
               <>
                 {geography.isError ? <AnalyticsNotice error={geography.error} onRetry={() => void geography.refetch()} />

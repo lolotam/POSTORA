@@ -853,6 +853,8 @@ describe("lazy report tabs, the retention curve and the export", () => {
     const view = await renderScreen(gateway);
     const titleNode = await screen.findByText("Fixture video");
     expect(titleNode.closest(".no-print")).toBeNull();
+    const channelLabelNode = screen.getByText("Channel: Fixture channel");
+    expect(channelLabelNode.closest(".no-print")).toBeNull();
 
     const details = view.container.querySelector("details")!;
     expect(details.open).toBe(false);
