@@ -1,4 +1,4 @@
-// deno-lint-ignore-file no-explicit-any no-import-prefix
+// deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   handleTranscribeMediaRequest,
@@ -129,7 +129,7 @@ function createFakeSupabaseAdmin(options: FakeSupabaseOptions = {}) {
       : []),
   ];
 
-  const supabaseAdmin: any = {
+  const supabaseAdmin = {
     systemLogs,
     auth: {
       getUser: (_token: string) =>
@@ -186,13 +186,12 @@ function createFakeSupabaseAdmin(options: FakeSupabaseOptions = {}) {
           },
         };
       }
-      const queryChain: any = {
-        eq: () => queryChain,
-        in: () => Promise.resolve({ data: [], error: null }),
-        limit: () => queryChain,
-        single: () => Promise.resolve({ data: null, error: null }),
-        maybeSingle: () => Promise.resolve({ data: null, error: null }),
-      };
+      const queryChain: Record<string, unknown> = {};
+      queryChain.eq = () => queryChain;
+      queryChain.in = () => Promise.resolve({ data: [], error: null });
+      queryChain.limit = () => queryChain;
+      queryChain.single = () => Promise.resolve({ data: null, error: null });
+      queryChain.maybeSingle = () => Promise.resolve({ data: null, error: null });
       return {
         select: () => queryChain,
       };

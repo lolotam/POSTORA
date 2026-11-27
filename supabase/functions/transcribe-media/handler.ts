@@ -1,4 +1,4 @@
-// deno-lint-ignore-file no-explicit-any no-import-prefix
+// deno-lint-ignore-file no-import-prefix
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCategoryAiSettings } from "../_shared/ai-fallback.ts";
 import { createLogger } from "../_shared/logging.ts";
@@ -32,8 +32,29 @@ export interface TranscribeMediaLogger {
   error: (message: string, metadata?: Record<string, unknown>, user_id?: string) => Promise<void> | void;
 }
 
+export interface TranscribeSupabaseQueryChain {
+  eq: (column: string, value: unknown) => TranscribeSupabaseQueryChain;
+  in: (
+    column: string,
+    values: readonly string[],
+  ) => Promise<{ data: Array<{ key: string; value: unknown }> | null; error: unknown }>;
+  limit: (count: number) => TranscribeSupabaseQueryChain;
+  single: () => Promise<{ data: Record<string, unknown> | null; error: unknown }>;
+  maybeSingle?: () => Promise<{ data: Record<string, unknown> | null; error: unknown }>;
+}
+
+export interface TranscribeSupabaseClient {
+  auth: {
+    getUser: (token: string) => Promise<{ data: { user: { id: string } | null }; error: unknown }>;
+  };
+  from: (table: string) => {
+    select: (columns?: string) => TranscribeSupabaseQueryChain;
+    insert?: (row: Record<string, unknown>) => Promise<{ error: unknown }>;
+  };
+}
+
 export interface TranscribeMediaDeps {
-  supabaseAdmin?: any;
+  supabaseAdmin?: unknown;
   fetchFn?: typeof fetch;
   logger?: TranscribeMediaLogger;
   vercelTranscribeFn?: (apiKey: string, modelId: string, audio: Uint8Array) => Promise<TranscriptionResult>;
@@ -170,15 +191,17 @@ async function downloadMedia(mediaUrl: string, fetchFn: typeof fetch): Promise<B
   return res.blob();
 }
 
-async function getOpenAIKeyFromDB(supabaseAdmin: any): Promise<string | null> {
+async function getOpenAIKeyFromDB(supabaseAdmin: unknown): Promise<string | null> {
   try {
-    const { data } = await supabaseAdmin
+    const client = supabaseAdmin as TranscribeSupabaseClient;
+    const { data } = await client
       .from("provider_api_keys")
       .select("api_key")
       .eq("provider_code", "openai")
       .limit(1)
       .single();
-    return data?.api_key || null;
+    const key = data?.api_key;
+    return typeof key === "string" && key.length > 0 ? key : null;
   } catch {
     return null;
   }
@@ -192,7 +215,7 @@ async function transcribeWithOpenAI(
   audioBlob: Blob,
   model: string,
   fetchFn: typeof fetch,
-  supabaseAdmin?: any,
+  supabaseAdmin?: unknown,
 ): Promise<TranscriptionResult> {
   let openaiKey = Deno.env.get("OPENAIAPIKEY") || Deno.env.get("OPENAI_API_KEY");
 
@@ -353,7 +376,7 @@ async function runTranscription(
   audioBlob: Blob,
   model: string,
   fetchFn: typeof fetch,
-  supabaseAdmin?: any,
+  supabaseAdmin?: unknown,
   provider?: string,
   vercelTranscribeFn = vercelTranscribe,
 ): Promise<TranscriptionResult> {
@@ -401,7 +424,8 @@ export async function handleTranscribeMediaRequest(
   }
 
   const fetchFn = deps.fetchFn ?? globalThis.fetch;
-  let supabaseAdmin: any = deps.supabaseAdmin ?? null;
+  let supabaseAdmin: TranscribeSupabaseClient | null =
+    (deps.supabaseAdmin as TranscribeSupabaseClient | undefined) ?? null;
   let userId: string | null = null;
 
   try {
@@ -409,10 +433,15 @@ export async function handleTranscribeMediaRequest(
       supabaseAdmin = createClient(
         Deno.env.get("SUPABASE_URL")!,
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-      );
+      ) as unknown as TranscribeSupabaseClient;
     }
     const logger: TranscribeMediaLogger =
-      deps.logger ?? createLogger(supabaseAdmin, "transcribe-media", "edge");
+      deps.logger ??
+      createLogger(
+        supabaseAdmin as unknown as Parameters<typeof createLogger>[0],
+        "transcribe-media",
+        "edge",
+      );
 
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -440,7 +469,10 @@ export async function handleTranscribeMediaRequest(
       });
     }
 
-    const sttSettings = await fetchCategoryAiSettings(supabaseAdmin, "stt");
+    const sttSettings = await fetchCategoryAiSettings(
+      supabaseAdmin as unknown as Parameters<typeof fetchCategoryAiSettings>[0],
+      "stt",
+    );
 
     const { data: appSettingsRows } = await supabaseAdmin
       .from("app_settings")
@@ -663,7 +695,12 @@ export async function handleTranscribeMediaRequest(
     if (supabaseAdmin) {
       try {
         const outerLogger: TranscribeMediaLogger =
-          deps.logger ?? createLogger(supabaseAdmin, "transcribe-media", "edge");
+          deps.logger ??
+          createLogger(
+            supabaseAdmin as unknown as Parameters<typeof createLogger>[0],
+            "transcribe-media",
+            "edge",
+          );
         await outerLogger.error(
           `Transcription unhandled error (${details.errorCode})`,
           {
