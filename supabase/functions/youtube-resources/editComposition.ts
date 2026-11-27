@@ -1,17 +1,20 @@
 /**
  * Production composition of the published-edit domain logic.
  *
- * The gate is a compile-time constant OFF. There is no environment variable,
- * flag table or feature switch that can turn it on: activation requires a code
- * change backed by approved D1 (If-Match enforcement) and D5 (fixture/rollout)
- * evidence. Tests construct the same composition with `enabled: true` and a
- * synthetic provider, so the connected path is exercised without live writes.
+ * Activated for Phase 4A (title, description, tags, category) after the
+ * live If-Match conditional-write rehearsal and OD-1 activation decision:
+ * - docs/reports/2026-11-27-youtube-if-match-rehearsal.md
+ * - docs/decisions/2026-11-27-youtube-phase4a-if-match-and-edit-activation.md
+ *
+ * Tests can still construct the composition with `enabled: false` or with a
+ * synthetic provider to verify both gated and connected behavior offline.
  */
 
 import {
   createEditSnapshot,
   EditFailure,
   planEditUpdate,
+  validateEditChanges,
   verifyEditResult,
   type EditFailureCode,
   type EditSnapshot,
@@ -20,16 +23,24 @@ import type { YouTubeEditPort } from "./handler.ts";
 import type { YouTubeEditProvider } from "./editProvider.ts";
 import type { YouTubeCategoryClient } from "./categoryClient.ts";
 
-export const PUBLISHED_EDIT_WRITE_ENABLED = false as const;
+export const PUBLISHED_EDIT_WRITE_ENABLED = true as const;
+
+export type EditWriteAuthorizationResult =
+  | { ok: true }
+  | { ok: false; code: "rate_limited" | "quota_exceeded" | "upstream_unavailable"; retryAfterSeconds?: number };
 
 /**
  * The two fail-closed checks that stand between a validated plan and a
  * provider write. Both are ports so the offline composition can prove they
- * are consulted; production leaves the whole edit port disabled.
+ * are consulted before any category catalog read or provider write.
  */
 export interface EditWriteGuard {
   /** Fail-closed per-owner mutation rate/quota gate. */
-  authorizeWrite(input: { accountId: string; ownerId: string; channelId: string }): Promise<boolean>;
+  authorizeWrite(input: {
+    accountId: string;
+    ownerId: string;
+    channelId: string;
+  }): Promise<EditWriteAuthorizationResult>;
   /** Re-read account, channel binding and token identity just before dispatch. */
   stillBound(input: {
     accountId: string;
@@ -71,6 +82,10 @@ function toEditFailureCode(error: unknown): EditFailureCode | null {
   return error instanceof EditFailure ? error.code : null;
 }
 
+function toRetryAfterSeconds(error: unknown): number | undefined {
+  return error instanceof EditFailure ? error.retryAfterSeconds : undefined;
+}
+
 /** The channel's catalog region when the account recorded one, else US. */
 function effectiveRegion(accountMetadata: unknown): string {
   const metadata = (accountMetadata ?? {}) as Record<string, unknown>;
@@ -102,6 +117,7 @@ export function createConnectedEditPort(inputs: EditCompositionInputs): YouTubeE
 
   return {
     failureCode: toEditFailureCode,
+    retryAfterSeconds: toRetryAfterSeconds,
     async snapshot({ accountId, videoId, ownerId }) {
       const { accessToken, channelId } = await context(accountId, ownerId);
       const video = await provider.getVideo(accessToken, { videoId, channelId });
@@ -126,12 +142,26 @@ export function createConnectedEditPort(inputs: EditCompositionInputs): YouTubeE
         fetchedAt: clock.now().toISOString(),
       });
       if (snapshot.revision !== baseRevision) throw new EditFailure("edit_conflict", "The video changed since it was opened.");
+      // Validate shape, bounds, and privacy confirmation BEFORE debiting the
+      // per-user write counters or the project-wide 50-unit write budget.
+      validateEditChanges(changes, snapshot);
+      if (snapshot.restrictions.unknownFieldsBlocked) {
+        throw new EditFailure("provider_unsupported", "A writable sibling is not yet understood.");
+      }
+      if (changes.privacyStatus !== undefined && (!privacyConfirmation || privacyConfirmation.to !== changes.privacyStatus)) {
+        throw new EditFailure("invalid_request", "The privacy change was not confirmed.");
+      }
 
       // The same quota gate that fences the provider write also fences the
       // provider CATALOG read made for this write. Otherwise a rejected write
       // could still spend a Google quota unit listing categories.
-      if (!await writeGuard.authorizeWrite({ accountId, ownerId, channelId })) {
-        throw new EditFailure("upstream_unavailable", "The write quota is exhausted. Try again later.");
+      const authResult = await writeGuard.authorizeWrite({ accountId, ownerId, channelId });
+      if (!authResult.ok) {
+        throw new EditFailure(
+          authResult.code,
+          "The write quota is exhausted. Try again later.",
+          { retryAfterSeconds: authResult.retryAfterSeconds },
+        );
       }
       const catalog = await categories.list(accessToken, { region, locale: "en" });
       const assignableCategoryIds = catalog.ok ? new Set(catalog.value.filter((option) => option.assignable).map((option) => option.id)) : undefined;
@@ -157,7 +187,14 @@ export function createConnectedEditPort(inputs: EditCompositionInputs): YouTubeE
       const reread = await provider.getVideo(accessToken, { videoId, channelId });
       if (!reread.ok) throw new EditFailure("outcome_unknown", "The result could not be verified.");
       verifyEditResult({ responseId: written.id, reread: reread.value, expectedVideoId: videoId, plan });
-      return { snapshot, verified: true };
+      const verifiedSnapshot = await createEditSnapshot({
+        video: reread.value,
+        ownerId,
+        accountId,
+        expectedChannelId: channelId,
+        fetchedAt: clock.now().toISOString(),
+      });
+      return { snapshot: verifiedSnapshot, verified: true };
     },
   };
 }

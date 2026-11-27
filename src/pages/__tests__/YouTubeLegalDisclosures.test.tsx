@@ -63,15 +63,33 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("Set a custom thumbnail");
     expect(text).toContain("thumbnails.set");
     expect(text).toContain("Edit published video metadata");
-    expect(text).toContain("currently disabled at the production baseline");
     expect(text).toContain("videos.update");
-    expect(text).toContain("title, description, tags, category, privacy, language, made-for-kids and synthetic-media declarations");
+    expect(text).toContain("title, description, tags");
+    expect(text).toContain("and category");
     expect(text).toContain("Postora does not replace existing video media bytes or delete your videos.");
     expect(text).toContain("can add a newly uploaded video to an existing playlist you choose through the narrower force-ssl scope");
     expect(text).toContain("does not create, rename, reorder, or delete playlists or remove playlist items, change channel settings, replace existing video media bytes, or delete videos");
     expect(text).not.toContain("does not manage playlists or channel settings");
     expect(text).not.toContain("(managing playlists, editing or deleting existing videos, channel settings)");
     expect(text).not.toContain("This scope does not allow us to edit or delete your existing videos.");
+  });
+
+  it("describes published metadata editing as a live, verified and limited write", () => {
+    const { container } = renderPage(<GoogleApiDisclosure />);
+    const text = pageText(container);
+
+    // The edit path is live on /youtube, not behind a gate.
+    expect(text).not.toContain("currently disabled at the production baseline");
+    expect(text).not.toContain("hard-off activation gate");
+    expect(text).toContain("/youtube");
+    // The write is conditional and the saved result is verified.
+    expect(text).toContain("If-Match");
+    expect(text).toContain("conditional write");
+    expect(text).toContain("confirm the saved values");
+    // The limiter and the shared budget are disclosed with their numbers.
+    expect(text).toContain("10 per 10 minutes");
+    expect(text).toContain("50 per 24 hours");
+    expect(text).toContain("4,000 units per day");
   });
 
   it("discloses replacing the thumbnail of a video that was already uploaded", () => {
@@ -185,10 +203,10 @@ describe("YouTube legal disclosures", () => {
     const text = pageText(container);
 
     expect(text).toContain("Your uploaded videos and their details when you browse your channel in Postora");
-    expect(text).toContain("Published video metadata when published metadata editing is enabled and you instruct Postora to edit details");
+    expect(text).toContain("Published video metadata (title, description, tags and category) when you instruct Postora to edit a video you already uploaded");
     expect(text).toContain("The playlists of your channel (playlist ID, title, privacy status) when you open YouTube publishing settings for a single connected channel or choose a destination playlist for a video you publish");
     expect(text).toContain("let you browse your uploaded videos and their full details");
-    expect(text).toContain("Edit published video metadata only when that feature is enabled (currently disabled at the production baseline)");
+    expect(text).toContain("Edit published video metadata (title, description, tags and category) only when you instruct Postora to make that change");
     expect(text).toContain("Replace the thumbnail of a video you already uploaded with a JPEG or PNG image from your own media library, only when you pick the image and confirm the change");
     expect(text).toContain("The bytes of a JPEG or PNG image from your own Postora media library when you replace the thumbnail of a video you already uploaded");
     expect(text).toContain("List your channel's playlists so you can choose a destination playlist when publishing, and add a newly uploaded video to the playlist you select");
@@ -213,7 +231,7 @@ describe("YouTube legal disclosures", () => {
 
     expect(text).toContain("video and Short publishing");
     expect(text).toContain("channel and uploaded-video browsing");
-    expect(text).toContain("published video metadata editing (when enabled; currently disabled at the production baseline)");
+    expect(text).toContain("published video metadata editing (title, description, tags and category)");
     expect(text).toContain("comment creation and moderation");
     expect(text).toContain("on-demand channel and video analytics");
     expect(text).toContain("accept the current Analytics Purpose Clause inside Postora for that connection");

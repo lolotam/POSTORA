@@ -79,13 +79,19 @@ export type EditFailureCode =
   | "invalid_request"
   | "provider_unsupported"
   | "reconnect_required"
+  | "rate_limited"
+  | "quota_exceeded"
   | "upstream_unavailable"
   | "outcome_unknown";
 
 export class EditFailure extends Error {
-  constructor(readonly code: EditFailureCode, message: string) {
+  readonly retryAfterSeconds?: number;
+  constructor(readonly code: EditFailureCode, message: string, options?: { retryAfterSeconds?: number }) {
     super(message);
     this.name = "EditFailure";
+    if (options?.retryAfterSeconds !== undefined) {
+      this.retryAfterSeconds = options.retryAfterSeconds;
+    }
   }
 }
 
@@ -154,7 +160,18 @@ export async function createEditSnapshot(args: {
   };
 }
 
-function validateChanges(changes: EditChanges, snapshot: EditSnapshot): void {
+const UTF8_ENCODER = new TextEncoder();
+
+function measureYouTubeTagsLength(tags: readonly string[]): number {
+  if (tags.length === 0) return 0;
+  let total = tags.length - 1;
+  for (const tag of tags) {
+    total += tag.length + (/\s/.test(tag) ? 2 : 0);
+  }
+  return total;
+}
+
+export function validateEditChanges(changes: EditChanges, snapshot: EditSnapshot): void {
   const keys = Object.keys(changes);
   if (keys.length === 0) throw new EditFailure("invalid_request", "No changes were supplied.");
   for (const key of keys) {
@@ -163,8 +180,17 @@ function validateChanges(changes: EditChanges, snapshot: EditSnapshot): void {
   if (changes.title !== undefined && (changes.title.trim().length === 0 || changes.title.length > 100 || /[<>]/.test(changes.title))) {
     throw new EditFailure("invalid_request", "Invalid title.");
   }
-  if (changes.description !== undefined && (changes.description.length > 5000 || /[<>]/.test(changes.description))) {
+  if (changes.description !== undefined && (UTF8_ENCODER.encode(changes.description).byteLength > 5000 || /[<>]/.test(changes.description))) {
     throw new EditFailure("invalid_request", "Invalid description.");
+  }
+  if (changes.tags !== undefined) {
+    if (
+      !Array.isArray(changes.tags) ||
+      changes.tags.some((tag) => typeof tag !== "string" || tag.trim().length === 0 || tag.trim() !== tag || /[<>]/.test(tag)) ||
+      measureYouTubeTagsLength(changes.tags) > 500
+    ) {
+      throw new EditFailure("invalid_request", "Invalid tags.");
+    }
   }
   if (changes.categoryId !== undefined && !/^\d{1,4}$/.test(changes.categoryId)) {
     throw new EditFailure("invalid_request", "Invalid category.");
@@ -191,7 +217,7 @@ export async function planEditUpdate(args: {
   /** The provider's assignable category ids for the creator's region. */
   assignableCategoryIds?: ReadonlySet<string>;
 }): Promise<UpdatePlan> {
-  validateChanges(args.changes, args.snapshot);
+  validateEditChanges(args.changes, args.snapshot);
   if (args.changes.categoryId !== undefined && args.assignableCategoryIds &&
       !args.assignableCategoryIds.has(args.changes.categoryId)) {
     throw new EditFailure("invalid_request", "The selected category is not assignable in this region.");

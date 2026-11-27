@@ -81,12 +81,12 @@ describe("YouTubeVideoEditCard", () => {
         video={video}
         fetchedAt="2026-11-20T10:00:00.000Z"
         canEdit={false}
-        disabledReason="Editing is not enabled until conditional write enforcement is verified."
+        disabledReason="Editing video details is currently unavailable for this channel."
       />,
     );
 
     expect(screen.getByRole("button", { name: "Edit video details" })).toBeDisabled();
-    expect(screen.getByText(/conditional write enforcement/)).toBeInTheDocument();
+    expect(screen.getByText(/currently unavailable for this channel/)).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
@@ -106,40 +106,202 @@ describe("YouTubeVideoEditCard", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
-  it("reports saved, conflict and unknown results through the injected save seam", async () => {
-    const outcomes = ["saved", "edit_conflict", "outcome_unknown"] as const;
-    for (const expected of outcomes) {
-      cleanup();
-      const onSave = vi.fn().mockResolvedValue(expected);
-      await renderUi(
-        <YouTubeVideoEditCard
-          video={video}
-          fetchedAt="2026-11-20T10:00:00.000Z"
-          canEdit
-          disabledReason=""
-          accountId="acc-1"
-          onSave={onSave}
-          onSnapshot={vi.fn().mockResolvedValue("rev-1")}
-        />,
-      );
-      fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
-      fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed" } });
-      const save = screen.getByRole("button", { name: "Save" });
-      await waitFor(() => expect(save).not.toBeDisabled());
-      fireEvent.click(save);
+  it("offers no visibility confirmation, because privacy is not part of this activation", async () => {
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
 
-      await waitFor(() => expect(onSave).toHaveBeenCalledWith({
-        title: "Renamed",
-        categoryId: "998",
-        baseRevision: "rev-1",
-      }));
-      expect(await screen.findByRole("status")).toBeInTheDocument();
-      expect(screen.getByRole("status").textContent).toContain(
-        expected === "saved" ? "match your changes"
-          : expected === "edit_conflict" ? "Review the latest details"
-            : "may have saved",
-      );
-    }
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByText(/changes who can see the video/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Visibility")).not.toBeInTheDocument();
+  });
+
+  it("starts the description and the tag field from the video the server confirmed", async () => {
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+
+    expect(screen.getByLabelText("Description")).toHaveValue("Body text");
+    expect(screen.getByLabelText("Tags (comma-separated)")).toHaveValue("one");
+  });
+
+  it("saves the title, the description, the tags and the category as one draft", async () => {
+    const onSave = vi.fn().mockResolvedValue("saved");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSave={onSave}
+        onSnapshot={vi.fn().mockResolvedValue("rev-1")}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed" } });
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "New body" } });
+    fireEvent.change(screen.getByLabelText("Tags (comma-separated)"), { target: { value: "alpha, beta ,, gamma" } });
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({
+      title: "Renamed",
+      description: "New body",
+      tags: ["alpha", "beta", "gamma"],
+      categoryId: "998",
+      baseRevision: "rev-1",
+    }));
+  });
+
+  it("refuses a draft YouTube would reject, before the request leaves the page", async () => {
+    const onSave = vi.fn().mockResolvedValue("saved");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSave={onSave}
+        onSnapshot={vi.fn().mockResolvedValue("rev-1")}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).not.toBeDisabled());
+
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "   " } });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Fine" } });
+    expect(save).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "a < b" } });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "a b" } });
+    expect(save).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Tags (comma-separated)"), { target: { value: "ok, <bad>" } });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Tags (comma-separated)"), { target: { value: "ok" } });
+    expect(save).not.toBeDisabled();
+  });
+
+  it.each([
+    ["saved", "saved", "match your changes"],
+    ["edit_conflict", "edit_conflict", "Review the latest details"],
+    ["rate_limited", { outcome: "rate_limited", retryAfterSeconds: 90 }, "Try again in 90 seconds"],
+    ["rate_limited without a wait", { outcome: "rate_limited", retryAfterSeconds: null }, "Try again later"],
+    ["refused", "refused", "Nothing was changed on YouTube"],
+    ["outcome_unknown", "outcome_unknown", "may have saved"],
+  ] as const)("reports %s through the injected save seam", async (_scenario, result, expected) => {
+    const onSave = vi.fn().mockResolvedValue(result);
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSave={onSave}
+        onSnapshot={vi.fn().mockResolvedValue("rev-1")}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed" } });
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(screen.getByRole("status").textContent).toContain(expected);
+  });
+
+  it("hydrates draft values from the fresh snapshot and updates baseRevision after a save", async () => {
+    const onSnapshot = vi.fn().mockResolvedValue({
+      revision: "rev-fresh-1",
+      values: {
+        title: "Studio title",
+        description: "Studio description",
+        tags: ["studio", "fresh"],
+        categoryId: "22",
+      },
+    });
+    const onSave = vi.fn().mockResolvedValue({ outcome: "saved", revision: "rev-fresh-2" });
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={onSnapshot}
+        onSave={onSave}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    await waitFor(() => expect(screen.getByLabelText("Title")).toHaveValue("Studio title"));
+    expect(screen.getByLabelText("Description")).toHaveValue("Studio description");
+    expect(screen.getByLabelText("Tags (comma-separated)")).toHaveValue("studio, fresh");
+
+    const save = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(save);
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      baseRevision: "rev-fresh-1",
+    })));
+
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Second rename" } });
+    fireEvent.click(save);
+    await waitFor(() => expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({
+      title: "Second rename",
+      baseRevision: "rev-fresh-2",
+    })));
+  });
+
+  it("preserves escaped commas inside individual tags across hydration and save", async () => {
+    const onSave = vi.fn().mockResolvedValue("saved");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={{ ...video, tags: ["science, technology", "ai"] }}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={vi.fn().mockResolvedValue({
+          revision: "rev-comma-1",
+          values: {
+            title: "First video",
+            description: "Body text",
+            tags: ["science, technology", "ai"],
+            categoryId: "998",
+          },
+        })}
+        onSave={onSave}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    await waitFor(() => expect(screen.getByLabelText("Tags (comma-separated)")).toHaveValue("science\\, technology, ai"));
+
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ["science, technology", "ai"],
+    })));
   });
 
   it("shows Arabic number-first labels in the edit dropdown", async () => {

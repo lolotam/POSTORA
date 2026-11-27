@@ -14,25 +14,25 @@ Work top to bottom. A row starts only when its "Needs" column is satisfied. Tier
 2. **Backend before frontend** for PR-8, PR-13 and PR-15: the Edge Function is deployed before, or in the same window as, the frontend merge, so the UI never calls an operation the deployed function rejects. Where one PR holds both sides, its Edge Functions are deployed from the PR's head commit and smoke-tested before the PR merges to `main` (merging is what deploys the frontend).
 3. **PR-8A's migration is applied in production before PR-8 merges**, and before any other PR that debits the unit budget (PR-10, PR-11, PR-14, PR-15).
 
-| # | PR | Phase | Delivers | Tier | Edge Functions deployed | Needs |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | PR-1 | 1A | `youtube-analytics`: `start_index`, `has_more`, `published_at`, `thumbnail_url` | Medium | `youtube-analytics` | — |
-| 2 | PR-2 | 1A | Shared view controls + `/analytics/youtube` table/grid, sort, Load more, drawer | Medium | — | PR-1 deployed |
-| 3 | PR-3 | 1B | `youtube-resources`: batched list enrichment | Medium | `youtube-resources` | — |
-| 4 | PR-4 | 1B | `/youtube` table/grid, sort, filter, drawer | Medium | — | PR-2 merged (shared controls), PR-3 deployed |
-| 5 | PR-5 | 2A | Chapter rules, `youtube_chapters` request type, Create Post UI | Medium | `generate-caption` | OD-5 |
-| 6 | PR-6 | 2B | `youtube_comment_reply` request type, composer button, disclosure | Medium | `generate-caption` | OD-3 (2B wording) |
-| 7 | PR-12 | 5A | Purpose Clause v2 (only if OD-2 = v2), two-stage rollout | Medium, or Heavy if SQL changes | `youtube-analytics` (twice: Stage A, Stage B) | OD-2 |
-| 8 | PR-13 | 5A + 5B | Four read-only report operations, tabs, retention chart, export | Medium | `youtube-analytics`, **before the frontend merge** | OD-2 applied (PR-12 Stage B if v2), PR-2 |
-| 9 | PR-7A | 3A | `process-post` backend: `youtube_publish_at` semantics, privacy helper, pre-open recheck, evidence, metadata copies | **Heavy** (privacy-critical publishing semantics) | `process-post`, deployed and smoke-tested alone | — |
-| 10 | PR-7B | 3A | Create Post UI and serialisation of `youtube_publish_at` | Medium | — | **PR-7A deployed and verified** |
-| 11 | PR-8A | 3B-pre | Migration: `check_weighted_rate_limit` SQL function and its SQL suite | **Heavy** (weighted-counter SQL migration) | — (database only) | OD-6; Waleed's card to merge and to apply in production |
-| 12 | PR-8 | 3B | `playlists` operation, selector, playlist follow-up, write budget helper, disclosure | Medium | `youtube-resources`, `process-post`, `n8n-api`, **before the frontend merge** | **PR-8A applied in production**, PR-7A, OD-3 (playlists), OD-6 |
-| 13 | PR-9 | 4A | D1 `If-Match` rehearsal report (no product code) | Heavy (evidence) | — | Waleed's D5 approval: named fixture and permitted live actions |
-| 14 | PR-10 | 4A | Activate published editing | **Heavy** | `youtube-resources` | OD-1 approved on PR-9's report, PR-8 (budget helper) |
-| 15 | PR-11 | 4B | `set_thumbnail` operation, `manage_thumbnail` capability, drawer control | **Heavy** | `youtube-resources` (+ `process-post` if the intake moves) | PR-8 (budget helper), PR-4. **Not** PR-9 or PR-10 |
-| 16 | PR-14 | 6A | Captions list and upload, `manage_captions` capability, capped body reader, disclosure | **Heavy** | `youtube-resources` | PR-8 (budget helper), PR-4, OD-6, quota extension decision. Reuses the write plumbing if PR-10 or PR-11 landed first, otherwise builds it |
-| 17 | PR-15 | 6B | `youtube-channel-benchmark` function and feature, disclosure | **Heavy** | `youtube-channel-benchmark` (new), **before the frontend merge** | OD-4 go, PR-8A applied |
+| # | PR | Phase | Delivers | Tier | Edge Functions deployed | Needs | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | PR-1 | 1A | `youtube-analytics`: `start_index`, `has_more`, `published_at`, `thumbnail_url` | Medium | `youtube-analytics` | — | ✅ Merged (`#496`) |
+| 2 | PR-2 | 1A | Shared view controls + `/analytics/youtube` table/grid, sort, Load more, drawer | Medium | — | PR-1 deployed | ✅ Merged (`#496`) |
+| 3 | PR-3 | 1B | `youtube-resources`: batched list enrichment | Medium | `youtube-resources` | — | ✅ Merged (`#496`) |
+| 4 | PR-4 | 1B | `/youtube` table/grid, sort, filter, drawer | Medium | — | PR-2 merged (shared controls), PR-3 deployed | ✅ Merged (`#496`) |
+| 5 | PR-5 | 2A | Chapter rules, `youtube_chapters` request type, Create Post UI | Medium | `generate-caption` | OD-5 | ✅ Merged (`#497`) |
+| 6 | PR-6 | 2B | `youtube_comment_reply` request type, composer button, disclosure | Medium | `generate-caption` | OD-3 (2B wording) | ✅ Merged (`#497`) |
+| 7 | PR-12 | 5A | Purpose Clause v2 (only if OD-2 = v2), two-stage rollout | Medium, or Heavy if SQL changes | `youtube-analytics` (twice: Stage A, Stage B) | OD-2 | ✅ Merged (`#498`) |
+| 8 | PR-13 | 5A + 5B | Four read-only report operations, tabs, retention chart, export | Medium | `youtube-analytics`, **before the frontend merge** | OD-2 applied (PR-12 Stage B if v2), PR-2 | ✅ Merged (`#498`) |
+| 9 | PR-7A | 3A | `process-post` backend: `youtube_publish_at` semantics, privacy helper, pre-open recheck, evidence, metadata copies | **Heavy** (privacy-critical publishing semantics) | `process-post`, deployed and smoke-tested alone | — | ✅ Merged (`#499`) |
+| 10 | PR-7B | 3A | Create Post UI and serialisation of `youtube_publish_at` | Medium | — | **PR-7A deployed and verified** | ✅ Merged (`#500`) |
+| 11 | PR-8A | 3B-pre | Migration: `check_weighted_rate_limit` SQL function and its SQL suite | **Heavy** (weighted-counter SQL migration) | — (database only) | OD-6; Waleed's card to merge and to apply in production | ✅ Merged (`#501`) |
+| 12 | PR-8 | 3B | `playlists` operation, selector, playlist follow-up, write budget helper, disclosure | Medium | `youtube-resources`, `process-post`, `n8n-api`, **before the frontend merge** | **PR-8A applied in production**, PR-7A, OD-3 (playlists), OD-6 | ✅ Merged (`#502`) |
+| 13 | PR-9 | 4A | D1 `If-Match` rehearsal report (no product code) | Heavy (evidence) | — | Waleed's D5 approval: named fixture and permitted live actions | ✅ Complete (PR-9/PR-10) |
+| 14 | PR-10 | 4A | Activate published editing | **Heavy** | `youtube-resources` | OD-1 approved on PR-9's report, PR-8 (budget helper) | ✅ Complete (PR-9/PR-10) |
+| 15 | PR-11 | 4B | `set_thumbnail` operation, `manage_thumbnail` capability, drawer control | **Heavy** | `youtube-resources` (+ `process-post` if the intake moves) | PR-8 (budget helper), PR-4. **Not** PR-9 or PR-10 | ✅ Merged (`#503`) |
+| 16 | PR-14 | 6A | Captions list and upload, `manage_captions` capability, capped body reader, disclosure | **Heavy** | `youtube-resources` | PR-8 (budget helper), PR-4, OD-6, quota extension decision. Reuses the write plumbing if PR-10 or PR-11 landed first, otherwise builds it | ✅ Merged (`#504`) |
+| 17 | PR-15 | 6B | `youtube-channel-benchmark` function and feature, disclosure | **Heavy** | `youtube-channel-benchmark` (new), **before the frontend merge** | OD-4 go, PR-8A applied | ✅ Merged (`#505`) |
 
 PR numbers are stable identifiers, so they no longer rise with the row number: PR-12 and PR-13 moved up, and PR-7 became PR-7A and PR-7B with PR-8A added. The PR sections below stay grouped by phase number.
 

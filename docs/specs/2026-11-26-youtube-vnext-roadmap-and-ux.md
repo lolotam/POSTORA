@@ -810,22 +810,22 @@ export interface YouTubeBenchmarkChannel {
 
 Each phase is accepted separately.
 
-- [ ] **1A** Table and grid with numbering, six sortable headers with `aria-sort`, Load more in steps of 10 without duplicates, reset on account/period/window change, drawer from the right in English and the left in Arabic, `?video=` deep link opens it. No added Google cost outside Load more. `no-store` intact.
-- [ ] **1B** Library table and grid with numbering, seven sortable headers, search and Shorts filter, Load more keyed on `hasMore` only, drawer with nine metadata cells, description box, tag chips and the edit section. One extra unit per page; degraded enrichment still shows the page.
-- [ ] **2A** Inserted chapters always pass `validateChapters`; invalid model output never reaches the description; estimated timing is always labelled.
-- [ ] **2B** A suggestion only fills the draft; no reply is sent without the Reply button; hostile comment text cannot change the output contract.
-- [ ] **3A** PR-7A deployed and smoke-tested before the UI exposes scheduling or emits `youtube_publish_at`. `undefined`, `null` and `""` are byte-identical to today; any other unusable value ends private without `publishAt`; a valid one is sent `private` with `publishAt`; the recheck sits before `createYoutubeResumableSession`; the warning reaches evidence on both settlement paths.
-- [ ] **3B-pre** `check_weighted_rate_limit` applied in production by Waleed; `check_rate_limit` unchanged; a refused debit changes nothing.
-- [ ] **3B** The selector lists only the bound channel's playlists and is disabled for more than one distinct native channel; the insert is attempted at most once; its failure never changes the upload receipt.
-- [ ] **4A** OD-1 evidence recorded and approved; every switch in §8.1 made; write limiter and budget fail closed; a lost `videos.update` answer is `outcome_unknown` after exactly one attempt; the saved response carries the post-write revision.
-- [ ] **4B** Only an owned JPEG or PNG of at most 2 MB, verified by its bytes, can become the thumbnail of an owned video; WebP is refused; a lost answer is reported as unknown.
-- [ ] **5A** OD-2 decided and applied; four operations inside the unchanged consent and budget pipeline; fetched lazily; nothing stored.
-- [ ] **5B** Export makes no network request and writes nothing to storage; CSV is injection-safe and opens correctly with Arabic text.
-- [ ] **6A** Format-checked before any quota is spent; two uploads per user per day; project budget enforced; no retry on a lost answer.
-- [ ] **6B** OD-4 go decision recorded; own function and feature; at most three units per channel; `found`, `not_found` and `unavailable` kept distinct; unavailable results not cached; nothing stored.
-- [ ] **2A, 2B** No outline, comment text, model output or provider body in any log line, proven by the log-capture tests.
-- [ ] **1A, 1B** Refresh costs one page on both screens however many were loaded.
-- [ ] **Every phase** Its Deno, Vitest, typecheck, ESLint and i18n gates pass (plan §0.3); guard skills run for its tier; legal pages and their test match shipped behaviour; changed Edge Functions are deployed per `docs/runbooks/deploy-edge-function.md` and verified.
+- [x] **1A** Table and grid with numbering, six sortable headers with `aria-sort`, Load more in steps of 10 without duplicates, reset on account/period/window change, drawer from the right in English and the left in Arabic, `?video=` deep link opens it. No added Google cost outside Load more. `no-store` intact.
+- [x] **1B** Library table and grid with numbering, seven sortable headers, search and Shorts filter, Load more keyed on `hasMore` only, drawer with nine metadata cells, description box, tag chips and the edit section. One extra unit per page; degraded enrichment still shows the page.
+- [x] **2A** Inserted chapters always pass `validateChapters`; invalid model output never reaches the description; estimated timing is always labelled.
+- [x] **2B** A suggestion only fills the draft; no reply is sent without the Reply button; hostile comment text cannot change the output contract.
+- [x] **3A** PR-7A deployed and smoke-tested before the UI exposes scheduling or emits `youtube_publish_at`. `undefined`, `null` and `""` are byte-identical to today; any other unusable value ends private without `publishAt`; a valid one is sent `private` with `publishAt`; the recheck sits before `createYoutubeResumableSession`; the warning reaches evidence on both settlement paths.
+- [x] **3B-pre** `check_weighted_rate_limit` applied in production by Waleed; `check_rate_limit` unchanged; a refused debit changes nothing.
+- [x] **3B** The selector lists only the bound channel's playlists and is disabled for more than one distinct native channel; the insert is attempted at most once; its failure never changes the upload receipt.
+- [x] **4A** OD-1 evidence recorded and approved; every switch in §8.1 made; write limiter and budget fail closed; a lost `videos.update` answer is `outcome_unknown` after exactly one attempt; the saved response carries the post-write revision.
+- [x] **4B** Only an owned JPEG or PNG of at most 2 MB, verified by its bytes, can become the thumbnail of an owned video; WebP is refused; a lost answer is reported as unknown.
+- [x] **5A** OD-2 decided and applied; four operations inside the unchanged consent and budget pipeline; fetched lazily; nothing stored.
+- [x] **5B** Export makes no network request and writes nothing to storage; CSV is injection-safe and opens correctly with Arabic text.
+- [x] **6A** Format-checked before any quota is spent; two uploads per user per day; project budget enforced; no retry on a lost answer.
+- [x] **6B** OD-4 go decision recorded; own function and feature; at most three units per channel; `found`, `not_found` and `unavailable` kept distinct; unavailable results not cached; nothing stored.
+- [x] **2A, 2B** No outline, comment text, model output or provider body in any log line, proven by the log-capture tests.
+- [x] **1A, 1B** Refresh costs one page on both screens however many were loaded.
+- [x] **Every phase** Its Deno, Vitest, typecheck, ESLint and i18n gates pass (plan §0.3); guard skills run for its tier; legal pages and their test match shipped behaviour; changed Edge Functions are deployed per `docs/runbooks/deploy-edge-function.md` and verified.
 
 ## 13. Non-goals
 

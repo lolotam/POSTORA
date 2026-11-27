@@ -19,7 +19,13 @@ export interface YouTubeResourcesGateway {
   getCapabilities(accountId: string): Promise<YouTubeResourceSuccess<YouTubeAccountCapabilities>>;
   getEditSnapshot?(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<{
     revision: string;
-    values: { title: string; privacyStatus: string; categoryId: string | null };
+    values: {
+      title: string;
+      description?: string;
+      tags?: string[];
+      privacyStatus: string;
+      categoryId: string | null;
+    };
   }>>;
   updateVideo?(params: {
     accountId: string;
@@ -27,6 +33,8 @@ export interface YouTubeResourcesGateway {
     baseRevision: string;
     changes: {
       title?: string;
+      description?: string;
+      tags?: string[];
       category_id?: string;
       privacy_status?: "private" | "unlisted" | "public";
     };

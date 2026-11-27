@@ -124,11 +124,26 @@ async function call<T>(
 export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway {
   getEditSnapshot(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<{
     revision: string;
-    values: { title: string; privacyStatus: string; categoryId: string | null };
+    values: {
+      title: string;
+      description?: string;
+      tags?: string[];
+      privacyStatus: string;
+      categoryId: string | null;
+    };
   }>> {
     return call(
       { operation: "edit_snapshot", account_id: params.accountId, video_id: params.videoId },
-      (data): data is { revision: string; values: { title: string; privacyStatus: string; categoryId: string | null } } =>
+      (data): data is {
+        revision: string;
+        values: {
+          title: string;
+          description?: string;
+          tags?: string[];
+          privacyStatus: string;
+          categoryId: string | null;
+        };
+      } =>
         typeof data === "object" && data !== null && typeof (data as { revision?: unknown }).revision === "string",
     );
   }
@@ -137,7 +152,13 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
     accountId: string;
     videoId: string;
     baseRevision: string;
-    changes: { title?: string; category_id?: string; privacy_status?: "private" | "unlisted" | "public" };
+    changes: {
+      title?: string;
+      description?: string;
+      tags?: string[];
+      category_id?: string;
+      privacy_status?: "private" | "unlisted" | "public";
+    };
     privacyConfirmation?: { to: "private" | "unlisted" | "public" };
   }): Promise<YouTubeResourceSuccess<{ revision: string }>> {
     return call(
@@ -151,6 +172,9 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
       },
       (data): data is { revision: string } =>
         typeof data === "object" && data !== null && typeof (data as { revision?: unknown }).revision === "string",
+      // A write whose answer never arrives is not a refusal: the change may
+      // already be on YouTube, so the caller must be told to check, not retry.
+      { unreadableFailureCode: "outcome_unknown" },
     );
   }
 

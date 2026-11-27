@@ -68,9 +68,17 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
   const browse = capabilities.data?.data.capabilities.browse;
   const canBrowse = browse !== undefined && browse.state !== "unavailable";
   const editCapability = capabilities.data?.data.capabilities.edit_metadata;
-  const editUnavailableReason = editCapability?.state === "unavailable" ? editCapability.reason : null;
+  // The reason the editor is disabled comes from the server's own capability,
+  // so the creator is told what to fix instead of a generic sentence.
+  const editDisabledReason = editCapability?.state === "unavailable"
+    ? editCapability.reason === "reconnect_required"
+      ? t("youtubeManagement.detail.reconnectRequired", "This channel needs to be reconnected before editing is available.")
+      : editCapability.reason === "missing_scope"
+        ? t("youtubeManagement.detail.missingScope", "Reconnect this channel and grant YouTube edit permissions (force-ssl) to edit video details.")
+        : t("youtubeManagement.detail.providerUnsupported", "Editing video details is not available for managed connections.")
+    : t("youtubeManagement.detail.editUnavailable", "Editing video details is currently unavailable for this channel.");
   // Thumbnail replacement has its own capability: it is independent of the
-  // published-edit gate and of the browse capability.
+  // published-edit capability and of the browse capability.
   const thumbnailCapability = capabilities.data?.data.capabilities.manage_thumbnail ?? null;
   const canChangeThumbnail = thumbnailCapability?.state === "available";
   // Caption management has its own capability too: it is independent of
@@ -260,32 +268,55 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
         accountId={activeAccountId}
         region={channel.data?.data.country ?? undefined}
         onSnapshot={async (videoId) => {
-          if (!activeAccountId) return null;
+          if (!activeAccountId || !gateway.getEditSnapshot) return null;
           try {
             const result = await gateway.getEditSnapshot({ accountId: activeAccountId, videoId });
-            return result.data.revision;
+            return { revision: result.data.revision, values: result.data.values };
           } catch {
             return null;
           }
         }}
-        onSave={async ({ title, categoryId, baseRevision }) => {
-          if (!activeAccountId || !selectedVideoId) return "outcome_unknown";
+        onSave={async ({ title, description, tags, categoryId, baseRevision }) => {
+          if (!activeAccountId || !selectedVideoId || !gateway.updateVideo) return "outcome_unknown";
           try {
-            await gateway.updateVideo({
+            const updated = await gateway.updateVideo({
               accountId: activeAccountId,
               videoId: selectedVideoId,
               baseRevision,
-              changes: { title, ...(categoryId ? { category_id: categoryId } : {}) },
+              changes: {
+                title,
+                description,
+                tags,
+                ...(categoryId ? { category_id: categoryId } : {}),
+              },
             });
-            return "saved";
+            // The saved answer is only a claim: the verified values live in the
+            // video itself, so the drawer and the library read it again.
+            await video.refetch();
+            void videos.refetch();
+            return { outcome: "saved", revision: updated.data.revision };
           } catch (error) {
-            const code = error && typeof error === "object" ? (error as { code?: string }).code : undefined;
-            return code === "edit_conflict" ? "edit_conflict" : "outcome_unknown";
+            // The server's own code decides what the creator is told; anything
+            // else is a write whose result is unknown.
+            if (error instanceof YouTubeResourceError) {
+              if (error.code === "edit_conflict") return "edit_conflict";
+              if (error.code === "rate_limited" || error.code === "quota_exceeded") {
+                return { outcome: "rate_limited", retryAfterSeconds: error.retryAfterSeconds };
+              }
+              if (
+                error.code === "invalid_request"
+                || error.code === "reconnect_required"
+                || error.code === "missing_scope"
+                || error.code === "provider_unsupported"
+                || error.code === "write_not_enabled"
+              ) {
+                return "refused";
+              }
+            }
+            return "outcome_unknown";
           }
         }}
-        disabledReason={editUnavailableReason === "reconnect_required"
-          ? t("youtubeManagement.detail.reconnectRequired", "This channel needs to be reconnected before editing is available.")
-          : t("youtubeManagement.detail.editUnavailable", "Editing is not enabled until conditional write enforcement is verified.")}
+        disabledReason={editDisabledReason}
         thumbnailCapability={thumbnailCapability}
         thumbnailCandidates={thumbnailMedia.data ?? []}
         thumbnailCandidatesLoading={thumbnailMedia.isPending}

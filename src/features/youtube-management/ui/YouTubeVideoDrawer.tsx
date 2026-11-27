@@ -17,7 +17,7 @@ import type {
   YouTubeVideoDetails,
 } from "../domain/types";
 import type { YouTubeThumbnailCandidate, YouTubeThumbnailOutcome } from "../domain/thumbnail";
-import type { EditSaveOutcome } from "./YouTubeVideoEditCard";
+import type { EditSaveResult, EditSnapshotInput } from "./YouTubeVideoEditCard";
 import { YouTubeVideoEditCard } from "./YouTubeVideoEditCard";
 import { YouTubeThumbnailChange } from "./YouTubeThumbnailChange";
 import { YouTubeCaptionsSection } from "./YouTubeCaptionsSection";
@@ -52,8 +52,14 @@ export function YouTubeVideoDrawer({
   disabledReason: string;
   accountId?: string | null;
   region?: string;
-  onSnapshot?: (videoId: string) => Promise<string | null>;
-  onSave?: (draft: { title: string; categoryId: string; baseRevision: string }) => Promise<EditSaveOutcome>;
+  onSnapshot?: (videoId: string) => Promise<EditSnapshotInput>;
+  onSave?: (draft: {
+    title: string;
+    description: string;
+    tags: string[];
+    categoryId: string;
+    baseRevision: string;
+  }) => Promise<EditSaveResult>;
   /** The server's derived thumbnail capability; null until it is known. */
   thumbnailCapability?: YouTubeCapabilityState | null;
   /** The creator's own library images, filtered by the picker. */
