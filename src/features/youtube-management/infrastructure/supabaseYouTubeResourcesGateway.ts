@@ -113,10 +113,7 @@ async function call<T>(
     const payload: unknown = context instanceof Response
       ? await context.clone().json().catch(() => null)
       : null;
-    if (payload === null && unreadableFailureCode === "outcome_unknown") {
-      throw new YouTubeResourceError("outcome_unknown");
-    }
-    throw toYouTubeResourceError(payload);
+    throw toYouTubeResourceError(payload, unreadableFailureCode);
   }
   if (data === null || !isEnvelopeFor<T>(data, isData)) {
     throw new YouTubeResourceError(unreadableFailureCode);

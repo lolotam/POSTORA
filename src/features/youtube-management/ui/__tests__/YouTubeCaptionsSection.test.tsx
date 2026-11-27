@@ -278,4 +278,44 @@ describe("YouTubeCaptionsSection — uploading a track", () => {
       screen.getByText("Daily caption upload allowance: up to 2 uploads per 24 hours (512 KB max per file)."),
     ).toBeInTheDocument();
   });
+
+  it("preserves tracks uploaded while a caption list request is in flight", async () => {
+    const uploadedTrack: YouTubeCaptionTrack = { ...TRACK, id: "track-2", language: "ar", name: "العربية" };
+    let resolveList: ((tracks: YouTubeCaptionTrack[]) => void) | null = null;
+    const onListCaptions = vi.fn(
+      () => new Promise<YouTubeCaptionTrack[]>((resolve) => { resolveList = resolve; }),
+    );
+    const onUploadCaption = vi.fn(async () => ({ outcome: "uploaded" as const, track: uploadedTrack }));
+    await renderSection(section({ onListCaptions, onUploadCaption }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Show caption tracks" }));
+    await userEvent.upload(
+      screen.getByLabelText("Caption file (.srt or .vtt)"),
+      captionFile("captions.srt", SRT_CONTENT),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Prepare caption upload" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm caption upload" }));
+    await waitFor(() => expect(onUploadCaption).toHaveBeenCalledTimes(1));
+
+    resolveList?.([TRACK]);
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("cell", { name: "English" })).toBeInTheDocument();
+    expect(within(table).getByRole("cell", { name: "العربية" })).toBeInTheDocument();
+  });
+
+  it("disables confirmation when language becomes invalid after preparation", async () => {
+    const onUploadCaption = vi.fn(async () => ({ outcome: "uploaded" as const, track: TRACK }));
+    await renderSection(section({ onUploadCaption }));
+
+    await userEvent.upload(
+      screen.getByLabelText("Caption file (.srt or .vtt)"),
+      captionFile("captions.srt", SRT_CONTENT),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Prepare caption upload" }));
+    expect(screen.getByRole("button", { name: "Confirm caption upload" })).not.toBeDisabled();
+
+    await userEvent.selectOptions(screen.getByLabelText("Caption language"), "other");
+    expect(screen.getByRole("button", { name: "Confirm caption upload" })).toBeDisabled();
+    expect(onUploadCaption).not.toHaveBeenCalled();
+  });
 });

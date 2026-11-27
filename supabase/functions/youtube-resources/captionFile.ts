@@ -12,7 +12,7 @@ const UTF8_ENCODER = new TextEncoder();
 
 const SRT_TIMING_RE = /^(\d{2,}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2,}):(\d{2}):(\d{2}),(\d{3})$/;
 const VTT_TIMING_RE =
-  /^(?:(\d{2,}):)?(\d{2}):(\d{2})\.(\d{3}) --> (?:(\d{2,}):)?(\d{2}):(\d{2})\.(\d{3})(?:[ \t].*)?$/;
+  /^(?:(\d{2,}):)?(\d{2}):(\d{2})\.(\d{3})[ \t]+-->[ \t]+(?:(\d{2,}):)?(\d{2}):(\d{2})\.(\d{3})(?:[ \t].*)?$/;
 const VTT_HEADER_RE = /^WEBVTT(?:[ \t].*)?$/;
 
 /** Measures exact UTF-8 byte length without logging or copying the content. */
@@ -76,11 +76,7 @@ function isVttNonCueBlock(firstLine: string): boolean {
     firstLine.startsWith("NOTE ") ||
     firstLine.startsWith("NOTE\t") ||
     firstLine === "STYLE" ||
-    firstLine.startsWith("STYLE ") ||
-    firstLine.startsWith("STYLE\t") ||
-    firstLine === "REGION" ||
-    firstLine.startsWith("REGION ") ||
-    firstLine.startsWith("REGION\t")
+    firstLine === "REGION"
   );
 }
 

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -184,6 +184,7 @@ export function YouTubeCaptionsSection({
   const [tracks, setTracks] = useState<YouTubeCaptionTrack[] | null>(null);
   const [listing, setListing] = useState(false);
   const [listFailed, setListFailed] = useState(false);
+  const uploadedDuringListRef = useRef<YouTubeCaptionTrack[]>([]);
 
   const available = capability?.state === "available";
   const unavailableReason = capability?.state === "unavailable" ? capability.reason : null;
@@ -192,14 +193,24 @@ export function YouTubeCaptionsSection({
     if (!onListCaptions || listing) return;
     setListing(true);
     setListFailed(false);
+    uploadedDuringListRef.current = [];
     try {
-      setTracks(await onListCaptions(videoId));
+      const fetched = await onListCaptions(videoId);
+      const concurrent = uploadedDuringListRef.current;
+      const merged = [...fetched];
+      for (const added of concurrent) {
+        if (!merged.some((track) => track.id === added.id)) {
+          merged.push(added);
+        }
+      }
+      setTracks(merged);
     } catch {
       // A failed read never looks like an empty list: the creator is told
       // the list could not be read and offered a retry.
       setTracks(null);
       setListFailed(true);
     } finally {
+      uploadedDuringListRef.current = [];
       setListing(false);
     }
   };
@@ -258,6 +269,11 @@ export function YouTubeCaptionsSection({
           // would cost another 50 provider units for a row we already have.
           // A track already in the list is not added twice, in case the
           // creator refreshed the list while the upload was in flight.
+          if (listing) {
+            if (!uploadedDuringListRef.current.some((track) => track.id === created.id)) {
+              uploadedDuringListRef.current = [...uploadedDuringListRef.current, created];
+            }
+          }
           setTracks((current) => {
             if (current === null) return [created];
             return current.some((track) => track.id === created.id) ? current : [...current, created];
@@ -293,6 +309,7 @@ function CaptionUploadForm({
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [outcome, setOutcome] = useState<YouTubeCaptionUploadOutcome | null>(null);
+  const fileReadSeqRef = useRef(0);
 
   const available = capability?.state === "available";
   const language = languageChoice === CUSTOM_LANGUAGE ? customLanguage.trim() : languageChoice;
@@ -302,20 +319,23 @@ function CaptionUploadForm({
   const formDisabled = !available || submitting;
 
   const chooseFile = async (chosen: File | undefined) => {
+    const readSeq = ++fileReadSeqRef.current;
+    setFile(null);
+    setFileError(null);
+    setConfirming(false);
     if (!chosen) {
-      setFile(null);
-      setFileError(null);
       return;
     }
     const format = inferCaptionFormatFromFileName(chosen.name);
     if (format === null) {
-      setFile(null);
       setFileError("unsupported");
       return;
     }
     const content = await chosen.text();
+    if (readSeq !== fileReadSeqRef.current) {
+      return;
+    }
     if (content.includes("\uFFFD")) {
-      setFile(null);
       setFileError("invalidEncoding");
       return;
     }
@@ -323,16 +343,14 @@ function CaptionUploadForm({
     if (bytes > CAPTION_CONTENT_MAX_BYTES) {
       // Refused in the browser, on the real byte count: an Arabic file of
       // 300,000 characters is 600,000 bytes and must not reach YouTube.
-      setFile(null);
       setFileError("tooLarge");
       return;
     }
     setFile({ name: chosen.name, format, content, bytes });
-    setFileError(null);
   };
 
   const confirmUpload = async () => {
-    if (!file || !onUploadCaption || submitting) return;
+    if (!file || !canPrepare || !available || !onUploadCaption || submitting) return;
     setSubmitting(true);
     try {
       const result = await onUploadCaption({
@@ -463,7 +481,12 @@ function CaptionUploadForm({
             )}
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" disabled={submitting} onClick={() => void confirmUpload()}>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!canPrepare || formDisabled || !onUploadCaption}
+              onClick={() => void confirmUpload()}
+            >
               {t("youtubeManagement.captions.confirm", "Confirm caption upload")}
             </Button>
             <Button type="button" size="sm" variant="outline" disabled={submitting} onClick={() => setConfirming(false)}>

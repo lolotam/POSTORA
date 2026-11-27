@@ -427,12 +427,42 @@ describe("YouTube resources gateway — caption tracks", () => {
       format: "srt",
       content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
     })).rejects.toMatchObject({ code: "outcome_unknown" });
+
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ message: "Bad Gateway" }, { status: 502 }),
+      }),
+    });
+    await expect(new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "en",
+      name: "English",
+      format: "srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
   });
 
   it("rejects a caption answer that names another video as outcome_unknown", async () => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({
       data: envelope({ video_id: "another-video", track }),
       error: null,
+    });
+    await expect(new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "en",
+      name: "English",
+      format: "srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
+
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ message: "Bad Gateway" }, { status: 502 }),
+      }),
     });
     await expect(new SupabaseYouTubeResourcesGateway().uploadCaption({
       accountId: "acc-1",

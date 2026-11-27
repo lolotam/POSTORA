@@ -14,7 +14,10 @@ export class YouTubeResourceError extends Error {
 
 // Accepts only the documented failure shape; an unknown shape or an unknown
 // code means the server-side read failed, so it becomes upstream_unavailable.
-export function toYouTubeResourceError(payload: unknown): YouTubeResourceError {
+export function toYouTubeResourceError(
+  payload: unknown,
+  fallbackCode: "upstream_unavailable" | "outcome_unknown" = "upstream_unavailable",
+): YouTubeResourceError {
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
     const record = payload as Record<string, unknown>;
     if (isYouTubeResourceErrorCode(record.error)) {
@@ -25,7 +28,7 @@ export function toYouTubeResourceError(payload: unknown): YouTubeResourceError {
       );
     }
   }
-  return new YouTubeResourceError("upstream_unavailable");
+  return new YouTubeResourceError(fallbackCode);
 }
 
 // "internal_error" is NOT retried: the server-side read itself just failed,

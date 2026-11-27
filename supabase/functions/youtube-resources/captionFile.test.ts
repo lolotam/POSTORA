@@ -54,6 +54,34 @@ Deno.test("validateCaptionUploadInput accepts valid SRT and VTT with Arabic text
     byteLength: measureUtf8Bytes(VALID_VTT),
     cueCount: 2,
   });
+
+  const vttTabsAndCueIds = [
+    "WEBVTT",
+    "",
+    "STYLE",
+    "::cue { color: yellow; }",
+    "",
+    "STYLE introduction",
+    "00:01.000\t-->\t00:02.000",
+    "First cue with tab arrow",
+    "",
+    "REGION introduction",
+    "00:03.000   -->   00:04.000",
+    "Second cue with multiple spaces",
+  ].join("\n");
+  assertEquals(
+    validateCaptionUploadInput({
+      language: "en",
+      name: "Tabs and cue ids",
+      format: "vtt",
+      content: vttTabsAndCueIds,
+    }),
+    {
+      ok: true,
+      byteLength: measureUtf8Bytes(vttTabsAndCueIds),
+      cueCount: 2,
+    },
+  );
 });
 
 Deno.test("validateCaptionUploadInput rejects invalid metadata, NUL bytes, and malformed SRT/VTT", () => {
