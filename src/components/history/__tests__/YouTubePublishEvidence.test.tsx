@@ -95,6 +95,61 @@ describe("YouTube publish evidence in History", () => {
     expect(block.textContent).toContain("First comment: Applied");
   });
 
+  it("shows the subtitles / CC outcome alongside thumbnail, first comment, and playlist", async () => {
+    await renderUi(
+      <YouTubePublishEvidence
+        evidence={{
+          requested_privacy: "private",
+          effective_privacy: "private",
+          thumbnail: { state: "applied", reason: null },
+          first_comment: { state: "applied", reason: null },
+          playlist: { state: "applied", reason: null },
+          caption: { state: "applied", reason: null, language: "en", format: "vtt", byte_length: 128 },
+        }}
+      />,
+    );
+    const block = screen.getByTestId("youtube-publish-evidence");
+    expect(block.textContent).toContain("Thumbnail: Applied");
+    expect(block.textContent).toContain("First comment: Applied");
+    expect(block.textContent).toContain("Playlist: Applied");
+    expect(block.textContent).toContain("Subtitles / CC: Applied");
+  });
+
+  it("reports subtitles / CC as not requested when absent on older rows", async () => {
+    await renderUi(
+      <YouTubePublishEvidence
+        evidence={{
+          requested_privacy: "private",
+          effective_privacy: "private",
+          thumbnail: { state: "applied", reason: null },
+          first_comment: { state: "not_requested", reason: null },
+        }}
+      />,
+    );
+    const block = screen.getByTestId("youtube-publish-evidence");
+    expect(block.textContent).toContain("Subtitles / CC: Not requested");
+  });
+
+  it("shows a skipped or failed subtitles / CC follow-up without claiming the other follow-ups failed", async () => {
+    await renderUi(
+      <YouTubePublishEvidence
+        evidence={{
+          requested_privacy: "private",
+          effective_privacy: "private",
+          thumbnail: { state: "applied", reason: null },
+          first_comment: { state: "applied", reason: null },
+          playlist: { state: "applied", reason: null },
+          caption: { state: "skipped", reason: "rate_limited" },
+        }}
+      />,
+    );
+    const block = screen.getByTestId("youtube-publish-evidence");
+    expect(block.textContent).toContain("Subtitles / CC: Skipped (rate_limited)");
+    expect(block.textContent).toContain("Thumbnail: Applied");
+    expect(block.textContent).toContain("First comment: Applied");
+    expect(block.textContent).toContain("Playlist: Applied");
+  });
+
   it("renders nothing when no evidence was recorded", async () => {
     const { container } = await renderUi(<YouTubePublishEvidence evidence={null} />);
     expect(container.firstChild).toBeNull();

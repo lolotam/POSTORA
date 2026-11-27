@@ -51,8 +51,17 @@ import { ResolvedModelCards } from "@/components/ai/ResolvedModelCards";
 import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
 import { useYouTubeCategories } from "@/hooks/useYouTubeCategories";
 import { useYouTubePlaylists } from "@/hooks/useYouTubePlaylists";
+import type { YouTubeUploadCaptionState } from "@/hooks/usePlatformSettings";
 import { resolveYouTubeVideoTitle } from "../../../../supabase/functions/_shared/youtubeVideoTitle";
 import { resolveYoutubePublishAt } from "../../../../supabase/functions/_shared/youtubePublishOptions";
+import {
+  CAPTION_CONTENT_MAX_BYTES,
+  CAPTION_LANGUAGE_PATTERN,
+  CAPTION_NAME_MAX_LENGTH,
+  measureUtf8Bytes,
+  validateCaptionUploadInput,
+  type CaptionFormat,
+} from "../../../../supabase/functions/_shared/captionFile";
 
 export interface YouTubeSettingsState {
   // Video type
@@ -96,6 +105,8 @@ export interface YouTubeSettingsState {
   publishAt?: string;
   /** Durable flag that "Schedule on YouTube" mode is selected even before a timestamp is entered. */
   scheduleRequested?: boolean;
+  /** Upload-time caption track sent as a captions.insert follow-up after the video is uploaded. */
+  captionTrack?: YouTubeUploadCaptionState | null;
 }
 
 interface SelectedAccount {
@@ -127,9 +138,23 @@ interface YouTubeSettingsProps {
 
 const MAX_THUMBNAIL_REFERENCES = 5;
 
+// Module-level monotonic sequence so an in-flight subtitle read survives step
+// navigation and remounts, while any clear or replacement in a later mount
+// advances the shared sequence and invalidates the old read.
+let nextYoutubeCaptionReadSeq = 0;
+
 // A select option cannot carry an empty value, so "no playlist" is a
 // sentinel that is translated back to an empty playlist id.
 const PLAYLIST_NONE_VALUE = "__none__";
+const COMMON_CAPTION_LANGUAGES = ["en", "ar", "es", "fr", "de"] as const;
+const CUSTOM_CAPTION_LANGUAGE = "other";
+
+function inferUploadCaptionFormat(fileName: string): CaptionFormat | null {
+  const lowered = fileName.toLowerCase();
+  if (lowered.endsWith(".srt")) return "srt";
+  if (lowered.endsWith(".vtt")) return "vtt";
+  return null;
+}
 
 interface DeclarationChoiceProps {
   id: string;
@@ -253,6 +278,7 @@ export function YouTubeSettings({
   const playlistSelectorDisabled =
     (composioManaged && nativeAccounts.length === 0) || multipleNativeChannels;
   const previousNativeChannelKeyRef = useRef<string | null>(singleNativeChannelKey);
+  const previousCaptionChannelKeyRef = useRef<string | null>(singleNativeChannelKey);
   // A playlist chosen for a channel that is no longer the only one (or when the
   // creator switches to a different single native channel, including across an
   // intermediate empty selection) would point at another channel's playlist, so
@@ -269,6 +295,365 @@ export function YouTubeSettings({
       onSettingsChange({ playlist: "" });
     }
   }, [multipleNativeChannels, onSettingsChange, settings.playlist, singleNativeChannelKey]);
+
+  const manageCaptionsCapability = playlistCatalog.capabilities?.manage_captions ?? null;
+  const captionCapabilityUnavailable =
+    manageCaptionsCapability !== null && manageCaptionsCapability.state !== "available";
+  const captionCapabilityUnconfirmed = Boolean(
+    playlistCatalog.capabilitiesLoading ||
+      playlistCatalog.capabilitiesUnavailable ||
+      manageCaptionsCapability === null,
+  );
+  const captionsSectionDisabled =
+    composioManaged ||
+    multipleNativeChannels ||
+    distinctNativeChannels.size !== 1 ||
+    captionCapabilityUnconfirmed ||
+    captionCapabilityUnavailable;
+  const captionCapabilityConfirmedEligible =
+    !captionsSectionDisabled && manageCaptionsCapability?.state === "available";
+
+  useEffect(() => {
+    const channelChanged =
+      previousCaptionChannelKeyRef.current !== null &&
+      singleNativeChannelKey !== null &&
+      previousCaptionChannelKeyRef.current !== singleNativeChannelKey;
+    if (singleNativeChannelKey !== null || !settings.captionTrack) {
+      previousCaptionChannelKeyRef.current = singleNativeChannelKey;
+    }
+    const hardIneligible =
+      composioManaged ||
+      multipleNativeChannels ||
+      captionCapabilityUnavailable;
+    if (
+      (hardIneligible || channelChanged) &&
+      settings.captionTrack &&
+      !settings.captionTrack.alreadySubmitted
+    ) {
+      nextYoutubeCaptionReadSeq += 1;
+      onSettingsChange({ captionTrack: null });
+      return;
+    }
+    if (
+      settings.captionTrack &&
+      !settings.captionTrack.alreadySubmitted &&
+      !settings.captionTrack.pendingRead
+    ) {
+      const nextEligible = captionCapabilityConfirmedEligible ? undefined : false;
+      if (settings.captionTrack.captionEligible !== nextEligible) {
+        const nextTrack = { ...settings.captionTrack };
+        if (nextEligible === undefined) {
+          delete nextTrack.captionEligible;
+        } else {
+          nextTrack.captionEligible = false;
+        }
+        onSettingsChange({ captionTrack: nextTrack });
+      }
+    }
+  }, [
+    captionCapabilityConfirmedEligible,
+    captionCapabilityUnavailable,
+    composioManaged,
+    distinctNativeChannels.size,
+    multipleNativeChannels,
+    onSettingsChange,
+    settings.captionTrack,
+    singleNativeChannelKey,
+  ]);
+
+  const [audioSubtitles, setAudioSubtitles] = useState<{ srt: string; vtt: string } | null>(null);
+  useEffect(() => {
+    setAudioSubtitles(null);
+  }, [hasVideo, videoSourceUrl]);
+
+  useEffect(() => {
+    if (
+      settings.captionTrack &&
+      !settings.captionTrack.alreadySubmitted &&
+      settings.captionTrack.source === "audio"
+    ) {
+      const currentVideoKey = hasVideo && videoSourceUrl ? videoSourceUrl : null;
+      if (!currentVideoKey || (settings.captionTrack.sourceKey && settings.captionTrack.sourceKey !== currentVideoKey)) {
+        onSettingsChange({ captionTrack: null });
+      }
+    }
+  }, [hasVideo, onSettingsChange, settings.captionTrack, videoSourceUrl]);
+
+  const initialCaptionLanguage = settings.captionTrack?.language ?? "en";
+  const isInitialCommonLang = (COMMON_CAPTION_LANGUAGES as readonly string[]).includes(initialCaptionLanguage);
+  const [captionLanguageChoice, setCaptionLanguageChoice] = useState<string>(
+    isInitialCommonLang ? initialCaptionLanguage : CUSTOM_CAPTION_LANGUAGE,
+  );
+  const [customCaptionLanguage, setCustomCaptionLanguage] = useState<string>(
+    isInitialCommonLang ? "" : initialCaptionLanguage,
+  );
+  const [captionTrackName, setCaptionTrackName] = useState<string>(settings.captionTrack?.name ?? "");
+  const [captionError, setCaptionError] = useState<string | null>(null);
+  const captionFileInputRef = useRef<HTMLInputElement>(null);
+  const latestCaptionTrackRef = useRef(settings.captionTrack);
+  latestCaptionTrackRef.current = settings.captionTrack;
+  const latestCaptionEligibleRef = useRef(captionCapabilityConfirmedEligible);
+  latestCaptionEligibleRef.current = captionCapabilityConfirmedEligible;
+
+  const captionTrackLanguage = settings.captionTrack?.language;
+  const captionTrackNameProp = settings.captionTrack?.name;
+  useEffect(() => {
+    if (captionTrackLanguage === undefined) return;
+    if ((COMMON_CAPTION_LANGUAGES as readonly string[]).includes(captionTrackLanguage)) {
+      setCaptionLanguageChoice((prev) => {
+        if (prev === CUSTOM_CAPTION_LANGUAGE) {
+          setCustomCaptionLanguage(captionTrackLanguage);
+          return prev;
+        }
+        setCustomCaptionLanguage("");
+        return captionTrackLanguage;
+      });
+    } else {
+      setCaptionLanguageChoice(CUSTOM_CAPTION_LANGUAGE);
+      setCustomCaptionLanguage(captionTrackLanguage);
+    }
+    setCaptionTrackName(captionTrackNameProp ?? "");
+  }, [captionTrackLanguage, captionTrackNameProp]);
+
+  const resolvedCaptionLanguage =
+    captionLanguageChoice === CUSTOM_CAPTION_LANGUAGE
+      ? customCaptionLanguage.trim()
+      : captionLanguageChoice;
+  const latestResolvedCaptionLanguageRef = useRef(resolvedCaptionLanguage);
+  latestResolvedCaptionLanguageRef.current = resolvedCaptionLanguage;
+  const latestCaptionTrackNameRef = useRef(captionTrackName);
+  latestCaptionTrackNameRef.current = captionTrackName;
+  const activeCaptionContent =
+    settings.captionTrack &&
+    !settings.captionTrack.alreadySubmitted &&
+    typeof settings.captionTrack.content === "string" &&
+    settings.captionTrack.content.length > 0
+      ? settings.captionTrack.content
+      : null;
+  const activeCaptionFormat: CaptionFormat | null =
+    settings.captionTrack && !settings.captionTrack.alreadySubmitted
+      ? settings.captionTrack.format
+      : null;
+  const activeCaptionSource =
+    settings.captionTrack && !settings.captionTrack.alreadySubmitted
+      ? settings.captionTrack.source
+      : undefined;
+  const activeCaptionSourceKey =
+    settings.captionTrack && !settings.captionTrack.alreadySubmitted
+      ? settings.captionTrack.sourceKey
+      : undefined;
+  const activeCaptionBytes = activeCaptionContent !== null ? measureUtf8Bytes(activeCaptionContent) : null;
+
+  const applyAndValidateCaptionTrack = (
+    nextLanguage: string,
+    nextName: string,
+    nextFormat: CaptionFormat,
+    nextContent: string,
+    meta?: { source?: "file" | "audio"; sourceKey?: string | null; captionEligible?: boolean },
+  ) => {
+    const trimmedLang = nextLanguage.trim();
+    const trimmedName = nextName.trim();
+    const sourceMeta = {
+      ...(meta?.source !== undefined ? { source: meta.source } : {}),
+      ...(meta?.sourceKey !== undefined ? { sourceKey: meta.sourceKey } : {}),
+      ...(meta?.captionEligible === false ? { captionEligible: false } : {}),
+    };
+    if (!CAPTION_LANGUAGE_PATTERN.test(trimmedLang)) {
+      setCaptionError(
+        t("youtube.captionsLanguageInvalid", "Enter a valid BCP-47 language code, for example en or ar-EG."),
+      );
+      onSettingsChange({
+        captionTrack: {
+          language: trimmedLang,
+          name: trimmedName,
+          format: nextFormat,
+          content: nextContent,
+          ...sourceMeta,
+        },
+      });
+      return;
+    }
+    const validation = validateCaptionUploadInput({
+      language: trimmedLang,
+      name: trimmedName,
+      format: nextFormat,
+      content: nextContent,
+    });
+    if (validation.ok === false) {
+      setCaptionError(
+        t(
+          "youtube.captionsInvalidContent",
+          "This subtitle file is invalid. Check the SRT or VTT timestamps and ensure it is under 512 KB.",
+        ),
+      );
+      onSettingsChange({ captionTrack: null });
+      return;
+    }
+    setCaptionError(null);
+    onSettingsChange({
+      captionTrack: {
+        language: trimmedLang,
+        name: trimmedName,
+        format: nextFormat,
+        content: nextContent,
+        ...sourceMeta,
+      },
+    });
+  };
+
+  const handleCaptionFileChange = async (chosen: File | undefined) => {
+    const readSeq = ++nextYoutubeCaptionReadSeq;
+    setCaptionError(null);
+    if (!chosen) return;
+    const format = inferUploadCaptionFormat(chosen.name);
+    if (format === null) {
+      setCaptionError(t("youtube.captionsUnsupportedFormat", "Choose an .srt or .vtt subtitle file."));
+      onSettingsChange({ captionTrack: null });
+      return;
+    }
+    if (typeof chosen.size === "number" && chosen.size > CAPTION_CONTENT_MAX_BYTES + 3) {
+      setCaptionError(t("youtube.captionsFileTooLarge", "Subtitle file exceeds the 512 KB UTF-8 limit."));
+      onSettingsChange({ captionTrack: null });
+      return;
+    }
+    onSettingsChange({
+      captionTrack: {
+        language: resolvedCaptionLanguage,
+        name: captionTrackName,
+        format,
+        pendingRead: true,
+        readSeq,
+      },
+    });
+    let content: string;
+    try {
+      if (typeof chosen.arrayBuffer === "function") {
+        const buffer = await chosen.arrayBuffer();
+        if (readSeq !== nextYoutubeCaptionReadSeq || latestCaptionTrackRef.current?.readSeq !== readSeq) return;
+        content = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+      } else {
+        content = await chosen.text();
+        if (readSeq !== nextYoutubeCaptionReadSeq || latestCaptionTrackRef.current?.readSeq !== readSeq) return;
+        if (content.includes("\uFFFD")) {
+          setCaptionError(
+            t(
+              "youtube.captionsInvalidEncoding",
+              "Subtitle file is not valid UTF-8. Save the file as UTF-8 and try again.",
+            ),
+          );
+          onSettingsChange({ captionTrack: null });
+          return;
+        }
+      }
+    } catch {
+      if (readSeq !== nextYoutubeCaptionReadSeq || latestCaptionTrackRef.current?.readSeq !== readSeq) return;
+      setCaptionError(
+        t(
+          "youtube.captionsInvalidEncoding",
+          "Subtitle file is not valid UTF-8. Save the file as UTF-8 and try again.",
+        ),
+      );
+      onSettingsChange({ captionTrack: null });
+      return;
+    }
+    if (readSeq !== nextYoutubeCaptionReadSeq || latestCaptionTrackRef.current?.readSeq !== readSeq) return;
+    const bytes = measureUtf8Bytes(content);
+    if (bytes > CAPTION_CONTENT_MAX_BYTES) {
+      setCaptionError(t("youtube.captionsFileTooLarge", "Subtitle file exceeds the 512 KB UTF-8 limit."));
+      onSettingsChange({ captionTrack: null });
+      return;
+    }
+    const pendingTrack = latestCaptionTrackRef.current;
+    const finalLang = pendingTrack?.pendingRead ? pendingTrack.language : latestResolvedCaptionLanguageRef.current;
+    const finalName = pendingTrack?.pendingRead ? pendingTrack.name : latestCaptionTrackNameRef.current;
+    applyAndValidateCaptionTrack(
+      finalLang,
+      finalName,
+      format,
+      content,
+      latestCaptionEligibleRef.current ? undefined : { captionEligible: false },
+    );
+  };
+
+  const handleUseAudioSubtitles = () => {
+    if (!audioSubtitles || captionsSectionDisabled) return;
+    nextYoutubeCaptionReadSeq += 1;
+    const bytes = measureUtf8Bytes(audioSubtitles.vtt);
+    if (bytes > CAPTION_CONTENT_MAX_BYTES) {
+      setCaptionError(t("youtube.captionsFileTooLarge", "Subtitle file exceeds the 512 KB UTF-8 limit."));
+      onSettingsChange({ captionTrack: null });
+      return;
+    }
+    applyAndValidateCaptionTrack(resolvedCaptionLanguage, captionTrackName, "vtt", audioSubtitles.vtt, {
+      source: "audio",
+      sourceKey: videoSourceUrl ?? null,
+    });
+  };
+
+  const handleCaptionLanguageChoiceChange = (choice: string) => {
+    setCaptionLanguageChoice(choice);
+    const nextLang = choice === CUSTOM_CAPTION_LANGUAGE ? customCaptionLanguage.trim() : choice;
+    if (activeCaptionContent !== null && activeCaptionFormat !== null) {
+      applyAndValidateCaptionTrack(nextLang, captionTrackName, activeCaptionFormat, activeCaptionContent, {
+        source: activeCaptionSource,
+        sourceKey: activeCaptionSourceKey,
+      });
+    } else if (settings.captionTrack?.pendingRead) {
+      onSettingsChange({
+        captionTrack: {
+          ...settings.captionTrack,
+          language: nextLang,
+        },
+      });
+    } else if (choice !== CUSTOM_CAPTION_LANGUAGE) {
+      setCaptionError(null);
+    }
+  };
+
+  const handleCustomCaptionLanguageChange = (raw: string) => {
+    setCustomCaptionLanguage(raw);
+    const nextLang = raw.trim();
+    if (activeCaptionContent !== null && activeCaptionFormat !== null) {
+      applyAndValidateCaptionTrack(nextLang, captionTrackName, activeCaptionFormat, activeCaptionContent, {
+        source: activeCaptionSource,
+        sourceKey: activeCaptionSourceKey,
+      });
+    } else if (settings.captionTrack?.pendingRead) {
+      onSettingsChange({
+        captionTrack: {
+          ...settings.captionTrack,
+          language: nextLang,
+        },
+      });
+    }
+  };
+
+  const handleCaptionTrackNameChange = (raw: string) => {
+    const sliced = raw.slice(0, CAPTION_NAME_MAX_LENGTH);
+    setCaptionTrackName(sliced);
+    if (activeCaptionContent !== null && activeCaptionFormat !== null) {
+      applyAndValidateCaptionTrack(resolvedCaptionLanguage, sliced, activeCaptionFormat, activeCaptionContent, {
+        source: activeCaptionSource,
+        sourceKey: activeCaptionSourceKey,
+      });
+    } else if (settings.captionTrack?.pendingRead) {
+      onSettingsChange({
+        captionTrack: {
+          ...settings.captionTrack,
+          name: sliced,
+        },
+      });
+    }
+  };
+
+  const handleClearCaptionTrack = () => {
+    nextYoutubeCaptionReadSeq += 1;
+    setCaptionError(null);
+    if (captionFileInputRef.current) {
+      captionFileInputRef.current.value = "";
+    }
+    onSettingsChange({ captionTrack: null });
+  };
   // The creator can ask for a YouTube schedule before choosing a time, so the
   // mode is local state until a timestamp exists. A stored timestamp switches
   // the mode on by itself, which is what reopens a saved draft.
@@ -605,6 +990,7 @@ export function YouTubeSettings({
           currentDescription={settings.description}
           videoSourceUrl={hasVideo ? videoSourceUrl : null}
           onSelect={(val) => onSettingsChange({ description: val })}
+          onAudioSubtitlesReady={setAudioSubtitles}
         />
       </div>
 
@@ -1381,6 +1767,190 @@ export function YouTubeSettings({
             </Button>
           </div>
         )}
+      </div>
+
+      {/* Subtitles / CC — upload-time caption track sent as a captions.insert follow-up */}
+      <div className="space-y-3 border-t pt-4" data-testid="youtube-upload-captions-section">
+        <div className="space-y-1">
+          <Label className="text-sm font-medium">
+            {t("youtube.captionsTitle", "Subtitles / CC")}
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "youtube.captionsAllowanceNote",
+              "Counts as one of your two caption uploads per day. Added after the video is uploaded.",
+            )}
+          </p>
+        </div>
+
+        {composioManaged && (
+          <p data-testid="youtube-captions-composio-note" className="text-xs text-destructive">
+            {t(
+              "youtube.captionsComposioUnsupported",
+              "Subtitles / CC upload is not available for managed accounts. Use a native channel.",
+            )}
+          </p>
+        )}
+        {!composioManaged && multipleNativeChannels && (
+          <p data-testid="youtube-captions-multi-channel-note" className="text-xs text-muted-foreground">
+            {t(
+              "youtube.captionsMultiChannelNote",
+              "Select a single native YouTube channel to attach subtitles at upload time.",
+            )}
+          </p>
+        )}
+        {!composioManaged && !multipleNativeChannels && playlistCatalog.capabilitiesUnavailable && playlistAccountId && (
+          <div data-testid="youtube-captions-capability-unavailable" className="flex items-center gap-2">
+            <p role="alert" className="text-xs text-destructive">
+              {t("youtube.captionsCapabilityLoadFailed", "Could not verify subtitle permissions for this channel.")}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => (playlistCatalog.retryCapabilities ?? playlistCatalog.retry)()}
+            >
+              {t("youtube.captionsCapabilityRetry", "Retry permissions")}
+            </Button>
+          </div>
+        )}
+        {!composioManaged && !multipleNativeChannels && captionCapabilityUnavailable && (
+          <p data-testid="youtube-captions-capability-note" className="text-xs text-destructive">
+            {manageCaptionsCapability?.state === "unavailable" &&
+            manageCaptionsCapability.reason === "reconnect_required"
+              ? t(
+                  "youtube.captionsReconnectRequired",
+                  "This channel needs to be reconnected before subtitles can be attached.",
+                )
+              : t(
+                  "youtube.captionsCapabilityUnavailable",
+                  "Reconnect this channel with YouTube caption permissions (force-ssl) to attach subtitles.",
+                )}
+          </p>
+        )}
+
+        {settings.captionTrack?.alreadySubmitted && (
+          <div
+            data-testid="youtube-caption-already-submitted"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-secondary/40 p-2.5 text-xs"
+          >
+            <span>
+              {t("youtube.captionsAlreadySubmitted", "Already submitted: {{language}} ({{format}}){{name}}", {
+                language: settings.captionTrack.language,
+                format: settings.captionTrack.format.toUpperCase(),
+                name: settings.captionTrack.name ? ` — ${settings.captionTrack.name}` : "",
+              })}
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={handleClearCaptionTrack}>
+              {t("youtube.captionsClear", "Clear subtitles")}
+            </Button>
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <Label htmlFor="youtube-caption-file" className="text-xs font-medium">
+            {t("youtube.captionsFileLabel", "Subtitle file (.srt or .vtt)")}
+          </Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              ref={captionFileInputRef}
+              id="youtube-caption-file"
+              type="file"
+              accept=".srt,.vtt"
+              aria-label={t("youtube.captionsFileLabel", "Subtitle file (.srt or .vtt)")}
+              disabled={captionsSectionDisabled}
+              onChange={(event) => void handleCaptionFileChange(event.target.files?.[0])}
+              className="max-w-sm"
+            />
+            {audioSubtitles !== null && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={captionsSectionDisabled}
+                onClick={handleUseAudioSubtitles}
+              >
+                {t("youtube.captionsUseFromAudio", "Use subtitles from the audio")}
+              </Button>
+            )}
+            {settings.captionTrack && !settings.captionTrack.alreadySubmitted && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleClearCaptionTrack}
+              >
+                {t("youtube.captionsClear", "Clear subtitles")}
+              </Button>
+            )}
+          </div>
+          {captionError && (
+            <p role="alert" data-testid="youtube-caption-error" className="text-xs text-destructive">
+              {captionError}
+            </p>
+          )}
+          {activeCaptionBytes !== null && (
+            <p data-testid="youtube-caption-file-size" className="text-xs text-muted-foreground">
+              {t(
+                "youtube.captionsFileSize",
+                "File size: {{size}} KB / {{limit}} KB ({{bytes}} UTF-8 bytes)",
+                {
+                  size: (activeCaptionBytes / 1024).toFixed(1),
+                  limit: CAPTION_CONTENT_MAX_BYTES / 1024,
+                  bytes: activeCaptionBytes,
+                },
+              )}
+            </p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="youtube-caption-language" className="text-xs font-medium">
+              {t("youtube.captionsLanguageLabel", "Subtitle language")}
+            </Label>
+            <select
+              id="youtube-caption-language"
+              aria-label={t("youtube.captionsLanguageLabel", "Subtitle language")}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-50"
+              value={captionLanguageChoice}
+              disabled={captionsSectionDisabled}
+              onChange={(event) => handleCaptionLanguageChoiceChange(event.target.value)}
+            >
+              {COMMON_CAPTION_LANGUAGES.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
+              <option value={CUSTOM_CAPTION_LANGUAGE}>
+                {t("youtube.captionsLanguageCustomOption", "Other (BCP-47 code)")}
+              </option>
+            </select>
+            {captionLanguageChoice === CUSTOM_CAPTION_LANGUAGE && (
+              <Input
+                aria-label={t("youtube.captionsLanguageCustomLabel", "BCP-47 language code")}
+                placeholder={t("youtube.captionsLanguageCustomLabel", "BCP-47 language code")}
+                value={customCaptionLanguage}
+                disabled={captionsSectionDisabled}
+                onChange={(event) => handleCustomCaptionLanguageChange(event.target.value)}
+              />
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="youtube-caption-track-name" className="text-xs font-medium">
+              {t("youtube.captionsTrackNameLabel", "Track name (optional)")}
+            </Label>
+            <Input
+              id="youtube-caption-track-name"
+              aria-label={t("youtube.captionsTrackNameLabel", "Track name (optional)")}
+              value={captionTrackName}
+              maxLength={CAPTION_NAME_MAX_LENGTH}
+              disabled={captionsSectionDisabled}
+              onChange={(event) => handleCaptionTrackNameChange(event.target.value)}
+            />
+          </div>
+        </div>
       </div>
     </div>
     </TooltipProvider>

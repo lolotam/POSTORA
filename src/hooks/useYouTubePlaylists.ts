@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SupabaseYouTubeResourcesGateway } from "@/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway";
-import type { YouTubePlaylistListItem } from "@/features/youtube-management/domain/types";
+import type {
+  YouTubeAccountCapabilities,
+  YouTubePlaylistListItem,
+} from "@/features/youtube-management/domain/types";
 
 export interface YouTubePlaylistsState {
   playlists: YouTubePlaylistListItem[];
+  capabilities: YouTubeAccountCapabilities["capabilities"] | null;
+  capabilitiesLoading: boolean;
+  capabilitiesUnavailable: boolean;
   loading: boolean;
   loadingMore: boolean;
   /** The list could not be read; the creator can retry without losing the choice. */
@@ -12,6 +18,7 @@ export interface YouTubePlaylistsState {
   hasMore: boolean;
   loadMore: () => void;
   retry: () => void;
+  retryCapabilities?: () => void;
 }
 
 const gateway = new SupabaseYouTubeResourcesGateway();
@@ -26,11 +33,23 @@ const gateway = new SupabaseYouTubeResourcesGateway();
  */
 export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylistsState {
   const [playlists, setPlaylists] = useState<YouTubePlaylistListItem[]>([]);
+  const [capabilitiesState, setCapabilitiesState] = useState<{
+    accountId: string | null;
+    capabilities: YouTubeAccountCapabilities["capabilities"] | null;
+    loading: boolean;
+    unavailable: boolean;
+  }>({
+    accountId: null,
+    capabilities: null,
+    loading: false,
+    unavailable: false,
+  });
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [capabilitiesAttempt, setCapabilitiesAttempt] = useState(0);
 
   // The cursor and the in-flight guard live in refs: `loadMore` is called from
   // a click handler that must see the cursor of the last finished read, not
@@ -41,6 +60,58 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   // changed belongs to an older generation and may not write into the list
   // the newer generation owns.
   const generationRef = useRef(0);
+
+  const capabilitiesGenerationRef = useRef(0);
+  useEffect(() => {
+    const capGeneration = capabilitiesGenerationRef.current + 1;
+    capabilitiesGenerationRef.current = capGeneration;
+
+    if (!accountId) {
+      setCapabilitiesState({
+        accountId: null,
+        capabilities: null,
+        loading: false,
+        unavailable: false,
+      });
+      return;
+    }
+
+    if (typeof gateway.getCapabilities === "function") {
+      setCapabilitiesState({
+        accountId,
+        capabilities: null,
+        loading: true,
+        unavailable: false,
+      });
+      gateway.getCapabilities(accountId)
+        .then((result) => {
+          if (capabilitiesGenerationRef.current !== capGeneration) return;
+          const nextCaps = result?.data?.capabilities ?? null;
+          setCapabilitiesState({
+            accountId,
+            capabilities: nextCaps,
+            loading: false,
+            unavailable: nextCaps === null,
+          });
+        })
+        .catch(() => {
+          if (capabilitiesGenerationRef.current !== capGeneration) return;
+          setCapabilitiesState({
+            accountId,
+            capabilities: null,
+            loading: false,
+            unavailable: true,
+          });
+        });
+    } else {
+      setCapabilitiesState({
+        accountId,
+        capabilities: null,
+        loading: false,
+        unavailable: false,
+      });
+    }
+  }, [accountId, attempt, capabilitiesAttempt]);
 
   useEffect(() => {
     const generation = generationRef.current + 1;
@@ -117,20 +188,33 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   const retry = useCallback(() => {
     // A failed page is retried where it failed; a list that never arrived is
     // read again from the first page.
-    if (playlists.length > 0 && cursorRef.current !== null) {
+    if (unavailable && playlists.length > 0 && cursorRef.current !== null) {
       loadMore();
       return;
     }
     setAttempt((value) => value + 1);
-  }, [loadMore, playlists.length]);
+  }, [loadMore, playlists.length, unavailable]);
+
+  const retryCapabilities = useCallback(() => {
+    setCapabilitiesAttempt((value) => value + 1);
+  }, []);
+
+  const activeAccountMatch = Boolean(accountId) && capabilitiesState.accountId === accountId;
+  const capabilities = activeAccountMatch ? capabilitiesState.capabilities : null;
+  const capabilitiesLoading = Boolean(accountId) && (!activeAccountMatch || capabilitiesState.loading);
+  const capabilitiesUnavailable = activeAccountMatch ? capabilitiesState.unavailable : false;
 
   return {
     playlists,
+    capabilities,
+    capabilitiesLoading,
+    capabilitiesUnavailable,
     loading,
     loadingMore,
     unavailable,
     hasMore: nextPageToken !== null,
     loadMore,
     retry,
+    retryCapabilities,
   };
 }

@@ -7,6 +7,12 @@ interface FollowUpEvidence {
   reason: string | null;
 }
 
+export interface CaptionFollowUpEvidence extends FollowUpEvidence {
+  language?: string | null;
+  format?: "srt" | "vtt" | null;
+  byte_length?: number | null;
+}
+
 export interface YoutubePublishEvidenceView {
   requested_privacy: string;
   effective_privacy: string;
@@ -14,6 +20,8 @@ export interface YoutubePublishEvidenceView {
   first_comment: FollowUpEvidence;
   /** Absent on rows settled before a video could be added to a playlist. */
   playlist?: FollowUpEvidence;
+  /** Absent on rows settled before upload-time captions were introduced. */
+  caption?: CaptionFollowUpEvidence;
 }
 
 interface Props {
@@ -62,6 +70,10 @@ export function YouTubePublishEvidence({ evidence }: Props): JSX.Element | null 
         <FollowUpLine
           label={t("youtube.playlist", "Playlist")}
           value={evidence.playlist ?? { state: "not_requested", reason: null }}
+        />
+        <FollowUpLine
+          label={t("youtube.caption", "Subtitles / CC")}
+          value={evidence.caption ?? { state: "not_requested", reason: null }}
         />
       </ul>
     </div>

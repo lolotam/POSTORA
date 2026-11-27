@@ -5,6 +5,20 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { buildYoutubeDeclarationProof } from "@/lib/youtubePublishSafety";
 import { resolveYoutubePublishAt } from "../../supabase/functions/_shared/youtubePublishOptions";
+import { validateCaptionUploadInput } from "../../supabase/functions/_shared/captionFile";
+
+export interface YouTubeUploadCaptionState {
+  language: string;
+  name: string;
+  format: "srt" | "vtt";
+  content?: string;
+  alreadySubmitted?: boolean;
+  source?: "file" | "audio";
+  sourceKey?: string | null;
+  pendingRead?: boolean;
+  readSeq?: number;
+  captionEligible?: boolean;
+}
 
 export type LocationSource = "threads" | "facebook" | "nominatim" | "meta";
 
@@ -193,6 +207,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
   const [youtubeEnableFirstComment, setYoutubeEnableFirstComment] = useState(false);
   const [youtubePublishAt, setYoutubePublishAt] = useState<string>("");
   const [youtubeScheduleRequested, setYoutubeScheduleRequested] = useState(false);
+  const [youtubeCaption, setYoutubeCaption] = useState<YouTubeUploadCaptionState | null>(null);
 
   // Facebook Reel settings
   const [facebookReelDescription, setFacebookReelDescription] = useState("");
@@ -586,6 +601,27 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       ...(selectedPlatforms.includes("youtube") && youtubePlaylist.trim().length > 0
         ? { youtube_playlist_id: youtubePlaylist.trim() }
         : {}),
+      ...(selectedPlatforms.includes("youtube") &&
+      youtubeCaption !== null &&
+      !youtubeCaption.alreadySubmitted &&
+      !youtubeCaption.pendingRead &&
+      typeof youtubeCaption.content === "string" &&
+      youtubeCaption.content.length > 0 &&
+      validateCaptionUploadInput({
+        language: youtubeCaption.language.trim(),
+        name: youtubeCaption.name.trim(),
+        format: youtubeCaption.format,
+        content: youtubeCaption.content,
+      }).ok === true
+        ? {
+            youtube_caption: {
+              language: youtubeCaption.language.trim(),
+              name: youtubeCaption.name.trim(),
+              format: youtubeCaption.format,
+              content: youtubeCaption.content,
+            },
+          }
+        : {}),
       // Facebook Reel description
       facebook_reel_description: facebookReelDescription || null,
       // Threads settings
@@ -687,6 +723,32 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     now: Date = new Date(),
     postoraScheduledAt: Date | null = null,
   ): string | null => {
+    if (youtubeCaption && !youtubeCaption.alreadySubmitted) {
+      if (youtubeCaption.pendingRead) {
+        return t(
+          "youtube.captionReadInProgress",
+          "Please wait for the subtitle file to finish loading before publishing.",
+        );
+      }
+      if (youtubeCaption.captionEligible === false) {
+        return t(
+          "youtube.captionsCapabilityUnconfirmedError",
+          "Verify subtitle permissions for the selected YouTube channel or clear the subtitle file before publishing.",
+        );
+      }
+      const validation = validateCaptionUploadInput({
+        language: youtubeCaption.language.trim(),
+        name: youtubeCaption.name.trim(),
+        format: youtubeCaption.format,
+        content: youtubeCaption.content ?? "",
+      });
+      if (validation.ok === false) {
+        return t(
+          "youtube.captionInvalid",
+          "Choose a valid .srt or .vtt subtitle file under 512 KB with a valid language code.",
+        );
+      }
+    }
     const trimmed = youtubePublishAt.trim();
     if (!trimmed) {
       return youtubeScheduleRequested
@@ -873,6 +935,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     youtubeEnableFirstComment, setYoutubeEnableFirstComment,
     youtubePublishAt, setYoutubePublishAt,
     youtubeScheduleRequested, setYoutubeScheduleRequested,
+    youtubeCaption, setYoutubeCaption,
     validateYoutubeSettings,
 
     // Facebook Reel

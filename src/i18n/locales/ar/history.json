@@ -157,6 +157,7 @@
   },
   "youtube": {
     "applied": "تم تطبيقه",
+    "caption": "الترجمة (Subtitles / CC)",
     "failed": "فشل",
     "firstComment": "أول تعليق",
     "notRequested": "مش مطلوب",
