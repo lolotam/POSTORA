@@ -1,5 +1,7 @@
 import { z } from "npm:zod@3.23.8";
+import { readJsonBodyCapped } from "../_shared/cappedJsonBody.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import type { CaptionFormat } from "./captionFile.ts";
 import { deriveYouTubeCapabilities } from "./capabilities.ts";
 import {
   YOUTUBE_RESOURCE_ERROR_STATUS,
@@ -7,13 +9,18 @@ import {
   YOUTUBE_VIDEOS_DEFAULT_PAGE_SIZE,
   YOUTUBE_VIDEOS_MAX_PAGE_SIZE,
   type YouTubeAccountCapabilities,
+  type YouTubeCaptionsListData,
   type YouTubeResourceErrorCode,
   type YouTubeResourceSuccess,
   type YouTubeSetThumbnailResult,
+  type YouTubeUploadCaptionData,
 } from "./contracts.ts";
 import type { YouTubeReadClient, YouTubeReadResult } from "./youtubeReadClient.ts";
 import type { EditChanges, EditFailureCode, EditSnapshot } from "./editLifecycle.ts";
 import type { CategoryListResult, YouTubeCategoryClient } from "./categoryClient.ts";
+
+export const YOUTUBE_RESOURCES_MAX_BODY_BYTES = Math.floor(1.5 * 1024 * 1024);
+const BODY_READ_TIMEOUT_MS = 10_000;
 
 /**
  * The edit seam. Production does not provide it (D1/D5): every edit request is
@@ -28,6 +35,29 @@ export interface YouTubeThumbnailPort {
     mediaFileId: string;
   }): Promise<
     | { ok: true; value: YouTubeSetThumbnailResult }
+    | { ok: false; code: YouTubeResourceErrorCode; retryAfterSeconds?: number }
+  >;
+}
+
+export interface YouTubeCaptionPort {
+  listCaptions(input: {
+    account: YouTubeResourceAccount;
+    userId: string;
+    videoId: string;
+  }): Promise<
+    | { ok: true; value: YouTubeCaptionsListData }
+    | { ok: false; code: YouTubeResourceErrorCode; retryAfterSeconds?: number }
+  >;
+  uploadCaption(input: {
+    account: YouTubeResourceAccount;
+    userId: string;
+    videoId: string;
+    language: string;
+    name: string;
+    format: CaptionFormat;
+    content: string;
+  }): Promise<
+    | { ok: true; value: YouTubeUploadCaptionData }
     | { ok: false; code: YouTubeResourceErrorCode; retryAfterSeconds?: number }
   >;
 }
@@ -86,6 +116,7 @@ export interface YouTubeResourcesPorts {
   categories: YouTubeCategoryClient;
   edit?: YouTubeEditPort;
   thumbnail?: YouTubeThumbnailPort;
+  captions?: YouTubeCaptionPort;
   rateLimit: { check(userId: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> };
 }
 
@@ -150,6 +181,24 @@ const SetThumbnailRequest = z.object({
   video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
   media_file_id: z.string().uuid(),
 }).strict();
+const CaptionsRequest = z.object({
+  operation: z.literal("captions"),
+  account_id: AccountId,
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
+}).strict();
+const UploadCaptionRequest = z.object({
+  operation: z.literal("upload_caption"),
+  account_id: AccountId,
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
+  language: z.string().min(1).max(35),
+  name: z.string().max(300),
+  format: z.enum(["srt", "vtt"]),
+  // Note: Do NOT put a character .max() on `content` in Zod that could fire
+  // before the UTF-8 byte check in captionFile.ts! Any oversized body > 1.5 MiB
+  // is stopped by readJsonBodyCapped, and any content > 512 KiB UTF-8 bytes
+  // is answered as `caption_invalid` by the caption validator.
+  content: z.string(),
+}).strict();
 const RequestSchema = z.discriminatedUnion("operation", [
   CapabilitiesRequest,
   CategoriesRequest,
@@ -160,6 +209,8 @@ const RequestSchema = z.discriminatedUnion("operation", [
   EditSnapshotRequest,
   UpdateVideoRequest,
   SetThumbnailRequest,
+  CaptionsRequest,
+  UploadCaptionRequest,
 ]);
 
 // The audit label for a refusal: the requested operation when the body names one of
@@ -170,7 +221,8 @@ function requestedOperationOf(body: unknown): string {
   const requested = (body as Record<string, unknown>).operation;
   return requested === "capabilities" || requested === "categories" || requested === "channel" ||
       requested === "videos" || requested === "video" || requested === "playlists" ||
-      requested === "edit_snapshot" || requested === "update_video" || requested === "set_thumbnail"
+      requested === "edit_snapshot" || requested === "update_video" || requested === "set_thumbnail" ||
+      requested === "captions" || requested === "upload_caption"
     ? requested
     : "unknown";
 }
@@ -309,11 +361,13 @@ export function createYouTubeResourcesHandler(
         requestId,
       });
     }
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      // Malformed JSON is a client error; the raw parse error text is not echoed.
+    const bodyResult = await readJsonBodyCapped(
+      req,
+      YOUTUBE_RESOURCES_MAX_BODY_BYTES,
+      AbortSignal.timeout(BODY_READ_TIMEOUT_MS),
+    ).catch(() => ({ ok: false as const, reason: "invalid_json" as const }));
+    if (!bodyResult.ok) {
+      // Malformed or oversized JSON is a client error; the raw parse error text is not echoed.
       return await refuse(req, {
         operation: unknownOperation,
         code: "invalid_request",
@@ -322,6 +376,7 @@ export function createYouTubeResourcesHandler(
         requestId,
       });
     }
+    const body = bodyResult.value;
     const requestedOperation = requestedOperationOf(body);
     const parsed = RequestSchema.safeParse(body);
     if (!parsed.success) {
@@ -495,21 +550,19 @@ export function createYouTubeResourcesHandler(
         return await refuse(req, { operation: parsed.data.operation, code, userId, accountId, requestId });
       }
     }
-    if (parsed.data.operation === "set_thumbnail") {
-      if (!ports.thumbnail) {
-        return await refuse(req, {
-          operation: "set_thumbnail",
-          code: "write_not_enabled",
-          userId,
-          accountId,
-          requestId,
-        });
-      }
+    async function runAdmittedPort<T>(
+      operation: string,
+      targetAccount: YouTubeResourceAccount,
+      fn: () => Promise<
+        | { ok: true; value: T }
+        | { ok: false; code: YouTubeResourceErrorCode; retryAfterSeconds?: number }
+      >,
+    ): Promise<Response> {
       try {
-        const admission = await admit(account, userId);
+        const admission = await admit(targetAccount, userId);
         if (admission !== null) {
           return await refuse(req, {
-            operation: "set_thumbnail",
+            operation,
             code: admission.code,
             userId,
             accountId,
@@ -518,15 +571,10 @@ export function createYouTubeResourcesHandler(
             ? { retry_after_seconds: admission.retryAfterSeconds }
             : undefined);
         }
-        const result = await ports.thumbnail.setThumbnail({
-          account,
-          userId,
-          videoId: parsed.data.video_id,
-          mediaFileId: parsed.data.media_file_id,
-        });
+        const result = await fn();
         if (!result.ok) {
           return await refuse(req, {
-            operation: "set_thumbnail",
+            operation,
             code: result.code,
             userId,
             accountId,
@@ -535,7 +583,7 @@ export function createYouTubeResourcesHandler(
             ? { retry_after_seconds: result.retryAfterSeconds }
             : undefined);
         }
-        const envelope: YouTubeResourceSuccess<YouTubeSetThumbnailResult> = {
+        const envelope: YouTubeResourceSuccess<T> = {
           schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
           request_id: requestId,
           freshness: { fetched_at: ports.clock.now().toISOString(), source: "provider" },
@@ -547,13 +595,69 @@ export function createYouTubeResourcesHandler(
         });
       } catch {
         return await refuse(req, {
-          operation: "set_thumbnail",
+          operation,
           code: "internal_error",
           userId,
           accountId,
           requestId,
         });
       }
+    }
+
+    if (parsed.data.operation === "set_thumbnail") {
+      if (!ports.thumbnail) {
+        return await refuse(req, {
+          operation: "set_thumbnail",
+          code: "write_not_enabled",
+          userId,
+          accountId,
+          requestId,
+        });
+      }
+      const thumbnailPort = ports.thumbnail;
+      const thumbData = parsed.data;
+      return await runAdmittedPort("set_thumbnail", account, () =>
+        thumbnailPort.setThumbnail({
+          account,
+          userId,
+          videoId: thumbData.video_id,
+          mediaFileId: thumbData.media_file_id,
+        })
+      );
+    }
+    if (parsed.data.operation === "captions" || parsed.data.operation === "upload_caption") {
+      if (!ports.captions) {
+        return await refuse(req, {
+          operation: parsed.data.operation,
+          code: "write_not_enabled",
+          userId,
+          accountId,
+          requestId,
+        });
+      }
+      const captionsPort = ports.captions;
+      if (parsed.data.operation === "captions") {
+        const listData = parsed.data;
+        return await runAdmittedPort("captions", account, () =>
+          captionsPort.listCaptions({
+            account,
+            userId,
+            videoId: listData.video_id,
+          })
+        );
+      }
+      const uploadData = parsed.data;
+      return await runAdmittedPort("upload_caption", account, () =>
+        captionsPort.uploadCaption({
+          account,
+          userId,
+          videoId: uploadData.video_id,
+          language: uploadData.language,
+          name: uploadData.name,
+          format: uploadData.format,
+          content: uploadData.content,
+        })
+      );
     }
     if (parsed.data.operation === "capabilities") {
       const envelope: YouTubeResourceSuccess<YouTubeAccountCapabilities> = {

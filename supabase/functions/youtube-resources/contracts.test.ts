@@ -11,11 +11,13 @@ Deno.test("each error code keeps its documented HTTP status", () => {
     invalid_request: 400,
     invalid_cursor: 400,
     media_not_usable: 400,
+    caption_invalid: 400,
     unauthorized: 401,
     missing_scope: 403,
     thumbnail_not_allowed: 403,
     write_not_enabled: 403,
     edit_conflict: 409,
+    caption_conflict: 409,
     outcome_unknown: 502,
     not_found: 404,
     method_not_allowed: 405,
@@ -32,6 +34,8 @@ Deno.test("isYouTubeResourceErrorCode accepts known codes and rejects everything
   assertEquals(isYouTubeResourceErrorCode("quota_exceeded"), true);
   assertEquals(isYouTubeResourceErrorCode("media_not_usable"), true);
   assertEquals(isYouTubeResourceErrorCode("thumbnail_not_allowed"), true);
+  assertEquals(isYouTubeResourceErrorCode("caption_invalid"), true);
+  assertEquals(isYouTubeResourceErrorCode("caption_conflict"), true);
   assertEquals(isYouTubeResourceErrorCode("Quota exceeded for quota metric"), false);
   assertEquals(isYouTubeResourceErrorCode(429), false);
   assertEquals(isYouTubeResourceErrorCode(null), false);
@@ -45,6 +49,8 @@ Deno.test("the quota policy is the one the specification publishes", () => {
     videos_page: 2,
     video: 1,
     playlists_page: 1,
+    captions_list: 50,
+    caption_upload: 400,
   });
 });
 

@@ -76,6 +76,19 @@ function manageThumbnailCapability({ composio, needsReconnect, scopes, hasRecord
   return hasRecordedList ? MISSING_SCOPE : UNKNOWN;
 }
 
+// Spec section 8 & 11.1: caption listing and upload are independent of
+// PUBLISHED_EDIT_WRITE_ENABLED; composio is unsupported, reconnect wins, readonly is
+// required for admission and video ownership pre-check, and force-ssl covers captions.
+function manageCaptionsCapability({ composio, needsReconnect, scopes, hasRecordedList }: DerivationContext): YouTubeCapabilityState {
+  if (composio) return { state: "unavailable", reason: "provider_unsupported" };
+  if (needsReconnect) return RECONNECT;
+  if (scopes.readonly === "missing") return MISSING_SCOPE;
+  if (scopes.readonly === "granted" && scopes.force_ssl === "granted") {
+    return AVAILABLE;
+  }
+  return hasRecordedList ? MISSING_SCOPE : UNKNOWN;
+}
+
 // Spec section 3.3: one pure function per row, no provider call, no I/O. The comment
 // capability stays the existing rule (youtubeCommentCapability); no second rule is written.
 export function deriveYouTubeCapabilities(
@@ -114,6 +127,7 @@ export function deriveYouTubeCapabilities(
       // "available" from scopes alone; a DB lock cannot fence Studio.
       edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
       manage_thumbnail: manageThumbnailCapability(context),
+      manage_captions: manageCaptionsCapability(context),
       comments: commentsCapability({
         needsReconnect,
         authProvider: account.authProvider,

@@ -33,3 +33,28 @@ export function toYouTubeResourceError(payload: unknown): YouTubeResourceError {
 export function isRetryableYouTubeError(code: YouTubeResourceErrorCode): boolean {
   return code === "upstream_unavailable";
 }
+
+/**
+ * The refusals that mean "nothing was written": the connection, the scope
+ * or the request itself was turned down before any change reached YouTube.
+ *
+ * Every outcome mapper in this feature shares this one list, so a refusal
+ * code cannot be added to one mapper and forgotten in the other — a missed
+ * code would tell the creator that something may have been uploaded when
+ * nothing was.
+ */
+const DEFINITIVE_REFUSAL_CODES = [
+  "reconnect_required",
+  "not_found",
+  "unauthorized",
+  "upstream_unavailable",
+  "missing_scope",
+  "provider_unsupported",
+  "write_not_enabled",
+  "invalid_request",
+  "internal_error",
+] as const;
+
+export function isDefinitiveRefusalCode(code: string): boolean {
+  return (DEFINITIVE_REFUSAL_CODES as readonly string[]).includes(code);
+}

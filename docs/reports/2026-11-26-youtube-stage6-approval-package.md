@@ -11,7 +11,7 @@ This package distinguishes four kinds of evidence:
 - **Offline verification:** tests whose files exist at the baseline or were added by Stage 6. A suite's presence is not a claim that Stage 6 reran it.
 - **Live evidence:** production migration records, deployed-file parity, Cloud Console readings, and provider behavior. Stage 6 is offline and does not independently verify these. A merged PR is not, by itself, deployed-SHA or live-provider proof.
 
-Feature availability remains subject to the shipped rollout controls. In particular, `PUBLISHED_EDIT_WRITE_ENABLED` is `false` at this baseline and the production edit guard returns `false`; the published-edit write path therefore fails closed until a separately reviewed activation change. Stage 4 comment capabilities and Stage 5 analytics are also gated per account. The demo script names these prerequisites rather than implying every feature is enabled for every channel.
+Feature availability remains subject to the shipped rollout controls. In particular, `PUBLISHED_EDIT_WRITE_ENABLED` is `false` at this baseline and the production edit guard returns `false`; the published-edit write path therefore fails closed until a separately reviewed activation change. Stage 4 comment capabilities and Stage 5 analytics are also gated per account. Stage 6A caption management has its own `manage_captions` capability, derived from the connection's scopes, and is gated by it independently of the published-edit gate. The demo script names these prerequisites rather than implying every feature is enabled for every channel.
 
 Public legal pages:
 
@@ -72,8 +72,10 @@ The upload path creates a new video. It does not replace media bytes of an exist
 | 4 | Edit a comment written by the connected channel | `comments.update` | `supabase/functions/comment-manager/stage4/provider.ts`; author/target checks in `handler.ts` |
 | 4 | Delete a comment written by the connected channel | `comments.delete` | `supabase/functions/_shared/youtubeComments.ts` (`deleteOwnComment`); action guard `supabase/functions/_shared/commentActions.ts` |
 | 4 | Publish or reject a comment (including comments already in the Held for review queue; moving a published comment to `heldForReview` is disabled at this baseline via `STAGE4_HOLD_FROM_PUBLISHED = false`); optionally request author ban only with rejection | `comments.setModerationStatus` | `supabase/functions/comment-manager/stage4/provider.ts`; separately confirmed `banAuthor` flow in `handler.ts` and `src/features/youtube-comments/application/useYouTubeStage4.ts` |
+| 6A | List the caption tracks of a video the owner already uploaded, only on an explicit request | `captions.list?part=snippet&videoId=...` | `supabase/functions/youtube-resources/captionComposition.ts`; UI `src/features/youtube-management/ui/YouTubeCaptionsSection.tsx` |
+| 6A | Add a new caption track from an owner-supplied `.srt` or `.vtt` file, after an explicit confirmation | `captions.insert` (multipart upload) | `supabase/functions/youtube-resources/captionComposition.ts`; format and size check in `captionFile.ts`; UI `src/features/youtube-management/ui/YouTubeCaptionsSection.tsx` |
 
-Postora does not offer video deletion. The separate legacy video-delete helper is not part of the Stage 6 disclosure or demo scope.
+Postora does not offer video deletion. The separate legacy video-delete helper is not part of the Stage 6 disclosure or demo scope. Postora does not modify, replace, or delete an existing caption track either: the caption flow only lists tracks on an explicit request and adds a new one from a file the owner supplies.
 
 ## 3. Quota model and capacity reserve
 
@@ -100,6 +102,8 @@ Sources, read for Stage 6 on 26 November 2026:
 | `comments.update` | 4 edit own comment | 50 shared units | Same Stage 4 per-action write limiter and durable receipt |
 | `comments.setModerationStatus` | 4 publish/reject (moving published to `heldForReview` is disabled at baseline); optional `banAuthor` | 50 shared units | Stage 4 per-action write limiter; ban confirmation has a separate 5 requests/24 h limit per user |
 | `comments.delete` | 4 delete own comment | 50 shared units | Existing own-author guard; repeat-safe legacy action, not a new Stage 4 receipted send |
+| `captions.list` | 6A list the caption tracks of an owned video | 50 shared units | Explicit creator action only (never on open); 10 lists per 24 h per user; debited only after the ownership read |
+| `captions.insert` | 6A add a new caption track from an owner-supplied file | 400 shared units | 2 uploads per 24 h per user; the 512 KB UTF-8 check is free and runs before the write; one attempt only, a lost answer is `outcome_unknown` |
 | Analytics v2 `reports.query` | 5 summary/daily/top-videos, channel or one video | 1 Analytics quota unit/request | Per-user admission 120/60 s; data 60/600 s and 300/86400 s; project attempt ceiling 2,000/Pacific day |
 
 A normal Stage 3 edit needs one pre-read `videos.list` plus one `videos.update`: **51 shared units before the read-after-write verification**. The verification read costs one additional unit, so a completed read → update → verify sequence costs **52 units**. Category catalog retrieval, when needed, adds one unit.
@@ -213,15 +217,15 @@ The registered runner is `scripts/db-harness.sh`; an unregistered file is not re
 
 ### 5.3 Vitest and Testing Library suites
 
-- **Management:** 14 files under `src/features/youtube-management/`, covering account options/errors/duration, capabilities/videos, gateway, architecture/wiring, and all major UI components including the editor.
+- **Management:** 17 files under `src/features/youtube-management/`, covering account options/errors/duration, capabilities/videos, gateway (including caption listing and upload), architecture/wiring, and all major UI components including the editor and the captions section.
 - **Comments:** 12 files under `src/features/youtube-comments/tests/`, covering admission, architecture, gateway capabilities/reasons, operation identity/recovery, pending guards/freshness, reply lists, status recovery, screen behavior, and user switching.
 - **Analytics:** `access_lease_and_screen.test.tsx`, `architecture.test.ts`, `domain.test.ts`, `flags_and_links.test.tsx`, and `gateway_and_keys.test.ts`. The domain suite pins the English and Arabic Analytics Purpose Clause digests.
-- **Stage 6:** `src/pages/__tests__/YouTubeLegalDisclosures.test.tsx` renders all three public legal pages and pins scopes, capabilities, dates, disconnect behavior, and required policy links.
+- **Stage 6:** `src/pages/__tests__/YouTubeLegalDisclosures.test.tsx` renders all three public legal pages and pins scopes, capabilities, dates, disconnect behavior, caption listing and upload, and required policy links.
 
 Stage 6 verification command:
 
 ```bash
-npx vitest run src/pages/__tests__/YouTubeLegalDisclosures.test.tsx src/features/youtube-analytics
+npx vitest run src/pages/__tests__/YouTubeLegalDisclosures.test.tsx src/features/youtube-analytics src/features/youtube-management
 ```
 
 ### 5.4 Offline Playwright journeys present at the baseline
@@ -311,6 +315,14 @@ All automated provider calls in these suites use fakes/fixtures. No test should 
 
 **Capture:** Disconnect confirmation/result, removed connection, and Google re-prompt with secrets masked. If demonstrating a shared grant, use two connections owned by the same test user and show that disconnecting one does not revoke the grant still needed by the other.
 
+### Journey 9 — Caption track list and upload
+
+**Actions:** Open `/youtube` and open an owned video. Show that no caption track was listed before the click, then click **Show caption tracks** and show the track list (or the empty state). Choose a small `.srt` or `.vtt` file, a language and a track name, and show the file size against the 512 KB limit. Stop at the confirmation step, then confirm the upload and show the new track in the list.
+
+**Expected:** Listing happens only on the explicit click. The upload happens once, after the explicit confirmation, and adds a new track. No existing caption track is edited, replaced, or deleted, and no caption track is downloaded. A file over 512 KB is refused in the browser before any provider call, and a lost answer leaves the track list unchanged until it is refreshed.
+
+**Capture:** The closed drawer before the click, the track list, the upload form with the file size and the limit, the confirmation step, and the confirmed result. Narrate the 50-unit `captions.list` and the 400-unit `captions.insert`, the 10-list and 2-upload per-user daily limits, and the 512 KB UTF-8 ceiling.
+
 ## 7. Submission checklist
 
 - [ ] Stage 6 frontend deployment serves the three legal pages with the fixed date and complete Stage 1–5 wording.
@@ -319,6 +331,6 @@ All automated provider calls in these suites use fakes/fixtures. No test should 
 - [ ] Full deployed Edge Function per-file SHA-256 output and Edge Functions Sync log match the demonstrated merge commit.
 - [ ] Actual Data and Analytics quota limits and recent Data API feature peaks are read from Cloud Console and compared with §3.
 - [ ] Feature activation state is stated accurately, including the published-edit write gate and per-account Stage 4/5 rollout controls.
-- [ ] All eight demo journeys are recorded with masking rules applied and no secret/private evidence exposed.
+- [ ] All nine demo journeys are recorded with masking rules applied and no secret/private evidence exposed.
 - [ ] Offline test outputs are attached for the exact candidate head, including Stage 6 legal tests, analytics tests, typecheck, and targeted zero-warning ESLint.
 - [ ] Any remaining live unknown is labeled as such; no repository-only evidence is presented as live production proof.

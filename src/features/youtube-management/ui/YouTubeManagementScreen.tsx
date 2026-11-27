@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { YouTubeResourceErrorCode, YouTubeVideoListItem } from "../domain/types";
 import { YouTubeResourceError } from "../domain/errors";
 import { thumbnailOutcomeFromErrorCode, type YouTubeThumbnailOutcome } from "../domain/thumbnail";
+import { captionOutcomeFromErrorCode } from "../domain/captions";
 import type { YouTubeAccountOption } from "../domain/accountOptions";
 import { useYouTubeCapabilities } from "../application/useYouTubeCapabilities";
 import { useYouTubeChannel } from "../application/useYouTubeChannel";
@@ -72,6 +73,9 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
   // published-edit gate and of the browse capability.
   const thumbnailCapability = capabilities.data?.data.capabilities.manage_thumbnail ?? null;
   const canChangeThumbnail = thumbnailCapability?.state === "available";
+  // Caption management has its own capability too: it is independent of
+  // the published-edit gate and of the browse capability.
+  const captionsCapability = capabilities.data?.data.capabilities.manage_captions ?? null;
 
   const channel = useYouTubeChannel({ gateway, accountId: activeAccountId, enabled: canBrowse });
   const videos = useYouTubeVideos({ gateway, accountId: activeAccountId, enabled: canBrowse });
@@ -275,7 +279,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             });
             return "saved";
           } catch (error) {
-            const code = (error as { code?: string }).code;
+            const code = error && typeof error === "object" ? (error as { code?: string }).code : undefined;
             return code === "edit_conflict" ? "edit_conflict" : "outcome_unknown";
           }
         }}
@@ -294,7 +298,8 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             await gateway.setThumbnail?.({ accountId: activeAccountId, videoId: selectedVideoId, mediaFileId });
             result = "applied";
           } catch (error) {
-            result = thumbnailOutcomeFromErrorCode((error as { code?: string }).code);
+            const code = error && typeof error === "object" ? (error as { code?: string }).code : undefined;
+            result = thumbnailOutcomeFromErrorCode(code);
           }
           // An applied write and a lost answer both need a fresh read: only
           // the video's current thumbnail settles what viewers see.
@@ -303,6 +308,24 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             void videos.refetch();
           }
           return result;
+        } : undefined}
+        captionsCapability={captionsCapability}
+        onListCaptions={gateway.listCaptions ? async (videoId) => {
+          if (!activeAccountId) throw new YouTubeResourceError("upstream_unavailable");
+          const result = await gateway.listCaptions({ accountId: activeAccountId, videoId });
+          return result.data.items;
+        } : undefined}
+        onUploadCaption={gateway.uploadCaption ? async ({ videoId, language, name, format, content }) => {
+          if (!activeAccountId) return { outcome: "refused", track: null };
+          try {
+            const result = await gateway.uploadCaption({ accountId: activeAccountId, videoId, language, name, format, content });
+            return { outcome: "uploaded", track: result.data.track };
+          } catch (error) {
+            // A lost answer is not a refusal: the upload may already exist
+            // on YouTube, and the creator has to refresh instead of retry.
+            const code = error && typeof error === "object" ? (error as { code?: string }).code : undefined;
+            return { outcome: captionOutcomeFromErrorCode(code), track: null };
+          }
         } : undefined}
       />
     </div>

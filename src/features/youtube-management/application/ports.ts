@@ -2,9 +2,12 @@ import type {
   YouTubeAccountCapabilities,
   YouTubeCategoryOption,
   YouTubeChannelDetails,
+  YouTubeCaptionFormat,
+  YouTubeCaptionsListData,
   YouTubePlaylistsPage,
   YouTubeResourceSuccess,
   YouTubeSetThumbnailResult,
+  YouTubeUploadCaptionData,
   YouTubeVideoDetails,
   YouTubeVideosPage,
 } from "../domain/types";
@@ -49,6 +52,24 @@ export interface YouTubeResourcesGateway {
     videoId: string;
     mediaFileId: string;
   }): Promise<YouTubeResourceSuccess<YouTubeSetThumbnailResult>>;
+  /**
+   * The caption tracks of one owned video. Every list costs 50 provider
+   * units, so the caller asks for it explicitly and never on open.
+   */
+  listCaptions?(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<YouTubeCaptionsListData>>;
+  /**
+   * Adds one caption track to an owned video. The text is the caption file
+   * itself, read as UTF-8 in the browser and capped at 512 KB there before
+   * the request leaves the page.
+   */
+  uploadCaption?(params: {
+    accountId: string;
+    videoId: string;
+    language: string;
+    name: string;
+    format: YouTubeCaptionFormat;
+    content: string;
+  }): Promise<YouTubeResourceSuccess<YouTubeUploadCaptionData>>;
 }
 
 /**

@@ -1,6 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   createYouTubeResourcesHandler,
+  YOUTUBE_RESOURCES_MAX_BODY_BYTES,
+  type YouTubeCaptionPort,
   type YouTubeResourceAccount,
   type YouTubeResourceRefusal,
   type YouTubeEditPort,
@@ -8,6 +10,7 @@ import {
   type YouTubeThumbnailPort,
   type YouTubeTokenResult,
 } from "./handler.ts";
+import { validateCaptionUploadInput } from "./captionFile.ts";
 import {
   YOUTUBE_SCOPE,
   type YouTubeChannelDetails,
@@ -109,6 +112,7 @@ function fixture(overrides: {
   rateLimitError?: boolean;
   edit?: YouTubeEditPort;
   thumbnail?: YouTubeThumbnailPort;
+  captions?: YouTubeCaptionPort;
   categories?: YouTubeCategoryClient;
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
@@ -186,6 +190,7 @@ function fixture(overrides: {
     },
     edit: overrides.edit,
     thumbnail: overrides.thumbnail,
+    captions: overrides.captions,
     categories: overrides.categories ?? {
       list: (_token, input): Promise<CategoryListResult> => {
         const arabic = typeof input.locale === "string" && input.locale.startsWith("ar");
@@ -1152,6 +1157,178 @@ Deno.test("set_thumbnail returns success envelope and maps port error codes", as
       account_id: ACCOUNT_ID,
       video_id: "videoAAAAAAA",
       media_file_id: MEDIA_FILE_ID,
+    }));
+    assertEquals(resp.status, testCase.status);
+    assertEquals(await resp.json(), testCase.body);
+  }
+});
+
+Deno.test("body cap accepts normal 300-byte request and rejects > 1.5 MiB body before parsing", async () => {
+  const f = fixture();
+  const smallBody = JSON.stringify({ operation: "capabilities", account_id: ACCOUNT_ID });
+  const okResp = await f.handler(rawRequest(smallBody));
+  assertEquals(okResp.status, 200);
+
+  const overCap = JSON.stringify({
+    operation: "upload_caption",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    language: "en",
+    name: "Oversize",
+    format: "vtt",
+    content: "a".repeat(YOUTUBE_RESOURCES_MAX_BODY_BYTES + 1024),
+  });
+  const badResp = await f.handler(rawRequest(overCap));
+  assertEquals(badResp.status, 400);
+  assertEquals(await badResp.json(), { error: "invalid_request", request_id: `${REQUEST_ID}-2` });
+  assertEquals(f.calls.load, 1);
+
+  const brokenStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error("client disconnected mid-stream"));
+    },
+  });
+  const brokenReq = new Request(ENDPOINT, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: brokenStream,
+    duplex: "half",
+  } as RequestInit);
+  const brokenResp = await f.handler(brokenReq);
+  assertEquals(brokenResp.status, 400);
+  assertEquals(await brokenResp.json(), { error: "invalid_request", request_id: `${REQUEST_ID}-3` });
+});
+
+Deno.test("upload_caption passes ~500 KiB Arabic caption through 1.5 MiB body cap and rejects ~300k Arabic chars as caption_invalid", async () => {
+  let portCalls = 0;
+  const f = fixture({
+    captions: {
+      listCaptions: () => Promise.resolve({ ok: true, value: { video_id: "videoAAAAAAA", items: [] } }),
+      uploadCaption: (input) => {
+        portCalls += 1;
+        const checked = validateCaptionUploadInput({
+          language: input.language,
+          name: input.name,
+          format: input.format,
+          content: input.content,
+        });
+        if (!checked.ok) {
+          return Promise.resolve({ ok: false, code: "caption_invalid" });
+        }
+        return Promise.resolve({
+          ok: true,
+          value: {
+            video_id: input.videoId,
+            track: {
+              id: "cap-ar-1",
+              language: input.language,
+              name: input.name,
+              track_kind: "standard",
+              is_draft: false,
+              status: "serving",
+              last_updated: "2026-11-27T10:00:00Z",
+            },
+          },
+        });
+      },
+    },
+  });
+
+  const prefix = "1\n00:00:01,000 --> 00:00:02,000\n";
+  // ~250,000 Arabic chars = ~500 KiB UTF-8 bytes (< 512 KiB limit)
+  const validArabic = `${prefix}${"م".repeat(250_000)}`;
+  const okResp = await f.handler(request({
+    operation: "upload_caption",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    language: "ar",
+    name: "Arabic 500 KiB",
+    format: "srt",
+    content: validArabic,
+  }));
+  assertEquals(okResp.status, 200);
+  assertEquals(portCalls, 1);
+
+  // ~300,000 Arabic chars = ~600 KiB UTF-8 bytes (< 1.5 MiB body cap, > 512 KiB caption cap)
+  const oversizeArabic = `${prefix}${"م".repeat(300_000)}`;
+  const invalidResp = await f.handler(request({
+    operation: "upload_caption",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    language: "ar",
+    name: "Arabic 600 KiB",
+    format: "srt",
+    content: oversizeArabic,
+  }));
+  assertEquals(invalidResp.status, 400);
+  assertEquals(await invalidResp.json(), { error: "caption_invalid", request_id: `${REQUEST_ID}-2` });
+  assertEquals(portCalls, 2);
+});
+
+Deno.test("captions and upload_caption gate on admit() before calling port and map all error codes", async () => {
+  let portCalls = 0;
+  const composioFixture = fixture({
+    account: { authProvider: "composio" },
+    captions: {
+      listCaptions: () => {
+        portCalls += 1;
+        return Promise.resolve({ ok: true, value: { video_id: "videoAAAAAAA", items: [] } });
+      },
+      uploadCaption: () => {
+        portCalls += 1;
+        return Promise.resolve({ ok: false, code: "caption_invalid" });
+      },
+    },
+  });
+  const composioResp = await composioFixture.handler(request({
+    operation: "captions",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+  }));
+  assertEquals(composioResp.status, 409);
+  assertEquals(await composioResp.json(), { error: "provider_unsupported", request_id: REQUEST_ID });
+  assertEquals(portCalls, 0);
+
+  const noPortFixture = fixture();
+  const noPortResp = await noPortFixture.handler(request({
+    operation: "captions",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+  }));
+  assertEquals(noPortResp.status, 403);
+  assertEquals(await noPortResp.json(), { error: "write_not_enabled", request_id: REQUEST_ID });
+
+  const errorCases: Array<{
+    result: Awaited<ReturnType<YouTubeCaptionPort["uploadCaption"]>>;
+    status: number;
+    body: Record<string, unknown>;
+  }> = [
+    { result: { ok: false, code: "caption_invalid" }, status: 400, body: { error: "caption_invalid", request_id: REQUEST_ID } },
+    { result: { ok: false, code: "caption_conflict" }, status: 409, body: { error: "caption_conflict", request_id: REQUEST_ID } },
+    { result: { ok: false, code: "outcome_unknown" }, status: 502, body: { error: "outcome_unknown", request_id: REQUEST_ID } },
+    {
+      result: { ok: false, code: "rate_limited", retryAfterSeconds: 60 },
+      status: 429,
+      body: { error: "rate_limited", request_id: REQUEST_ID, retry_after_seconds: 60 },
+    },
+    { result: { ok: false, code: "quota_exceeded" }, status: 429, body: { error: "quota_exceeded", request_id: REQUEST_ID } },
+  ];
+
+  for (const testCase of errorCases) {
+    const errFixture = fixture({
+      captions: {
+        listCaptions: () => Promise.resolve({ ok: true, value: { video_id: "videoAAAAAAA", items: [] } }),
+        uploadCaption: () => Promise.resolve(testCase.result),
+      },
+    });
+    const resp = await errFixture.handler(request({
+      operation: "upload_caption",
+      account_id: ACCOUNT_ID,
+      video_id: "videoAAAAAAA",
+      language: "en",
+      name: "English",
+      format: "vtt",
+      content: "WEBVTT\n\n00:01.000 --> 00:02.000\nHello",
     }));
     assertEquals(resp.status, testCase.status);
     assertEquals(await resp.json(), testCase.body);

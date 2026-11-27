@@ -8,11 +8,19 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { YouTubeResourceError } from "../domain/errors";
-import type { YouTubeCapabilityState, YouTubeResourceSuccess, YouTubeVideoDetails } from "../domain/types";
+import type {
+  YouTubeCaptionFormat,
+  YouTubeCaptionTrack,
+  YouTubeCaptionUploadResult,
+  YouTubeCapabilityState,
+  YouTubeResourceSuccess,
+  YouTubeVideoDetails,
+} from "../domain/types";
 import type { YouTubeThumbnailCandidate, YouTubeThumbnailOutcome } from "../domain/thumbnail";
 import type { EditSaveOutcome } from "./YouTubeVideoEditCard";
 import { YouTubeVideoEditCard } from "./YouTubeVideoEditCard";
 import { YouTubeThumbnailChange } from "./YouTubeThumbnailChange";
+import { YouTubeCaptionsSection } from "./YouTubeCaptionsSection";
 import { YouTubeResourceNotice } from "./YouTubeResourceNotice";
 
 export function YouTubeVideoDrawer({
@@ -32,6 +40,9 @@ export function YouTubeVideoDrawer({
   thumbnailCandidatesError,
   onRetryThumbnailCandidates,
   onSetThumbnail,
+  captionsCapability,
+  onListCaptions,
+  onUploadCaption,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,6 +62,18 @@ export function YouTubeVideoDrawer({
   thumbnailCandidatesError?: unknown;
   onRetryThumbnailCandidates?: () => void;
   onSetThumbnail?: (mediaFileId: string) => Promise<YouTubeThumbnailOutcome>;
+  /** The server's derived caption capability; null until it is known. */
+  captionsCapability?: YouTubeCapabilityState | null;
+  /** Lists the video's caption tracks; never called without a click. */
+  onListCaptions?: (videoId: string) => Promise<YouTubeCaptionTrack[]>;
+  /** Uploads one caption track after the creator confirms it. */
+  onUploadCaption?: (params: {
+    videoId: string;
+    language: string;
+    name: string;
+    format: YouTubeCaptionFormat;
+    content: string;
+  }) => Promise<YouTubeCaptionUploadResult>;
 }) {
   const { t, i18n } = useTranslation("accounts");
   const details = video.data?.data;
@@ -97,6 +120,13 @@ export function YouTubeVideoDrawer({
               candidatesError={thumbnailCandidatesError ?? null}
               onRetryCandidates={onRetryThumbnailCandidates}
               onSetThumbnail={onSetThumbnail}
+            />
+            <YouTubeCaptionsSection
+              key={details.id}
+              capability={captionsCapability ?? null}
+              videoId={details.id}
+              onListCaptions={onListCaptions}
+              onUploadCaption={onUploadCaption}
             />
             {updatedLabel ? <p className="text-xs text-muted-foreground">{t("youtubeManagement.fetchedAt", "Updated {{time}}", { time: updatedLabel })}</p> : null}
           </div>

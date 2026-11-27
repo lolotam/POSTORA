@@ -38,9 +38,9 @@ const GoogleApiDisclosure = () => {
                 Postora ("we", "us", or "our") uses Google API Services, including the YouTube Data API v3 and
                 YouTube Analytics API v2, to enable owners to publish and browse their YouTube content, edit
                 published video details (when published metadata editing is enabled; currently disabled at the
-                production baseline), add a newly uploaded video to a playlist they choose, manage comments, and
-                view on-demand analytics. This disclosure describes how we access, use, store, and share
-                information obtained through Google APIs.
+                production baseline), add a newly uploaded video to a playlist they choose, add a caption track to
+                a video they uploaded, manage comments, and view on-demand analytics. This disclosure describes
+                how we access, use, store, and share information obtained through Google APIs.
               </p>
               <p className="text-muted-foreground">
                 Our use of information received from Google APIs adheres to the{" "}
@@ -99,7 +99,9 @@ const GoogleApiDisclosure = () => {
                   an existing playlist you choose through the narrower force-ssl scope, but does not create, rename,
                   reorder, or delete playlists or remove playlist items, change channel settings, replace existing
                   video media bytes, or delete videos. Setting a thumbnail is not a media-byte replacement: only the
-                  thumbnail image of your own video changes.
+                  thumbnail image of your own video changes. Postora also never modifies, replaces, or deletes
+                  existing caption tracks: it only lists them on your request and adds a new caption track that you
+                  supply.
                 </li>
                 <li>
                   <strong>No monetization or membership data:</strong> We do not request scopes for channel memberships
@@ -245,6 +247,16 @@ const GoogleApiDisclosure = () => {
                           <code className="bg-muted px-1 rounded">playlistItems.insert</code>). Postora does not create,
                           rename, reorder, or delete playlists, and does not remove items from a playlist.
                         </li>
+                        <li>
+                          <strong>List the caption tracks of a video you already uploaded</strong> on the YouTube
+                          Channel page (<code className="bg-muted px-1 rounded">/youtube</code>) through{" "}
+                          <code className="bg-muted px-1 rounded">captions.list</code>, only when you ask for the
+                          list, and <strong>add a new caption track</strong> from an{" "}
+                          <code className="bg-muted px-1 rounded">.srt</code> or{" "}
+                          <code className="bg-muted px-1 rounded">.vtt</code> file you choose and confirm (
+                          <code className="bg-muted px-1 rounded">captions.insert</code>). Postora never modifies,
+                          replaces, or deletes existing caption tracks, and it never downloads a caption track.
+                        </li>
                       </ul>
                     </div>
 
@@ -300,6 +312,12 @@ const GoogleApiDisclosure = () => {
                   <strong>Playlist Selection:</strong> To list the playlists of your channel so you can choose a
                   destination playlist when publishing, and to add a newly uploaded video to the playlist you selected,
                   without creating, renaming, reordering, or deleting playlists or removing playlist items
+                </li>
+                <li>
+                  <strong>Caption Management:</strong> To list the caption tracks of a video you already uploaded
+                  and to add a new caption track you supply, only when you ask for the list from the YouTube Channel
+                  page (<code className="bg-muted px-1 rounded">/youtube</code>) and confirm the upload. Postora never
+                  modifies, replaces, or deletes existing caption tracks
                 </li>
                 <li>
                   <strong>Authentication:</strong> To verify your identity and maintain your connected account status

@@ -35,3 +35,22 @@ export type {
 // picker and the server can never disagree about what is uploadable. It is
 // narrower than the upload-time intake's list, which also admits WebP.
 export { DIRECT_THUMBNAIL_MIMES } from "../../../../supabase/functions/youtube-resources/thumbnailMedia";
+
+// The caption contract and the caption rules the browser needs live in
+// `domain/captions.ts`, which re-exports the edge function's caption
+// shapes (ARCHITECTURE.md §22) and owns the byte limit the page measures
+// before it sends anything.
+export {
+  CAPTION_CONTENT_MAX_BYTES,
+  CAPTION_DAILY_UPLOAD_ALLOWANCE,
+  CAPTION_LANGUAGE_PATTERN,
+  CAPTION_TRACK_NAME_MAX_LENGTH,
+} from "./captions";
+export type {
+  YouTubeCaptionFormat,
+  YouTubeCaptionTrack,
+  YouTubeCaptionsListData,
+  YouTubeCaptionUploadOutcome,
+  YouTubeCaptionUploadResult,
+  YouTubeUploadCaptionData,
+} from "./captions";
