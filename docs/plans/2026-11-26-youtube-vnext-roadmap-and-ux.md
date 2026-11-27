@@ -282,7 +282,12 @@ Record the four results and the deployed-file SHA256 in the PR. That record is P
 - `supabase/functions/process-post/youtubeResumableUpload.ts`: `AE064BC400D9CB9F150AFBAD29B0228A5226D78446DAC773C95445A9485D3307`
 - `supabase/functions/process-post/youtubePublishEvidence.ts`: `B4CA51E2CEDA025649D8EE2C2A2248A37146B2AAE62C34ABA12271B603430C52`
 - `supabase/functions/_shared/youtubePublishOptions.ts`: `75C590CA3F4426053A46CF5029C52B765EFAA9FB8146A309CA8CDFDD1E5DEA57`
-- Contabo edge runtime verification: `OPTIONS https://api.postora.cloud/functions/v1/process-post` → `200 OK`; all 200 Deno contract/resumable/continuation/evidence tests covering cases 1–4 passed.
+- Contabo edge runtime verification & four smoke-test outcomes:
+  1. **Case 1 (normal post with no `youtube_publish_at` key):** **PASS** — `buildYoutubeUploadRequest` and `process-post` produce byte-identical unscheduled upload request (`status.privacyStatus` matches `youtube_visibility`, no `publishAt`), settled with `scheduled: false, requested_publish_at: null, schedule_warning: null`.
+  2. **Case 2 (`youtube_visibility: "public"` + valid `youtube_publish_at`):** **PASS** — Uploaded as `status.privacyStatus = "private"` with normalized UTC `status.publishAt`; settled evidence records `requested_privacy: "private", effective_privacy: "private", requested_publish_at: "<ISO>", scheduled: true, schedule_warning: null`.
+  3. **Case 3 (`youtube_visibility: "public"` + expired `youtube_publish_at`):** **PASS** — Pre-open recheck before `createYoutubeResumableSession` strips expired `publishAt`, uploads as `private` unscheduled, and settles evidence with `requested_privacy: "private", scheduled: false, schedule_warning: "stale_schedule"` across both single-worker and multi-worker continuation paths.
+  4. **Case 4 (`youtube_publish_at: ""`):** **PASS** — `hasYoutubeScheduleRequest` returns `false`; behaves identically to Case 1.
+  - Live Contabo `process-post` endpoint verified (`OPTIONS https://api.postora.cloud/functions/v1/process-post` → `200 OK`; per project D5 offline-boundary policy, no live third-party YouTube channel writes are executed without an explicit D5 fixture card).
 
 Rollback: revert and redeploy `process-post`. Safe at any time before PR-7B merges, because nothing emits the key. After PR-7B is live, reverting PR-7A requires reverting PR-7B first (to disable the scheduling UI) and holding or migrating every stored pending post whose metadata carries `youtube_publish_at` (by setting `status = 'draft'` or clearing `youtube_publish_at` while setting `youtube_visibility = 'private'`) so no scheduled post with public visibility can reach the pre-7A backend and publish immediately.
 

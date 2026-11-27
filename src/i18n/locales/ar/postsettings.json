@@ -115,6 +115,7 @@
     "publishScheduleRequired": "اختار تاريخ ووقت النشر على YouTube.",
     "publishScheduleInvalidTimestamp": "اختار تاريخ ووقت صحيحين للنشر على YouTube.",
     "publishScheduleTooSoon": "وقت النشر على YouTube لازم يكون بعد 15 دقيقة على الأقل من دلوقتي.",
+    "publishScheduleTooSoonAfterPostora": "وقت النشر على YouTube لازم يكون بعد 15 دقيقة على الأقل من ميعاد رفع المنشور في Postora.",
     "publishScheduleTooFar": "وقت النشر على YouTube مينفعش يكون بعد أكتر من سنتين من دلوقتي.",
     "publishScheduleComposioUnsupported": "جدولة YouTube الأصلية مش متاحة للقنوات المدارة عبر هذا المزوّد. استخدم قناة مربوطة مباشرة.",
     "previewScheduledOnYouTube": "مجدول على YouTube: {{time}}"

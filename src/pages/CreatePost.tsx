@@ -264,6 +264,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
   const intentSnapshotKey = `youtube-stage3-intent:${user?.id ?? "anonymous"}:${editPostId ?? "new"}`;
   const [restoredIntent] = useState<{
     youtubeSettings?: Partial<YouTubeSettingsState>;
+    scheduleRequested?: boolean;
     intake?: {
       uploadMethod?: "local" | "url" | "text";
       urlMediaType?: "images" | "video";
@@ -559,6 +560,9 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     if (restoredIntent.youtubeSettings) {
       youtubeChangeRef.current(youtubeSettingsFromMetadata(restoredIntent.youtubeSettings));
     }
+    if (typeof restoredIntent.scheduleRequested === "boolean") {
+      youtubeChangeRef.current({ scheduleRequested: restoredIntent.scheduleRequested });
+    }
     if (restoredIntent.intake) {
       setUploadMethodRef.current(restoredIntent.intake.uploadMethod ?? "local");
       setUrlMediaType(restoredIntent.intake.urlMediaType ?? "images");
@@ -687,6 +691,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
             fingerprint: submitFingerprint,
             youtubeSettings: youtubeIntentMetadata,
+            scheduleRequested: platformSettings.youtubeScheduleRequested,
             intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
           }));
         }

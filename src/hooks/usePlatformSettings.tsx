@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Platform } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -51,6 +52,7 @@ export interface PinterestBoard {
 
 export function usePlatformSettings(userId: string | undefined, selectedAccountIds: string[], selectedPlatforms: Platform[]) {
   const { toast } = useToast();
+  const { t } = useTranslation("postsettings");
 
   // TikTok settings
   const [tiktokPrivacyLevel, setTiktokPrivacyLevel] = useState<string>("");
@@ -683,7 +685,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     const trimmed = youtubePublishAt.trim();
     if (!trimmed) {
       return youtubeScheduleRequested
-        ? "Choose a YouTube scheduled publish date and time."
+        ? t("youtube.publishScheduleRequired", "Choose a YouTube scheduled publish date and time.")
         : null;
     }
     const afterPostoraSchedule =
@@ -697,14 +699,26 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
         case "too_soon":
         case "expired":
           return afterPostoraSchedule
-            ? "YouTube scheduled publish time must be at least 15 minutes after the Postora upload schedule."
-            : "YouTube scheduled publish time must be at least 15 minutes in the future.";
+            ? t(
+                "youtube.publishScheduleTooSoonAfterPostora",
+                "YouTube scheduled publish time must be at least 15 minutes after the Postora upload schedule.",
+              )
+            : t(
+                "youtube.publishScheduleTooSoon",
+                "YouTube scheduled publish time must be at least 15 minutes in the future.",
+              );
         case "too_far":
-          return "YouTube scheduled publish time cannot be more than 2 years in the future.";
+          return t(
+            "youtube.publishScheduleTooFar",
+            "YouTube scheduled publish time cannot be more than 2 years in the future.",
+          );
         case "malformed":
         case "wrong_type":
         default:
-          return "Choose a valid YouTube scheduled publish date and time.";
+          return t(
+            "youtube.publishScheduleInvalidTimestamp",
+            "Choose a valid YouTube scheduled publish date and time.",
+          );
       }
     }
     return null;
