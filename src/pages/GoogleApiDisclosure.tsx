@@ -38,8 +38,9 @@ const GoogleApiDisclosure = () => {
                 Postora ("we", "us", or "our") uses Google API Services, including the YouTube Data API v3 and
                 YouTube Analytics API v2, to enable owners to publish and browse their YouTube content, edit
                 published video details (when published metadata editing is enabled; currently disabled at the
-                production baseline), manage comments, and view on-demand analytics. This disclosure describes
-                how we access, use, store, and share information obtained through Google APIs.
+                production baseline), add a newly uploaded video to a playlist they choose, manage comments, and
+                view on-demand analytics. This disclosure describes how we access, use, store, and share
+                information obtained through Google APIs.
               </p>
               <p className="text-muted-foreground">
                 Our use of information received from Google APIs adheres to the{" "}
@@ -94,8 +95,10 @@ const GoogleApiDisclosure = () => {
                 <li>
                   <strong>No broad management scope:</strong> We intentionally do not request the full{" "}
                   <code className="bg-muted px-1 rounded">youtube</code> scope, because it would grant broader access
-                  than Postora needs. Postora edits published video metadata through the narrower force-ssl scope,
-                  but does not manage playlists or channel settings, replace existing video media bytes, or delete videos.
+                  than Postora needs. Postora edits published video metadata and can add a newly uploaded video to
+                  an existing playlist you choose through the narrower force-ssl scope, but does not create, rename,
+                  reorder, or delete playlists or remove playlist items, change channel settings, replace existing
+                  video media bytes, or delete videos.
                 </li>
                 <li>
                   <strong>No monetization or membership data:</strong> We do not request scopes for channel memberships
@@ -182,6 +185,12 @@ const GoogleApiDisclosure = () => {
                           Data API counters, always limited to videos owned by your connected channel.
                         </li>
                         <li>
+                          <strong>List your channel's playlists</strong> (
+                          <code className="bg-muted px-1 rounded">playlists.list</code>) so you can choose a
+                          destination playlist for a video you publish, always limited to playlists owned by your
+                          connected channel.
+                        </li>
+                        <li>
                           <strong>Read your channel and video analytics on demand</strong> through the YouTube Analytics API v2
                           on the YouTube Analytics page (<code className="bg-muted px-1 rounded">/analytics/youtube</code>),
                           only after you explicitly accept the Analytics Purpose Clause inside Postora for the current
@@ -221,6 +230,12 @@ const GoogleApiDisclosure = () => {
                           Held for review queue; moving an already-published comment to hold is unavailable at the
                           current baseline), with an optional separately confirmed{" "}
                           <code className="bg-muted px-1 rounded">banAuthor</code> request attached only to rejection.
+                        </li>
+                        <li>
+                          <strong>Add a newly uploaded video to an existing playlist</strong> on your channel when you
+                          select one in Create Post (
+                          <code className="bg-muted px-1 rounded">playlistItems.insert</code>). Postora does not create,
+                          rename, reorder, or delete playlists, and does not remove items from a playlist.
                         </li>
                       </ul>
                     </div>
@@ -266,6 +281,11 @@ const GoogleApiDisclosure = () => {
                   <strong>Published Video Editing:</strong> When published metadata editing is enabled (currently
                   disabled at the production baseline), to update metadata on your existing videos only when you ask,
                   without replacing their media bytes or deleting videos
+                </li>
+                <li>
+                  <strong>Playlist Selection:</strong> To list the playlists of your channel so you can choose a
+                  destination playlist when publishing, and to add a newly uploaded video to the playlist you selected,
+                  without creating, renaming, reordering, or deleting playlists or removing playlist items
                 </li>
                 <li>
                   <strong>Authentication:</strong> To verify your identity and maintain your connected account status

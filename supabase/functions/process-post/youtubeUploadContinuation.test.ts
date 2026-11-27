@@ -979,6 +979,7 @@ Deno.test("observed follow-up outcomes are recorded on the native settlement", a
     followUpResults: {
       thumbnail: { state: "applied", reason: null },
       first_comment: { state: "skipped", reason: "no_time" },
+      playlist: { state: "not_requested", reason: null },
     },
   });
   await continueYoutubeUpload(w.ports, request);

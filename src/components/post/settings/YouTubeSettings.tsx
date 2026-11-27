@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -50,6 +50,7 @@ import { Image as ImageIcon } from "lucide-react";
 import { ResolvedModelCards } from "@/components/ai/ResolvedModelCards";
 import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
 import { useYouTubeCategories } from "@/hooks/useYouTubeCategories";
+import { useYouTubePlaylists } from "@/hooks/useYouTubePlaylists";
 import { resolveYouTubeVideoTitle } from "../../../../supabase/functions/_shared/youtubeVideoTitle";
 import { resolveYoutubePublishAt } from "../../../../supabase/functions/_shared/youtubePublishOptions";
 
@@ -102,6 +103,8 @@ interface SelectedAccount {
   platform_username: string | null;
   avatar_url: string | null;
   auth_provider?: "native" | "composio";
+  /** The YouTube channel id behind the account; two accounts of one channel share it. */
+  platform_user_id?: string | null;
 }
 
 interface YouTubeSettingsProps {
@@ -123,6 +126,10 @@ interface YouTubeSettingsProps {
 }
 
 const MAX_THUMBNAIL_REFERENCES = 5;
+
+// A select option cannot carry an empty value, so "no playlist" is a
+// sentinel that is translated back to an empty playlist id.
+const PLAYLIST_NONE_VALUE = "__none__";
 
 interface DeclarationChoiceProps {
   id: string;
@@ -223,6 +230,42 @@ export function YouTubeSettings({
   const [isStockPickerOpen, setIsStockPickerOpen] = useState(false);
   const aiThumbnailRefInputRef = useRef<HTMLInputElement>(null);
   const composioManaged = selectedAccounts.some((account) => account.auth_provider === "composio");
+  // A playlist belongs to exactly one channel and one post carries one
+  // playlist id, so the selector only works with a single native channel.
+  // Distinctness is by channel: two selected accounts of the same channel are
+  // one channel. A managed channel cannot be written through Postora's own
+  // credentials, so it never counts as a native channel.
+  const nativeAccounts = selectedAccounts.filter((account) => account.auth_provider !== "composio");
+  const distinctNativeChannels = new Set(
+    nativeAccounts.map((account) => {
+      const channelId = account.platform_user_id?.trim();
+      return channelId && channelId.length > 0 ? `channel:${channelId}` : `account:${account.id}`;
+    }),
+  );
+  const multipleNativeChannels = distinctNativeChannels.size > 1;
+  const singleNativeChannelKey = !multipleNativeChannels && distinctNativeChannels.size === 1
+    ? [...distinctNativeChannels][0]
+    : null;
+  const playlistAccountId = !multipleNativeChannels && nativeAccounts.length > 0
+    ? nativeAccounts[0].id
+    : null;
+  const playlistCatalog = useYouTubePlaylists(playlistAccountId);
+  const playlistSelectorDisabled =
+    (composioManaged && nativeAccounts.length === 0) || multipleNativeChannels;
+  const previousNativeChannelKeyRef = useRef<string | null>(singleNativeChannelKey);
+  // A playlist chosen for a channel that is no longer the only one (or when the
+  // creator switches to a different single native channel) would point at
+  // another channel's playlist, so the choice is dropped with the channel.
+  useEffect(() => {
+    const channelChanged =
+      previousNativeChannelKeyRef.current !== null &&
+      singleNativeChannelKey !== null &&
+      previousNativeChannelKeyRef.current !== singleNativeChannelKey;
+    previousNativeChannelKeyRef.current = singleNativeChannelKey;
+    if ((multipleNativeChannels || channelChanged) && settings.playlist) {
+      onSettingsChange({ playlist: "" });
+    }
+  }, [multipleNativeChannels, onSettingsChange, settings.playlist, singleNativeChannelKey]);
   // The creator can ask for a YouTube schedule before choosing a time, so the
   // mode is local state until a timestamp exists. A stored timestamp switches
   // the mode on by itself, which is what reopens a saved draft.
@@ -1267,6 +1310,73 @@ export function YouTubeSettings({
             maxLength={10000}
             disabled={composioManaged}
           />
+        )}
+      </div>
+
+      {/* Playlist — the new video may join one existing playlist of the target channel */}
+      <div className="space-y-2 border-t pt-4">
+        <Label htmlFor="youtube-playlist" className="text-sm font-medium">
+          {t("youtube.playlist", "Playlist")}
+        </Label>
+        <Select
+          value={settings.playlist || PLAYLIST_NONE_VALUE}
+          onValueChange={(value) => onSettingsChange({
+            playlist: value === PLAYLIST_NONE_VALUE ? "" : value,
+          })}
+          disabled={playlistSelectorDisabled}
+        >
+          <SelectTrigger id="youtube-playlist" className="w-full" aria-label={t("youtube.playlist", "Playlist")}>
+            <SelectValue placeholder={t("youtube.playlistNone", "No playlist")} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={PLAYLIST_NONE_VALUE}>
+              {t("youtube.playlistNone", "No playlist")}
+            </SelectItem>
+            {playlistCatalog.playlists.map((playlist) => (
+              <SelectItem key={playlist.id} value={playlist.id}>
+                {playlist.privacy_status
+                  ? `${playlist.title} (${playlist.privacy_status})`
+                  : playlist.title}
+              </SelectItem>
+            ))}
+            {/* A draft rehydrated before the list arrived keeps its own choice
+                visible, so the select never silently drops a stored playlist. */}
+            {settings.playlist
+              && !playlistCatalog.playlists.some((playlist) => playlist.id === settings.playlist) && (
+              <SelectItem value={settings.playlist}>{settings.playlist}</SelectItem>
+            )}
+          </SelectContent>
+        </Select>
+        {playlistCatalog.loading && (
+          <p className="text-xs text-muted-foreground">
+            {t("youtube.playlistLoading", "Loading playlists…")}
+          </p>
+        )}
+        {multipleNativeChannels && (
+          <p data-testid="youtube-playlist-multi-channel-note" className="text-xs text-muted-foreground">
+            {t("youtube.playlistMultiChannelNote", "Playlists belong to a single channel. Select one YouTube channel to add this video to a playlist.")}
+          </p>
+        )}
+        {playlistCatalog.hasMore && !multipleNativeChannels && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={playlistCatalog.loadingMore}
+            onClick={playlistCatalog.loadMore}
+          >
+            {t("youtube.playlistLoadMore", "Load more playlists")}
+          </Button>
+        )}
+        {playlistCatalog.unavailable && !multipleNativeChannels && playlistAccountId && (
+          <div className="flex items-center gap-2">
+            <p role="alert" className="text-xs text-destructive">
+              {t("youtube.playlistUnavailable", "Could not load playlists.")}
+            </p>
+            <Button type="button" variant="outline" size="sm" onClick={playlistCatalog.retry}>
+              {t("youtube.playlistRetry", "Retry playlists")}
+            </Button>
+          </div>
         )}
       </div>
     </div>

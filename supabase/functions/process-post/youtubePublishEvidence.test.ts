@@ -111,3 +111,20 @@ Deno.test("an observed schedule wins over the value the post carried", () => {
   assertEquals(kept.schedule_warning, null);
   assertEquals(kept.requested_publish_at, soonPublishAt);
 });
+
+Deno.test("playlist evidence records not_requested when omitted and preserves not_owned / quota_budget reasons", () => {
+  const withoutPlaylist = youtubeEvidenceFromMetadata({ youtube_visibility: "public" });
+  assertEquals(withoutPlaylist.playlist, { state: "not_requested", reason: null });
+
+  const notOwned = youtubeEvidenceFromMetadata(
+    { youtube_visibility: "public", youtube_playlist_id: "PLfixtureplaylist001" },
+    { playlistState: "failed", playlistReason: "not_owned" },
+  );
+  assertEquals(notOwned.playlist, { state: "failed", reason: "not_owned" });
+
+  const quotaBudget = youtubeEvidenceFromMetadata(
+    { youtube_visibility: "public", youtube_playlist_id: "PLfixtureplaylist001" },
+    { playlistState: "skipped", playlistReason: "quota_budget" },
+  );
+  assertEquals(quotaBudget.playlist, { state: "skipped", reason: "quota_budget" });
+});

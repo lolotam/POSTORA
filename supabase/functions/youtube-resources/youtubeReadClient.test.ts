@@ -488,3 +488,68 @@ Deno.test("listUploads normalizes unparseable publishedAt values to null", async
   const result = await client(fetchImpl).listUploads("t", { channelId: CHANNEL_ID, pageSize: 25 });
   assertEquals(result.ok && result.value.items[0].published_at, null);
 });
+
+Deno.test("listPlaylists pages owned playlists and drops foreign-channel or malformed items", async () => {
+  const { fetchImpl, requests } = fakeFetch(200, {
+    nextPageToken: "NEXT_PL",
+    items: [
+      {
+        id: "PLownedplaylist001",
+        snippet: {
+          channelId: CHANNEL_ID,
+          title: "Owned Playlist",
+          thumbnails: { medium: { url: "https://i.ytimg.com/vi/abc/mqdefault.jpg" } },
+        },
+        status: { privacyStatus: "public" },
+      },
+      {
+        id: "PLforeignplaylist2",
+        snippet: { channelId: "UCanotherchannel000000002", title: "Foreign Playlist" },
+        status: { privacyStatus: "unlisted" },
+      },
+      {
+        id: "bad/id",
+        snippet: { channelId: CHANNEL_ID, title: "Bad Id" },
+        status: { privacyStatus: "private" },
+      },
+    ],
+  });
+
+  const result = await client(fetchImpl).listPlaylists("token-pl", {
+    channelId: CHANNEL_ID,
+    pageToken: "PAGE_1",
+  });
+
+  assertEquals(requests.length, 1);
+  assertEquals(requests[0].url.pathname, "/youtube/v3/playlists");
+  assertEquals(requests[0].url.searchParams.get("part"), "snippet,status");
+  assertEquals(requests[0].url.searchParams.get("mine"), "true");
+  assertEquals(requests[0].url.searchParams.get("maxResults"), "50");
+  assertEquals(requests[0].url.searchParams.get("pageToken"), "PAGE_1");
+  assertEquals(requests[0].authorization, "Bearer token-pl");
+  assertEquals(result, {
+    ok: true,
+    value: {
+      items: [{
+        id: "PLownedplaylist001",
+        title: "Owned Playlist",
+        privacy_status: "public",
+        thumbnail_url: "https://i.ytimg.com/vi/abc/mqdefault.jpg",
+      }],
+      next_page_token: "NEXT_PL",
+    },
+  });
+});
+
+Deno.test("listPlaylists maps 400 with pageToken to invalid_cursor and 401 to unauthorized", async () => {
+  const badCursor = fakeFetch(400, { error: { errors: [{ reason: "invalidPageToken" }] } });
+  const cursorResult = await client(badCursor.fetchImpl).listPlaylists("t", {
+    channelId: CHANNEL_ID,
+    pageToken: "stale",
+  });
+  assertEquals(cursorResult, { ok: false, code: "invalid_cursor", unauthorized: false });
+
+  const unauth = fakeFetch(401, { error: { errors: [{ reason: "authError" }] } });
+  const unauthResult = await client(unauth.fetchImpl).listPlaylists("t", { channelId: CHANNEL_ID });
+  assertEquals(unauthResult, { ok: false, code: "reconnect_required", unauthorized: true });
+});

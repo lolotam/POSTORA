@@ -12,6 +12,8 @@ export interface YoutubePublishEvidenceView {
   effective_privacy: string;
   thumbnail: FollowUpEvidence;
   first_comment: FollowUpEvidence;
+  /** Absent on rows settled before a video could be added to a playlist. */
+  playlist?: FollowUpEvidence;
 }
 
 interface Props {
@@ -56,6 +58,10 @@ export function YouTubePublishEvidence({ evidence }: Props): JSX.Element | null 
         <FollowUpLine
           label={t("youtube.firstComment", "First comment")}
           value={evidence.first_comment}
+        />
+        <FollowUpLine
+          label={t("youtube.playlist", "Playlist")}
+          value={evidence.playlist ?? { state: "not_requested", reason: null }}
         />
       </ul>
     </div>

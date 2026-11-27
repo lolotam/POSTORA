@@ -32,7 +32,7 @@ function validDataFor(operation: string): Record<string, unknown> {
       capabilities: { browse: { state: "available" }, upload: { state: "available" }, comments: { state: "available" } },
       quota: {
         provider_quota: "not_tracked",
-        unit_costs: { channel: 1, videos_page: 2, video: 1 },
+        unit_costs: { channel: 1, videos_page: 2, video: 1, playlists_page: 1 },
         per_user_burst: { limit: 30, window_seconds: 600 },
         per_user_daily: { limit: 300, window_seconds: 86400 },
       },
@@ -80,6 +80,40 @@ describe("YouTube resources gateway", () => {
       body: { operation: "videos", account_id: "acc-1" },
       timeout: 15000,
     });
+  });
+
+  it("asks for a page of playlists with the account and the cursor, and no user id", async () => {
+    const page = envelope({ items: [{ id: "PL1", title: "Launch", privacy_status: "private", thumbnail_url: null }], next_page_token: null });
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({ data: page, error: null });
+
+    const received = await new SupabaseYouTubeResourcesGateway().listPlaylists({ accountId: "acc-1", pageToken: "PAGE2" });
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("youtube-resources", {
+      body: { operation: "playlists", account_id: "acc-1", page_token: "PAGE2" },
+      timeout: 15000,
+    });
+    expect(received).toEqual(page);
+  });
+
+  it("omits the playlist cursor on the first page", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ items: [], next_page_token: null }),
+      error: null,
+    });
+    await new SupabaseYouTubeResourcesGateway().listPlaylists({ accountId: "acc-1" });
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("youtube-resources", {
+      body: { operation: "playlists", account_id: "acc-1" },
+      timeout: 15000,
+    });
+  });
+
+  it("rejects a playlist page without an items list", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ next_page_token: null }),
+      error: null,
+    });
+    await expect(new SupabaseYouTubeResourcesGateway().listPlaylists({ accountId: "acc-1" }))
+      .rejects.toMatchObject({ code: "upstream_unavailable" });
   });
 
   it("sends exactly the request bodies the edge handler's shared examples define", async () => {

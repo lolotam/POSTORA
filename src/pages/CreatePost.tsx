@@ -482,6 +482,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       thumbnailMode: thumbnailMediaId ? "upload" : "auto",
       publishAt: text("youtube_publish_at") ?? "",
       scheduleRequested: Boolean((text("youtube_publish_at") ?? "").trim()),
+      playlist: text("youtube_playlist_id") ?? "",
     };
   };
 

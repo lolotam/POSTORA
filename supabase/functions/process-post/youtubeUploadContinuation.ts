@@ -80,6 +80,8 @@ export interface ContinuationPost {
   thumbnailUrl: string | null;
   /** The first comment the customer asked for, if any. */
   firstComment: string | null;
+  /** The playlist the customer asked to add the video to, if any. */
+  playlistId?: string | null;
   /**
    * The post metadata, so a resumed upload can check D3 provenance. A legacy
    * boolean without a versioned proof is not a declaration.
@@ -1045,6 +1047,8 @@ async function interpretOutcome(args: {
           thumbnailReason: followUpResults?.thumbnail.reason,
           commentState: followUpResults?.first_comment.state,
           commentReason: followUpResults?.first_comment.reason,
+          playlistState: followUpResults?.playlist?.state,
+          playlistReason: followUpResults?.playlist?.reason,
           ...scheduleEvidence,
         }),
         ...(scheduleEvidence.scheduleWarning === "stale_schedule"

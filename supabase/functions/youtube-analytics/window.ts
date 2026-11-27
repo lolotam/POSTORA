@@ -1,3 +1,4 @@
+import { pacificDateString } from "../_shared/pacificDay.ts";
 import {
   YOUTUBE_ANALYTICS_DATE_PATTERN,
   YOUTUBE_ANALYTICS_TIME_ZONE,
@@ -5,18 +6,7 @@ import {
   type YouTubeAnalyticsRequestedWindow,
 } from "./contracts.ts";
 
-const pacificFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: YOUTUBE_ANALYTICS_TIME_ZONE,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
-export function pacificDateString(now: Date): string {
-  const parts = pacificFormatter.formatToParts(now);
-  const values = new Map(parts.map((part) => [part.type, part.value]));
-  return `${values.get("year")}-${values.get("month")}-${values.get("day")}`;
-}
+export { pacificDateString };
 
 export function shiftIsoDate(isoDate: string, deltaDays: number): string {
   const [year, month, day] = isoDate.split("-").map(Number);

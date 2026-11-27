@@ -1,8 +1,14 @@
 import { z } from "npm:zod@3.23.8";
 import { classifyGoogleError, type YouTubeErrorClass } from "../_shared/youtubeApiErrors.ts";
-import { YOUTUBE_VIDEO_LIST_DESCRIPTION_MAX } from "./contracts.ts";
+import {
+  YOUTUBE_PLAYLIST_ID_PATTERN,
+  YOUTUBE_PLAYLISTS_PAGE_SIZE,
+  YOUTUBE_VIDEO_LIST_DESCRIPTION_MAX,
+} from "./contracts.ts";
 import type {
   YouTubeChannelDetails,
+  YouTubePlaylistListItem,
+  YouTubePlaylistsPage,
   YouTubeResourceErrorCode,
   YouTubeVideoDetails,
   YouTubeVideoListItem,
@@ -27,6 +33,10 @@ export interface YouTubeReadClient {
     accessToken: string,
     input: { channelId: string; videoId: string },
   ): Promise<YouTubeReadResult<YouTubeVideoDetails>>;
+  listPlaylists(
+    accessToken: string,
+    input: { channelId: string; pageToken?: string },
+  ): Promise<YouTubeReadResult<YouTubePlaylistsPage>>;
 }
 
 export interface YouTubeReadClientOptions {
@@ -184,6 +194,23 @@ const VideoItemSchema = z.object({
 
 const VideoListSchema = z.object({
   items: z.array(VideoItemSchema).optional(),
+});
+
+const PlaylistsItemSchema = z.object({
+  id: z.string().optional(),
+  snippet: z.object({
+    channelId: z.string().optional(),
+    title: z.string().optional(),
+    thumbnails: z.unknown().optional(),
+  }).optional(),
+  status: z.object({
+    privacyStatus: z.string().optional(),
+  }).optional(),
+});
+
+const PlaylistsListSchema = z.object({
+  nextPageToken: z.string().optional(),
+  items: z.array(PlaylistsItemSchema).optional(),
 });
 
 function videoUrl(videoId: string): string {
@@ -364,6 +391,48 @@ export function createYouTubeReadClient(options: YouTubeReadClientOptions): YouT
             comment_count: count(item.statistics?.commentCount),
           },
           url: videoUrl(input.videoId),
+        },
+      };
+    },
+
+    listPlaylists: async (accessToken, input): Promise<YouTubeReadResult<YouTubePlaylistsPage>> => {
+      const query: Record<string, string> = {
+        part: "snippet,status",
+        mine: "true",
+        maxResults: String(YOUTUBE_PLAYLISTS_PAGE_SIZE),
+      };
+      if (input.pageToken !== undefined) query.pageToken = input.pageToken;
+      const read = await send("playlists", query, accessToken);
+      if (!read.ok) {
+        const code: YouTubeResourceErrorCode = read.status === 400 && input.pageToken !== undefined
+          ? "invalid_cursor"
+          : read.code;
+        return { ok: false, code, unauthorized: read.unauthorized };
+      }
+      const parsed = PlaylistsListSchema.safeParse(read.body);
+      if (!parsed.success) return { ok: false, code: "upstream_unavailable", unauthorized: false };
+      const items: YouTubePlaylistListItem[] = [];
+      for (const item of parsed.data.items ?? []) {
+        // Drop playlists owned by other channels under the same Google grant or malformed ids.
+        if (
+          typeof item.id !== "string" ||
+          !YOUTUBE_PLAYLIST_ID_PATTERN.test(item.id) ||
+          item.snippet?.channelId !== input.channelId
+        ) {
+          continue;
+        }
+        items.push({
+          id: item.id,
+          title: item.snippet?.title ?? "",
+          privacy_status: optionalString(item.status?.privacyStatus),
+          thumbnail_url: thumbnail(item.snippet?.thumbnails),
+        });
+      }
+      return {
+        ok: true,
+        value: {
+          items,
+          next_page_token: parsed.data.nextPageToken ?? null,
         },
       };
     },
