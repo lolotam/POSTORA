@@ -4,7 +4,10 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
+import { MemoryRouter } from "react-router-dom";
 import type { YouTubeCapabilityState, YouTubeCaptionTrack, YouTubeCaptionUploadOutcome } from "../../domain/types";
+import type { YouTubeResourceErrorCode } from "../../domain/types";
+import { YouTubeResourceError } from "../../domain/errors";
 import { YouTubeCaptionsSection } from "../YouTubeCaptionsSection";
 
 const TRACK: YouTubeCaptionTrack = {
@@ -22,7 +25,7 @@ const SRT_CONTENT = "1\n00:00:00,000 --> 00:00:01,000\nHello\n";
 async function renderSection(ui: ReactElement) {
   const i18n = createInstance();
   await i18n.init({ lng: "en", resources: { en: { accounts: {} } }, defaultNS: "accounts" });
-  return render(<I18nextProvider i18n={i18n}>{ui}</I18nextProvider>);
+  return render(<MemoryRouter><I18nextProvider i18n={i18n}>{ui}</I18nextProvider></MemoryRouter>);
 }
 
 function section(props: {
@@ -87,21 +90,108 @@ describe("YouTubeCaptionsSection — listing the tracks", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  it("offers a retry when the list cannot be read, and never shows an empty list", async () => {
+  it("offers a retry when the provider did not answer, and never shows an empty list", async () => {
     const onListCaptions = vi.fn()
-      .mockRejectedValueOnce(new Error("read failed"))
+      .mockRejectedValueOnce(new YouTubeResourceError("upstream_unavailable"))
       .mockResolvedValueOnce([TRACK]);
     await renderSection(section({ onListCaptions }));
 
     await userEvent.click(screen.getByRole("button", { name: "Show caption tracks" }));
 
-    expect(await screen.findByText("Postora could not read the caption tracks of this video.")).toBeInTheDocument();
+    expect(await screen.findByText("YouTube did not answer. Try again.")).toBeInTheDocument();
     expect(screen.queryByText("No caption tracks found for this video.")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Retry caption tracks" }));
 
     expect(await screen.findByRole("table")).toBeInTheDocument();
     expect(onListCaptions).toHaveBeenCalledTimes(2);
+  });
+
+  it("says plainly that the tracks could not be read when no reason is known", async () => {
+    const onListCaptions = vi.fn(async () => {
+      throw new Error("read failed");
+    });
+    await renderSection(section({ onListCaptions }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Show caption tracks" }));
+
+    expect(await screen.findByText("Postora could not read the caption tracks of this video.")).toBeInTheDocument();
+    expect(screen.queryByText("No caption tracks found for this video.")).not.toBeInTheDocument();
+  });
+});
+
+describe("YouTubeCaptionsSection — why the tracks could not be read", () => {
+  it.each([
+    ["missing_scope", "Reconnect this channel and allow Postora to manage your YouTube account to read captions."],
+    ["reconnect_required", "This channel needs to be reconnected before captions can be read."],
+    ["rate_limited", "You have reached today's limit for reading caption tracks. Try again later."],
+    ["quota_exceeded", "Postora's YouTube quota for today is used up. Try again tomorrow."],
+    ["not_found", "This video is no longer on the connected channel."],
+    ["invalid_request", "Captions are not available for this channel right now."],
+    ["upstream_unavailable", "YouTube did not answer. Try again."],
+  ] as Array<[YouTubeResourceErrorCode, string]>)("states the %s reason in words", async (code, message) => {
+    const onListCaptions = vi.fn(async () => {
+      throw new YouTubeResourceError(code);
+    });
+    await renderSection(section({ onListCaptions }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Show caption tracks" }));
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText("No caption tracks found for this video.")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["missing_scope"],
+    ["reconnect_required"],
+    ["rate_limited"],
+    ["quota_exceeded"],
+    ["not_found"],
+    ["invalid_request"],
+  ] as Array<[YouTubeResourceErrorCode]>)("offers no retry for %s, because a second list would fail the same way", async (code) => {
+    const onListCaptions = vi.fn(async () => {
+      throw new YouTubeResourceError(code);
+    });
+    await renderSection(section({ onListCaptions }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Show caption tracks" }));
+
+    await waitFor(() => expect(onListCaptions).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "Retry caption tracks" })).not.toBeInTheDocument();
+  });
+
+  it("sends the creator to the profiles page when the channel must be reconnected", async () => {
+    const onListCaptions = vi.fn(async () => {
+      throw new YouTubeResourceError("missing_scope");
+    });
+    await renderSection(section({ onListCaptions }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Show caption tracks" }));
+
+    const link = await screen.findByRole("link", { name: "Open Profiles" });
+    expect(link).toHaveAttribute("href", "/profiles");
+  });
+
+  it("shows how long to wait when the limit is a timed one", async () => {
+    const onListCaptions = vi.fn(async () => {
+      throw new YouTubeResourceError("rate_limited", 90);
+    });
+    await renderSection(section({ onListCaptions }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Show caption tracks" }));
+
+    expect(await screen.findByText("You have reached today's limit for reading caption tracks. Try again in 2 minutes.")).toBeInTheDocument();
+  });
+
+  it("shows the wait in seconds when it is short", async () => {
+    const onListCaptions = vi.fn(async () => {
+      throw new YouTubeResourceError("rate_limited", 30);
+    });
+    await renderSection(section({ onListCaptions }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Show caption tracks" }));
+
+    expect(await screen.findByText("You have reached today's limit for reading caption tracks. Try again in 30 seconds.")).toBeInTheDocument();
   });
 });
 

@@ -87,4 +87,32 @@ export interface YouTubeResourcesGateway {
  */
 export interface YouTubeThumbnailMediaGateway {
   listOwnedImages(params: { userId: string }): Promise<YouTubeThumbnailCandidate[]>;
+  /**
+   * Stores one image the creator picked on this device and returns it as a
+   * candidate of the same library.
+   *
+   * The owner is read from the session by the adapter, never from a
+   * parameter: the browser writes under the creator's own JWT, so the
+   * adapter has no owner to be told.
+   */
+  uploadOwnedImage?(params: {
+    blob: Blob;
+    fileName: string;
+    mimeType: "image/jpeg" | "image/png";
+  }): Promise<YouTubeThumbnailCandidate>;
+}
+
+/**
+ * Generates a thumbnail image with the app's own image generator.
+ *
+ * The generated image is a starting point, not the file that reaches
+ * YouTube: it is materialised in the browser and stored like any other owned
+ * image first.
+ */
+export interface YouTubeThumbnailAiGateway {
+  generate(params: {
+    prompt: string;
+    referenceImage?: string;
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string }>;
 }

@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,9 +18,12 @@ import type {
   YouTubeCapabilityState,
 } from "../domain/types";
 import {
+  captionListFailureFromErrorCode,
   inferCaptionFormatFromFileName,
   measureCaptionUtf8Bytes,
+  type CaptionListFailure,
 } from "../domain/captions";
+import { YouTubeResourceError } from "../domain/errors";
 
 export interface YouTubeCaptionsSectionProps {
   /** The server's derived caption capability; never a client-side flag. */
@@ -41,6 +45,15 @@ export interface YouTubeCaptionsSectionProps {
 /** The languages most creators need, plus a free-form BCP-47 code. */
 const COMMON_LANGUAGES = ["en", "ar", "es", "fr", "de"] as const;
 const CUSTOM_LANGUAGE = "other";
+
+/** The server's refusal code, whichever error shape reached the page. */
+function readErrorCode(error: unknown): string | null {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "string" ? code : null;
+  }
+  return null;
+}
 
 /** The chosen caption file, measured the way the server measures it. */
 interface CaptionFile {
@@ -167,6 +180,106 @@ function CaptionOutcomeMessage({ outcome }: { outcome: YouTubeCaptionUploadOutco
 }
 
 /**
+ * Why the caption tracks could not be read (spec §14.1.5).
+ *
+ * A list costs 50 provider units and one of ten daily reads, so the creator
+ * is told which of those they spent. Only a provider that did not answer is
+ * worth repeating: the other refusals would fail the same way a second time.
+ */
+function CaptionListFailureNotice({
+  failure,
+  retryAfterSeconds,
+  disabled,
+  onRetry,
+}: {
+  failure: CaptionListFailure;
+  retryAfterSeconds: number | null;
+  disabled: boolean;
+  onRetry: () => void;
+}): JSX.Element {
+  const { t } = useTranslation("accounts");
+  const waitLabel = retryAfterSeconds !== null && retryAfterSeconds > 0
+    ? retryAfterSeconds >= 60
+      ? t("youtubeManagement.captions.listError.minutes", "{{count}} minutes", { count: Math.ceil(retryAfterSeconds / 60) })
+      : t("youtubeManagement.captions.listError.seconds", "{{count}} seconds", { count: retryAfterSeconds })
+    : null;
+
+  let message: string;
+  let reconnect = false;
+  switch (failure) {
+    case "missing_scope":
+      message = t(
+        "youtubeManagement.captions.listError.missingScope",
+        "Reconnect this channel and allow Postora to manage your YouTube account to read captions.",
+      );
+      reconnect = true;
+      break;
+    case "reconnect_required":
+      message = t(
+        "youtubeManagement.captions.listError.reconnectRequired",
+        "This channel needs to be reconnected before captions can be read.",
+      );
+      reconnect = true;
+      break;
+    case "rate_limited":
+      message = waitLabel !== null
+        ? t(
+          "youtubeManagement.captions.listError.rateLimitedWithWait",
+          "You have reached today's limit for reading caption tracks. Try again in {{time}}.",
+          { time: waitLabel },
+        )
+        : t(
+          "youtubeManagement.captions.listError.rateLimited",
+          "You have reached today's limit for reading caption tracks. Try again later.",
+        );
+      break;
+    case "quota_exceeded":
+      message = t(
+        "youtubeManagement.captions.listError.quotaExceeded",
+        "Postora's YouTube quota for today is used up. Try again tomorrow.",
+      );
+      break;
+    case "not_found":
+      message = t(
+        "youtubeManagement.captions.listError.notFound",
+        "This video is no longer on the connected channel.",
+      );
+      break;
+    case "unavailable":
+      message = t(
+        "youtubeManagement.captions.listError.unavailable",
+        "Captions are not available for this channel right now.",
+      );
+      break;
+    case "retryable":
+      message = t("youtubeManagement.captions.listError.retryable", "YouTube did not answer. Try again.");
+      break;
+    default:
+      message = t(
+        "youtubeManagement.captions.tracksError",
+        "Postora could not read the caption tracks of this video.",
+      );
+      break;
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">{message}</p>
+      {reconnect ? (
+        <Link to="/profiles" className="text-xs font-medium text-primary underline-offset-4 hover:underline">
+          {t("youtubeManagement.captions.listError.reconnectLink", "Open Profiles")}
+        </Link>
+      ) : null}
+      {failure === "retryable" ? (
+        <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onRetry}>
+          {t("youtubeManagement.captions.retryTracks", "Retry caption tracks")}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * The caption tracks of one video, and the form that adds a new one.
  *
  * Listing is deliberately not automatic: every list costs 50 provider
@@ -183,7 +296,10 @@ export function YouTubeCaptionsSection({
   const { t } = useTranslation("accounts");
   const [tracks, setTracks] = useState<YouTubeCaptionTrack[] | null>(null);
   const [listing, setListing] = useState(false);
-  const [listFailed, setListFailed] = useState(false);
+  const [listFailure, setListFailure] = useState<{
+    failure: CaptionListFailure;
+    retryAfterSeconds: number | null;
+  } | null>(null);
   const uploadedDuringListRef = useRef<YouTubeCaptionTrack[]>([]);
 
   const available = capability?.state === "available";
@@ -192,7 +308,7 @@ export function YouTubeCaptionsSection({
   const loadTracks = async () => {
     if (!onListCaptions || listing) return;
     setListing(true);
-    setListFailed(false);
+    setListFailure(null);
     uploadedDuringListRef.current = [];
     try {
       const fetched = await onListCaptions(videoId);
@@ -204,11 +320,17 @@ export function YouTubeCaptionsSection({
         }
       }
       setTracks(merged);
-    } catch {
+    } catch (error) {
       // A failed read never looks like an empty list: the creator is told
-      // the list could not be read and offered a retry.
+      // which of the possible reasons it failed, so a missing permission is
+      // not read as an empty channel.
       setTracks(null);
-      setListFailed(true);
+      setListFailure({
+        failure: captionListFailureFromErrorCode(
+          error instanceof YouTubeResourceError ? error.code : readErrorCode(error),
+        ),
+        retryAfterSeconds: error instanceof YouTubeResourceError ? error.retryAfterSeconds : null,
+      });
     } finally {
       uploadedDuringListRef.current = [];
       setListing(false);
@@ -238,18 +360,13 @@ export function YouTubeCaptionsSection({
         <p role="status" className="text-xs text-muted-foreground">
           {t("youtubeManagement.captions.loadingTracks", "Loading caption tracks…")}
         </p>
-      ) : listFailed ? (
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">
-            {t(
-              "youtubeManagement.captions.tracksError",
-              "Postora could not read the caption tracks of this video.",
-            )}
-          </p>
-          <Button type="button" size="sm" variant="outline" disabled={!available} onClick={() => void loadTracks()}>
-            {t("youtubeManagement.captions.retryTracks", "Retry caption tracks")}
-          </Button>
-        </div>
+      ) : listFailure ? (
+        <CaptionListFailureNotice
+          failure={listFailure.failure}
+          retryAfterSeconds={listFailure.retryAfterSeconds}
+          disabled={!available}
+          onRetry={() => void loadTracks()}
+        />
       ) : tracks !== null ? (
         tracks.length === 0 ? (
           <p className="text-xs text-muted-foreground">

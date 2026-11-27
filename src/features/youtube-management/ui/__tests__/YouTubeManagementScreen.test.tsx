@@ -503,6 +503,63 @@ describe("YouTubeManagementScreen thumbnail replacement", () => {
 
     expect(await screen.findByText("This YouTube channel is not eligible to set custom thumbnails.")).toBeInTheDocument();
   });
+
+  it("offers the upload and the generator in the thumbnail dialog", async () => {
+    const uploadOwnedImage = vi.fn(async () => ({
+      id: "media-new",
+      file_name: "new.jpg",
+      mime_type: "image/jpeg",
+      file_type: "image",
+      file_size: 1_000,
+      preview_url: null,
+    }));
+    const generate = vi.fn(async () => ({ imageUrl: "https://images.test/thumb.jpg" }));
+    await renderScreen(
+      <YouTubeManagementScreen
+        accounts={ACCOUNTS}
+        accountsLoading={false}
+        gateway={thumbnailGateway({
+          setThumbnail: vi.fn(async () => envelope({ video_id: "acc-a-video", applied: true as const })),
+        })}
+        mediaGateway={{ listOwnedImages: vi.fn(async () => CANDIDATES), uploadOwnedImage }}
+        aiGateway={{ generate }}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Change thumbnail" }));
+
+    await userEvent.click(screen.getByRole("tab", { name: "Upload file" }));
+    expect(screen.getByLabelText("Choose a JPEG or PNG image")).not.toBeDisabled();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Generate with AI" }));
+    await userEvent.type(screen.getByLabelText("Describe the thumbnail"), "a calm studio desk");
+    expect(screen.getByRole("button", { name: "Generate" })).not.toBeDisabled();
+  });
+});
+
+
+describe("YouTubeManagementScreen drawer player", () => {
+  it("widens the drawer in Theater mode", async () => {
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={gateway()} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+    const drawer = await screen.findByRole("dialog");
+    expect(drawer.className).not.toContain("sm:max-w-[min(96vw,1200px)]");
+
+    await userEvent.click(screen.getByRole("button", { name: "Theater" }));
+
+    await waitFor(() => expect(screen.getByRole("dialog").className).toContain("sm:max-w-[min(96vw,1200px)]"));
+  });
+
+  it("mounts no iframe before the creator presses Play", async () => {
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={gateway()} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+
+    expect(await screen.findByRole("button", { name: "Play video" })).toBeInTheDocument();
+    expect(document.querySelector("iframe")).toBeNull();
+  });
 });
 
 

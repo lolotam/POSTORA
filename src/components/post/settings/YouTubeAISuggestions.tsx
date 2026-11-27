@@ -26,12 +26,34 @@ interface YouTubeAISuggestionsProps {
   onSelect: (value: string) => void;
 }
 
-export function YouTubeAISuggestions(props: YouTubeAISuggestionsProps) {
-  if (props.type === "chapters") return <YouTubeChapterSuggestions {...props} />;
-  return <YouTubeLegacyAISuggestions {...props} />;
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildYouTubeSuggestContext(
+  type: "title" | "description" | "tags",
+  title: string,
+  description?: string,
+): string {
+  if (type === "title") {
+    return title;
+  }
+  if (type === "description") {
+    if (!description?.trim()) {
+      return title;
+    }
+    return `Title: ${title}\nDraft Description / Notes: ${description}`;
+  }
+  return `Title: ${title}\nDescription: ${description || ""}`;
 }
 
-function YouTubeLegacyAISuggestions({ type, context = "", secondaryContext, onSelect }: YouTubeAISuggestionsProps) {
+export function YouTubeAISuggestions(props: YouTubeAISuggestionsProps) {
+  if (props.type === "chapters") return <YouTubeChapterSuggestions {...props} />;
+  return <YouTubeLegacyAISuggestions {...props} type={props.type} />;
+}
+
+type YouTubeLegacyAISuggestionsProps = Omit<YouTubeAISuggestionsProps, "type"> & {
+  type: "title" | "description" | "tags";
+};
+
+function YouTubeLegacyAISuggestions({ type, context = "", secondaryContext, onSelect }: YouTubeLegacyAISuggestionsProps) {
   const { t } = useTranslation("postsettings");
   const [isLoading, setIsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -67,7 +89,7 @@ function YouTubeLegacyAISuggestions({ type, context = "", secondaryContext, onSe
 
       const { data, error } = await supabase.functions.invoke("generate-caption", {
         body: {
-          context: type === "tags" ? `Title: ${context}\nDescription: ${secondaryContext || ""}` : context,
+          context: buildYouTubeSuggestContext(type, context, secondaryContext),
           platform: "youtube",
           language,
           requestType,

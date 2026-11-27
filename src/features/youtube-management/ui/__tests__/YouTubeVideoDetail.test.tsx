@@ -39,10 +39,19 @@ describe("YouTubeVideoDetail", () => {
     await renderUi(<YouTubeVideoDetail video={details} fetchedAt="2026-11-20T10:00:00.000Z" />);
     expect(screen.getByRole("heading", { name: "First video" })).toBeInTheDocument();
     expect(screen.getByText("Body text")).toBeInTheDocument();
-    expect(screen.getByText("4:13")).toBeInTheDocument();
+    // The duration is shown twice: in the metadata list and on the poster of
+    // the embedded player.
+    expect(screen.getAllByText("4:13")).toHaveLength(2);
     const link = screen.getByRole("link", { name: "Open on YouTube" });
     expect(link).toHaveAttribute("href", details.url);
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("offers the embedded player instead of a static thumbnail", async () => {
+    await renderUi(<YouTubeVideoDetail video={details} fetchedAt="2026-11-20T10:00:00.000Z" />);
+    expect(document.querySelector("iframe")).toBeNull();
+    // The fixture's id is not a video id, so the page offers no Play button.
+    expect(screen.queryByRole("button", { name: "Play video" })).not.toBeInTheDocument();
   });
 
   it("shows a counter YouTube did not return as unavailable, not as zero", async () => {

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { YouTubeCategorySelect } from "@/components/post/settings/YouTubeCategorySelect";
+import type { YouTubePlayerSizeMode } from "../domain/player";
 import type { YouTubeVideoDetails } from "../domain/types";
 import { YouTubeVideoDetail } from "./YouTubeVideoDetail";
 import { useYouTubeCategories } from "@/hooks/useYouTubeCategories";
@@ -51,6 +52,9 @@ export interface YouTubeVideoEditCardProps {
     categoryId: string;
     baseRevision: string;
   }) => Promise<EditSaveResult>;
+  /** How large the embedded player is drawn; the drawer owns it. */
+  playerSizeMode?: YouTubePlayerSizeMode;
+  onPlayerSizeModeChange?: (mode: YouTubePlayerSizeMode) => void;
 }
 
 // The comma-separated tag field is one text control; a tag is a trimmed,
@@ -109,6 +113,8 @@ export function YouTubeVideoEditCard({
   region,
   onSnapshot,
   onSave,
+  playerSizeMode,
+  onPlayerSizeModeChange,
 }: YouTubeVideoEditCardProps): JSX.Element {
   const { t, i18n } = useTranslation("accounts");
   const [editing, setEditing] = useState(false);
@@ -192,6 +198,16 @@ export function YouTubeVideoEditCard({
     || containsAngleBrackets(draftDescription)
     || parsedTags.some(containsAngleBrackets);
 
+  // The button toggles: an open editor closes without a save and without a
+  // request, and the next open starts from a fresh snapshot.
+  const toggleEditor = () => {
+    if (editing) {
+      setEditing(false);
+      return;
+    }
+    void openEditor();
+  };
+
   const save = async () => {
     if (!onSave || saving || revision === null) return;
     setSaving(true);
@@ -206,11 +222,15 @@ export function YouTubeVideoEditCard({
       });
       if (typeof result === "string") {
         setOutcome({ outcome: result, retryAfterSeconds: null });
+        if (result === "saved") setEditing(false);
       } else {
         if (typeof result.revision === "string" && result.revision.length > 0) {
           setRevision(result.revision);
         }
         setOutcome({ outcome: result.outcome, retryAfterSeconds: result.retryAfterSeconds ?? null });
+        // Only a saved write closes the editor: every other outcome keeps the
+        // draft on screen so the creator can fix it and try again.
+        if (result.outcome === "saved") setEditing(false);
       }
     } finally {
       setSaving(false);
@@ -248,21 +268,30 @@ export function YouTubeVideoEditCard({
         categoryLabel={categoryCatalog.categories.find((category) => category.id === video.category_id)?.label ?? video.category_id}
         showUpdated={false}
         showHeading={false}
+        playerSizeMode={playerSizeMode}
+        onPlayerSizeModeChange={onPlayerSizeModeChange}
       />
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
           size="sm"
           variant="outline"
-          disabled={!canEdit}
-          onClick={openEditor}
+          disabled={!canEdit || saving}
+          aria-expanded={editing}
+          aria-controls="youtube-video-edit-form"
+          onClick={toggleEditor}
         >
           {t("youtubeManagement.detail.edit", "Edit video details")}
         </Button>
         {!canEdit && <p className="text-xs text-muted-foreground">{disabledReason}</p>}
       </div>
+      {outcomeText ? (
+        <p role="status" className="text-xs text-muted-foreground">
+          {outcomeText}
+        </p>
+      ) : null}
       {canEdit && editing ? (
-        <div className="space-y-3 rounded-lg border p-3">
+        <div id="youtube-video-edit-form" className="space-y-3 rounded-lg border p-3">
           <h3 className="text-sm font-semibold">{t("youtubeManagement.detail.edit", "Edit video details")}</h3>
           <p className="text-xs text-muted-foreground">
             {t("youtubeManagement.detail.sameVideo", "This changes the details of the same video.")}
@@ -330,11 +359,6 @@ export function YouTubeVideoEditCard({
               ? t("youtubeManagement.detail.saving", "Saving…")
               : t("youtubeManagement.detail.save", "Save")}
           </Button>
-          {outcomeText ? (
-            <p role="status" className="text-xs text-muted-foreground">
-              {outcomeText}
-            </p>
-          ) : null}
         </div>
       ) : null}
     </div>

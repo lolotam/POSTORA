@@ -108,3 +108,51 @@ export function captionOutcomeFromErrorCode(code: string | null | undefined): Yo
         : "outcome_unknown";
   }
 }
+
+/**
+ * Why one caption list could not be read (spec §14.1.5).
+ *
+ * A caption list costs 50 provider units and one of ten daily reads, so the
+ * creator is told which of those they spent: a missing permission, a spent
+ * allowance, a video that is gone and a provider that did not answer are four
+ * different problems with four different fixes.
+ */
+export type CaptionListFailure =
+  | "missing_scope"
+  | "reconnect_required"
+  | "rate_limited"
+  | "quota_exceeded"
+  | "not_found"
+  | "unavailable"
+  | "retryable"
+  | "failed";
+
+/**
+ * Maps the server's stable refusal code to the reason the list failed.
+ *
+ * `retryable` is reserved for a provider that did not answer: the other
+ * refusals would fail the same way a second time, and repeating them spends
+ * provider units to reach the same answer.
+ */
+export function captionListFailureFromErrorCode(code: string | null | undefined): CaptionListFailure {
+  switch (code) {
+    case "missing_scope":
+      return "missing_scope";
+    case "reconnect_required":
+      return "reconnect_required";
+    case "rate_limited":
+      return "rate_limited";
+    case "quota_exceeded":
+      return "quota_exceeded";
+    case "not_found":
+      return "not_found";
+    case "write_not_enabled":
+    case "provider_unsupported":
+    case "invalid_request":
+      return "unavailable";
+    case "upstream_unavailable":
+      return "retryable";
+    default:
+      return "failed";
+  }
+}
