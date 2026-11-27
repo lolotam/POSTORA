@@ -41,6 +41,24 @@ export interface TranscribeMediaDeps {
 
 const MAX_SEGMENTS = 5000;
 const MAX_SEGMENT_TEXT_LENGTH = 500;
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const PROVIDER_TIMEOUT_MS = 50_000;
+const SAFE_MODEL_LOG_RE = /^[A-Za-z0-9._:/-]{1,80}$/;
+const SAFE_LANGUAGE_LOG_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
+function sanitizeModelForLog(value: unknown): string {
+  if (typeof value !== "string") return "none";
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return "none";
+  return SAFE_MODEL_LOG_RE.test(trimmed) ? trimmed : "unvalidated_model";
+}
+
+function sanitizeLanguageForLog(value: unknown): string {
+  if (typeof value !== "string") return "unknown";
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return "unknown";
+  return SAFE_LANGUAGE_LOG_RE.test(trimmed) ? trimmed : "unknown";
+}
 
 export function validateSegments(
   rawSegments: unknown,
@@ -133,7 +151,7 @@ async function discardBody(res: Response): Promise<void> {
 async function downloadMedia(mediaUrl: string, fetchFn: typeof fetch): Promise<Blob> {
   let res: Response;
   try {
-    res = await fetchFn(mediaUrl);
+    res = await fetchFn(mediaUrl, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
   } catch {
     throw new TranscriptionApiError(
       "Failed to download media: network_error",
@@ -203,12 +221,15 @@ async function transcribeWithOpenAI(
     method: "POST",
     headers: { Authorization: `Bearer ${openaiKey}` },
     body: formData,
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
   });
 
   if (!res.ok) {
     await discardBody(res);
     const errorCode = classifyHttpErrorCode(res.status);
-    console.error(`OpenAI transcription error (${model}): status=${res.status} code=${errorCode}`);
+    console.error(
+      `OpenAI transcription error (${sanitizeModelForLog(model)}): status=${res.status} code=${errorCode}`,
+    );
     throw new TranscriptionApiError(
       `OpenAI transcription error ${res.status}`,
       errorCode,
@@ -248,6 +269,7 @@ async function transcribeWithDeepgram(
       "Content-Type": "audio/mp4",
     },
     body: audioBlob,
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -308,6 +330,7 @@ async function transcribeWithGoogle(
         ],
       }],
     }),
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -454,8 +477,13 @@ export async function handleTranscribeMediaRequest(
       sttSettings.fallbackProvider,
     );
 
+    const safePrimaryLogModel = sanitizeModelForLog(primaryModel);
+    const safeFallbackLogModel = sanitizeModelForLog(fallbackModel);
+    const safeLastResortLogModel = sanitizeModelForLog(lastResortModel);
+    const safeRequestedLogModel = requestedModel ? sanitizeModelForLog(requestedModel) : undefined;
+
     console.log(
-      `Transcription 3-tier: Primary=${primaryModel}, Fallback=${fallbackModel}, LastResort=${lastResortModel}`,
+      `Transcription 3-tier: Primary=${safePrimaryLogModel}, Fallback=${safeFallbackLogModel}, LastResort=${safeLastResortLogModel}`,
     );
 
     let audioBlob: Blob;
@@ -472,7 +500,7 @@ export async function handleTranscribeMediaRequest(
           error_type: "media_download_failure",
           error_code: details.errorCode,
           http_status: details.httpStatus,
-          requested_model: requestedModel,
+          requested_model: safeRequestedLogModel,
         },
         user.id,
       );
@@ -485,7 +513,7 @@ export async function handleTranscribeMediaRequest(
 
     // ── Tier 1: Primary ──
     try {
-      console.log(`Tier 1 (primary): ${primaryModel}`);
+      console.log(`Tier 1 (primary): ${safePrimaryLogModel}`);
       result = await runTranscription(
         audioBlob,
         primaryModel,
@@ -494,13 +522,13 @@ export async function handleTranscribeMediaRequest(
         primaryProvider,
         deps.vercelTranscribeFn,
       );
-      tiers.push({ tier: "primary", model: primaryModel, success: true });
+      tiers.push({ tier: "primary", model: safePrimaryLogModel, success: true });
     } catch (err) {
       const details = extractSanitizedErrorDetails(err);
       console.error(`Primary transcription failed: code=${details.errorCode} status=${details.httpStatus ?? 0}`);
       tiers.push({
         tier: "primary",
-        model: primaryModel,
+        model: safePrimaryLogModel,
         success: false,
         error_code: details.errorCode,
         http_status: details.httpStatus,
@@ -510,7 +538,7 @@ export async function handleTranscribeMediaRequest(
     // ── Tier 2: Fallback ──
     if (!result && fallbackModel && fallbackModel !== primaryModel) {
       try {
-        console.log(`Tier 2 (fallback): ${fallbackModel}`);
+        console.log(`Tier 2 (fallback): ${safeFallbackLogModel}`);
         result = await runTranscription(
           audioBlob,
           fallbackModel,
@@ -519,13 +547,13 @@ export async function handleTranscribeMediaRequest(
           fallbackProvider,
           deps.vercelTranscribeFn,
         );
-        tiers.push({ tier: "fallback", model: fallbackModel, success: true });
+        tiers.push({ tier: "fallback", model: safeFallbackLogModel, success: true });
       } catch (err) {
         const details = extractSanitizedErrorDetails(err);
         console.error(`Fallback transcription failed: code=${details.errorCode} status=${details.httpStatus ?? 0}`);
         tiers.push({
           tier: "fallback",
-          model: fallbackModel,
+          model: safeFallbackLogModel,
           success: false,
           error_code: details.errorCode,
           http_status: details.httpStatus,
@@ -536,7 +564,7 @@ export async function handleTranscribeMediaRequest(
     // ── Tier 3: Last Resort (whisper-1, or the admin's Vercel model) ──
     if (!result && lastResortModel !== primaryModel && lastResortModel !== fallbackModel) {
       try {
-        console.log(`Tier 3 (last_resort): ${lastResortModel}`);
+        console.log(`Tier 3 (last_resort): ${safeLastResortLogModel}`);
         result = await runTranscription(
           audioBlob,
           lastResortModel,
@@ -545,13 +573,13 @@ export async function handleTranscribeMediaRequest(
           lastResortProvider,
           deps.vercelTranscribeFn,
         );
-        tiers.push({ tier: "last_resort", model: lastResortModel, success: true });
+        tiers.push({ tier: "last_resort", model: safeLastResortLogModel, success: true });
       } catch (err) {
         const details = extractSanitizedErrorDetails(err);
         console.error(`Last resort transcription failed: code=${details.errorCode} status=${details.httpStatus ?? 0}`);
         tiers.push({
           tier: "last_resort",
-          model: lastResortModel,
+          model: safeLastResortLogModel,
           success: false,
           error_code: details.errorCode,
           http_status: details.httpStatus,
@@ -561,6 +589,7 @@ export async function handleTranscribeMediaRequest(
 
     const tierUsed = tiers.find((t) => t.success)?.tier || "none";
     const modelUsed = tiers.find((t) => t.success)?.model || "none";
+    const safeLanguage = result ? sanitizeLanguageForLog(result.language) : undefined;
 
     const logFn = result ? logger.info : logger.error;
     await logFn(
@@ -573,7 +602,7 @@ export async function handleTranscribeMediaRequest(
         tier_used: tierUsed,
         success: !!result,
         has_segments: Boolean(result?.segments && result.segments.length > 0),
-        language: result?.language,
+        language: safeLanguage,
         duration: result?.duration,
         tiers: Object.fromEntries(
           tiers.map((t) => [
@@ -587,10 +616,10 @@ export async function handleTranscribeMediaRequest(
           ]),
         ),
         raw_details: {
-          requested_model: requestedModel,
-          primary_model: primaryModel,
-          fallback_model: fallbackModel,
-          last_resort_model: lastResortModel,
+          requested_model: safeRequestedLogModel,
+          primary_model: safePrimaryLogModel,
+          fallback_model: safeFallbackLogModel,
+          last_resort_model: safeLastResortLogModel,
           tier_attempts: tiers.map((t) => ({
             tier: t.tier,
             model: t.model,

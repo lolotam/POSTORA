@@ -368,5 +368,57 @@ describe("YouTubeAISuggestions component", () => {
       expect(screen.queryByRole("button", { name: "Download .vtt" })).not.toBeInTheDocument();
       expect(onAudioSubtitlesReady).toHaveBeenCalledWith(null);
     });
+
+    it("ignores late transcription completions and clears auto-filled outline when videoSourceUrl changes", async () => {
+      let resolveFirst: ((value: unknown) => void) | null = null;
+      invokeMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      );
+
+      const { rerender } = render(
+        <YouTubeAISuggestions
+          type="chapters"
+          durationSeconds={120}
+          videoSourceUrl="https://cdn.postora.cloud/uploads/video-a.mp4"
+          onSelect={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Extract chapters and subtitles from the video's audio",
+        }),
+      );
+
+      rerender(
+        <YouTubeAISuggestions
+          type="chapters"
+          durationSeconds={180}
+          videoSourceUrl="https://cdn.postora.cloud/uploads/video-b.mp4"
+          onSelect={vi.fn()}
+        />,
+      );
+
+      resolveFirst?.({
+        data: {
+          transcript: "Stale video A transcript",
+          language: "en",
+          duration: 120,
+          segments: [{ start: 0, end: 10, text: "Stale video A segment" }],
+        },
+        error: null,
+      });
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledTimes(1);
+      });
+
+      const outlineInput = screen.getByLabelText("Timed outline") as HTMLTextAreaElement;
+      expect(outlineInput.value).toBe("");
+      expect(screen.queryByRole("button", { name: "Download .srt" })).not.toBeInTheDocument();
+    });
   });
 });

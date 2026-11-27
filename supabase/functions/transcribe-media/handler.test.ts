@@ -372,6 +372,8 @@ Deno.test("D-P7-3 log-capture: signed mediaUrl, transcript, segment text, and pr
   const TRANSCRIPT_MARKER = "MARKER_TXT_882";
   const SEGMENT_MARKER = "MARKER_SEG_773";
   const PROVIDER_BODY_MARKER = "MARKER_ERR_664";
+  const UNTRUSTED_MODEL_MARKER = "MARKER_MDL 553";
+  const UNTRUSTED_LANG_MARKER = "MARKER_LNG 442";
 
   const signedMediaUrl = `https://storage.postora.cloud/object/sign/media/video.mp4?sig=${SIGNED_URL_MARKER}`;
 
@@ -420,7 +422,7 @@ Deno.test("D-P7-3 log-capture: signed mediaUrl, transcript, segment text, and pr
           Authorization: "Bearer test-jwt",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ mediaUrl: signedMediaUrl }),
+        body: JSON.stringify({ mediaUrl: signedMediaUrl, model: UNTRUSTED_MODEL_MARKER }),
       }),
       {
         supabaseAdmin,
@@ -435,7 +437,7 @@ Deno.test("D-P7-3 log-capture: signed mediaUrl, transcript, segment text, and pr
           return Promise.resolve(
             Response.json({
               text: `Full transcript with ${TRANSCRIPT_MARKER}`,
-              language: "english",
+              language: UNTRUSTED_LANG_MARKER,
               duration: 5,
               segments: [{ start: 0, end: 4, text: `Cue with ${SEGMENT_MARKER}` }],
             }),
@@ -510,6 +512,8 @@ Deno.test("D-P7-3 log-capture: signed mediaUrl, transcript, segment text, and pr
       TRANSCRIPT_MARKER,
       SEGMENT_MARKER,
       PROVIDER_BODY_MARKER,
+      UNTRUSTED_MODEL_MARKER,
+      UNTRUSTED_LANG_MARKER,
     ]) {
       assertEquals(
         combinedLogOutput.includes(secretMarker),

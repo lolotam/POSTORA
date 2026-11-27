@@ -25,6 +25,15 @@ function sanitizeCueText(rawText: string): string {
     .trim();
 }
 
+function sanitizeVttCueText(rawText: string): string {
+  const cleaned = sanitizeCueText(rawText);
+  if (cleaned.length === 0) return "";
+  return cleaned
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function sanitizeOutlineText(rawText: string): string {
   return rawText
     .replace(/[\0<>]/g, "")
@@ -111,7 +120,7 @@ export function segmentsToSrt(segments: TranscriptSegment[]): string {
 }
 
 export function segmentsToVtt(segments: TranscriptSegment[]): string {
-  const cues = normalizeCues(segments, sanitizeCueText);
+  const cues = normalizeCues(segments, sanitizeVttCueText);
   if (cues.length === 0) return "";
 
   const body = cues

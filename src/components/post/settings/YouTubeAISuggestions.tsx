@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -301,21 +301,40 @@ function YouTubeChapterSuggestions({
 
   const trimmedVideoSourceUrl = typeof videoSourceUrl === "string" ? videoSourceUrl.trim() : "";
   const isHttpsVideoUrl = /^https:\/\//i.test(trimmedVideoSourceUrl);
+  const latestVideoSourceRef = useRef(trimmedVideoSourceUrl);
+  const extractRequestIdRef = useRef(0);
+  const autoFilledOutlineRef = useRef<string | null>(null);
+  latestVideoSourceRef.current = trimmedVideoSourceUrl;
   const activeAudioExtract =
     isHttpsVideoUrl && audioExtractState?.sourceKey === trimmedVideoSourceUrl
       ? audioExtractState
       : null;
 
   useEffect(() => {
+    extractRequestIdRef.current += 1;
     resetTranscription();
+    setAudioExtractState((prev) => (prev && prev.sourceKey !== trimmedVideoSourceUrl ? null : prev));
+    if (autoFilledOutlineRef.current !== null) {
+      const previousAutoOutline = autoFilledOutlineRef.current;
+      autoFilledOutlineRef.current = null;
+      setOutline((prev) => (prev === previousAutoOutline ? "" : prev));
+    }
   }, [trimmedVideoSourceUrl, resetTranscription]);
 
   const handleExtractFromAudio = async () => {
     if (!isHttpsVideoUrl || isTranscribing || isLoading) return;
     const requestSourceKey = trimmedVideoSourceUrl;
+    extractRequestIdRef.current += 1;
+    const requestId = extractRequestIdRef.current;
     setError(null);
     setAudioExtractState(null);
     const result = await transcribe(requestSourceKey);
+    if (
+      requestId !== extractRequestIdRef.current ||
+      latestVideoSourceRef.current !== requestSourceKey
+    ) {
+      return;
+    }
     if (!result) {
       onAudioSubtitlesReady?.(null);
       return;
@@ -326,6 +345,7 @@ function YouTubeChapterSuggestions({
       const srt = segmentsToSrt(segments);
       const vtt = segmentsToVtt(segments);
       if (timedOutline.length > 0) {
+        autoFilledOutlineRef.current = timedOutline;
         setOutline(timedOutline);
         setTiming("provided");
         setAudioExtractState({

@@ -58,7 +58,7 @@ Deno.test("segmentsToSrt orders cues, rolls over hours, and strips NUL and arrow
 
 Deno.test("segmentsToVtt formats WEBVTT cues with hour rollover and sanitized text", () => {
   const segments: TranscriptSegment[] = [
-    { start: 1.5, end: 4.75, text: "Intro --> welcome\0" },
+    { start: 1.5, end: 4.75, text: "Intro --> welcome & <script> tag\0" },
     { start: 7200, end: 7205.125, text: "Two hours in" },
   ];
 
@@ -69,7 +69,7 @@ Deno.test("segmentsToVtt formats WEBVTT cues with hour rollover and sanitized te
       "WEBVTT",
       "",
       "00:00:01.500 --> 00:00:04.750",
-      "Intro → welcome",
+      "Intro → welcome &amp; &lt;script&gt; tag",
       "",
       "02:00:00.000 --> 02:00:05.125",
       "Two hours in",
