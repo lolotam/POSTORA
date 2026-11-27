@@ -89,6 +89,8 @@ export interface FeatureFlags {
   analyticsYoutube: boolean;
   // YouTube channel management page (stage 2c)
   youtubeManagement: boolean;
+  // YouTube public channel benchmark (phase 6B)
+  youtubeBenchmark: boolean;
 }
 
 // Title required settings stored separately
@@ -171,6 +173,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   analyticsTiktok: false,
   analyticsYoutube: false,
   youtubeManagement: false,
+  youtubeBenchmark: false,
 };
 
 export const DEFAULT_TITLE_SETTINGS: TitleRequiredSettings = {
@@ -252,6 +255,7 @@ export const FLAG_KEYS = [
   "feature_analytics_tiktok",
   "feature_analytics_youtube",
   "feature_youtube_management",
+  "feature_youtube_benchmark",
 ];
 
 export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
@@ -328,6 +332,7 @@ export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
   feature_analytics_tiktok: "analyticsTiktok",
   feature_analytics_youtube: "analyticsYoutube",
   feature_youtube_management: "youtubeManagement",
+  feature_youtube_benchmark: "youtubeBenchmark",
 };
 
 // Channel name for realtime broadcast
@@ -416,6 +421,7 @@ const FEATURE_DISPLAY_NAMES: Record<keyof FeatureFlags, string> = {
   analyticsTiktok: "Analytics: TikTok",
   analyticsYoutube: "Analytics: YouTube",
   youtubeManagement: "YouTube Channel",
+  youtubeBenchmark: "YouTube Benchmark",
 };
 
 // All flags enabled for admins - they always have full access
@@ -493,6 +499,7 @@ const ALL_FLAGS_ENABLED: FeatureFlags = {
   analyticsTiktok: true,
   analyticsYoutube: true,
   youtubeManagement: true,
+  youtubeBenchmark: true,
 };
 
 export function useFeatureFlags() {
@@ -617,6 +624,7 @@ export function useFeatureFlags() {
         analyticsTiktok: globalFlagMap["feature_analytics_tiktok"] ?? DEFAULT_FLAGS.analyticsTiktok,
         analyticsYoutube: globalFlagMap["feature_analytics_youtube"] ?? DEFAULT_FLAGS.analyticsYoutube,
         youtubeManagement: globalFlagMap["feature_youtube_management"] ?? DEFAULT_FLAGS.youtubeManagement,
+        youtubeBenchmark: globalFlagMap["feature_youtube_benchmark"] ?? DEFAULT_FLAGS.youtubeBenchmark,
       };
 
       // Defensive merge: defaults <- previous cache <- current DB result.
@@ -672,6 +680,10 @@ export function useFeatureFlags() {
     "youtubeComments",
     // YouTube Analytics stays dark for admins too until its rollout flag is explicitly enabled.
     "analyticsYoutube",
+    // The public channel benchmark reads other channels' public data. It stays
+    // dark for admins too until its rollout flag is explicitly enabled, so a
+    // merged frontend can never spend provider units nobody approved.
+    "youtubeBenchmark",
     "platformAccess",
     "freePlatforms",
     "tiktokOAuthDebug",

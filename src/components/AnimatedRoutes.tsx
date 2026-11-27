@@ -115,6 +115,7 @@ const UnifiedAgentSetupPage = lazyWithRetry(() => import("@/pages/automation/Uni
 const AudiencePage = lazyWithRetry(() => import("@/pages/automation/AudiencePage"), "AudiencePage");
 const CommentManagerPage = lazyWithRetry(() => import("@/pages/comments/CommentManagerPage"), "CommentManagerPage");
 const YouTubeManagementPage = lazyWithRetry(() => import("@/pages/youtube/YouTubeManagementPage"), "YouTubeManagementPage");
+const YouTubeBenchmarkPage = lazyWithRetry(() => import("@/pages/youtube/YouTubeBenchmarkPage"), "YouTubeBenchmarkPage");
 const CommentWorkflowPage = lazyWithRetry(() => import("@/pages/automation/CommentWorkflowPage"), "CommentWorkflowPage");
 
 // Admin pages
@@ -315,6 +316,7 @@ export function AnimatedRoutes() {
         <Route path="/messaging/threads" element={<Navigate to="/messaging/thread" replace />} />
         <Route path="/comments" element={<ProtectedRoute><AnimatedPage><CommentManagerPage /></AnimatedPage></ProtectedRoute>} />
         <Route path="/youtube" element={<ProtectedRoute><AnimatedPage><YouTubeManagementPage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/youtube/benchmark" element={<ProtectedRoute><AnimatedPage><YouTubeBenchmarkPage /></AnimatedPage></ProtectedRoute>} />
         <Route path="/messaging/comments" element={<Navigate to="/comments" replace />} />
         
         {/* Automation Hub */}

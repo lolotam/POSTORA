@@ -82,7 +82,7 @@ For each scope, provide justification:
 
 | Scope | Purpose | User Benefit |
 |-------|---------|--------------|
-| `youtube.readonly` | Identify the connected channel and check connection health; browse owned uploads and full video details on `/youtube`; list the channel's own playlists (`playlists.list`) so a destination playlist can be chosen when publishing; read owner-accepted channel/video reports through YouTube Analytics API v2 on `/analytics/youtube` | See the correct channel, browse its content, pick one of its playlists for a new video, and view on-demand analytics without Postora storing the numbers |
+| `youtube.readonly` | Identify the connected channel and check connection health; browse owned uploads and full video details on `/youtube`; list the channel's own playlists (`playlists.list`) so a destination playlist can be chosen when publishing; read owner-accepted channel/video reports through YouTube Analytics API v2 on `/analytics/youtube`; read the public statistics of up to three public channels the owner names, and the public metrics of their recent public videos, on `/youtube/benchmark` (`channels.list`, `playlistItems.list`, `videos.list`) | See the correct channel, browse its content, pick one of its playlists for a new video, view on-demand analytics without Postora storing the numbers, and compare public channels side by side without Postora storing or combining their figures |
 | `youtube.upload` | Upload new videos and Shorts with user-chosen metadata and set an optional custom thumbnail with `thumbnails.set`; replace the thumbnail of a video the owner already uploaded, from `/youtube`, with an owned JPEG or PNG image from the owner's own Postora media library, through the same `thumbnails.set` operation | Publish new content to the owner's channel, and correct the thumbnail of an existing video without ever replacing the video's media bytes |
 | `youtube.force-ssl` | Edit published metadata with `videos.update` (when published metadata editing is enabled; disabled at the current baseline via `PUBLISHED_EDIT_WRITE_ENABLED = false`); add a newly uploaded video to an existing playlist the owner selected in Create Post (`playlistItems.insert`) — never creating, renaming, reordering, or deleting playlists and never removing playlist items; list the caption tracks of a video the owner already uploaded (`captions.list`) and add a new caption track from an owner-supplied `.srt` or `.vtt` file (`captions.insert`) — never modifying, replacing, or deleting an existing caption track and never downloading one; read Published and Held for review comments and create top-level comments and replies (with optional creator-initiated AI reply drafting that sends the selected comment text and video title to the configured AI provider solely to populate the local reply draft without auto-sending); edit/delete the channel's own comments; publish or reject comments (moving a published comment to hold is disabled at the current baseline), with optional `banAuthor` on rejection | Correct published details, file a new video under the playlist of the owner's choice, add a caption track the owner supplied, and manage/moderate discussions on owned videos |
 | `userinfo.profile` | Get user's display name during Google Sign-In only, not YouTube connection | Personalize the application experience |
@@ -94,6 +94,14 @@ Postora does not replace existing video media bytes or delete videos. Published 
 **Playlists.** Postora lists the playlists of the connected channel and, on the owner's instruction, adds a newly uploaded video to one of them. It never creates, renames, reorders, or deletes playlists, and never removes playlist items. Listing playlists is covered by `youtube.readonly`; the insert is covered by `youtube.force-ssl`. A playlist belongs to exactly one channel, so the selector in Create Post is disabled when more than one distinct native YouTube channel is selected for the post.
 
 **Captions.** Postora lists the caption tracks of a video the owner already uploaded and, on the owner's instruction, adds a new caption track from a `.srt` or `.vtt` file the owner supplies. Both operations are covered by `youtube.force-ssl` (`captions.list` and `captions.insert`). Listing is never automatic: every list costs 50 provider units, so the owner clicks **Show caption tracks** in the video drawer on `/youtube` and Postora reads the tracks only then. The upload is two steps — the owner picks the file, the language and the track name, then confirms — because the write costs 400 units and adds a public track to the video. The file is capped at 512 KB measured in UTF-8 bytes, in the browser before the request leaves the page and again on the server. Postora never modifies, replaces, or deletes an existing caption track, never downloads one, and never retries a lost answer: the owner is asked to refresh the track list instead. Downloading, replacing, deleting, and auto-translating caption tracks are out of scope.
+
+**Public channel benchmark (Phase 6B).** Postora compares up to three **public** YouTube channels that the owner names himself on `/youtube/benchmark`. The owner types a handle (`@name`) or a channel ID (`UC…`) for each channel; Postora reads `channels.list?part=snippet,statistics,contentDetails`, then the channel's uploads playlist through `playlistItems.list?maxResults=10`, then `videos.list?part=snippet,statistics` for those uploads. All three are covered by `youtube.readonly`.
+
+- **What is read:** only public fields of the named channels — the channel title and thumbnail, the subscriber count (or the fact that the owner hides it), the total view count, the total video count, and the view, like and comment counts of up to ten recent **public** videos. The owner's own channel is never added to the comparison and no channel the owner did not name is ever read.
+- **Unit cost:** at most **3 units per channel**, so a three-channel comparison costs at most **9 units**. The cost is 1 unit when the channel is not found, 2 units when the channel has no uploads (`videos.list` is then never called), and 3 units otherwise. The project-wide budget for this feature is **300 units per Pacific day**, debited by the units actually spent, and each user is limited to **10 requests per 10 minutes** and **30 requests per 24 hours**.
+- **Nothing is stored:** the response carries `Cache-Control: no-store`; no benchmark figure is written to a database, a storage bucket, a log line, or browser storage. The browser keeps the settled answers in memory only (30 minutes) and drops them when the owner signs out.
+- **No aggregation across channels:** each channel is shown in its own column with its own figures, the per-recent-video averages are computed in the browser from that channel's own uploads, and Postora never combines the figures of two different channels into one score or ranking.
+- **The three states are distinct:** a channel that was read, a channel YouTube says does not exist, and a channel that could not be read (quota, outage, revoked grant) are three different answers. A failure is never presented as "no channel found".
 
 ### Connect and reconnect parameters
 
@@ -152,6 +160,7 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - The bytes of a JPEG or PNG image from your own Postora media library when you replace the thumbnail of a video you already uploaded
 - Comments on your own videos for creation, replies, editing, deletion, and moderation
 - On-demand YouTube Analytics numbers after your connection-scoped in-app purpose acceptance
+- The public statistics of up to three public YouTube channels you name yourself on `/youtube/benchmark`, and the public metrics of their recent public videos
 
 ### How We Use This Data
 - Display your connected YouTube channel in the dashboard
@@ -163,11 +172,13 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - Edit published video metadata on your instruction, without replacing video bytes or deleting videos
 - Read, create, reply to, edit, delete, and moderate comments on your own videos
 - Display your own channel and video analytics (summary, daily trend, top videos, viewer country, device type, traffic sources, and audience retention, with optional browser-local export to your own device) to you, the signed-in owner, only where enabled and after you accept Analytics Purpose Clause Version 2 (November 26, 2026) for the current connection; analytics numbers are read on demand and are not stored by Postora
+- Compare up to three public YouTube channels that you name yourself on `/youtube/benchmark`, showing each channel's own public figures and the public metrics of its recent public videos; nothing is stored by Postora and the figures of different channels are never combined into one score
 
 ### Data Storage
 - OAuth tokens are stored securely in our database
 - Tokens are refreshed automatically to maintain connection
 - YouTube Analytics values are read on demand for immediate display and are not stored by Postora
+- Public channel benchmark figures are read on demand for immediate display, are sent with `Cache-Control: no-store`, and are not stored by Postora
 - Acceptance events record the owner, channel, account reference, event type, purpose version, locale, method, request ID, timestamp, and connection revision, never analytics numbers
 - We do not share your YouTube data with third parties
 
@@ -211,13 +222,14 @@ Create a masked screen recording of these nine journeys, using an owner-controll
 7. **Denial:** use a synthetic foreign account/video ID and a connection with missing scope to show safe `not_found`/reconnect states with no data or write.
 8. **Disconnect and reconnect:** Profiles → Connected Accounts → Disconnect, immediate local removal and provider-revocation outcome, followed by the account chooser and permission prompt on reconnect.
 9. **Caption tracks:** from `/youtube`, open an owned video, click **Show caption tracks** and show that nothing was listed before the click, then upload an owner-supplied `.srt` or `.vtt` file with a language and a track name, show the explicit confirmation step before the write, and show the confirmed new track in the list; never show an existing track being edited, replaced, or deleted.
+10. **Public channel benchmark:** open `/youtube/benchmark`, show that nothing was read before the click, type up to three public handles or channel IDs, click **Compare channels**, and show the three columns side by side with their own figures, the per-recent-video averages, the "Fetched at" line and the YouTube attribution line; show that a channel YouTube does not have reads "No channel found for this handle or channel ID." and that a failed lookup reads a quota or outage notice with a per-channel **Retry** and never "No channel found".
 
 The complete actions, expected results, masking rules, and capture checklist are in `docs/reports/2026-11-26-youtube-stage6-approval-package.md`.
 
 **Video Requirements:**
 - 720p or higher resolution
 - Clear narration or text overlays
-- Keep the recording as concise as the nine journeys permit
+- Keep the recording as concise as the ten journeys permit
 - Upload to YouTube as unlisted
 - Never expose tokens, cookies, client secrets, customer data, private channel identifiers, or unmasked personal information
 

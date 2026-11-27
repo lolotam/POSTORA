@@ -43,6 +43,9 @@ The dedicated `yt-analytics.readonly` scope is not requested at this baseline. A
 | 5 | Confirm a video belongs to the admitted channel before per-video analytics | `videos.list?part=snippet&id=...` | `supabase/functions/youtube-analytics/analyticsReadClient.ts`; attempt order in `handler.ts` |
 | 5 | Enrich top-video rows with owned titles | `videos.list?part=snippet&id=<up to 10 IDs>` | `supabase/functions/youtube-analytics/analyticsReadClient.ts`; display `src/features/youtube-analytics/ui/TopVideosTable.tsx` |
 | 5 | Read channel and per-video totals, daily trends, and top-video reports after in-app acceptance | YouTube Analytics API v2 `reports.query` | `supabase/functions/youtube-analytics/analyticsReadClient.ts`; consent/credential enforcement in `handler.ts`, `decision.ts`, `credentials.ts`; page `src/features/youtube-analytics/ui/YouTubeAnalyticsScreen.tsx` |
+| 6B | Compare up to three public channels the owner names, with their public statistics and the public metrics of their recent public videos | `channels.list?part=snippet,statistics,contentDetails`, `playlistItems.list?part=contentDetails`, `videos.list?part=snippet,statistics` | `supabase/functions/youtube-channel-benchmark/benchmarkReadClient.ts`; owner-scoped account load, token lease and limits in `handler.ts` and `index.ts`; UI `src/features/youtube-benchmark/ui/YouTubeBenchmarkScreen.tsx` and `src/features/youtube-benchmark/ui/YouTubeBenchmarkColumnCard.tsx` |
+
+Benchmark figures are read on demand for the channels the owner names, are returned with `Cache-Control: no-store`, and are never stored by Postora. The browser keeps settled answers in memory for 30 minutes only; a failed or degraded answer is never kept as a fresh one.
 
 Analytics values are read on demand, returned with `Cache-Control: no-store`, and never stored by Postora. Acceptance is recorded separately by `supabase/functions/youtube-analytics/consent.ts` and `src/features/youtube-analytics/application/usePurposeConsent.ts`; its text is pinned in `src/features/youtube-analytics/domain/purposeText.ts` and its digest in `src/features/youtube-analytics/tests/domain.test.ts`.
 
@@ -105,6 +108,7 @@ Sources, read for Stage 6 on 26 November 2026:
 | `captions.list` | 6A list the caption tracks of an owned video | 50 shared units | Explicit creator action only (never on open); 10 lists per 24 h per user; debited only after the ownership read |
 | `captions.insert` | 6A add a new caption track from an owner-supplied file | 400 shared units | 2 uploads per 24 h per user; the 512 KB UTF-8 check is free and runs before the write; one attempt only, a lost answer is `outcome_unknown` |
 | Analytics v2 `reports.query` | 5 summary/daily/top-videos, channel or one video | 1 Analytics quota unit/request | Per-user admission 120/60 s; data 60/600 s and 300/86400 s; project attempt ceiling 2,000/Pacific day |
+| 6B benchmark: `channels.list` + `playlistItems.list` + `videos.list` | 6B compare up to three public channels the owner names | 1 shared unit per call, **at most 3 units per channel** (1 when the channel is not found, 2 when it has no uploads and `videos.list` is skipped, 3 otherwise) — at most **9 units** for three channels | Dedicated project bucket `youtube-channel-benchmark:budget:data:<YYYY-MM-DD Pacific>`, **300 units per Pacific day**, debited by the units actually spent; per user **10 requests/10 min** and **30 requests/24 h**; an unreadable counter refuses the read |
 
 A normal Stage 3 edit needs one pre-read `videos.list` plus one `videos.update`: **51 shared units before the read-after-write verification**. The verification read costs one additional unit, so a completed read → update → verify sequence costs **52 units**. Category catalog retrieval, when needed, adds one unit.
 
@@ -119,6 +123,7 @@ A normal Stage 3 edit needs one pre-read `videos.list` plus one `videos.update`:
 | Data daily limiter | `youtube-analytics:data:24h:<user_id>` | 300 data operations/86,400 s per user |
 | Stage 2 browse limiters | `youtube-resources:burst`, `youtube-resources:day` | 30/600 s and 300/86,400 s per user. The existing shared helper fails open if its counter RPC fails; ownership checks remain independent |
 | Stage 4 limiters | `stage4:<action>:<user_id>` | Per user, per action: reads 120/60 s per read action, writes 20/60 s per write action, ban confirmation 5/86,400 s per user; all fail closed |
+| Phase 6B benchmark limiters | `youtube-channel-benchmark:budget:data:<YYYY-MM-DD>` and the per-user request counters | 300 Data units per Pacific day, project-wide, debited by the units each lookup actually spends (1, 2 or 3); 10 requests/600 s and 30 requests/86,400 s per user |
 
 The two Stage 5 budget keys use the Pacific calendar date and a 48-hour counter window, so a counter cannot reset inside its named Pacific day. A debit requires `allowed: true` and `count >= 1`; an unreadable counter fails closed. A debit is not refunded when a later authorization check or provider attempt fails.
 
@@ -323,6 +328,14 @@ All automated provider calls in these suites use fakes/fixtures. No test should 
 
 **Capture:** The closed drawer before the click, the track list, the upload form with the file size and the limit, the confirmation step, and the confirmed result. Narrate the 50-unit `captions.list` and the 400-unit `captions.insert`, the 10-list and 2-upload per-user daily limits, and the 512 KB UTF-8 ceiling.
 
+### Journey 10 — Public channel benchmark
+
+**Actions:** Open `/youtube/benchmark` and show that nothing was read before the click. Type the handle or channel ID of up to three public channels into **Channel 1**, **Channel 2 (optional)** and **Channel 3 (optional)**, then click **Compare channels**. Show the columns side by side: each channel's own title, thumbnail, handle or ID, subscribers (or "Hidden by channel owner"), total views, total videos, the per-recent-video averages, and the recent public videos. Show the "Fetched at" line and the YouTube attribution line. Repeat with one handle that does not exist, and show that it reads "No channel found for this handle or channel ID." while the other columns are unchanged.
+
+**Expected:** Nothing is read until **Compare channels** is clicked, and an empty, malformed or repeated input is refused in the browser before any provider call. Each channel carries its own state: a channel that was read, a channel YouTube says does not exist, and a channel that could not be read. A quota, outage or revoked-grant failure reads its own notice with a per-channel **Retry** and is never presented as "no channel found". A retry reads only that channel. The figures of different channels are never combined into one score.
+
+**Capture:** The empty page before the click, the three inputs, the comparison columns, the "no channel found" column, and a degraded column with its notice and **Retry**. Narrate the unit cost: at most 3 units per channel (1 when the channel is not found, 2 when it has no uploads, 3 otherwise), at most 9 units for three channels, against a 300-unit project budget per Pacific day, with per-user limits of 10 requests per 10 minutes and 30 per 24 hours. State that nothing is stored and that the responses carry `Cache-Control: no-store`.
+
 ## 7. Submission checklist
 
 - [ ] Stage 6 frontend deployment serves the three legal pages with the fixed date and complete Stage 1–5 wording.
@@ -331,6 +344,6 @@ All automated provider calls in these suites use fakes/fixtures. No test should 
 - [ ] Full deployed Edge Function per-file SHA-256 output and Edge Functions Sync log match the demonstrated merge commit.
 - [ ] Actual Data and Analytics quota limits and recent Data API feature peaks are read from Cloud Console and compared with §3.
 - [ ] Feature activation state is stated accurately, including the published-edit write gate and per-account Stage 4/5 rollout controls.
-- [ ] All nine demo journeys are recorded with masking rules applied and no secret/private evidence exposed.
+- [ ] All ten demo journeys are recorded with masking rules applied and no secret/private evidence exposed.
 - [ ] Offline test outputs are attached for the exact candidate head, including Stage 6 legal tests, analytics tests, typecheck, and targeted zero-warning ESLint.
 - [ ] Any remaining live unknown is labeled as such; no repository-only evidence is presented as live production proof.
