@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SupabaseYouTubeResourcesGateway } from "@/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway";
-import type { YouTubePlaylistListItem } from "@/features/youtube-management/domain/types";
+import type {
+  YouTubeAccountCapabilities,
+  YouTubePlaylistListItem,
+} from "@/features/youtube-management/domain/types";
 
 export interface YouTubePlaylistsState {
   playlists: YouTubePlaylistListItem[];
+  capabilities: YouTubeAccountCapabilities["capabilities"] | null;
   loading: boolean;
   loadingMore: boolean;
   /** The list could not be read; the creator can retry without losing the choice. */
@@ -26,6 +30,7 @@ const gateway = new SupabaseYouTubeResourcesGateway();
  */
 export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylistsState {
   const [playlists, setPlaylists] = useState<YouTubePlaylistListItem[]>([]);
+  const [capabilities, setCapabilities] = useState<YouTubeAccountCapabilities["capabilities"] | null>(null);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -48,6 +53,7 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
 
     if (!accountId) {
       setPlaylists([]);
+      setCapabilities(null);
       cursorRef.current = null;
       setNextPageToken(null);
       setLoading(false);
@@ -60,12 +66,25 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
     // The playlists of one channel are never the playlists of another, so the
     // previous account's list is dropped before the new read.
     setPlaylists([]);
+    setCapabilities(null);
     cursorRef.current = null;
     setNextPageToken(null);
     setLoading(true);
     setLoadingMore(false);
     loadingMoreRef.current = false;
     setUnavailable(false);
+
+    if (typeof gateway.getCapabilities === "function") {
+      gateway.getCapabilities(accountId)
+        .then((result) => {
+          if (generationRef.current !== generation) return;
+          setCapabilities(result?.data?.capabilities ?? null);
+        })
+        .catch(() => {
+          if (generationRef.current !== generation) return;
+          setCapabilities(null);
+        });
+    }
 
     gateway.listPlaylists({ accountId })
       .then((result) => {
@@ -126,6 +145,7 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
 
   return {
     playlists,
+    capabilities,
     loading,
     loadingMore,
     unavailable,

@@ -2,16 +2,23 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 
 import { useYouTubePlaylists } from "../useYouTubePlaylists";
-import type { YouTubePlaylistListItem } from "@/features/youtube-management/domain/types";
+import type {
+  YouTubeAccountCapabilities,
+  YouTubePlaylistListItem,
+} from "@/features/youtube-management/domain/types";
 
 // The hook's only outward dependency is the resources gateway, which is the
 // seam to the provider read. Everything below it is the hook's own logic:
 // the cursor, the deduplication and the retry rules.
-const { listPlaylistsMock } = vi.hoisted(() => ({ listPlaylistsMock: vi.fn() }));
+const { listPlaylistsMock, getCapabilitiesMock } = vi.hoisted(() => ({
+  listPlaylistsMock: vi.fn(),
+  getCapabilitiesMock: vi.fn(),
+}));
 
 vi.mock("@/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway", () => ({
   SupabaseYouTubeResourcesGateway: class {
     listPlaylists = listPlaylistsMock;
+    getCapabilities = getCapabilitiesMock;
   },
 }));
 
@@ -28,6 +35,25 @@ function page(items: YouTubePlaylistListItem[], nextPageToken: string | null) {
   };
 }
 
+function capabilitiesEnvelope(capabilities: YouTubeAccountCapabilities["capabilities"]) {
+  return {
+    schema_version: 1 as const,
+    request_id: "req-cap-1",
+    freshness: { fetched_at: "2026-11-27T10:00:00.000Z", source: "provider" as const },
+    data: {
+      account_id: "acc-1",
+      provider: "native" as const,
+      granted_scopes: [],
+      capabilities,
+      quota: {
+        read_per_minute: 30,
+        browse_per_minute: 10,
+        detail_per_minute: 20,
+      },
+    },
+  };
+}
+
 function deferred() {
   let resolve!: (value: ReturnType<typeof page>) => void;
   const promise = new Promise<ReturnType<typeof page>>((res) => { resolve = res; });
@@ -36,6 +62,8 @@ function deferred() {
 
 beforeEach(() => {
   listPlaylistsMock.mockReset();
+  getCapabilitiesMock.mockReset();
+  getCapabilitiesMock.mockRejectedValue(new Error("unconfigured"));
 });
 
 describe("useYouTubePlaylists", () => {
@@ -164,5 +192,35 @@ describe("useYouTubePlaylists", () => {
     await act(async () => { latePage.resolve(page([playlist("PL2")], null)); });
 
     expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL9"]);
+  });
+
+  it("populates capabilities when getCapabilities resolves and resets to null when getCapabilities rejects", async () => {
+    const sampleCapabilities: YouTubeAccountCapabilities["capabilities"] = {
+      browse: { state: "available" },
+      upload: { state: "available" },
+      comments: { state: "available" },
+      edit_metadata: { state: "available" },
+      manage_thumbnail: { state: "available" },
+      manage_captions: { state: "unavailable", reason: "missing_scope" },
+    };
+    listPlaylistsMock.mockResolvedValue(page([playlist("PL1")], null));
+    getCapabilitiesMock.mockResolvedValueOnce(capabilitiesEnvelope(sampleCapabilities));
+
+    const { result, rerender } = renderHook(
+      ({ accountId }: { accountId: string | null }) => useYouTubePlaylists(accountId),
+      { initialProps: { accountId: "acc-1" as string | null } },
+    );
+
+    await waitFor(() => expect(result.current.capabilities).toEqual(sampleCapabilities));
+    expect(getCapabilitiesMock).toHaveBeenCalledWith("acc-1");
+
+    getCapabilitiesMock.mockRejectedValueOnce(new Error("provider error"));
+    rerender({ accountId: "acc-2" });
+
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+    expect(result.current.capabilities).toBeNull();
+
+    rerender({ accountId: null });
+    expect(result.current.capabilities).toBeNull();
   });
 });

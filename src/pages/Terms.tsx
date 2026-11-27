@@ -54,7 +54,7 @@ const Terms = () => {
             
             <h3 className="text-xl font-semibold mt-6 mb-3">4.1 YouTube and Google Services</h3>
             <p className="text-muted-foreground leading-relaxed mb-4">
-              Postora uses YouTube API Services to provide owner-authorized video and Short publishing, channel
+              Postora uses YouTube API Services to provide owner-authorized video and Short publishing (including, when you attach an .srt or .vtt caption file to a new video upload in Create Post, sending that caption track to YouTube after the video upload completes under youtube.force-ssl), channel
               and uploaded-video browsing, published video metadata editing (title, description, tags and
               category), comment creation and moderation,
               and on-demand channel and video analytics. Analytics is available only where enabled and after you

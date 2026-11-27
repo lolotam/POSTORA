@@ -147,6 +147,19 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("Postora never modifies, replaces, or deletes existing caption tracks");
   });
 
+  it.each([
+    ["Google API Services Disclosure", <GoogleApiDisclosure />],
+    ["Postora Privacy Policy", <Privacy />],
+    ["Postora Terms of Service", <Terms />],
+  ])("discloses upload-time captions sent after video upload under youtube.force-ssl on %s", (_heading, page) => {
+    const { container } = renderPage(page);
+    const text = pageText(container);
+
+    expect(text).toContain("attach an .srt or .vtt caption file to a new video upload in Create Post");
+    expect(text).toContain("after the video upload completes");
+    expect(text).toContain("youtube.force-ssl");
+  });
+
   it("discloses comparing public channels the user names, without storing the figures", () => {
     const { container } = renderPage(<GoogleApiDisclosure />);
     const text = pageText(container);

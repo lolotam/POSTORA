@@ -343,6 +343,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       ).length;
       if (remainingYoutube === 0) {
         platformSettings.setYoutubePlaylist("");
+        platformSettings.setYoutubeCaption(null);
       }
     }
 
@@ -371,6 +372,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       }
       if (platform === "youtube") {
         platformSettings.setYoutubePlaylist("");
+        platformSettings.setYoutubeCaption(null);
       }
     } else {
       setSelectedAccountIds(prev => [...new Set([...prev, ...platformAccountIds])]);
@@ -452,6 +454,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     enableFirstComment: platformSettings.youtubeEnableFirstComment,
     publishAt: platformSettings.youtubePublishAt,
     scheduleRequested: platformSettings.youtubeScheduleRequested,
+    captionTrack: platformSettings.youtubeCaption,
   };
 
   // Complete inverse of buildPostMetadata's YouTube section. Every field that
@@ -468,6 +471,21 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     const proof = youtubeDeclarationProofOf(stored);
     const comment = text("youtube_first_comment");
     const thumbnailMediaId = text("youtube_thumbnail_media_id") ?? null;
+    const rawCaption = stored.youtube_caption;
+    let captionTrack: YouTubeSettingsState["captionTrack"] = null;
+    if (rawCaption && typeof rawCaption === "object" && !Array.isArray(rawCaption)) {
+      const record = rawCaption as Record<string, unknown>;
+      const language = typeof record.language === "string" ? record.language : null;
+      const name = typeof record.name === "string" ? record.name : null;
+      const format = record.format === "srt" || record.format === "vtt" ? record.format : null;
+      if (language !== null && name !== null && format !== null) {
+        if (typeof record.content === "string" && record.content.length > 0) {
+          captionTrack = { language, name, format, content: record.content };
+        } else {
+          captionTrack = { language, name, format, alreadySubmitted: true };
+        }
+      }
+    }
     return {
       videoType: (text("youtube_video_type") as "video" | "short" | undefined) ?? "video",
       title: text("youtube_title") ?? "",
@@ -495,6 +513,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       publishAt: text("youtube_publish_at") ?? "",
       scheduleRequested: Boolean((text("youtube_publish_at") ?? "").trim()),
       playlist: text("youtube_playlist_id") ?? "",
+      captionTrack,
     };
   };
 
@@ -555,6 +574,9 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     }
     if (changes.scheduleRequested !== undefined) {
       platformSettings.setYoutubeScheduleRequested(changes.scheduleRequested);
+    }
+    if (changes.captionTrack !== undefined) {
+      platformSettings.setYoutubeCaption(changes.captionTrack);
     }
   };
 
