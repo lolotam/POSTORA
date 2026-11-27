@@ -87,6 +87,7 @@ describe("YouTube benchmark gateway", () => {
       { ...envelope([foundChannel("@someone")]), request_id: 7 },
       { ...envelope([foundChannel("@someone")]), freshness: { source: "provider" } },
       { schema_version: 1, request_id: "r", freshness: { fetched_at: "x" }, data: { account_id: "acc-1" } },
+      envelope([{ input: "@someone", status: "found" }]),
     ];
 
     for (const payload of malformed) {

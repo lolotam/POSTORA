@@ -211,6 +211,10 @@ function mapRecentVideos(
     if (!item || typeof item.id !== "string" || !VIDEO_ID_RE.test(item.id)) continue;
     const snippet = asRecord(item.snippet);
     if (snippet?.channelId !== expectedChannelId) continue;
+    const status = asRecord(item.status);
+    if (status && status.privacyStatus !== undefined && status.privacyStatus !== "public") {
+      continue;
+    }
     const statistics = asRecord(item.statistics);
     byId.set(item.id, {
       id: item.id,
@@ -392,7 +396,7 @@ export function createYouTubeBenchmarkReadClient(
       }
 
       const step3 = await sendGet("videos", {
-        part: "snippet,statistics",
+        part: "snippet,statistics,status",
         id: videoIds.join(","),
         maxResults: String(YOUTUBE_BENCHMARK_RECENT_VIDEOS_LIMIT),
       }, accessToken);

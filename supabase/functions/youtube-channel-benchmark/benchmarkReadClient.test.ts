@@ -57,6 +57,7 @@ Deno.test("lookupChannel spends 3 units for handle with uploads and preserves up
           kind: "youtube#playlistItemListResponse",
           items: [
             { contentDetails: { videoId: "vid_second1" } },
+            { contentDetails: { videoId: "vid_private" } },
             { contentDetails: { videoId: "vid_first01" } },
           ],
         }));
@@ -90,7 +91,18 @@ Deno.test("lookupChannel spends 3 units for handle with uploads and preserves up
                 title: "Second",
                 publishedAt: "not-a-date",
               },
+              status: { privacyStatus: "public" },
               statistics: { viewCount: "200", likeCount: "bad", commentCount: "5" },
+            },
+            {
+              id: "vid_private",
+              snippet: {
+                channelId: CHANNEL_ID,
+                title: "Private video",
+                publishedAt: "2026-11-22T10:00:00Z",
+              },
+              status: { privacyStatus: "private" },
+              statistics: { viewCount: "500", likeCount: "50", commentCount: "10" },
             },
           ],
         }));

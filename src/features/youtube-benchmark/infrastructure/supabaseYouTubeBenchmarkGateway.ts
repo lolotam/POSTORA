@@ -11,6 +11,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isNumberOrNull(value: unknown): value is number | null {
+  return typeof value === "number" ? Number.isFinite(value) : value === null;
+}
+
+function isBenchmarkChannel(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value.input !== "string" || value.input.length === 0) return false;
+  if (value.status !== "found" && value.status !== "not_found" && value.status !== "unavailable") {
+    return false;
+  }
+  if (typeof value.subscriber_count_hidden !== "boolean") return false;
+  if (!isNumberOrNull(value.subscriber_count)) return false;
+  if (!isNumberOrNull(value.view_count)) return false;
+  if (!isNumberOrNull(value.video_count)) return false;
+  return Array.isArray(value.recent_videos);
+}
+
 /**
  * The envelope the benchmark function answers with.
  *
@@ -27,7 +44,7 @@ function isBenchmarkEnvelope(
   if (!isRecord(payload.freshness) || typeof payload.freshness.fetched_at !== "string") return false;
   if (!isRecord(payload.data)) return false;
   if (payload.data.account_id !== accountId) return false;
-  return Array.isArray(payload.data.channels);
+  return Array.isArray(payload.data.channels) && payload.data.channels.every(isBenchmarkChannel);
 }
 
 /**

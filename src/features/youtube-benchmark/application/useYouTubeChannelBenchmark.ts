@@ -139,14 +139,24 @@ async function lookupChannelResults(
  * (`useAuthQueryCacheSync`). Nothing read here is written to a database, a
  * storage bucket or browser storage.
  */
+const EMPTY_INPUTS: readonly string[] = [];
+const EMPTY_FAILURES: Record<string, YouTubeBenchmarkError> = {};
+
 export function useYouTubeChannelBenchmark(
   options: UseYouTubeChannelBenchmarkOptions,
 ): UseYouTubeChannelBenchmarkResult {
   const { gateway, userId, accountId } = options;
   const queryClient = useQueryClient();
-  const [submitted, setSubmitted] = useState<readonly string[]>([]);
-  const [pendingInputs, setPendingInputs] = useState<readonly string[]>([]);
-  const [failures, setFailures] = useState<Record<string, YouTubeBenchmarkError>>({});
+  const scope = `${userId ?? ""}:${accountId ?? ""}`;
+  const [submittedByScope, setSubmittedByScope] = useState<Record<string, readonly string[]>>({});
+  const [pendingByScope, setPendingByScope] = useState<Record<string, readonly string[]>>({});
+  const [failuresByScope, setFailuresByScope] = useState<
+    Record<string, Record<string, YouTubeBenchmarkError>>
+  >({});
+
+  const submitted = submittedByScope[scope] ?? EMPTY_INPUTS;
+  const pendingInputs = pendingByScope[scope] ?? EMPTY_INPUTS;
+  const failures = failuresByScope[scope] ?? EMPTY_FAILURES;
 
   // Without a signed-in user or a connection to borrow the credential from,
   // nothing may be read at all.
@@ -169,15 +179,15 @@ export function useYouTubeChannelBenchmark(
     })),
   });
 
-  const recordFailures = useCallback(
-    (inputs: readonly string[], failure: YouTubeBenchmarkError | null) => {
-      setFailures((previous) => {
-        const next = { ...previous };
+  const recordFailuresForScope = useCallback(
+    (targetScope: string, inputs: readonly string[], failure: YouTubeBenchmarkError | null) => {
+      setFailuresByScope((previous) => {
+        const current = { ...(previous[targetScope] ?? {}) };
         for (const input of inputs) {
-          if (failure) next[input] = failure;
-          else delete next[input];
+          if (failure) current[input] = failure;
+          else delete current[input];
         }
-        return next;
+        return { ...previous, [targetScope]: current };
       });
     },
     [],
@@ -186,7 +196,15 @@ export function useYouTubeChannelBenchmark(
   const runLookup = useCallback(
     async (inputs: readonly string[]) => {
       if (!userId || !accountId || inputs.length === 0) return;
-      setPendingInputs(inputs);
+      const callScope = `${userId}:${accountId}`;
+      setPendingByScope((previous) => {
+        const current = previous[callScope] ?? [];
+        const merged = [...current];
+        for (const input of inputs) {
+          if (!merged.includes(input)) merged.push(input);
+        }
+        return { ...previous, [callScope]: merged };
+      });
       try {
         const results = await lookupChannelResults(gateway, accountId, inputs);
         for (const input of inputs) {
@@ -198,27 +216,37 @@ export function useYouTubeChannelBenchmark(
             );
           }
         }
-        recordFailures(inputs, null);
+        recordFailuresForScope(callScope, inputs, null);
         // A channel the provider did not answer failed on its own; the other
         // channels keep the answers they have.
         const unanswered = inputs.filter((input) => !results.has(input));
         if (unanswered.length > 0) {
-          recordFailures(unanswered, new YouTubeBenchmarkError("upstream_unavailable"));
+          recordFailuresForScope(
+            callScope,
+            unanswered,
+            new YouTubeBenchmarkError("upstream_unavailable"),
+          );
         }
       } catch (error) {
-        recordFailures(inputs, toBenchmarkFailure(error));
+        recordFailuresForScope(callScope, inputs, toBenchmarkFailure(error));
       } finally {
-        setPendingInputs([]);
+        setPendingByScope((previous) => {
+          const current = previous[callScope] ?? [];
+          return {
+            ...previous,
+            [callScope]: current.filter((item) => !inputs.includes(item)),
+          };
+        });
       }
     },
-    [accountId, gateway, queryClient, recordFailures, userId],
+    [accountId, gateway, queryClient, recordFailuresForScope, userId],
   );
 
   const compare = useCallback(
     (inputs: readonly string[]) => {
       if (!ready || inputs.length === 0) return;
       const normalized = inputs.map((input) => normalizeBenchmarkChannelInput(input));
-      setSubmitted(normalized);
+      setSubmittedByScope((previous) => ({ ...previous, [scope]: normalized }));
       // A channel whose cached answer is still fresh and settled is served
       // from the cache: no request, no provider units. Everything else — new,
       // degraded, failed or stale — is read again.
@@ -231,11 +259,11 @@ export function useYouTubeChannelBenchmark(
       );
       const cachedInputs = normalized.filter((input) => !pending.includes(input));
       if (cachedInputs.length > 0) {
-        recordFailures(cachedInputs, null);
+        recordFailuresForScope(scope, cachedInputs, null);
       }
       void runLookup(pending);
     },
-    [accountId, queryClient, ready, recordFailures, runLookup, userId],
+    [accountId, queryClient, ready, recordFailuresForScope, runLookup, scope, userId],
   );
 
   const retry = useCallback(

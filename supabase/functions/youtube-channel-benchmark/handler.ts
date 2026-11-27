@@ -310,7 +310,10 @@ export function createYouTubeBenchmarkHandler(
 
       if (outcome.kind === "unauthorized" && !refreshedInRequest) {
         refreshedInRequest = true;
-        const refreshed = await ports.tokens.get(account, { force: true });
+        const refreshed = await ports.tokens.get(
+          { ...account, accessToken: currentToken },
+          { force: true },
+        );
         if (!refreshed.ok) {
           return await refuse(req, {
             code: refreshed.code,

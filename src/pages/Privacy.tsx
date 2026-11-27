@@ -253,7 +253,7 @@ const Privacy = () => {
               <li>Post history and scheduled content are retained until you delete them or close your account</li>
               <li>When you disconnect a native YouTube account through Profiles → Connected Accounts → Disconnect, Postora clears its stored OAuth credentials immediately and revokes the Google grant when no other active connection of yours shares it; a failed provider revocation does not produce a false disconnect</li>
               <li>On-demand YouTube Analytics numbers are never stored. Disconnecting ends analytics authorization for that connection, and reconnecting requires fresh acceptance of the current Analytics Purpose Clause; historical acceptance events contain no analytics numbers</li>
-              <li>Public channel benchmark figures are never stored. They are read on demand for the channels you name, are kept only in your browser's memory while the page is open, and are sent with Cache-Control: no-store. Signing out clears them</li>
+              <li>Public channel benchmark figures are never stored. They are read on demand for the channels you name, are kept only in your browser's in-memory session cache (reusable for up to 30 minutes while active and garbage-collected about 10 minutes after you leave the page, with zero disk or browser-storage persistence), and are sent with Cache-Control: no-store. Signing out or reloading the page clears them immediately</li>
             </ul>
             <p className="text-muted-foreground leading-relaxed mt-4 mb-4">
               <strong>Account Deletion:</strong> You may request deletion of your account and all associated data at any time by:
