@@ -437,6 +437,8 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     blockedCountries: platformSettings.youtubeBlockedCountries,
     firstComment: platformSettings.youtubeFirstComment,
     enableFirstComment: platformSettings.youtubeEnableFirstComment,
+    publishAt: platformSettings.youtubePublishAt,
+    scheduleRequested: platformSettings.youtubeScheduleRequested,
   };
 
   // Complete inverse of buildPostMetadata's YouTube section. Every field that
@@ -477,6 +479,8 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       thumbnailUrl: text("youtube_thumbnail_url") ?? "",
       thumbnailMediaId,
       thumbnailMode: thumbnailMediaId ? "upload" : "auto",
+      publishAt: text("youtube_publish_at") ?? "",
+      scheduleRequested: Boolean((text("youtube_publish_at") ?? "").trim()),
     };
   };
 
@@ -529,6 +533,15 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     if (changes.blockedCountries !== undefined) platformSettings.setYoutubeBlockedCountries(changes.blockedCountries);
     if (changes.firstComment !== undefined) platformSettings.setYoutubeFirstComment(changes.firstComment);
     if (changes.enableFirstComment !== undefined) platformSettings.setYoutubeEnableFirstComment(changes.enableFirstComment);
+    if (changes.publishAt !== undefined) {
+      platformSettings.setYoutubePublishAt(changes.publishAt);
+      if (changes.publishAt.trim().length > 0 && changes.scheduleRequested === undefined) {
+        platformSettings.setYoutubeScheduleRequested(true);
+      }
+    }
+    if (changes.scheduleRequested !== undefined) {
+      platformSettings.setYoutubeScheduleRequested(changes.scheduleRequested);
+    }
   };
 
   // Restore the persisted source intent BEFORE the user can submit again.
@@ -743,6 +756,17 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           const pinterestError = platformSettings.validatePinterestSettings();
           if (pinterestError) {
             showErrorToast(t("toast.pinterestValidationFailed", "Pinterest validation failed"), pinterestError);
+            return;
+          }
+        }
+
+        if (selectedPlatforms.includes("youtube")) {
+          const youtubeError = platformSettings.validateYoutubeSettings(
+            new Date(),
+            scheduleEnabled && scheduledAt ? scheduledAt : null,
+          );
+          if (youtubeError) {
+            showErrorToast(t("youtube.scheduleInvalidTitle", "Invalid YouTube schedule"), youtubeError);
             return;
           }
         }

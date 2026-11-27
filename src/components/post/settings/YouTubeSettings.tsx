@@ -51,6 +51,7 @@ import { ResolvedModelCards } from "@/components/ai/ResolvedModelCards";
 import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
 import { useYouTubeCategories } from "@/hooks/useYouTubeCategories";
 import { resolveYouTubeVideoTitle } from "../../../../supabase/functions/_shared/youtubeVideoTitle";
+import { resolveYoutubePublishAt } from "../../../../supabase/functions/_shared/youtubePublishOptions";
 
 export interface YouTubeSettingsState {
   // Video type
@@ -90,6 +91,10 @@ export interface YouTubeSettingsState {
   blockedCountries: string;
   firstComment: string;
   enableFirstComment: boolean;
+  /** RFC 3339 UTC ISO timestamp when "Schedule on YouTube" is active, or "" / undefined when off. */
+  publishAt?: string;
+  /** Durable flag that "Schedule on YouTube" mode is selected even before a timestamp is entered. */
+  scheduleRequested?: boolean;
 }
 
 interface SelectedAccount {
@@ -175,6 +180,20 @@ function DeclarationChoice({
   );
 }
 
+/**
+ * Converts a stored UTC RFC 3339 timestamp into the local `datetime-local`
+ * value the browser's date-time input speaks.
+ *
+ * The picker shows the creator their own wall-clock time; the stored value
+ * stays UTC so the schedule means the same instant on every machine.
+ */
+function toLocalDateTimeValue(utcTimestamp: string): string {
+  const parsed = new Date(utcTimestamp);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
 export function YouTubeSettings({
   settings,
   onSettingsChange,
@@ -204,6 +223,90 @@ export function YouTubeSettings({
   const [isStockPickerOpen, setIsStockPickerOpen] = useState(false);
   const aiThumbnailRefInputRef = useRef<HTMLInputElement>(null);
   const composioManaged = selectedAccounts.some((account) => account.auth_provider === "composio");
+  // The creator can ask for a YouTube schedule before choosing a time, so the
+  // mode is local state until a timestamp exists. A stored timestamp switches
+  // the mode on by itself, which is what reopens a saved draft.
+  const [scheduleModeRequested, setScheduleModeRequested] = useState(false);
+  // The raw text the creator typed, kept until it is replaced so the input
+  // never rewrites what they are still editing.
+  const [publishAtDraft, setPublishAtDraft] = useState<string | null>(null);
+
+  const trimmedPublishAt = (settings.publishAt ?? "").trim();
+  // The browser checks the same bounds the publisher enforces, so a creator is
+  // never told a schedule is fine when the upload would refuse it.
+  const scheduleResolution = resolveYoutubePublishAt(trimmedPublishAt || null, new Date());
+  const isScheduleOnYouTube =
+    !composioManaged &&
+    (Boolean(settings.scheduleRequested) || scheduleModeRequested || trimmedPublishAt.length > 0);
+  const publishAtDraftIsUnusable =
+    publishAtDraft !== null &&
+    publishAtDraft.trim().length > 0 &&
+    Number.isNaN(new Date(publishAtDraft).getTime());
+  const publishAtInputValue =
+    publishAtDraft ?? (trimmedPublishAt ? toLocalDateTimeValue(trimmedPublishAt) : "");
+
+  // A scheduled upload is private until YouTube flips it, so the preview says
+  // private even when the privacy control said something else. A managed
+  // channel never carries the key, so it promises no schedule either.
+  const previewPrivacy = isScheduleOnYouTube ? "private" : settings.visibility;
+
+  const publishAtError = (() => {
+    // Outside schedule mode there is no picker to fix the value with, so an
+    // error there would be a dead end.
+    if (!isScheduleOnYouTube) return null;
+    if (!trimmedPublishAt) {
+      return t("youtube.publishScheduleRequired", "Choose a YouTube scheduled publish date and time.");
+    }
+    if (publishAtDraftIsUnusable) {
+      return t("youtube.publishScheduleInvalidTimestamp", "Choose a valid YouTube scheduled publish date and time.");
+    }
+    // `=== false` rather than `!ok`: this repository compiles without
+    // `strictNullChecks`, where the negated form does not narrow the union.
+    if (scheduleResolution.ok === false) {
+      switch (scheduleResolution.reason) {
+        case "too_soon":
+        case "expired":
+          return t("youtube.publishScheduleTooSoon", "YouTube scheduled publish time must be at least 15 minutes in the future.");
+        case "too_far":
+          return t("youtube.publishScheduleTooFar", "YouTube scheduled publish time cannot be more than 2 years in the future.");
+        default:
+          return t("youtube.publishScheduleInvalidTimestamp", "Choose a valid YouTube scheduled publish date and time.");
+      }
+    }
+    return null;
+  })();
+
+  const handlePublishModeChange = (mode: string) => {
+    if (mode === "schedule") {
+      setScheduleModeRequested(true);
+      onSettingsChange({ scheduleRequested: true });
+      return;
+    }
+    setScheduleModeRequested(false);
+    setPublishAtDraft(null);
+    // Leaving the schedule clears the timestamp and the mode flag, so the post
+    // metadata carries no schedule key at all and the upload keeps the chosen privacy.
+    onSettingsChange({
+      scheduleRequested: false,
+      ...(settings.publishAt ? { publishAt: "" } : {}),
+    });
+  };
+
+  const handlePublishAtChange = (value: string) => {
+    setPublishAtDraft(value);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setScheduleModeRequested(true);
+      onSettingsChange({ publishAt: "", scheduleRequested: true });
+      return;
+    }
+    // `datetime-local` has no time zone, so the browser reads it as local
+    // time; the stored value is the same instant in UTC.
+    const parsed = new Date(trimmed);
+    if (Number.isNaN(parsed.getTime())) return;
+    setScheduleModeRequested(true);
+    onSettingsChange({ publishAt: parsed.toISOString(), scheduleRequested: true });
+  };
 
   const handleAiThumbnailRefSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -282,12 +385,18 @@ export function YouTubeSettings({
           {t("youtube.previewTitle", "YouTube title: {{title}}", { title: shortsTitle })}
         </p>
         <p>
-          {t("youtube.previewPrivacy", "Requested privacy: {{privacy}}", { privacy: settings.visibility })}
+          {t("youtube.previewPrivacy", "Requested privacy: {{privacy}}", { privacy: previewPrivacy })}
           {" · "}
           {t("youtube.previewChannel", "Channel: {{channel}}", {
             channel: selectedAccounts.map((account) => account.platform_username || "Unknown").join(", ") ||
               t("youtube.noChannel", "none selected"),
           })}
+          {scheduleResolution.ok && !composioManaged && (
+            <>
+              {" · "}
+              {t("youtube.previewScheduledOnYouTube", "Scheduled on YouTube: {{time}}", { time: scheduleResolution.publishAt })}
+            </>
+          )}
         </p>
       </div>
     <div className="space-y-4">
@@ -509,16 +618,27 @@ export function YouTubeSettings({
               </TooltipContent>
             </Tooltip>
           </Label>
-          <Select value={settings.visibility} onValueChange={(v) => onSettingsChange({ visibility: v as typeof settings.visibility })}>
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="public">{t("youtube.visibilityPublic", "public")}</SelectItem>
-              <SelectItem value="unlisted">{t("youtube.visibilityUnlisted", "unlisted")}</SelectItem>
-              <SelectItem value="private">{t("youtube.visibilityPrivate", "private")}</SelectItem>
-            </SelectContent>
-          </Select>
+          {isScheduleOnYouTube ? (
+            /* A scheduled upload is always uploaded private; YouTube publishes
+               it when the time comes, so the privacy control has no say. */
+            <p
+              data-testid="youtube-scheduled-privacy-notice"
+              className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm text-foreground"
+            >
+              {t("youtube.publishPrivateUntilScheduled", "Private until then. YouTube makes it public at the scheduled time.")}
+            </p>
+          ) : (
+            <Select value={settings.visibility} onValueChange={(v) => onSettingsChange({ visibility: v as typeof settings.visibility })}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="public">{t("youtube.visibilityPublic", "public")}</SelectItem>
+                <SelectItem value="unlisted">{t("youtube.visibilityUnlisted", "unlisted")}</SelectItem>
+                <SelectItem value="private">{t("youtube.visibilityPrivate", "private")}</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
@@ -542,6 +662,70 @@ export function YouTubeSettings({
             </SelectContent>
           </Select>
         </div>
+      </div>
+
+      {/* Publish timing — native YouTube scheduling (status.publishAt) */}
+      <div className="space-y-2">
+        <Label className="text-sm font-medium flex items-center gap-2">
+          {t("youtube.publishTimingLabel", "Publish")}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{t("youtube.publishTimingTooltip", "Choose whether to use the privacy above immediately or schedule public release on YouTube.")}</p>
+            </TooltipContent>
+          </Tooltip>
+        </Label>
+        <RadioGroup
+          value={isScheduleOnYouTube ? "schedule" : "privacy"}
+          onValueChange={handlePublishModeChange}
+          className="flex gap-4"
+          aria-label={t("youtube.publishTimingLabel", "Publish")}
+        >
+          <label className="flex items-center gap-2 cursor-pointer" htmlFor="youtube-publish-mode-privacy">
+            <RadioGroupItem id="youtube-publish-mode-privacy" value="privacy" />
+            <span className="text-sm">{t("youtube.publishUsePrivacyAbove", "Use the privacy above")}</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer" htmlFor="youtube-publish-mode-schedule">
+            <RadioGroupItem
+              id="youtube-publish-mode-schedule"
+              value="schedule"
+              disabled={composioManaged}
+            />
+            <span className="text-sm">{t("youtube.publishScheduleOnYouTube", "Schedule on YouTube")}</span>
+          </label>
+        </RadioGroup>
+        {composioManaged && (
+          <p className="text-xs text-destructive">
+            {t("youtube.publishScheduleComposioUnsupported", "Native YouTube scheduling is not available for managed accounts. Use a native channel.")}
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          {t("youtube.publishScheduleDifferenceHelp", "Postora's schedule decides when the upload starts; YouTube's decides when the uploaded video becomes public.")}
+        </p>
+        {isScheduleOnYouTube && (
+          <div className="space-y-2">
+            <Label htmlFor="youtube-publish-at" className="text-sm font-medium">
+              {t("youtube.publishScheduleDateTimeLabel", "YouTube publish date and time")}
+            </Label>
+            <Input
+              id="youtube-publish-at"
+              type="datetime-local"
+              aria-label={t("youtube.publishScheduleDateTimeLabel", "YouTube publish date and time")}
+              value={publishAtInputValue}
+              onChange={(e) => handlePublishAtChange(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("youtube.publishScheduleMinMaxHelp", "Must be at least 15 minutes and at most 2 years in the future.")}
+            </p>
+            {publishAtError && (
+              <p role="alert" data-testid="youtube-publish-at-error" className="text-xs text-destructive">
+                {publishAtError}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Checkboxes Row */}

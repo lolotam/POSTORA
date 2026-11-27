@@ -25,7 +25,19 @@ import { useYouTubeMetricLabels } from "./useYouTubeMetricLabels";
 
 const METRICS: YouTubeAnalyticsMetricKey[] = ["views", "watch_time", "likes", "subscribers_gained"];
 
-export function TopVideosTable({ data, onInspect, hasNextPage, isFetchingNextPage, onLoadMore, nextPageError, onRetryNextPage }: {
+export function TopVideosTable({
+  data,
+  onInspect,
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
+  nextPageError,
+  onRetryNextPage,
+  sortColumn: controlledSortColumn,
+  onSortColumnChange,
+  sortDirection: controlledSortDirection,
+  onSortDirectionChange,
+}: {
   data: YouTubeTopVideosInfiniteData;
   onInspect: (videoId: string) => void;
   hasNextPage: boolean;
@@ -33,13 +45,30 @@ export function TopVideosTable({ data, onInspect, hasNextPage, isFetchingNextPag
   onLoadMore: () => void;
   nextPageError?: unknown;
   onRetryNextPage: () => void;
+  sortColumn?: TopVideosColumn | null;
+  onSortColumnChange?: (col: TopVideosColumn | null) => void;
+  sortDirection?: DataViewSortDirection;
+  onSortDirectionChange?: (dir: DataViewSortDirection | ((curr: DataViewSortDirection) => DataViewSortDirection)) => void;
 }) {
   const { t, i18n } = useTranslation("analytics");
   const labels = useYouTubeMetricLabels();
   const [viewMode, setViewMode] = useStoredChoice<DataViewMode>("ytAnalyticsTopVideosView", ["grid", "table"], "table");
   const [gridColumns, setGridColumns] = useStoredChoice<GridColumns>("ytAnalyticsTopVideosGridColumns", [4, 5, 6], 5);
-  const [sortColumn, setSortColumn] = useState<TopVideosColumn | null>(null);
-  const [sortDirection, setSortDirection] = useState<DataViewSortDirection>("descending");
+  const [internalSortColumn, setInternalSortColumn] = useState<TopVideosColumn | null>(null);
+  const [internalSortDirection, setInternalSortDirection] = useState<DataViewSortDirection>("descending");
+  const sortColumn = controlledSortColumn !== undefined ? controlledSortColumn : internalSortColumn;
+  const sortDirection = controlledSortDirection ?? internalSortDirection;
+  const setSortColumn = (col: TopVideosColumn | null) => {
+    if (controlledSortColumn === undefined) setInternalSortColumn(col);
+    onSortColumnChange?.(col);
+  };
+  const setSortDirection = (dir: DataViewSortDirection | ((curr: DataViewSortDirection) => DataViewSortDirection)) => {
+    if (controlledSortDirection === undefined) {
+      setInternalSortDirection(dir);
+    } else if (onSortDirectionChange) {
+      onSortDirectionChange(typeof dir === "function" ? dir(sortDirection) : dir);
+    }
+  };
   const rows = useMemo(() => mergeTopVideoPages(data.pages), [data.pages]);
   const sortedRows = useMemo(() => {
     if (!sortColumn) return rows;
