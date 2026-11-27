@@ -535,6 +535,22 @@ jobs:
             supabase/functions/_shared/youtubeChapters.test.ts \
             supabase/functions/generate-caption/handler.test.ts
 
+      - name: Typecheck and test transcribe-media and YouTube transcript formatters
+        run: |
+          set -euo pipefail
+          deno check --no-config --node-modules-dir=none \
+            supabase/functions/_shared/youtubeTranscriptFormats.ts \
+            supabase/functions/_shared/youtubeTranscriptFormats.test.ts \
+            supabase/functions/transcribe-media/index.ts \
+            supabase/functions/transcribe-media/handler.ts \
+            supabase/functions/transcribe-media/handler.test.ts \
+            supabase/functions/transcribe-media/sttProvider.ts \
+            supabase/functions/transcribe-media/sttProvider.test.ts
+          deno test --no-config --allow-env --allow-read --node-modules-dir=none \
+            supabase/functions/_shared/youtubeTranscriptFormats.test.ts \
+            supabase/functions/transcribe-media/handler.test.ts \
+            supabase/functions/transcribe-media/sttProvider.test.ts
+
       - name: Typecheck and test AI provider health and catalogue sync
         run: |
           set -euo pipefail

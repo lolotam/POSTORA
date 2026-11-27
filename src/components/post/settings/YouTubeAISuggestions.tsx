@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
-import { AlertTriangle, Sparkles, Loader2, Check } from "lucide-react";
+import { AlertTriangle, Sparkles, Loader2, Check, Download, AudioLines } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useTranscription } from "@/hooks/useTranscription";
 import { getErrorStatus, handleAIError } from "@/lib/aiErrorHandler";
 import {
   Select,
@@ -15,6 +16,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { upsertChaptersBlock } from "../../../../supabase/functions/_shared/youtubeChapters";
+import {
+  segmentsToSrt,
+  segmentsToTimedOutline,
+  segmentsToVtt,
+} from "../../../../supabase/functions/_shared/youtubeTranscriptFormats";
 import { buildYouTubeSuggestContext } from "./youtubeSuggestContext";
 
 interface YouTubeAISuggestionsProps {
@@ -25,6 +31,7 @@ interface YouTubeAISuggestionsProps {
   videoSourceUrl?: string | null;
   currentDescription?: string;
   onSelect: (value: string) => void;
+  onAudioSubtitlesReady?: (captions: { srt: string; vtt: string } | null) => void;
 }
 
 export function YouTubeAISuggestions(props: YouTubeAISuggestionsProps) {
@@ -231,9 +238,52 @@ function useDetectedVideoDuration(
   return probed?.url === videoSourceUrl ? probed.seconds : null;
 }
 
-function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDescription, onSelect }: YouTubeAISuggestionsProps) {
+type AudioExtractState =
+  | {
+      sourceKey: string;
+      status: "ready";
+      srt: string;
+      vtt: string;
+    }
+  | {
+      sourceKey: string;
+      status: "no_timing";
+    };
+
+function downloadSubtitlesFile(content: string, format: "srt" | "vtt"): void {
+  const mimeType =
+    format === "srt"
+      ? "application/x-subrip;charset=utf-8"
+      : "text/vtt;charset=utf-8";
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `subtitles.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function YouTubeChapterSuggestions({
+  durationSeconds,
+  videoSourceUrl,
+  currentDescription,
+  onSelect,
+  onAudioSubtitlesReady,
+}: YouTubeAISuggestionsProps) {
   const { t } = useTranslation("postsettings");
   const { toast } = useToast();
+  const {
+    transcribe,
+    isTranscribing,
+    error: transcriptionError,
+    reset: resetTranscription,
+  } = useTranscription();
   const [outline, setOutline] = useState("");
   const [language, setLanguage] = useState<"english" | "arabic">("english");
   const [timing, setTiming] = useState<"provided" | "estimated">("provided");
@@ -243,10 +293,57 @@ function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDes
     timing: "provided" | "estimated";
     videoKey: string;
   } | null>(null);
+  const [audioExtractState, setAudioExtractState] = useState<AudioExtractState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const resolvedDurationSeconds = useDetectedVideoDuration(videoSourceUrl, durationSeconds);
   const currentVideoKey = `${videoSourceUrl ?? ""}::${resolvedDurationSeconds ?? "unknown"}`;
   const preview = previewState?.videoKey === currentVideoKey ? previewState : null;
+
+  const trimmedVideoSourceUrl = typeof videoSourceUrl === "string" ? videoSourceUrl.trim() : "";
+  const isHttpsVideoUrl = /^https:\/\//i.test(trimmedVideoSourceUrl);
+  const activeAudioExtract =
+    isHttpsVideoUrl && audioExtractState?.sourceKey === trimmedVideoSourceUrl
+      ? audioExtractState
+      : null;
+
+  useEffect(() => {
+    resetTranscription();
+  }, [trimmedVideoSourceUrl, resetTranscription]);
+
+  const handleExtractFromAudio = async () => {
+    if (!isHttpsVideoUrl || isTranscribing || isLoading) return;
+    const requestSourceKey = trimmedVideoSourceUrl;
+    setError(null);
+    setAudioExtractState(null);
+    const result = await transcribe(requestSourceKey);
+    if (!result) {
+      onAudioSubtitlesReady?.(null);
+      return;
+    }
+    const segments = result.segments;
+    if (Array.isArray(segments) && segments.length > 0) {
+      const timedOutline = segmentsToTimedOutline(segments, 8000);
+      const srt = segmentsToSrt(segments);
+      const vtt = segmentsToVtt(segments);
+      if (timedOutline.length > 0) {
+        setOutline(timedOutline);
+        setTiming("provided");
+        setAudioExtractState({
+          sourceKey: requestSourceKey,
+          status: "ready",
+          srt,
+          vtt,
+        });
+        onAudioSubtitlesReady?.({ srt, vtt });
+        return;
+      }
+    }
+    setAudioExtractState({
+      sourceKey: requestSourceKey,
+      status: "no_timing",
+    });
+    onAudioSubtitlesReady?.(null);
+  };
 
   const handleGenerate = async () => {
     const requestVideoKey = currentVideoKey;
@@ -254,6 +351,7 @@ function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDes
     setIsLoading(true);
     setPreviewState(null);
     setError(null);
+    resetTranscription();
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user) throw new Error(t("youtubeAI.signInRequired", "Please sign in to use AI features."));
@@ -318,9 +416,76 @@ function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDes
   const durationLabel = resolvedDurationSeconds == null
     ? t("youtubeAI.chapters.durationUnknown", "Unknown")
     : formatVideoDuration(resolvedDurationSeconds);
+  const displayedError = error ?? transcriptionError;
 
   return (
     <div className="space-y-3 rounded-lg border border-border p-3">
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleExtractFromAudio}
+            disabled={!isHttpsVideoUrl || isTranscribing || isLoading}
+            className="gap-1.5"
+          >
+            {isTranscribing ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <AudioLines className="w-3.5 h-3.5" />
+            )}
+            {isTranscribing
+              ? t("youtubeAI.chapters.fromAudio.extracting", "Extracting timestamps from audio…")
+              : t("youtubeAI.chapters.fromAudio.extractBtn", "Extract chapters and subtitles from the video's audio")}
+          </Button>
+          {activeAudioExtract?.status === "ready" && (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => downloadSubtitlesFile(activeAudioExtract.srt, "srt")}
+                className="gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                {t("youtubeAI.chapters.fromAudio.downloadSrt", "Download .srt")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => downloadSubtitlesFile(activeAudioExtract.vtt, "vtt")}
+                className="gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                {t("youtubeAI.chapters.fromAudio.downloadVtt", "Download .vtt")}
+              </Button>
+            </>
+          )}
+        </div>
+        {!isHttpsVideoUrl && (
+          <p className="text-xs text-muted-foreground">
+            {t("youtubeAI.chapters.fromAudio.uploadFirstHint", "Available after the video is uploaded")}
+          </p>
+        )}
+        {activeAudioExtract?.status === "ready" && (
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "youtubeAI.chapters.fromAudio.readyHint",
+              "Timed outline filled from audio. You can now generate chapters or download subtitles.",
+            )}
+          </p>
+        )}
+        {activeAudioExtract?.status === "no_timing" && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {t(
+              "youtubeAI.chapters.fromAudio.noTiming",
+              "This transcription has no timing, so chapters and subtitles cannot be built from it",
+            )}
+          </p>
+        )}
+      </div>
       <div className="space-y-2">
         <label className="text-sm font-medium" htmlFor="youtube-chapter-outline">
           {t("youtubeAI.chapters.outlineLabel", "Timed outline")}
@@ -364,7 +529,7 @@ function YouTubeChapterSuggestions({ durationSeconds, videoSourceUrl, currentDes
             : t("youtubeAI.chapters.generate", "Generate chapters")}
         </Button>
       </div>
-      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      {displayedError && <p role="alert" className="text-xs text-destructive">{displayedError}</p>}
       {preview && (
         <div className="space-y-2">
           {preview.timing === "estimated" && (
