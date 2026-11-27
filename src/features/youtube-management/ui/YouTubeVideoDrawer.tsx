@@ -8,12 +8,31 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { YouTubeResourceError } from "../domain/errors";
-import type { YouTubeResourceSuccess, YouTubeVideoDetails } from "../domain/types";
+import type { YouTubeCapabilityState, YouTubeResourceSuccess, YouTubeVideoDetails } from "../domain/types";
+import type { YouTubeThumbnailCandidate, YouTubeThumbnailOutcome } from "../domain/thumbnail";
 import type { EditSaveOutcome } from "./YouTubeVideoEditCard";
 import { YouTubeVideoEditCard } from "./YouTubeVideoEditCard";
+import { YouTubeThumbnailChange } from "./YouTubeThumbnailChange";
 import { YouTubeResourceNotice } from "./YouTubeResourceNotice";
 
-export function YouTubeVideoDrawer({ open, onOpenChange, locale, video, canEdit, disabledReason, accountId, region, onSnapshot, onSave }: {
+export function YouTubeVideoDrawer({
+  open,
+  onOpenChange,
+  locale,
+  video,
+  canEdit,
+  disabledReason,
+  accountId,
+  region,
+  onSnapshot,
+  onSave,
+  thumbnailCapability,
+  thumbnailCandidates,
+  thumbnailCandidatesLoading,
+  thumbnailCandidatesError,
+  onRetryThumbnailCandidates,
+  onSetThumbnail,
+}: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   locale: "en" | "ar";
@@ -24,6 +43,14 @@ export function YouTubeVideoDrawer({ open, onOpenChange, locale, video, canEdit,
   region?: string;
   onSnapshot?: (videoId: string) => Promise<string | null>;
   onSave?: (draft: { title: string; categoryId: string; baseRevision: string }) => Promise<EditSaveOutcome>;
+  /** The server's derived thumbnail capability; null until it is known. */
+  thumbnailCapability?: YouTubeCapabilityState | null;
+  /** The creator's own library images, filtered by the picker. */
+  thumbnailCandidates?: readonly YouTubeThumbnailCandidate[];
+  thumbnailCandidatesLoading?: boolean;
+  thumbnailCandidatesError?: unknown;
+  onRetryThumbnailCandidates?: () => void;
+  onSetThumbnail?: (mediaFileId: string) => Promise<YouTubeThumbnailOutcome>;
 }) {
   const { t, i18n } = useTranslation("accounts");
   const details = video.data?.data;
@@ -62,6 +89,14 @@ export function YouTubeVideoDrawer({ open, onOpenChange, locale, video, canEdit,
               onSnapshot={onSnapshot}
               onSave={onSave}
               disabledReason={disabledReason}
+            />
+            <YouTubeThumbnailChange
+              capability={thumbnailCapability ?? null}
+              candidates={thumbnailCandidates ?? []}
+              candidatesLoading={thumbnailCandidatesLoading ?? false}
+              candidatesError={thumbnailCandidatesError ?? null}
+              onRetryCandidates={onRetryThumbnailCandidates}
+              onSetThumbnail={onSetThumbnail}
             />
             {updatedLabel ? <p className="text-xs text-muted-foreground">{t("youtubeManagement.fetchedAt", "Updated {{time}}", { time: updatedLabel })}</p> : null}
           </div>

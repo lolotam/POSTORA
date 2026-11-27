@@ -24,7 +24,14 @@ export type {
   YouTubePlaylistsPage,
   YouTubeResourceErrorCode,
   YouTubeResourceSuccess,
+  YouTubeSetThumbnailResult,
   YouTubeVideoDetails,
   YouTubeVideoListItem,
   YouTubeVideosPage,
 } from "../../../../supabase/functions/youtube-resources/contracts";
+
+// The MIME allow-list of a direct `thumbnails.set` upload belongs to the edge
+// operation that enforces it (ARCHITECTURE.md §22): one definition, so the
+// picker and the server can never disagree about what is uploadable. It is
+// narrower than the upload-time intake's list, which also admits WebP.
+export { DIRECT_THUMBNAIL_MIMES } from "../../../../supabase/functions/youtube-resources/thumbnailMedia";

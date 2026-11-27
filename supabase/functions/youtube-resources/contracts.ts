@@ -9,8 +9,10 @@ export const YOUTUBE_SCOPE = {
 export const YOUTUBE_RESOURCE_ERROR_STATUS = {
   invalid_request: 400,
   invalid_cursor: 400,
+  media_not_usable: 400,
   unauthorized: 401,
   missing_scope: 403,
+  thumbnail_not_allowed: 403,
   not_found: 404,
   method_not_allowed: 405,
   provider_unsupported: 409,
@@ -66,8 +68,15 @@ export interface YouTubeAccountCapabilities {
     comments: YouTubeCapabilityState;
     /** Additive: an old server may omit it and an old client may ignore it. */
     edit_metadata?: YouTubeCapabilityState;
+    /** Additive: an old server may omit it and an old client may ignore it. */
+    manage_thumbnail?: YouTubeCapabilityState;
   };
   quota: typeof YOUTUBE_RESOURCE_QUOTA_POLICY;
+}
+
+export interface YouTubeSetThumbnailResult {
+  video_id: string;
+  applied: true;
 }
 
 export interface YouTubeResourceSuccess<T> {

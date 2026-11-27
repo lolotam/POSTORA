@@ -83,11 +83,13 @@ For each scope, provide justification:
 | Scope | Purpose | User Benefit |
 |-------|---------|--------------|
 | `youtube.readonly` | Identify the connected channel and check connection health; browse owned uploads and full video details on `/youtube`; list the channel's own playlists (`playlists.list`) so a destination playlist can be chosen when publishing; read owner-accepted channel/video reports through YouTube Analytics API v2 on `/analytics/youtube` | See the correct channel, browse its content, pick one of its playlists for a new video, and view on-demand analytics without Postora storing the numbers |
-| `youtube.upload` | Upload new videos and Shorts with user-chosen metadata and set an optional custom thumbnail with `thumbnails.set` | Publish new content to the owner's channel |
+| `youtube.upload` | Upload new videos and Shorts with user-chosen metadata and set an optional custom thumbnail with `thumbnails.set`; replace the thumbnail of a video the owner already uploaded, from `/youtube`, with an owned JPEG or PNG image from the owner's own Postora media library, through the same `thumbnails.set` operation | Publish new content to the owner's channel, and correct the thumbnail of an existing video without ever replacing the video's media bytes |
 | `youtube.force-ssl` | Edit published metadata with `videos.update` (when published metadata editing is enabled; disabled at the current baseline via `PUBLISHED_EDIT_WRITE_ENABLED = false`); add a newly uploaded video to an existing playlist the owner selected in Create Post (`playlistItems.insert`) — never creating, renaming, reordering, or deleting playlists and never removing playlist items; read Published and Held for review comments and create top-level comments and replies (with optional creator-initiated AI reply drafting that sends the selected comment text and video title to the configured AI provider solely to populate the local reply draft without auto-sending); edit/delete the channel's own comments; publish or reject comments (moving a published comment to hold is disabled at the current baseline), with optional `banAuthor` on rejection | Correct published details, file a new video under the playlist of the owner's choice, and manage/moderate discussions on owned videos |
 | `userinfo.profile` | Get user's display name during Google Sign-In only, not YouTube connection | Personalize the application experience |
 
 Postora does not replace existing video media bytes or delete videos. Published metadata editing is implemented in Stage 3 (`PUBLISHED_EDIT_WRITE_ENABLED = false` at the current baseline until enabled for the target release) and is covered by `youtube.force-ssl`; the disclosure must not claim otherwise.
+
+**Thumbnails.** Postora sets a custom thumbnail on a video at upload time, and it can also replace the thumbnail of a video the owner already uploaded. The replacement happens from `/youtube`: the owner opens the video, clicks **Change thumbnail**, picks a JPEG or PNG image from their own Postora media library, and confirms the change before anything is sent. Only JPEG and PNG are accepted — WebP, GIF and videos are refused — and only an image the owner owns can be used. Setting a thumbnail never replaces the video's media bytes and never deletes the video. The write goes through the `thumbnails.set` operation and is covered by `youtube.upload` (or `youtube.force-ssl` on a connection that holds it); it is gated by its own `manage_thumbnail` capability and is independent of the published-metadata editing gate.
 
 **Playlists.** Postora lists the playlists of the connected channel and, on the owner's instruction, adds a newly uploaded video to one of them. It never creates, renames, reorders, or deletes playlists, and never removes playlist items. Listing playlists is covered by `youtube.readonly`; the insert is covered by `youtube.force-ssl`. A playlist belongs to exactly one channel, so the selector in Create Post is disabled when more than one distinct native YouTube channel is selected for the post.
 
@@ -144,6 +146,7 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - The playlists of your channel (playlist ID, title, privacy status) when you choose a destination playlist
 - Published video metadata when you instruct Postora to edit it
 - Ability to upload videos to your channel
+- The bytes of a JPEG or PNG image from your own Postora media library when you replace the thumbnail of a video you already uploaded
 - Comments on your own videos for creation, replies, editing, deletion, and moderation
 - On-demand YouTube Analytics numbers after your connection-scoped in-app purpose acceptance
 
@@ -151,6 +154,7 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - Display your connected YouTube channel in the dashboard
 - Browse your uploaded videos and their details on `/youtube`
 - Publish videos and Shorts to your channel on your behalf, with an optional custom thumbnail
+- Replace the thumbnail of a video you already uploaded from `/youtube`, with an owned JPEG or PNG image from your own media library, only after you pick the image and confirm the change; Postora never replaces the video's media bytes and never deletes the video
 - List your channel's playlists so you can pick a destination playlist, and add a newly uploaded video to the playlist you select; Postora never creates, renames, reorders, or deletes playlists and never removes playlist items
 - Edit published video metadata on your instruction, without replacing video bytes or deleting videos
 - Read, create, reply to, edit, delete, and moderate comments on your own videos
@@ -197,7 +201,7 @@ Create a masked screen recording of these eight journeys, using an owner-control
 1. **Connect:** account chooser and permission dialog with all three scopes, followed by the Postora success state.
 2. **Channel and video browse:** `/youtube` channel summary, uploads paging, and full details for an owned video.
 3. **Published metadata edit:** when `PUBLISHED_EDIT_WRITE_ENABLED` is enabled for the demo environment, change a permitted field on an existing video and show the verified result at the same watch URL (if that gate is `false`, show the disabled state and code/test evidence only; do not claim a live edit occurred); never replace media bytes or delete a video.
-4. **New upload:** publish a new video with chosen metadata and, optionally, a custom thumbnail; when a playlist of the same channel is selected in Create Post, show the video listed in that playlist exactly once.
+4. **New upload and thumbnail replacement:** publish a new video with chosen metadata and, optionally, a custom thumbnail; when a playlist of the same channel is selected in Create Post, show the video listed in that playlist exactly once; then, from `/youtube`, replace the thumbnail of an already uploaded video with an owned JPEG or PNG image from the media library, show the confirmation step before the write, and show the confirmed result on the video.
 5. **Comments and moderation:** read Published and Held for review, create/reply/edit an own comment, and demonstrate publish and reject on a controlled or already-held comment (moving a published comment to hold is disabled at the current baseline via `STAGE4_HOLD_FROM_PUBLISHED = false`); show the separate ban confirmation only if that capability is enabled for the test account.
 6. **On-demand analytics:** accept Analytics Purpose Clause v1 at `/analytics/youtube`, show channel/video reports, withdraw, and prove no further report loads. Reconnect later to show fresh acceptance is required.
 7. **Denial:** use a synthetic foreign account/video ID and a connection with missing scope to show safe `not_found`/reconnect states with no data or write.

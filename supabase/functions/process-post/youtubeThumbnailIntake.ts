@@ -54,7 +54,14 @@ export function thumbnailSourceOf(metadata: object | null | undefined):
   return null;
 }
 
-/** The only raster types YouTube accepts for thumbnails.set. */
+/**
+ * The only raster types YouTube accepts for thumbnails.set via upload-time intake.
+ * Note: `youtube-resources/thumbnailMedia.ts` uses the narrower
+ * `DIRECT_THUMBNAIL_MIMES = ["image/jpeg", "image/png"]` because
+ * `youtube-resources` sends the stored bytes directly to Google's
+ * `thumbnails.set` upload endpoint (which only lists JPEG and PNG), whereas
+ * upload-time intake can deliver through the media pipeline.
+ */
 export const THUMBNAIL_RASTER_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 /**

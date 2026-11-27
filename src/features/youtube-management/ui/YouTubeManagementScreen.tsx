@@ -5,15 +5,18 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import type { YouTubeResourceErrorCode, YouTubeVideoListItem } from "../domain/types";
 import { YouTubeResourceError } from "../domain/errors";
+import { thumbnailOutcomeFromErrorCode, type YouTubeThumbnailOutcome } from "../domain/thumbnail";
 import type { YouTubeAccountOption } from "../domain/accountOptions";
 import { useYouTubeCapabilities } from "../application/useYouTubeCapabilities";
 import { useYouTubeChannel } from "../application/useYouTubeChannel";
 import { trimVideosToFirstPage, useYouTubeVideos } from "../application/useYouTubeVideos";
+import { useYouTubeThumbnailMedia } from "../application/useYouTubeThumbnailMedia";
 import { youtubeResourceKey } from "../application/queryKeys";
 import { useAuth } from "@/hooks/useAuth";
 import { useYouTubeVideo } from "../application/useYouTubeVideo";
-import type { YouTubeResourcesGateway } from "../application/ports";
+import type { YouTubeResourcesGateway, YouTubeThumbnailMediaGateway } from "../application/ports";
 import { defaultYouTubeResourcesGateway } from "../infrastructure/supabaseYouTubeResourcesGateway";
+import { defaultYouTubeThumbnailMediaGateway } from "../infrastructure/supabaseYouTubeThumbnailMediaGateway";
 import { YouTubeResourceNotice } from "./YouTubeResourceNotice";
 import { YouTubeAccountPicker } from "./YouTubeAccountPicker";
 import { YouTubeChannelSummary } from "./YouTubeChannelSummary";
@@ -24,6 +27,8 @@ export interface YouTubeManagementScreenProps {
   accounts: readonly YouTubeAccountOption[];
   accountsLoading: boolean;
   gateway?: YouTubeResourcesGateway;
+  /** The creator's own media library, used to offer a thumbnail image. */
+  mediaGateway?: YouTubeThumbnailMediaGateway;
   // The page's connected-accounts query can fail; the screen then offers a
   // retry instead of pretending no channel is connected.
   accountsError?: unknown;
@@ -33,7 +38,14 @@ export interface YouTubeManagementScreenProps {
 // The composition root of the feature: the only ui/ file allowed to import
 // infrastructure (for the default gateway), which every test replaces.
 export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JSX.Element {
-  const { accounts, accountsLoading, gateway = defaultYouTubeResourcesGateway, accountsError, onRetryAccounts } = props;
+  const {
+    accounts,
+    accountsLoading,
+    gateway = defaultYouTubeResourcesGateway,
+    mediaGateway = defaultYouTubeThumbnailMediaGateway,
+    accountsError,
+    onRetryAccounts,
+  } = props;
   const { t, i18n } = useTranslation("accounts");
   const queryClient = useQueryClient();
   const userId = useAuth().user?.id ?? "anonymous";
@@ -56,10 +68,15 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
   const canBrowse = browse !== undefined && browse.state !== "unavailable";
   const editCapability = capabilities.data?.data.capabilities.edit_metadata;
   const editUnavailableReason = editCapability?.state === "unavailable" ? editCapability.reason : null;
+  // Thumbnail replacement has its own capability: it is independent of the
+  // published-edit gate and of the browse capability.
+  const thumbnailCapability = capabilities.data?.data.capabilities.manage_thumbnail ?? null;
+  const canChangeThumbnail = thumbnailCapability?.state === "available";
 
   const channel = useYouTubeChannel({ gateway, accountId: activeAccountId, enabled: canBrowse });
   const videos = useYouTubeVideos({ gateway, accountId: activeAccountId, enabled: canBrowse });
   const video = useYouTubeVideo({ gateway, accountId: activeAccountId, videoId: selectedVideoId, enabled: canBrowse && selectedVideoId !== null });
+  const thumbnailMedia = useYouTubeThumbnailMedia({ gateway: mediaGateway, enabled: canChangeThumbnail });
 
   const errorCode = (error: unknown): YouTubeResourceErrorCode =>
     error instanceof YouTubeResourceError ? error.code : "upstream_unavailable";
@@ -265,6 +282,28 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
         disabledReason={editUnavailableReason === "reconnect_required"
           ? t("youtubeManagement.detail.reconnectRequired", "This channel needs to be reconnected before editing is available.")
           : t("youtubeManagement.detail.editUnavailable", "Editing is not enabled until conditional write enforcement is verified.")}
+        thumbnailCapability={thumbnailCapability}
+        thumbnailCandidates={thumbnailMedia.data ?? []}
+        thumbnailCandidatesLoading={thumbnailMedia.isPending}
+        thumbnailCandidatesError={thumbnailMedia.error}
+        onRetryThumbnailCandidates={() => void thumbnailMedia.refetch()}
+        onSetThumbnail={gateway.setThumbnail ? async (mediaFileId) => {
+          if (!activeAccountId || !selectedVideoId) return "outcome_unknown";
+          let result: YouTubeThumbnailOutcome;
+          try {
+            await gateway.setThumbnail?.({ accountId: activeAccountId, videoId: selectedVideoId, mediaFileId });
+            result = "applied";
+          } catch (error) {
+            result = thumbnailOutcomeFromErrorCode((error as { code?: string }).code);
+          }
+          // An applied write and a lost answer both need a fresh read: only
+          // the video's current thumbnail settles what viewers see.
+          if (result === "applied" || result === "outcome_unknown") {
+            await video.refetch();
+            void videos.refetch();
+          }
+          return result;
+        } : undefined}
       />
     </div>
   );

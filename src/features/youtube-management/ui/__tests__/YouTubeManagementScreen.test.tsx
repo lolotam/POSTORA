@@ -355,3 +355,138 @@ describe("YouTubeManagementScreen drawer behavior", () => {
     expect(trigger).toHaveFocus();
   });
 });
+
+describe("YouTubeManagementScreen thumbnail replacement", () => {
+  const CANDIDATES = [
+    { id: "media-jpeg", file_name: "cover.jpg", mime_type: "image/jpeg", file_type: "image", file_size: 120_000 },
+    { id: "media-webp", file_name: "sticker.webp", mime_type: "image/webp", file_type: "image", file_size: 40_000 },
+  ];
+
+  function thumbnailGateway(options: {
+    manageThumbnail?: YouTubeCapabilityState;
+    setThumbnail?: YouTubeResourcesGateway["setThumbnail"];
+  }): YouTubeResourcesGateway {
+    const base = gateway();
+    return {
+      ...base,
+      getCapabilities: vi.fn((accountId: string) => Promise.resolve(envelope({
+        account_id: accountId,
+        channel_id: `UC-${accountId}`,
+        channel_title: accountId,
+        provider: "native" as const,
+        connection: "ok" as const,
+        scopes: { readonly: "granted" as const, upload: "granted" as const, force_ssl: "granted" as const },
+        capabilities: {
+          browse: { state: "available" as const },
+          upload: { state: "available" as const },
+          comments: { state: "available" as const },
+          manage_thumbnail: options.manageThumbnail ?? { state: "available" as const },
+        },
+        quota: {
+          provider_quota: "not_tracked" as const,
+          unit_costs: { channel: 1 as const, videos_page: 2 as const, video: 1 as const, playlists_page: 1 as const },
+          per_user_burst: { limit: 30 as const, window_seconds: 600 as const },
+          per_user_daily: { limit: 300 as const, window_seconds: 86400 as const },
+        },
+      }))),
+      setThumbnail: options.setThumbnail,
+    };
+  }
+
+  it("offers only JPEG and PNG images and writes once after the confirmation", async () => {
+    const setThumbnail = vi.fn(async () => envelope({ video_id: "acc-a-video", applied: true as const }));
+    const listOwnedImages = vi.fn(async () => CANDIDATES);
+    await renderScreen(
+      <YouTubeManagementScreen
+        accounts={ACCOUNTS}
+        accountsLoading={false}
+        gateway={thumbnailGateway({ setThumbnail })}
+        mediaGateway={{ listOwnedImages }}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Change thumbnail" }));
+
+    expect(await screen.findByRole("radio", { name: "cover.jpg" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "sticker.webp" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("radio", { name: "cover.jpg" }));
+    expect(screen.getByText("This replaces the thumbnail viewers see on YouTube")).toBeInTheDocument();
+    expect(setThumbnail).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Confirm thumbnail change" }));
+
+    expect(setThumbnail).toHaveBeenCalledTimes(1);
+    expect(setThumbnail).toHaveBeenCalledWith({
+      accountId: "acc-a",
+      videoId: "acc-a-video",
+      mediaFileId: "media-jpeg",
+    });
+    const outcome = await screen.findByText("Thumbnail updated on YouTube.");
+    expect(outcome).toHaveAttribute("role", "status");
+  });
+
+  it("reads the video again after an applied thumbnail so the drawer shows the new one", async () => {
+    const setThumbnail = vi.fn(async () => envelope({ video_id: "acc-a-video", applied: true as const }));
+    const fake = thumbnailGateway({ setThumbnail });
+    await renderScreen(
+      <YouTubeManagementScreen
+        accounts={ACCOUNTS}
+        accountsLoading={false}
+        gateway={fake}
+        mediaGateway={{ listOwnedImages: vi.fn(async () => CANDIDATES) }}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Change thumbnail" }));
+    await userEvent.click(await screen.findByRole("radio", { name: "cover.jpg" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm thumbnail change" }));
+
+    await screen.findByText("Thumbnail updated on YouTube.");
+    await waitFor(() => expect(fake.getVideo).toHaveBeenCalledTimes(2));
+  });
+
+  it("disables the control and reads no library when the channel cannot set thumbnails", async () => {
+    const listOwnedImages = vi.fn(async () => CANDIDATES);
+    await renderScreen(
+      <YouTubeManagementScreen
+        accounts={ACCOUNTS}
+        accountsLoading={false}
+        gateway={thumbnailGateway({ manageThumbnail: { state: "unavailable", reason: "reconnect_required" } })}
+        mediaGateway={{ listOwnedImages }}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+
+    const control = await screen.findByRole("button", { name: "Change thumbnail" });
+    expect(control).toBeDisabled();
+    expect(
+      screen.getByText("This channel needs to be reconnected before changing thumbnails is available."),
+    ).toBeInTheDocument();
+    expect(listOwnedImages).not.toHaveBeenCalled();
+  });
+
+  it("reports a channel that may not set custom thumbnails", async () => {
+    const setThumbnail = vi.fn(async () => {
+      throw new YouTubeResourceError("thumbnail_not_allowed");
+    });
+    await renderScreen(
+      <YouTubeManagementScreen
+        accounts={ACCOUNTS}
+        accountsLoading={false}
+        gateway={thumbnailGateway({ setThumbnail })}
+        mediaGateway={{ listOwnedImages: vi.fn(async () => CANDIDATES) }}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Change thumbnail" }));
+    await userEvent.click(await screen.findByRole("radio", { name: "cover.jpg" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm thumbnail change" }));
+
+    expect(await screen.findByText("This YouTube channel is not eligible to set custom thumbnails.")).toBeInTheDocument();
+  });
+});

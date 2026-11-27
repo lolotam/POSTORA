@@ -4,9 +4,11 @@ import type {
   YouTubeChannelDetails,
   YouTubePlaylistsPage,
   YouTubeResourceSuccess,
+  YouTubeSetThumbnailResult,
   YouTubeVideoDetails,
   YouTubeVideosPage,
 } from "../domain/types";
+import type { YouTubeThumbnailCandidate } from "../domain/thumbnail";
 
 // The port the query hooks depend on (ARCHITECTURE.md §4: application never
 // imports infrastructure; the adapter arrives as this interface).
@@ -37,4 +39,23 @@ export interface YouTubeResourcesGateway {
   /** The playlists of the account's own channel, one page at a time. */
   listPlaylists?(params: { accountId: string; pageToken?: string | null }): Promise<YouTubeResourceSuccess<YouTubePlaylistsPage>>;
   getVideo(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<YouTubeVideoDetails>>;
+  /**
+   * Replaces the thumbnail of an already published video with an image the
+   * creator already owns. The server resolves the media row by id and owner,
+   * so no URL ever crosses the wire.
+   */
+  setThumbnail?(params: {
+    accountId: string;
+    videoId: string;
+    mediaFileId: string;
+  }): Promise<YouTubeResourceSuccess<YouTubeSetThumbnailResult>>;
+}
+
+/**
+ * The creator's own media-library images, so the thumbnail picker can offer a
+ * file Postora already stores. Deliberately a separate port: this reads the
+ * creator's library, not the channel's YouTube resources.
+ */
+export interface YouTubeThumbnailMediaGateway {
+  listOwnedImages(params: { userId: string }): Promise<YouTubeThumbnailCandidate[]>;
 }
