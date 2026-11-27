@@ -140,14 +140,21 @@ Deno.test("canScrubSettledPostCaptionNow and scrubSettledPostCaptionInDb preserv
         ready: true,
         consumed: true,
         content_hash: "md5-before-scrub",
+        content_fence: {
+          metadata: {
+            youtube_caption: captionWithContent,
+          },
+        },
       },
     },
   };
 
+  let observedExpectedStatus: string | undefined;
   const didScrub = await scrubSettledPostCaptionInDb(
     {
       readPostRow: () => Promise.resolve({ data: storedRow, error: null }),
-      updatePostMetadata: (_postId, metadata) => {
+      updatePostMetadata: (_postId, metadata, expectedStatus) => {
+        observedExpectedStatus = expectedStatus;
         storedRow = { ...storedRow, metadata };
         return Promise.resolve({ error: null });
       },
@@ -156,6 +163,7 @@ Deno.test("canScrubSettledPostCaptionNow and scrubSettledPostCaptionInDb preserv
   );
 
   assertEquals(didScrub, true);
+  assertEquals(observedExpectedStatus, "completed");
   assertEquals(storedRow.metadata, {
     youtube_title: "Live video",
     youtube_caption: {
@@ -170,6 +178,15 @@ Deno.test("canScrubSettledPostCaptionNow and scrubSettledPostCaptionInDb preserv
       ready: true,
       consumed: true,
       content_hash: "md5-before-scrub",
+      content_fence: {
+        metadata: {
+          youtube_caption: {
+            language: "en",
+            name: "English",
+            format: "vtt",
+          },
+        },
+      },
     },
   });
 });

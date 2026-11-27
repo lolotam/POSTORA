@@ -1851,12 +1851,16 @@ async function scrubSettledPostCaptionForPost(
           .select("status, metadata")
           .eq("id", id)
           .maybeSingle(),
-      updatePostMetadata: async (id, metadata) =>
-        await supabase
+      updatePostMetadata: async (id, metadata, expectedStatus) => {
+        let query = supabase
           .from("posts")
           .update({ metadata })
-          .eq("id", id)
-          .in("status", ["completed", "partial", "failed"]),
+          .eq("id", id);
+        query = expectedStatus
+          ? query.eq("status", expectedStatus)
+          : query.in("status", ["completed", "partial", "failed"]);
+        return await query;
+      },
     },
     postId,
   );

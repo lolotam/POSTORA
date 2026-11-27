@@ -136,18 +136,38 @@ export function hasDisallowedYoutubeCaptionInput(body: unknown): boolean {
  */
 export function stripYoutubeCaptionFromMetadata<T>(metadata: T): T {
   if (!isPlainRecord(metadata)) return metadata;
-  if (!("youtube_caption" in metadata)) return metadata;
 
-  const rawCaption = metadata.youtube_caption;
-  if (!isPlainRecord(rawCaption) || !("content" in rawCaption)) {
-    return metadata;
+  let changed = false;
+  const copy: Record<string, unknown> = { ...metadata };
+
+  if (isPlainRecord(copy.youtube_caption) && "content" in copy.youtube_caption) {
+    const { content: _content, ...restCaption } = copy.youtube_caption;
+    copy.youtube_caption = restCaption;
+    changed = true;
   }
 
-  const { content: _content, ...restCaption } = rawCaption;
-  return {
-    ...metadata,
-    youtube_caption: restCaption,
-  } as T;
+  if (isPlainRecord(copy.legacy_notification_candidate)) {
+    const candidate = copy.legacy_notification_candidate;
+    if (isPlainRecord(candidate.content_fence) && isPlainRecord(candidate.content_fence.metadata)) {
+      const fenceMetadata = candidate.content_fence.metadata;
+      if (isPlainRecord(fenceMetadata.youtube_caption) && "content" in fenceMetadata.youtube_caption) {
+        const { content: _content, ...restNestedCaption } = fenceMetadata.youtube_caption;
+        copy.legacy_notification_candidate = {
+          ...candidate,
+          content_fence: {
+            ...candidate.content_fence,
+            metadata: {
+              ...fenceMetadata,
+              youtube_caption: restNestedCaption,
+            },
+          },
+        };
+        changed = true;
+      }
+    }
+  }
+
+  return changed ? (copy as T) : metadata;
 }
 
 /**

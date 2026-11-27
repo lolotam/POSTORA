@@ -6,20 +6,16 @@
  * leaving `{ language, name, format }`.
  */
 
-export function scrubSettledYoutubeCaptionMetadata(
-  metadata: Record<string, unknown> | null | undefined,
-): Record<string, unknown> | null | undefined {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return metadata;
-  }
-  const rawCaption = metadata.youtube_caption;
+function scrubCaptionRecord(
+  rawCaption: unknown,
+): { changed: boolean; value: unknown } {
   if (
     !rawCaption ||
     typeof rawCaption !== "object" ||
     Array.isArray(rawCaption) ||
     !("content" in rawCaption)
   ) {
-    return metadata;
+    return { changed: false, value: rawCaption };
   }
 
   const captionRecord = rawCaption as Record<string, unknown>;
@@ -33,10 +29,67 @@ export function scrubSettledYoutubeCaptionMetadata(
   if (typeof captionRecord.format === "string") {
     scrubbedCaption.format = captionRecord.format;
   }
+  return { changed: true, value: scrubbedCaption };
+}
+
+function scrubNestedCandidateContentFence(
+  rawCandidate: unknown,
+): { changed: boolean; value: unknown } {
+  if (!rawCandidate || typeof rawCandidate !== "object" || Array.isArray(rawCandidate)) {
+    return { changed: false, value: rawCandidate };
+  }
+  const candidate = rawCandidate as Record<string, unknown>;
+  const contentFence = candidate.content_fence;
+  if (!contentFence || typeof contentFence !== "object" || Array.isArray(contentFence)) {
+    return { changed: false, value: rawCandidate };
+  }
+  const fenceRecord = contentFence as Record<string, unknown>;
+  const fenceMetadata = fenceRecord.metadata;
+  if (!fenceMetadata || typeof fenceMetadata !== "object" || Array.isArray(fenceMetadata)) {
+    return { changed: false, value: rawCandidate };
+  }
+  const fenceMetadataRecord = fenceMetadata as Record<string, unknown>;
+  const scrubbedNestedCaption = scrubCaptionRecord(fenceMetadataRecord.youtube_caption);
+  if (!scrubbedNestedCaption.changed) {
+    return { changed: false, value: rawCandidate };
+  }
+  return {
+    changed: true,
+    value: {
+      ...candidate,
+      content_fence: {
+        ...fenceRecord,
+        metadata: {
+          ...fenceMetadataRecord,
+          youtube_caption: scrubbedNestedCaption.value,
+        },
+      },
+    },
+  };
+}
+
+export function scrubSettledYoutubeCaptionMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return metadata;
+  }
+
+  const topCaption = scrubCaptionRecord(metadata.youtube_caption);
+  const nestedCandidate = scrubNestedCandidateContentFence(
+    metadata.legacy_notification_candidate,
+  );
+
+  if (!topCaption.changed && !nestedCandidate.changed) {
+    return metadata;
+  }
 
   return {
     ...metadata,
-    youtube_caption: scrubbedCaption,
+    ...(topCaption.changed ? { youtube_caption: topCaption.value } : {}),
+    ...(nestedCandidate.changed
+      ? { legacy_notification_candidate: nestedCandidate.value }
+      : {}),
   };
 }
 
@@ -46,13 +99,10 @@ export function hasUnscrubbedYoutubeCaptionContent(
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     return false;
   }
-  const rawCaption = metadata.youtube_caption;
-  return Boolean(
-    rawCaption &&
-      typeof rawCaption === "object" &&
-      !Array.isArray(rawCaption) &&
-      "content" in rawCaption,
-  );
+  if (scrubCaptionRecord(metadata.youtube_caption).changed) {
+    return true;
+  }
+  return scrubNestedCandidateContentFence(metadata.legacy_notification_candidate).changed;
 }
 
 export interface SettledPostCaptionDbPort {
@@ -63,6 +113,7 @@ export interface SettledPostCaptionDbPort {
   updatePostMetadata(
     postId: string,
     metadata: Record<string, unknown>,
+    expectedStatus?: string,
   ): Promise<{ error: unknown }>;
 }
 
@@ -121,12 +172,17 @@ export async function scrubSettledPostCaptionInDb(
     if (error || !canScrubSettledPostCaptionNow(data)) {
       return false;
     }
+    const currentStatus = String(data!.status);
     const currentMetadata = data!.metadata as Record<string, unknown>;
     const scrubbed = scrubSettledYoutubeCaptionMetadata(currentMetadata);
     if (!scrubbed || scrubbed === currentMetadata) {
       return false;
     }
-    const { error: updateError } = await port.updatePostMetadata(postId, scrubbed);
+    const { error: updateError } = await port.updatePostMetadata(
+      postId,
+      scrubbed,
+      currentStatus,
+    );
     return !updateError;
   } catch {
     return false;
