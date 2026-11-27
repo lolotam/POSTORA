@@ -214,7 +214,7 @@ export async function decideYouTubeAnalytics(
         if (firstOutdatedDenial === null) firstOutdatedDenial = denial;
         continue;
       }
-      return firstOutdatedDenial ?? denial;
+      return code === "consent_required" ? (firstOutdatedDenial ?? denial) : denial;
     } catch {
       return settingsUnavailable();
     }

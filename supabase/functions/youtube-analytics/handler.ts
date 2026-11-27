@@ -415,10 +415,13 @@ export function createYouTubeAnalyticsHandler(
 
       const input = parsed.data;
       const operation = input.operation;
+      const requiresPurposeV2 = operation === "traffic_sources" || operation === "geography" ||
+        operation === "devices" || operation === "retention";
       const admissionDecision = await ports.decide({
         ownerId: userId,
         accountId: input.account_id,
         withCredentials: false,
+        ...(requiresPurposeV2 ? { purposeVersion: ANALYTICS_PURPOSE_VERSION } : {}),
       });
       if (!admissionDecision.ok) {
         return await refuse(req, {
@@ -430,6 +433,20 @@ export function createYouTubeAnalyticsHandler(
         });
       }
       const binding = admissionDecision.binding;
+      if (requiresPurposeV2 && binding.consent.version < ANALYTICS_PURPOSE_VERSION) {
+        return await refuse(req, {
+          operation,
+          code: "consent_required",
+          requestId,
+          userId,
+          accountId: input.account_id,
+          extra: {
+            connection_revision: binding.connectionRevision,
+            consent: { state: "outdated", version: ANALYTICS_PURPOSE_VERSION },
+            purpose_version: ANALYTICS_PURPOSE_VERSION,
+          },
+        });
+      }
       admittedAccountId = input.account_id;
       const resolved = resolveRequestedWindow({
         windowEnd: input.window_end,

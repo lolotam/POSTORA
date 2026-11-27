@@ -31,7 +31,7 @@ export function VideoAnalyticsPanel(props: {
   } = props;
   const { t } = useTranslation("analytics");
   return (
-    <section aria-label={t("youtube.videoAnalytics", "Video analytics")} className="space-y-4 rounded-lg border p-4">
+    <section aria-label={t("youtube.videoAnalytics", "Video analytics")} className="youtube-video-analytics-panel space-y-4 rounded-lg border p-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">{title ?? `${t("youtube.videoAnalytics", "Video analytics")}: ${videoId}`}</h2>
         {onClose ? <Button type="button" size="sm" variant="ghost" onClick={onClose}>{t("youtube.close", "Close")}</Button> : null}

@@ -178,7 +178,7 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
     let previouslyClosed: HTMLDetailsElement[] = [];
     const onBeforePrint = () => {
       previouslyClosed = Array.from(
-        document.querySelectorAll<HTMLDetailsElement>(".youtube-analytics-report details, [role='dialog'] details"),
+        document.querySelectorAll<HTMLDetailsElement>(".youtube-analytics-report details, .youtube-video-analytics-panel details"),
       ).filter((el) => !el.open);
       for (const el of previouslyClosed) el.open = true;
     };

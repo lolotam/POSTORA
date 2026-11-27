@@ -39,6 +39,11 @@ const BINDING: YouTubeAnalyticsBinding = {
   provider: "native",
   needsReauth: false,
   grantedScopes: [...YOUTUBE_ANALYTICS_REQUIRED_SCOPES],
+  consent: { state: "accepted", version: 2 },
+};
+
+const BINDING_V1: YouTubeAnalyticsBinding = {
+  ...BINDING,
   consent: { state: "accepted", version: 1 },
 };
 
@@ -1031,6 +1036,22 @@ for (const op of ["traffic_sources", "geography", "devices", "retention"] as con
     assertEquals(response.status, 409);
     assertEquals((await json(response)).error, "window_stale");
     assertCounts(f.calls, { token: 0, data: 0, analytics: 0 });
+  });
+
+  Deno.test(`${op} refuses a v1-only consent acceptance during Stage A without Google calls`, async () => {
+    const f = fixture({
+      decisions: [{
+        ok: true,
+        binding: BINDING_V1,
+      }],
+    });
+    const response = await f.handler(request(body(op, extra)));
+    assertEquals(response.status, 403);
+    const payload = await json(response);
+    assertEquals(payload.error, "consent_required");
+    assertEquals(payload.consent, { state: "outdated", version: 2 });
+    assertEquals(payload.purpose_version, 2);
+    assertCounts(f.calls, { token: 0, data: 0, analytics: 0, dataDebits: 0, analyticsDebits: 0 });
   });
 
   Deno.test(`${op} refuses budget exhaustion cleanly`, async () => {
