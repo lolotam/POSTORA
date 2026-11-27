@@ -2,11 +2,14 @@ import { supabase } from "@/integrations/supabase/client";
 import { resolveAiImageResponse } from "@/lib/aiGenerationJobWatcher";
 import type { YouTubeThumbnailAiGateway } from "../application/ports";
 
+// Bounded timeout for the initial generate-image submission call.
+export const YOUTUBE_THUMBNAIL_AI_SUBMIT_TIMEOUT_MS = 30_000;
+
 /**
  * Generates a thumbnail with the app's own image generator.
  *
  * The request is the one `/post` sends today — `prompt`, `aspectRatio: "16:9"`,
- * the first reference image and `async: true` — so the generator, its limits
+ * the reference images and `async: true` — so the generator, its limits
  * and its billing stay where they are.
  */
 export class SupabaseYouTubeThumbnailAiGateway implements YouTubeThumbnailAiGateway {
@@ -16,8 +19,6 @@ export class SupabaseYouTubeThumbnailAiGateway implements YouTubeThumbnailAiGate
     referenceImages?: readonly string[];
     signal?: AbortSignal;
   }): Promise<{ imageUrl: string }> {
-    // The Supabase Functions client has no abort seam, so a cancelled request
-    // is refused before it is sent rather than pretended to be cancelled.
     if (params.signal?.aborted) throw new Error("Image generation was cancelled");
 
     const refs = (params.referenceImages ?? []).filter((url) => typeof url === "string" && url.length > 0).slice(0, 5);
@@ -32,6 +33,8 @@ export class SupabaseYouTubeThumbnailAiGateway implements YouTubeThumbnailAiGate
         ...(referenceImages ? { referenceImages } : {}),
         async: true,
       },
+      timeout: YOUTUBE_THUMBNAIL_AI_SUBMIT_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (error) throw error;
 

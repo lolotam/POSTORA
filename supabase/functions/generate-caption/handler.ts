@@ -323,19 +323,19 @@ function parseJsonWithOptionalOuterFence(rawContent: string): unknown {
   }
 }
 
-function measureYoutubeTagSetLength(tagSet: string): number {
+function normalizeAndMeasureYoutubeTagSet(tagSet: string): { normalized: string; measured: number } | null {
   const tags = tagSet
     .split(",")
     .map((tag) => tag.trim())
     .filter((tag) => tag.length > 0);
-  if (tags.length === 0) return 0;
+  if (tags.length === 0) return null;
   let total = 0;
   for (let i = 0; i < tags.length; i += 1) {
     const tag = tags[i];
     const hasWhitespace = /\s/.test(tag);
     total += tag.length + (hasWhitespace ? 2 : 0) + (i > 0 ? 1 : 0);
   }
-  return total;
+  return { normalized: tags.join(", "), measured: total };
 }
 
 function parseYouTubeSuggestions(
@@ -362,9 +362,9 @@ function parseYouTubeSuggestions(
     } else if (feature === "youtube_description") {
       if (encoder.encode(sanitized).byteLength <= 5000) suggestions.push(sanitized);
     } else {
-      const measured = measureYoutubeTagSetLength(sanitized);
-      if (measured >= 1 && measured <= 500 && sanitized.length <= 500) {
-        suggestions.push(sanitized);
+      const tagMetrics = normalizeAndMeasureYoutubeTagSet(sanitized);
+      if (tagMetrics && tagMetrics.measured >= 1 && tagMetrics.measured <= 500) {
+        suggestions.push(tagMetrics.normalized);
       }
     }
   }

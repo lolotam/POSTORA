@@ -36,12 +36,13 @@ test.describe("YouTube Stage 3 offline journeys", () => {
     await expect(drawer).toBeVisible();
 
     // Nothing is loaded from YouTube's embed host before the creator presses Play.
-    await expect(drawer.getByRole("button", { name: /play video/i })).toBeVisible();
+    const playButton = drawer.getByRole("button", { name: /play video/i });
+    await expect(playButton).toBeVisible();
     await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(0);
     expect(embedRequestsBeforePlay).toEqual([]);
 
     playClicked = true;
-    await drawer.getByRole("button", { name: /play video/i }).click();
+    await playButton.click();
 
     await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(1);
     await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveAttribute("src", /embed\/AbcD1234eFg/);

@@ -329,7 +329,6 @@ export function YouTubeVideoPlayer({
   };
 
   const handleSpeedChange = (next: number) => {
-    setSpeed(next);
     sendCommand("setPlaybackRate", [next]);
   };
 
@@ -350,7 +349,7 @@ export function YouTubeVideoPlayer({
   const fullscreenAvailable = typeof document === "undefined" || document.fullscreenEnabled !== false;
 
   const outerClass = activeSizeMode === "mini"
-    ? "space-y-2 sticky top-0 z-10 bg-background/95 backdrop-blur-sm pb-2"
+    ? "space-y-2 sticky top-0 z-10 bg-background pb-2"
     : "space-y-2";
   const playerBoxClass = activeSizeMode === "mini"
     ? "relative h-[200px] w-[356px] max-w-full min-h-[200px] min-w-[200px] sticky top-0 z-10 overflow-hidden rounded-md border bg-muted"

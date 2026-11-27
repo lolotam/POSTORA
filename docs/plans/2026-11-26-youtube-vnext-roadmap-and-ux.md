@@ -630,7 +630,7 @@ Deploy `process-post`, `n8n-api` and `youtube-resources`, then smoke-test on the
 | 4 | Legal pages, legal test, verification guide | Caption-at-upload sentence |
 | 5 | `src/i18n/locales/ar/postsettings.json`; component and rehydration tests | — |
 
-Rollback: PR-17B alone at any time. PR-17A only after PR-17B is reverted; stored posts carrying the key are then simply ignored by the older function.
+Rollback: PR-17B alone at any time (stops new upload-time caption submissions). PR-17A is reverted only after PR-17B is reverted **and** all queued/scheduled posts carrying `youtube_caption` have settled through the PR-17A processor (which scrubs `youtube_caption.content` on terminal settlement); while any queued post still carries `youtube_caption`, the PR-17A processor stays deployed.
 
 ### PR-18 — inline playlist creation (spec §14.4)
 

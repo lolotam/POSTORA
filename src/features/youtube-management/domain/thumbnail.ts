@@ -14,9 +14,12 @@ import { isDefinitiveRefusalCode } from "./errors";
  * The edge function's own constant, re-exported so the page and the server can
  * never disagree about it (ARCHITECTURE.md §22).
  */
-import { THUMBNAIL_MAX_BYTES } from "../../../../supabase/functions/youtube-resources/thumbnailMedia";
+import {
+  THUMBNAIL_MAX_BYTES,
+  sniffThumbnailType,
+} from "../../../../supabase/functions/youtube-resources/thumbnailMedia";
 
-export { THUMBNAIL_MAX_BYTES };
+export { THUMBNAIL_MAX_BYTES, sniffThumbnailType };
 
 /** One row of the creator's own media library, as the picker needs it. */
 export interface YouTubeThumbnailCandidate {
@@ -30,35 +33,8 @@ export interface YouTubeThumbnailCandidate {
   preview_url?: string | null;
 }
 
-/**
- * YouTube's 2 MiB maximum thumbnail file size.
- *
- * The same ceiling the edge function enforces on the stored bytes, so a file
- * the page accepts is a file the server accepts.
- */
-const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
-
-/**
- * Identifies a JPEG or PNG from its leading bytes.
- *
- * The declared MIME of a file is what the browser claims; the magic bytes are
- * what the file is. Google reads the bytes, so the bytes decide.
- */
-export function sniffThumbnailType(head: Uint8Array): "image/jpeg" | "image/png" | null {
-  if (head.byteLength >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
-    return "image/jpeg";
-  }
-  if (
-    head.byteLength >= PNG_SIGNATURE.length
-    && PNG_SIGNATURE.every((byte, index) => head[index] === byte)
-  ) {
-    return "image/png";
-  }
-  return null;
-}
-
 /** The MIME types a declared file type may name. */
-const DECLARED_THUMBNAIL_TYPES = new Set(["image/jpeg", "image/png"]);
+const DECLARED_THUMBNAIL_TYPES = new Set<string>(DIRECT_THUMBNAIL_MIMES);
 
 /** Why a picked image was refused before it was stored. */
 export type ThumbnailFileFailureReason = "not_jpeg_png" | "too_large" | "type_mismatch";

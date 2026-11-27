@@ -113,8 +113,10 @@ async function signStoragePreviewsBatch(
       // Fall back to per-path or public URL below.
     }
   }
-  for (const path of paths) {
-    const signed = await signStoragePreview(bucket, path);
+  const entries = await Promise.all(
+    paths.map(async (path) => [path, await signStoragePreview(bucket, path)] as const),
+  );
+  for (const [path, signed] of entries) {
     if (signed) result.set(path, signed);
   }
   return result;

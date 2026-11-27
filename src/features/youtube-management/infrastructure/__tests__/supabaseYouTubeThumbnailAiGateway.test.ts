@@ -37,6 +37,7 @@ describe("generating a thumbnail with AI", () => {
         referenceImage: "data:image/png;base64,AAA",
         async: true,
       },
+      timeout: 30_000,
     });
     expect(result).toEqual({ imageUrl: "https://images.test/thumb.jpg" });
   });

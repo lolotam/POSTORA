@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -267,6 +267,23 @@ function ThumbnailOutcomeMessage({ outcome }: { outcome: YouTubeThumbnailOutcome
   );
 }
 
+function decodePercentEncodedBytes(payload: string): Uint8Array {
+  const bytes: number[] = [];
+  for (let i = 0; i < payload.length; i += 1) {
+    if (payload[i] === "%" && i + 2 < payload.length) {
+      const hex = payload.slice(i + 1, i + 3);
+      const parsed = Number.parseInt(hex, 16);
+      if (!Number.isNaN(parsed)) {
+        bytes.push(parsed);
+        i += 2;
+        continue;
+      }
+    }
+    bytes.push(payload.charCodeAt(i) & 0xff);
+  }
+  return new Uint8Array(bytes);
+}
+
 function decodeInlineImageDataUrl(dataUrl: string): Blob {
   const commaIndex = dataUrl.indexOf(",");
   if (commaIndex === -1) throw new Error("Invalid data URL");
@@ -283,7 +300,7 @@ function decodeInlineImageDataUrl(dataUrl: string): Blob {
     }
     return new Blob([bytes], { type: mimeType });
   }
-  return new Blob([decodeURIComponent(payload)], { type: mimeType });
+  return new Blob([decodePercentEncodedBytes(payload)], { type: mimeType });
 }
 
 async function loadGeneratedImageBlob(imageUrl: string): Promise<Blob> {
@@ -532,6 +549,8 @@ export function YouTubeThumbnailChange({
   const [aiImageUrl, setAiImageUrl] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [references, setReferences] = useState<string[]>([]);
+  const [readingReferences, setReadingReferences] = useState(false);
+  const dialogSessionRef = useRef(0);
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
   const [stockPickerOpen, setStockPickerOpen] = useState(false);
 
@@ -544,6 +563,7 @@ export function YouTubeThumbnailChange({
 
   const openPicker = () => {
     if (submitting) return;
+    dialogSessionRef.current += 1;
     setDialogOpen(true);
     setChosen(null);
     setOutcome(null);
@@ -552,6 +572,8 @@ export function YouTubeThumbnailChange({
     setAiImageUrl(null);
     setAiPrompt("");
     setReferences([]);
+    setReadingReferences(false);
+    onRetryCandidates?.();
   };
 
   const selectImage = (id: string) => {
@@ -603,9 +625,10 @@ export function YouTubeThumbnailChange({
   };
 
   const handleGenerate = async () => {
-    if (!onGenerateAiImage || submitting) return;
+    if (!onGenerateAiImage || !onUploadImage || submitting || readingReferences) return;
     setAiError(null);
     setChosen(null);
+    setAiImageUrl(null);
     setSubmitting(true);
     try {
       const result = await onGenerateAiImage({
@@ -648,7 +671,8 @@ export function YouTubeThumbnailChange({
   };
 
   const handleReferenceFiles = async (files: FileList | null) => {
-    if (!files || submitting) return;
+    if (!files || submitting || readingReferences) return;
+    const session = dialogSessionRef.current;
     setAiError(null);
     const room = 5 - references.length;
     const picked = Array.from(files).slice(0, Math.max(room, 0));
@@ -656,11 +680,15 @@ export function YouTubeThumbnailChange({
       setAiError("failed");
       return;
     }
+    setReadingReferences(true);
     try {
       const dataUrls = await Promise.all(picked.map((file) => readAsDataUrl(file)));
+      if (dialogSessionRef.current !== session) return;
       setReferences((current) => [...current, ...dataUrls].slice(0, 5));
     } catch {
-      setAiError("failed");
+      if (dialogSessionRef.current === session) setAiError("failed");
+    } finally {
+      if (dialogSessionRef.current === session) setReadingReferences(false);
     }
   };
 
@@ -749,8 +777,8 @@ export function YouTubeThumbnailChange({
 
             <TabsContent value="ai" className="space-y-2">
               <GenerateWithAiTab
-                disabled={submitting}
-                canGenerate={onGenerateAiImage !== undefined && aiPrompt.trim().length > 0}
+                disabled={submitting || readingReferences}
+                canGenerate={onGenerateAiImage !== undefined && onUploadImage !== undefined && !readingReferences && aiPrompt.trim().length > 0}
                 resolvedTiers={resolvedTiers}
                 prompt={aiPrompt}
                 onPromptChange={setAiPrompt}
