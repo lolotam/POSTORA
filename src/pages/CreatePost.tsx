@@ -109,11 +109,31 @@ function fingerprintYoutubeSettings(youtubeSettings: Record<string, unknown>): R
 
 function fingerprintYoutubeSettingsWithoutCaptionContent(
   youtubeSettings: Record<string, unknown>,
+  fallbackCaptionSummary?: { language: string; name: string; format: "srt" | "vtt" } | null,
 ): Record<string, unknown> {
-  if (!("youtube_caption" in youtubeSettings)) return youtubeSettings;
-  const next = { ...youtubeSettings };
-  delete next.youtube_caption;
-  return next;
+  const rawCaption = youtubeSettings.youtube_caption;
+  if (rawCaption && typeof rawCaption === "object" && !Array.isArray(rawCaption)) {
+    const record = rawCaption as Record<string, unknown>;
+    return {
+      ...youtubeSettings,
+      youtube_caption: {
+        language: typeof record.language === "string" ? record.language : "",
+        name: typeof record.name === "string" ? record.name : "",
+        format: record.format === "srt" || record.format === "vtt" ? record.format : "vtt",
+      },
+    };
+  }
+  if (fallbackCaptionSummary) {
+    return {
+      ...youtubeSettings,
+      youtube_caption: {
+        language: fallbackCaptionSummary.language.trim(),
+        name: fallbackCaptionSummary.name.trim(),
+        format: fallbackCaptionSummary.format,
+      },
+    };
+  }
+  return youtubeSettings;
 }
 
 export default function CreatePost() {
@@ -418,19 +438,22 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     return videoFile?.previewUrl ?? videoFile?.cloudinaryUrl ?? videoFile?.storagePath ?? null;
   }, [files, uploadMethod, urlMediaType, videoUrl]);
 
+  const previousVideoSourceForCaptionRef = useRef<string | null>(null);
   useEffect(() => {
+    const prevSource = previousVideoSourceForCaptionRef.current;
+    previousVideoSourceForCaptionRef.current = currentYoutubeVideoSourceKey;
+    if (!youtubeCaption || youtubeCaption.alreadySubmitted) return;
+    const sourceReplaced = prevSource !== null && prevSource !== currentYoutubeVideoSourceKey;
+    if (sourceReplaced) {
+      setYoutubeCaption(null);
+      return;
+    }
     if (
-      youtubeCaption &&
-      !youtubeCaption.alreadySubmitted &&
-      youtubeCaption.source === "audio"
+      youtubeCaption.source === "audio" &&
+      (!currentYoutubeVideoSourceKey ||
+        (youtubeCaption.sourceKey && youtubeCaption.sourceKey !== currentYoutubeVideoSourceKey))
     ) {
-      if (
-        !currentYoutubeVideoSourceKey ||
-        (youtubeCaption.sourceKey &&
-          youtubeCaption.sourceKey !== currentYoutubeVideoSourceKey)
-      ) {
-        setYoutubeCaption(null);
-      }
+      setYoutubeCaption(null);
     }
   }, [
     currentYoutubeVideoSourceKey,
@@ -786,9 +809,17 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           scheduleTimezone: scheduleTimezone || null,
           youtube: yt,
         });
+      const settledSummaryFallback =
+        platformSettings.youtubeCaption?.alreadySubmitted
+          ? {
+              language: platformSettings.youtubeCaption.language,
+              name: platformSettings.youtubeCaption.name,
+              format: platformSettings.youtubeCaption.format,
+            }
+          : null;
       const submitFingerprint = buildIntentEnvelope(fingerprintYoutubeSettings(youtubeSettings));
-      const settledCaptionlessFingerprint = buildIntentEnvelope(
-        fingerprintYoutubeSettingsWithoutCaptionContent(youtubeSettings),
+      const settledCaptionSummaryFingerprint = buildIntentEnvelope(
+        fingerprintYoutubeSettingsWithoutCaptionContent(youtubeSettings, settledSummaryFallback),
       );
 
       type RecoveredPost = {
@@ -820,10 +851,28 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         const existingCaption = existingMetadata?.youtube_caption as Record<string, unknown> | undefined;
         const captionWasScrubbedOnSettlement =
           Boolean(existingCaption && typeof existingCaption === "object" && !("content" in existingCaption));
+        const existingSettledFingerprint = captionWasScrubbedOnSettlement && existingMetadata
+          ? buildIntentEnvelope(
+              fingerprintYoutubeSettingsWithoutCaptionContent(
+                Object.fromEntries(
+                  Object.entries(existingMetadata).filter(([key]) =>
+                    key !== "submit_id" &&
+                    key !== "submit_fingerprint" &&
+                    key !== "publish_enqueue_accepted" &&
+                    key !== "schedule_timezone" &&
+                    key !== "final_notified_at" &&
+                    key !== "settlement_rollup_status" &&
+                    key !== "legacy_notification_candidate" &&
+                    key !== "final_notification_intent",
+                  ),
+                ),
+              ),
+            )
+          : null;
         const fingerprintMatches =
           existingMetadata?.submit_fingerprint === submitFingerprint ||
           (captionWasScrubbedOnSettlement &&
-            existingMetadata?.submit_fingerprint === settledCaptionlessFingerprint);
+            existingSettledFingerprint === settledCaptionSummaryFingerprint);
         if (!fingerprintMatches) {
           return { state: "conflict", reason: "intent" };
         }

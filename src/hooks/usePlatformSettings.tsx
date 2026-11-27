@@ -604,7 +604,6 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       youtubeCaption !== null &&
       !youtubeCaption.alreadySubmitted &&
       !youtubeCaption.pendingRead &&
-      youtubeCaption.captionEligible !== false &&
       typeof youtubeCaption.content === "string" &&
       youtubeCaption.content.length > 0 &&
       validateCaptionUploadInput({

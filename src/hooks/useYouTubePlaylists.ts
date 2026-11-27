@@ -18,6 +18,7 @@ export interface YouTubePlaylistsState {
   hasMore: boolean;
   loadMore: () => void;
   retry: () => void;
+  retryCapabilities?: () => void;
 }
 
 const gateway = new SupabaseYouTubeResourcesGateway();
@@ -40,6 +41,7 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   const [loadingMore, setLoadingMore] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [capabilitiesAttempt, setCapabilitiesAttempt] = useState(0);
 
   // The cursor and the in-flight guard live in refs: `loadMore` is called from
   // a click handler that must see the cursor of the last finished read, not
@@ -51,15 +53,47 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   // the newer generation owns.
   const generationRef = useRef(0);
 
+  const capabilitiesGenerationRef = useRef(0);
+  useEffect(() => {
+    const capGeneration = capabilitiesGenerationRef.current + 1;
+    capabilitiesGenerationRef.current = capGeneration;
+
+    if (!accountId) {
+      setCapabilities(null);
+      setCapabilitiesLoading(false);
+      setCapabilitiesUnavailable(false);
+      return;
+    }
+
+    if (typeof gateway.getCapabilities === "function") {
+      setCapabilitiesLoading(true);
+      setCapabilitiesUnavailable(false);
+      gateway.getCapabilities(accountId)
+        .then((result) => {
+          if (capabilitiesGenerationRef.current !== capGeneration) return;
+          const nextCaps = result?.data?.capabilities ?? null;
+          setCapabilities(nextCaps);
+          setCapabilitiesUnavailable(nextCaps === null);
+          setCapabilitiesLoading(false);
+        })
+        .catch(() => {
+          if (capabilitiesGenerationRef.current !== capGeneration) return;
+          setCapabilities(null);
+          setCapabilitiesUnavailable(true);
+          setCapabilitiesLoading(false);
+        });
+    } else {
+      setCapabilitiesLoading(false);
+      setCapabilitiesUnavailable(false);
+    }
+  }, [accountId, attempt, capabilitiesAttempt]);
+
   useEffect(() => {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
 
     if (!accountId) {
       setPlaylists([]);
-      setCapabilities(null);
-      setCapabilitiesLoading(false);
-      setCapabilitiesUnavailable(false);
       cursorRef.current = null;
       setNextPageToken(null);
       setLoading(false);
@@ -72,35 +106,12 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
     // The playlists of one channel are never the playlists of another, so the
     // previous account's list is dropped before the new read.
     setPlaylists([]);
-    setCapabilities(null);
     cursorRef.current = null;
     setNextPageToken(null);
     setLoading(true);
     setLoadingMore(false);
     loadingMoreRef.current = false;
     setUnavailable(false);
-
-    if (typeof gateway.getCapabilities === "function") {
-      setCapabilitiesLoading(true);
-      setCapabilitiesUnavailable(false);
-      gateway.getCapabilities(accountId)
-        .then((result) => {
-          if (generationRef.current !== generation) return;
-          const nextCaps = result?.data?.capabilities ?? null;
-          setCapabilities(nextCaps);
-          setCapabilitiesUnavailable(nextCaps === null);
-          setCapabilitiesLoading(false);
-        })
-        .catch(() => {
-          if (generationRef.current !== generation) return;
-          setCapabilities(null);
-          setCapabilitiesUnavailable(true);
-          setCapabilitiesLoading(false);
-        });
-    } else {
-      setCapabilitiesLoading(false);
-      setCapabilitiesUnavailable(false);
-    }
 
     gateway.listPlaylists({ accountId })
       .then((result) => {
@@ -150,14 +161,18 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   }, [accountId]);
 
   const retry = useCallback(() => {
-    // A failed page is retried where it failed; a list that never arrived (or a
-    // failed capabilities check when playlists succeeded) is read again.
+    // A failed page is retried where it failed; a list that never arrived is
+    // read again from the first page.
     if (unavailable && playlists.length > 0 && cursorRef.current !== null) {
       loadMore();
       return;
     }
     setAttempt((value) => value + 1);
   }, [loadMore, playlists.length, unavailable]);
+
+  const retryCapabilities = useCallback(() => {
+    setCapabilitiesAttempt((value) => value + 1);
+  }, []);
 
   return {
     playlists,
@@ -170,5 +185,6 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
     hasMore: nextPageToken !== null,
     loadMore,
     retry,
+    retryCapabilities,
   };
 }

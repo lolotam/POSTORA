@@ -386,31 +386,20 @@ export function YouTubeSettings({
   const [captionError, setCaptionError] = useState<string | null>(null);
   const captionFileReadSeqRef = useRef(0);
   const captionFileInputRef = useRef<HTMLInputElement>(null);
-  const latestCaptionTrackRef = useRef(settings.captionTrack);
-  latestCaptionTrackRef.current = settings.captionTrack;
-  const latestOnSettingsChangeRef = useRef(onSettingsChange);
-  latestOnSettingsChangeRef.current = onSettingsChange;
-
-  useEffect(() => {
-    captionFileReadSeqRef.current += 1;
-  }, [captionsSectionDisabled, singleNativeChannelKey]);
-
-  useEffect(() => {
-    return () => {
-      captionFileReadSeqRef.current += 1;
-      if (latestCaptionTrackRef.current?.pendingRead) {
-        latestOnSettingsChangeRef.current({ captionTrack: null });
-      }
-    };
-  }, []);
 
   const captionTrackLanguage = settings.captionTrack?.language;
   const captionTrackNameProp = settings.captionTrack?.name;
   useEffect(() => {
     if (captionTrackLanguage === undefined) return;
     if ((COMMON_CAPTION_LANGUAGES as readonly string[]).includes(captionTrackLanguage)) {
-      setCaptionLanguageChoice((prev) => (prev === CUSTOM_CAPTION_LANGUAGE ? prev : captionTrackLanguage));
-      setCustomCaptionLanguage("");
+      setCaptionLanguageChoice((prev) => {
+        if (prev === CUSTOM_CAPTION_LANGUAGE) {
+          setCustomCaptionLanguage(captionTrackLanguage);
+          return prev;
+        }
+        setCustomCaptionLanguage("");
+        return captionTrackLanguage;
+      });
     } else {
       setCaptionLanguageChoice(CUSTOM_CAPTION_LANGUAGE);
       setCustomCaptionLanguage(captionTrackLanguage);
@@ -571,7 +560,6 @@ export function YouTubeSettings({
       latestCaptionTrackNameRef.current,
       format,
       content,
-      { source: "file", sourceKey: null },
     );
   };
 
@@ -1783,7 +1771,12 @@ export function YouTubeSettings({
             <p role="alert" className="text-xs text-destructive">
               {t("youtube.captionsCapabilityLoadFailed", "Could not verify subtitle permissions for this channel.")}
             </p>
-            <Button type="button" variant="outline" size="sm" onClick={playlistCatalog.retry}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => (playlistCatalog.retryCapabilities ?? playlistCatalog.retry)()}
+            >
               {t("youtube.captionsCapabilityRetry", "Retry permissions")}
             </Button>
           </div>
