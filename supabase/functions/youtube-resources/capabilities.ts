@@ -6,6 +6,7 @@ import {
   type YouTubeCapabilityState,
   type YouTubeScopeState,
 } from "./contracts.ts";
+import { PUBLISHED_EDIT_WRITE_ENABLED } from "./editComposition.ts";
 
 export interface YouTubeCapabilityAccountInput {
   id: string;
@@ -89,11 +90,29 @@ function manageCaptionsCapability({ composio, needsReconnect, scopes, hasRecorde
   return hasRecordedList ? MISSING_SCOPE : UNKNOWN;
 }
 
+// Spec section 8.1: published metadata editing requires native provider, active
+// connection, PUBLISHED_EDIT_WRITE_ENABLED, readonly (for admission and
+// ownership pre-check), and force-ssl (for videos.update).
+function editMetadataCapability(
+  { composio, needsReconnect, scopes, hasRecordedList }: DerivationContext,
+  editWriteEnabled: boolean,
+): YouTubeCapabilityState {
+  if (composio || !editWriteEnabled) return { state: "unavailable", reason: "provider_unsupported" };
+  if (needsReconnect) return RECONNECT;
+  if (scopes.readonly === "missing") return MISSING_SCOPE;
+  if (scopes.readonly === "granted" && scopes.force_ssl === "granted") {
+    return AVAILABLE;
+  }
+  return hasRecordedList ? MISSING_SCOPE : UNKNOWN;
+}
+
 // Spec section 3.3: one pure function per row, no provider call, no I/O. The comment
 // capability stays the existing rule (youtubeCommentCapability); no second rule is written.
 export function deriveYouTubeCapabilities(
   account: YouTubeCapabilityAccountInput,
+  options?: { editWriteEnabled?: boolean },
 ): YouTubeAccountCapabilities {
+  const editWriteEnabled = options?.editWriteEnabled ?? PUBLISHED_EDIT_WRITE_ENABLED;
   const composio = account.authProvider === "composio";
   const recorded = composio ? [] : grantedScopes(account.accountMetadata);
   const scopeState = (scope: string): YouTubeScopeState =>
@@ -122,10 +141,7 @@ export function deriveYouTubeCapabilities(
     capabilities: {
       browse: browseCapability(context),
       upload: uploadCapability(context),
-      // D1: published edits stay disabled until a private fixture proves the
-      // provider honours the conditional write fence. No capability derives
-      // "available" from scopes alone; a DB lock cannot fence Studio.
-      edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
+      edit_metadata: editMetadataCapability(context, editWriteEnabled),
       manage_thumbnail: manageThumbnailCapability(context),
       manage_captions: manageCaptionsCapability(context),
       comments: commentsCapability({

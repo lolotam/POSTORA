@@ -1,44 +1,64 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { createConnectedEditPort } from "./editComposition.ts";
+import { createConnectedEditPort, type EditWriteAuthorizationResult } from "./editComposition.ts";
+import { EditFailure, type ProviderVideo } from "./editLifecycle.ts";
+import type { EditWriteResult } from "./editProvider.ts";
 
 const ACCOUNT = "13a7bda5-e24f-4caa-8917-aa17f57e1671";
 const OWNER = "owner-1";
 const CHANNEL = "UCfixturechannel000000001";
 const VIDEO = "AbcD1234eFg";
 
-const video = () => ({
+const baseVideo = (title = "Original"): ProviderVideo => ({
   id: VIDEO,
   etag: "etag-1",
-  snippet: { channelId: CHANNEL, title: "Original", description: "Description", categoryId: "22" },
+  snippet: { channelId: CHANNEL, title, description: "Description", tags: [], categoryId: "22" },
   status: { privacyStatus: "private", embeddable: false, license: "youtube", publicStatsViewable: false },
 });
 
-function composition(writeGuard: {
-  authorizeWrite(): Promise<boolean>;
-  stillBound(): Promise<boolean>;
-}, writes: { count: number }) {
+function composition(
+  writeGuard: {
+    authorizeWrite(): Promise<EditWriteAuthorizationResult>;
+    stillBound(): Promise<boolean>;
+  },
+  counts: { reads: number; catalog: number; writes: number },
+  options?: {
+    updateResult?: EditWriteResult;
+  },
+) {
+  let currentTitle = "Original";
   return createConnectedEditPort({
     enabled: true,
     provider: {
-      getVideo: () => Promise.resolve({ ok: true as const, value: video() }),
-      updateVideo: () => {
-        writes.count += 1;
-        return Promise.resolve({ ok: true as const, id: VIDEO });
+      getVideo: () => {
+        counts.reads += 1;
+        return Promise.resolve({ ok: true as const, value: baseVideo(currentTitle) });
+      },
+      updateVideo: (_token, input) => {
+        counts.writes += 1;
+        if (options?.updateResult && !options.updateResult.ok) {
+          return Promise.resolve(options.updateResult);
+        }
+        const snippet = input.plan.body.snippet as { title?: string } | undefined;
+        if (snippet?.title) currentTitle = snippet.title;
+        return Promise.resolve(options?.updateResult ?? { ok: true as const, id: VIDEO });
       },
     },
     categories: {
-      list: () => Promise.resolve({
-        ok: true as const,
-        region: "US",
-        locale: "en" as const,
-        value: [{ id: "22", name: "People & Blogs", label: "22 (People & Blogs)", assignable: true }],
-      }),
+      list: () => {
+        counts.catalog += 1;
+        return Promise.resolve({
+          ok: true as const,
+          region: "US",
+          locale: "en" as const,
+          value: [{ id: "22", name: "People & Blogs", label: "22 (People & Blogs)", assignable: true }],
+        });
+      },
     },
-    tokens: { get: () => Promise.resolve({ ok: true as const, accessToken: "token", minted: false }) },
+    tokens: { get: () => Promise.resolve({ ok: true as const, accessToken: "bound-fixture-123", minted: false }) },
     accounts: {
       load: ({ accountId, userId }) => Promise.resolve({
         id: accountId, userId, channelId: CHANNEL, authProvider: null, needsReauth: false,
-        accessToken: "token", refreshToken: null, tokenExpiresAt: null, accountMetadata: { country: "DE" },
+        accessToken: "bound-fixture-123", refreshToken: null, tokenExpiresAt: null, accountMetadata: { country: "DE" },
       }),
     },
     clock: { now: () => new Date("2026-11-22T10:00:00.000Z") },
@@ -46,31 +66,49 @@ function composition(writeGuard: {
   });
 }
 
-Deno.test("a failed write rate/quota gate refuses before any provider write", async () => {
-  const writes = { count: 0 };
-  const port = composition({
-    authorizeWrite: () => Promise.resolve(false),
-    stillBound: () => Promise.resolve(true),
-  }, writes);
-  const snapshot = await port!.snapshot({ accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL });
-  try {
-    await port!.update({
-      accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
-      baseRevision: snapshot.revision, changes: { title: "Renamed" }, privacyConfirmation: null,
-    });
-    throw new Error("the write should have been refused");
-  } catch (error) {
-    assertEquals((error as { code?: string }).code, "upstream_unavailable");
+Deno.test("burst, daily, unreadable counter, and budget refusals stop before any catalog read or provider write", async () => {
+  const cases: Array<{
+    name: string;
+    authResult: EditWriteAuthorizationResult;
+    expectedCode: string;
+    expectedRetryAfter?: number;
+  }> = [
+    { name: "burst refusal", authResult: { ok: false, code: "rate_limited", retryAfterSeconds: 42 }, expectedCode: "rate_limited", expectedRetryAfter: 42 },
+    { name: "daily refusal", authResult: { ok: false, code: "rate_limited", retryAfterSeconds: 3600 }, expectedCode: "rate_limited", expectedRetryAfter: 3600 },
+    { name: "unreadable counter", authResult: { ok: false, code: "upstream_unavailable" }, expectedCode: "upstream_unavailable" },
+    { name: "budget refusal", authResult: { ok: false, code: "quota_exceeded", retryAfterSeconds: 7200 }, expectedCode: "quota_exceeded", expectedRetryAfter: 7200 },
+  ];
+
+  for (const testCase of cases) {
+    const counts = { reads: 0, catalog: 0, writes: 0 };
+    const port = composition({
+      authorizeWrite: () => Promise.resolve(testCase.authResult),
+      stillBound: () => Promise.resolve(true),
+    }, counts);
+    const snapshot = await port!.snapshot({ accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL });
+    let caught: unknown;
+    try {
+      await port!.update({
+        accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+        baseRevision: snapshot.revision, changes: { title: "Renamed" }, privacyConfirmation: null,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    assertEquals(caught instanceof EditFailure, true, testCase.name);
+    assertEquals((caught as EditFailure).code, testCase.expectedCode, testCase.name);
+    assertEquals((caught as EditFailure).retryAfterSeconds, testCase.expectedRetryAfter, testCase.name);
+    assertEquals(counts.catalog, 0, `${testCase.name}: zero catalog calls`);
+    assertEquals(counts.writes, 0, `${testCase.name}: zero provider writes`);
   }
-  assertEquals(writes.count, 0);
 });
 
 Deno.test("a lost channel rebinding refuses before any provider write", async () => {
-  const writes = { count: 0 };
+  const counts = { reads: 0, catalog: 0, writes: 0 };
   const port = composition({
-    authorizeWrite: () => Promise.resolve(true),
+    authorizeWrite: () => Promise.resolve({ ok: true }),
     stillBound: () => Promise.resolve(false),
-  }, writes);
+  }, counts);
   const snapshot = await port!.snapshot({ accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL });
   try {
     await port!.update({
@@ -81,5 +119,86 @@ Deno.test("a lost channel rebinding refuses before any provider write", async ()
   } catch (error) {
     assertEquals((error as { code?: string }).code, "reconnect_required");
   }
-  assertEquals(writes.count, 0);
+  assertEquals(counts.writes, 0);
+});
+
+Deno.test("provider outcome_unknown surfaces as EditFailure('outcome_unknown') with no verification re-read", async () => {
+  const counts = { reads: 0, catalog: 0, writes: 0 };
+  const port = composition(
+    {
+      authorizeWrite: () => Promise.resolve({ ok: true }),
+      stillBound: () => Promise.resolve(true),
+    },
+    counts,
+    { updateResult: { ok: false, code: "outcome_unknown" } },
+  );
+  const snapshot = await port!.snapshot({ accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL });
+  counts.reads = 0;
+
+  let caught: unknown;
+  try {
+    await port!.update({
+      accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+      baseRevision: snapshot.revision, changes: { title: "Renamed" }, privacyConfirmation: null,
+    });
+  } catch (error) {
+    caught = error;
+  }
+  assertEquals(caught instanceof EditFailure, true);
+  assertEquals((caught as EditFailure).code, "outcome_unknown");
+  assertEquals(counts.writes, 1);
+  assertEquals(counts.reads, 1, "only pre-write getVideo should run; no verification re-read after outcome_unknown");
+});
+
+Deno.test("invalid draft changes and unconfirmed privacy changes refuse before authorizeWrite spends any quota", async () => {
+  let authorizeCalls = 0;
+  const counts = { reads: 0, catalog: 0, writes: 0 };
+  const port = composition({
+    authorizeWrite: () => {
+      authorizeCalls += 1;
+      return Promise.resolve({ ok: true });
+    },
+    stillBound: () => Promise.resolve(true),
+  }, counts);
+  const snapshot = await port!.snapshot({ accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL });
+
+  for (const invalidChanges of [
+    { title: "   " },
+    { title: "bad <title>" },
+    { tags: [" untrimmed "] },
+  ]) {
+    let caught: unknown;
+    try {
+      await port!.update({
+        accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+        baseRevision: snapshot.revision, changes: invalidChanges, privacyConfirmation: null,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    assertEquals(caught instanceof EditFailure, true);
+    assertEquals((caught as EditFailure).code, "invalid_request");
+  }
+  assertEquals(authorizeCalls, 0);
+  assertEquals(counts.catalog, 0);
+  assertEquals(counts.writes, 0);
+});
+
+Deno.test("successful update returns the post-write snapshot revision built from the verified re-read", async () => {
+  const counts = { reads: 0, catalog: 0, writes: 0 };
+  const port = composition(
+    {
+      authorizeWrite: () => Promise.resolve({ ok: true }),
+      stillBound: () => Promise.resolve(true),
+    },
+    counts,
+  );
+  const snapshot = await port!.snapshot({ accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL });
+  const result = await port!.update({
+    accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+    baseRevision: snapshot.revision, changes: { title: "Renamed" }, privacyConfirmation: null,
+  });
+  assertEquals(result.verified, true);
+  assertEquals(result.snapshot.values.title, "Renamed");
+  assertEquals(result.snapshot.revision !== snapshot.revision, true);
 });

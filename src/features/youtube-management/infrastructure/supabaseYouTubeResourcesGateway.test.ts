@@ -263,6 +263,90 @@ describe("YouTube resources gateway", () => {
   });
 });
 
+describe("YouTube resources gateway — published metadata edit", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("sends the title, description, tags and category of the draft in one conditional write", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ revision: "rev-2" }),
+      error: null,
+    });
+
+    const received = await new SupabaseYouTubeResourcesGateway().updateVideo({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      baseRevision: "rev-1",
+      changes: {
+        title: "Renamed",
+        description: "Body text",
+        tags: ["one", "two"],
+        category_id: "22",
+      },
+    });
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("youtube-resources", {
+      body: {
+        operation: "update_video",
+        account_id: "acc-1",
+        video_id: EXAMPLE_VIDEO_ID,
+        base_revision: "rev-1",
+        changes: {
+          title: "Renamed",
+          description: "Body text",
+          tags: ["one", "two"],
+          category_id: "22",
+        },
+      },
+      timeout: 15000,
+    });
+    expect(received.data).toEqual({ revision: "rev-2" });
+  });
+
+  it("maps a timed-out or unreadable write to outcome_unknown", async () => {
+    vi.mocked(supabase.functions.invoke).mockRejectedValue(
+      Object.assign(new Error("The operation was aborted due to timeout"), { name: "FunctionsFetchError" }),
+    );
+    await expect(new SupabaseYouTubeResourcesGateway().updateVideo({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      baseRevision: "rev-1",
+      changes: { title: "Renamed" },
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
+
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ message: "Bad Gateway" }, { status: 502 }),
+      }),
+    });
+    await expect(new SupabaseYouTubeResourcesGateway().updateVideo({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      baseRevision: "rev-1",
+      changes: { title: "Renamed" },
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
+  });
+
+  it("turns a write refusal into the server's stable code", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ error: "edit_conflict", request_id: "req-5" }, { status: 409 }),
+      }),
+    });
+    const failure = await new SupabaseYouTubeResourcesGateway()
+      .updateVideo({
+        accountId: "acc-1",
+        videoId: EXAMPLE_VIDEO_ID,
+        baseRevision: "rev-1",
+        changes: { title: "Renamed" },
+      })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(YouTubeResourceError);
+    expect((failure as YouTubeResourceError).code).toBe("edit_conflict");
+  });
+});
+
 describe("YouTube resources gateway — caption tracks", () => {
   beforeEach(() => vi.resetAllMocks());
 

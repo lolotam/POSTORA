@@ -170,8 +170,8 @@ const ports: YouTubeResourcesPorts = {
   },
 };
 
-// The production edit port is composed from the real domain logic but stays
-// OFF until approved D1/D5 evidence exists. There is no runtime flag to flip.
+// Phase 4A: published metadata editing composed from domain logic with strict
+// per-user write counters, project write budget debit, and pre-dispatch rebinding check.
 ports.edit = createConnectedEditPort({
   enabled: PUBLISHED_EDIT_WRITE_ENABLED,
   provider: createYouTubeEditProvider({ fetchImpl: fetch }),
@@ -179,12 +179,37 @@ ports.edit = createConnectedEditPort({
   tokens: ports.tokens,
   accounts: ports.accounts,
   clock: ports.clock,
-  // Fail-closed by construction. The edit port itself is off, and even if a
-  // future activation changed that, no write would pass without a proven
-  // quota and rebinding gate.
   writeGuard: {
-    authorizeWrite: () => Promise.resolve(false),
-    stillBound: () => Promise.resolve(false),
+    authorizeWrite: async ({ ownerId }) => {
+      const counters = await checkUserWriteCounters({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        userId: ownerId,
+      });
+      if (!counters.ok) {
+        return {
+          ok: false,
+          code: counters.code,
+          ...(counters.retryAfterSeconds !== undefined
+            ? { retryAfterSeconds: counters.retryAfterSeconds }
+            : {}),
+        };
+      }
+      const budget = await debitWriteBudget({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        units: 50,
+      });
+      if (!budget.ok) {
+        return {
+          ok: false,
+          code: budget.code,
+          ...(budget.retryAfterSeconds !== undefined
+            ? { retryAfterSeconds: budget.retryAfterSeconds }
+            : {}),
+        };
+      }
+      return { ok: true };
+    },
+    stillBound: (input) => verifyAccountStillBound({ loadAccount: ports.accounts.load, ...input }),
   },
 });
 

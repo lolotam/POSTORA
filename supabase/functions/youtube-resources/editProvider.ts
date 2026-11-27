@@ -16,7 +16,7 @@ export type EditReadResult =
 
 export type EditWriteResult =
   | { ok: true; id: string }
-  | { ok: false; code: "edit_conflict" | "reconnect_required" | "upstream_unavailable" };
+  | { ok: false; code: "edit_conflict" | "reconnect_required" | "upstream_unavailable" | "outcome_unknown" };
 
 export interface YouTubeEditProvider {
   getVideo(accessToken: string, input: { videoId: string; channelId: string }): Promise<EditReadResult>;
@@ -122,13 +122,13 @@ export function createYouTubeEditProvider(args: {
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch {
-        return { ok: false, code: "upstream_unavailable" };
+        return { ok: false, code: "outcome_unknown" };
       }
       if (!response.ok) return writeFailure(response.status);
       let body: unknown;
-      try { body = await response.json(); } catch { return { ok: false, code: "upstream_unavailable" }; }
+      try { body = await response.json(); } catch { return { ok: false, code: "outcome_unknown" }; }
       const parsed = parseVideo(body);
-      if (!parsed || parsed.id !== input.videoId) return { ok: false, code: "upstream_unavailable" };
+      if (!parsed || parsed.id !== input.videoId) return { ok: false, code: "outcome_unknown" };
       return { ok: true, id: parsed.id };
     },
   };

@@ -18,7 +18,7 @@ function account(overrides: Partial<YouTubeCapabilityAccountInput> = {}): YouTub
   };
 }
 
-Deno.test("native row with all scopes recorded can browse, upload and comment", () => {
+Deno.test("native row with all scopes recorded can browse, upload, edit metadata and comment", () => {
   const result = deriveYouTubeCapabilities(account());
   assertEquals(result.provider, "native");
   assertEquals(result.connection, "ok");
@@ -26,30 +26,32 @@ Deno.test("native row with all scopes recorded can browse, upload and comment", 
   assertEquals(result.capabilities, {
     browse: { state: "available" },
     upload: { state: "available" },
-    edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
+    edit_metadata: { state: "available" },
     manage_thumbnail: { state: "available" },
     manage_captions: { state: "available" },
     comments: { state: "available" },
   });
 });
 
-Deno.test("native row with no recorded scopes is unknown for browse and upload, and keeps the comment rule", () => {
+Deno.test("native row with no recorded scopes is unknown for browse, upload and edit_metadata, and keeps the comment rule", () => {
   const result = deriveYouTubeCapabilities(account({ accountMetadata: {} }));
   assertEquals(result.scopes, { readonly: "unknown", upload: "unknown", force_ssl: "unknown" });
   assertEquals(result.capabilities.browse, { state: "unknown" });
   assertEquals(result.capabilities.upload, { state: "unknown" });
+  assertEquals(result.capabilities.edit_metadata, { state: "unknown" });
   assertEquals(result.capabilities.manage_thumbnail, { state: "unknown" });
   assertEquals(result.capabilities.manage_captions, { state: "unknown" });
   assertEquals(result.capabilities.comments, { state: "unavailable", reason: "missing_scope" });
 });
 
-Deno.test("a recorded list without readonly blocks browse, thumbnail replacement, and captions", () => {
+Deno.test("a recorded list without readonly blocks browse, edit_metadata, thumbnail replacement, and captions", () => {
   const result = deriveYouTubeCapabilities(
     account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.upload, YOUTUBE_SCOPE.force_ssl] } }),
   );
   assertEquals(result.scopes.readonly, "missing");
   assertEquals(result.capabilities.browse, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.upload, { state: "available" });
+  assertEquals(result.capabilities.edit_metadata, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.manage_thumbnail, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.manage_captions, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.comments, { state: "available" });
@@ -62,7 +64,7 @@ Deno.test("needs_reauth makes every capability reconnect_required", () => {
   assertEquals(result.capabilities, {
     browse: expected,
     upload: expected,
-    edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
+    edit_metadata: expected,
     manage_thumbnail: expected,
     manage_captions: expected,
     comments: expected,
@@ -139,6 +141,34 @@ Deno.test("manage_captions derivation requires readonly and force_ssl", () => {
   assertEquals(readonlyAndForceSsl.capabilities.manage_captions, { state: "available" });
 });
 
+
+Deno.test("edit_metadata derivation across scopes, reconnect, composio, and editWriteEnabled=false", () => {
+  const readonlyAndUpload = deriveYouTubeCapabilities(
+    account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly, YOUTUBE_SCOPE.upload] } }),
+  );
+  assertEquals(readonlyAndUpload.capabilities.edit_metadata, { state: "unavailable", reason: "missing_scope" });
+
+  const forceSslOnly = deriveYouTubeCapabilities(
+    account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.force_ssl] } }),
+  );
+  assertEquals(forceSslOnly.capabilities.edit_metadata, { state: "unavailable", reason: "missing_scope" });
+
+  const readonlyAndForceSsl = deriveYouTubeCapabilities(
+    account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly, YOUTUBE_SCOPE.force_ssl] } }),
+  );
+  assertEquals(readonlyAndForceSsl.capabilities.edit_metadata, { state: "available" });
+
+  const noToken = deriveYouTubeCapabilities(account({ hasAccessToken: false, hasRefreshToken: false }));
+  assertEquals(noToken.capabilities.edit_metadata, { state: "unavailable", reason: "reconnect_required" });
+
+  const composio = deriveYouTubeCapabilities(
+    account({ authProvider: "composio", hasAccessToken: false, hasRefreshToken: false, accountMetadata: {} }),
+  );
+  assertEquals(composio.capabilities.edit_metadata, { state: "unavailable", reason: "provider_unsupported" });
+
+  const disabled = deriveYouTubeCapabilities(account(), { editWriteEnabled: false });
+  assertEquals(disabled.capabilities.edit_metadata, { state: "unavailable", reason: "provider_unsupported" });
+});
 
 Deno.test("capabilities publish the two-unit enriched videos page cost", () => {
   const result = deriveYouTubeCapabilities(account());

@@ -37,10 +37,10 @@ const GoogleApiDisclosure = () => {
               <p className="text-muted-foreground">
                 Postora ("we", "us", or "our") uses Google API Services, including the YouTube Data API v3 and
                 YouTube Analytics API v2, to enable owners to publish and browse their YouTube content, edit
-                published video details (when published metadata editing is enabled; currently disabled at the
-                production baseline), add a newly uploaded video to a playlist they choose, add a caption track to
-                a video they uploaded, manage comments, and view on-demand analytics. This disclosure describes
-                how we access, use, store, and share information obtained through Google APIs.
+                published video details (title, description, tags and category), add a newly uploaded video to
+                a playlist they choose, add a caption track to a video they uploaded, manage comments, and view
+                on-demand analytics. This disclosure describes how we access, use, store, and share information
+                obtained through Google APIs.
               </p>
               <p className="text-muted-foreground">
                 Our use of information received from Google APIs adheres to the{" "}
@@ -88,7 +88,7 @@ const GoogleApiDisclosure = () => {
                   <code className="bg-muted px-1 rounded break-all">youtube.upload</code>, and{" "}
                   <code className="bg-muted px-1 rounded break-all">youtube.force-ssl</code>.
                   Together they cover identifying your channel, browsing your uploaded videos and their details,
-                  publishing videos you choose, editing published video metadata when that feature is enabled,
+                  publishing videos you choose, editing published video metadata on the YouTube Channel page,
                   managing and moderating comments on your own videos, and reading on-demand analytics after your
                   in-app purpose acceptance.
                 </li>
@@ -235,11 +235,16 @@ const GoogleApiDisclosure = () => {
                       </p>
                       <ul className="list-disc list-inside text-muted-foreground text-sm mt-2 space-y-1 ms-4">
                         <li>
-                          <strong>Edit published video metadata</strong> (when published metadata editing is enabled;
-                          currently disabled at the production baseline) on the YouTube Channel page through{" "}
-                          <code className="bg-muted px-1 rounded">videos.update</code>: title, description, tags,
-                          category, privacy, language, made-for-kids and synthetic-media declarations. Postora never
-                          replaces the existing video's media bytes and never deletes videos.
+                          <strong>Edit published video metadata</strong> on the YouTube Channel page (
+                          <code className="bg-muted px-1 rounded">/youtube</code>) through{" "}
+                          <code className="bg-muted px-1 rounded">videos.update</code>: title, description, tags
+                          and category. Every edit is a conditional write: Postora reads the video, sends the
+                          change with an <code className="bg-muted px-1 rounded">If-Match</code> header, and
+                          reads the same video again to confirm the saved values, so a video you changed in
+                          YouTube Studio in the meantime is refused instead of overwritten. Edits are limited
+                          to 10 per 10 minutes and 50 per 24 hours for your account, and Postora&apos;s own
+                          YouTube write budget is 4,000 units per day. Postora never replaces the existing
+                          video&apos;s media bytes and never deletes videos.
                         </li>
                         <li>
                           <strong>Read and create comments</strong> on your own videos, including Published and Held for
@@ -311,9 +316,9 @@ const GoogleApiDisclosure = () => {
                   on the YouTube Channel page, limited to your own channel
                 </li>
                 <li>
-                  <strong>Published Video Editing:</strong> When published metadata editing is enabled (currently
-                  disabled at the production baseline), to update metadata on your existing videos only when you ask,
-                  without replacing their media bytes or deleting videos
+                  <strong>Published Video Editing:</strong> To update the title, description, tags and category
+                  of a video you already uploaded, only when you ask, with a conditional write that verifies the
+                  saved result, without replacing its media bytes or deleting it
                 </li>
                 <li>
                   <strong>Thumbnail Replacement:</strong> To replace the thumbnail of a video you already uploaded,

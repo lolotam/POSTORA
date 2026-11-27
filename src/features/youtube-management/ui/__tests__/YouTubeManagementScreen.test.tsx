@@ -629,3 +629,137 @@ describe("YouTubeManagementScreen caption tracks", () => {
     expect(listCaptions).not.toHaveBeenCalled();
   });
 });
+
+describe("YouTubeManagementScreen published metadata editing", () => {
+  function editGateway(options: {
+    editMetadata?: YouTubeCapabilityState;
+    updateVideo?: YouTubeResourcesGateway["updateVideo"];
+  }): YouTubeResourcesGateway {
+    const base = gateway();
+    return {
+      ...base,
+      getCapabilities: vi.fn((accountId: string) => Promise.resolve(envelope({
+        account_id: accountId,
+        channel_id: `UC-${accountId}`,
+        channel_title: accountId,
+        provider: "native" as const,
+        connection: "ok" as const,
+        scopes: { readonly: "granted" as const, upload: "granted" as const, force_ssl: "granted" as const },
+        capabilities: {
+          browse: { state: "available" as const },
+          upload: { state: "available" as const },
+          comments: { state: "available" as const },
+          edit_metadata: options.editMetadata ?? { state: "available" as const },
+        },
+        quota: {
+          provider_quota: "not_tracked" as const,
+          unit_costs: {
+            channel: 1 as const,
+            videos_page: 2 as const,
+            video: 1 as const,
+            playlists_page: 1 as const,
+            captions_list: 50 as const,
+            caption_upload: 400 as const,
+          },
+          per_user_burst: { limit: 30 as const, window_seconds: 600 as const },
+          per_user_daily: { limit: 300 as const, window_seconds: 86400 as const },
+        },
+      }))),
+      getVideo: vi.fn(({ videoId }: { accountId: string; videoId: string }) => Promise.resolve(envelope({
+        id: videoId, channel_id: "UC", title: `Details of ${videoId}`, description: "Body text", thumbnail_url: null,
+        published_at: null, tags: ["one"], category_id: "22", default_language: null, duration_iso8601: null,
+        privacy_status: "public", upload_status: null, made_for_kids: null,
+        statistics: { view_count: null, like_count: null, comment_count: null },
+        url: "https://www.youtube.com/watch?v=x",
+      }))),
+      getEditSnapshot: vi.fn(async () => envelope({
+        revision: "rev-1",
+        values: { title: "Details of acc-a-video", description: "Body text", tags: ["one"], privacyStatus: "public", categoryId: "22" },
+      })),
+      updateVideo: options.updateVideo ?? vi.fn(async () => envelope({ revision: "rev-2" })),
+    };
+  }
+
+  async function openTheEditor() {
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit video details" }));
+    await screen.findByLabelText("Title");
+  }
+
+  it("saves the title, the description, the tags and the category, then reads the video again", async () => {
+    const updateVideo = vi.fn(async () => envelope({ revision: "rev-2" }));
+    const fake = editGateway({ updateVideo: updateVideo as unknown as YouTubeResourcesGateway["updateVideo"] });
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+    await openTheEditor();
+
+    await userEvent.clear(screen.getByLabelText("Title"));
+    await userEvent.type(screen.getByLabelText("Title"), "Renamed");
+    await userEvent.clear(screen.getByLabelText("Description"));
+    await userEvent.type(screen.getByLabelText("Description"), "New body");
+    await userEvent.clear(screen.getByLabelText("Tags (comma-separated)"));
+    await userEvent.type(screen.getByLabelText("Tags (comma-separated)"), "alpha, beta");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(updateVideo).toHaveBeenCalledTimes(1));
+    expect(updateVideo).toHaveBeenCalledWith({
+      accountId: "acc-a",
+      videoId: "acc-a-video",
+      baseRevision: "rev-1",
+      changes: {
+        title: "Renamed",
+        description: "New body",
+        tags: ["alpha", "beta"],
+        category_id: "22",
+      },
+    });
+    // The saved answer is a claim; the drawer shows the values YouTube kept.
+    await waitFor(() => expect(fake.getVideo).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fake.listVideos).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    ["reconnect_required", "This channel needs to be reconnected before editing is available."],
+    ["missing_scope", "Reconnect this channel and grant YouTube edit permissions (force-ssl) to edit video details."],
+    ["provider_unsupported", "Editing video details is not available for managed connections."],
+  ] as const)("explains a %s capability instead of a generic sentence", async (reason, expected) => {
+    const fake = editGateway({ editMetadata: { state: "unavailable", reason } });
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+
+    expect(await screen.findByRole("button", { name: "Edit video details" })).toBeDisabled();
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it("explains an unknown capability without pretending the edit is available", async () => {
+    const fake = editGateway({ editMetadata: { state: "unknown" } });
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+
+    expect(await screen.findByRole("button", { name: "Edit video details" })).toBeDisabled();
+    expect(
+      screen.getByText("Editing video details is currently unavailable for this channel."),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["a conflict", new YouTubeResourceError("edit_conflict"), "Review the latest details"],
+    ["a rate limit", new YouTubeResourceError("rate_limited", 90), "Try again in 90 seconds"],
+    ["a pre-write refusal", new YouTubeResourceError("invalid_request"), "Nothing was changed on YouTube"],
+    ["a lost answer", new YouTubeResourceError("outcome_unknown"), "may have saved"],
+  ] as const)("reports %s without claiming a save", async (_scenario, failure, expected) => {
+    const updateVideo = vi.fn(async () => {
+      throw failure;
+    });
+    const fake = editGateway({ updateVideo: updateVideo as unknown as YouTubeResourcesGateway["updateVideo"] });
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+    await openTheEditor();
+
+    await userEvent.clear(screen.getByLabelText("Title"));
+    await userEvent.type(screen.getByLabelText("Title"), "Renamed");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(expected);
+  });
+});

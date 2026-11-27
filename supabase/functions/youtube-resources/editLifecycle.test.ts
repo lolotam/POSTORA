@@ -224,3 +224,31 @@ Deno.test("verification demands the same video id and the intended field values"
     "title",
   );
 });
+
+Deno.test("tags validation accepts valid tags and refuses empty, angle-bracket, or >500 total char tags", async () => {
+  const snapshot = await snapshotOf();
+  const validPlan = await planEditUpdate({
+    snapshot,
+    changes: { tags: ["postora", "youtube"] },
+    freshVideo: video(),
+    ownerId: OWNER,
+    accountId: ACCOUNT,
+    privacyConfirmation: null,
+  });
+  assertEquals((validPlan.body.snippet as Record<string, unknown>).tags, ["postora", "youtube"]);
+
+  for (const badTags of [[""], ["   "], ["bad<tag>"], ["a".repeat(250), "b".repeat(251)]]) {
+    await assertRejects(
+      () => planEditUpdate({
+        snapshot,
+        changes: { tags: badTags },
+        freshVideo: video(),
+        ownerId: OWNER,
+        accountId: ACCOUNT,
+        privacyConfirmation: null,
+      }),
+      EditFailure,
+      "Invalid tags",
+    );
+  }
+});

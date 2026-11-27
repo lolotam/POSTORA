@@ -11,7 +11,7 @@ This package distinguishes four kinds of evidence:
 - **Offline verification:** tests whose files exist at the baseline or were added by Stage 6. A suite's presence is not a claim that Stage 6 reran it.
 - **Live evidence:** production migration records, deployed-file parity, Cloud Console readings, and provider behavior. Stage 6 is offline and does not independently verify these. A merged PR is not, by itself, deployed-SHA or live-provider proof.
 
-Feature availability remains subject to the shipped rollout controls. In particular, `PUBLISHED_EDIT_WRITE_ENABLED` is `false` at this baseline and the production edit guard returns `false`; the published-edit write path therefore fails closed until a separately reviewed activation change. Stage 4 comment capabilities and Stage 5 analytics are also gated per account. Stage 6A caption management has its own `manage_captions` capability, derived from the connection's scopes, and is gated by it independently of the published-edit gate. The demo script names these prerequisites rather than implying every feature is enabled for every channel.
+Feature availability remains subject to the shipped rollout controls. Published video metadata editing is **live** as of Phase 4A (`PR-10`): `PUBLISHED_EDIT_WRITE_ENABLED` is `true`, the write path is admitted, the per-user write limiter and the shared daily write budget are enforced, and the `edit_metadata` capability is derived from the connection's scopes. The `If-Match` behaviour was rehearsed on a private fixture channel and is recorded in `docs/reports/2026-11-27-youtube-if-match-rehearsal.md`, and the activation decision is `docs/decisions/2026-11-27-youtube-phase4a-if-match-and-edit-activation.md`. Stage 4 comment capabilities and Stage 5 analytics are still gated per account. Stage 6A caption management has its own `manage_captions` capability, derived from the connection's scopes, and is gated by it independently of the published-edit capability. The demo script names these prerequisites rather than implying every feature is enabled for every channel.
 
 Public legal pages:
 
@@ -63,7 +63,7 @@ The upload path creates a new video. It does not replace media bytes of an exist
 | Stage | User-facing capability | Provider operation | Exact implementation path |
 | --- | --- | --- | --- |
 | 3 | Read the current writable projection before a published edit | `videos.list` | `supabase/functions/youtube-resources/editProvider.ts`; snapshot composition in `editComposition.ts` and `editLifecycle.ts` |
-| 3 | Edit published title, description, tags, category, privacy, language, made-for-kids and synthetic-media declarations on the owner's instruction | `videos.update` | `supabase/functions/youtube-resources/editProvider.ts`; conditional planning/verification in `editLifecycle.ts` and `editComposition.ts`; editor `src/features/youtube-management/ui/YouTubeVideoEditCard.tsx` |
+| 3 | Edit the published title, description, tags and category of an owned video on the owner's instruction (live in Phase 4A; privacy and the other declarations are not part of this activation) | `videos.update` | `supabase/functions/youtube-resources/editProvider.ts`; conditional planning/verification in `editLifecycle.ts` and `editComposition.ts`; editor `src/features/youtube-management/ui/YouTubeVideoEditCard.tsx`; activation evidence `docs/reports/2026-11-27-youtube-if-match-rehearsal.md` |
 | 3 | Read the assignable category catalog for editing/publishing | `videoCategories.list` | `supabase/functions/youtube-resources/categoryClient.ts`; shared UI `src/components/post/settings/YouTubeCategorySelect.tsx` |
 | 3/4 | Optionally create a first top-level comment after upload | `commentThreads.insert` | `supabase/functions/process-post/youtubeUploadFollowUps.ts` |
 | 4 | Page owned uploads for the comment workspace | `playlistItems.list` | `supabase/functions/comment-manager/stage4/provider.ts`; UI `src/features/youtube-comments/ui/StudioVideoPicker.tsx` |
@@ -94,8 +94,8 @@ Sources, read for Stage 6 on 26 November 2026:
 | `channels.list` | 1 identity/health; 2 channel summary | 1 shared unit | Stage 2: 30 provider operations/10 min and 300/24 h per user |
 | `playlistItems.list` | 2 uploads pages; 4 comment video picker | 1 shared unit per page | Same Stage 2 guard for `/youtube`; Stage 4 read guard for comment workspace |
 | `videos.list` | 2 details; 3 edit pre-read/verification; 4 ownership/target checks; 5 ownership/title enrichment | 1 shared unit per call | Charged to the calling feature's guard; Stage 5 also debits the shared Data budget before every attempt |
-| `videoCategories.list` | 3 category catalog | 1 shared unit | Published-edit composition checks its write guard before catalog read; production edit remains disabled |
-| `videos.update` | 3 published metadata edit | 50 shared units | Production `PUBLISHED_EDIT_WRITE_ENABLED = false`; `authorizeWrite` and `stillBound` both refuse. No numeric edit-write allowance is active at baseline |
+| `videoCategories.list` | 3 category catalog | 1 shared unit | Published-edit composition checks its write guard before the catalog read; the category catalog is never read for a video that failed the ownership or revision check |
+| `videos.update` | 3 published metadata edit | 50 shared units | Live in Phase 4A: one attempt only, `If-Match` conditional, a lost answer is `outcome_unknown` and never retried; per user **10 edits/10 min** and **50 edits/24 h**, plus the project-wide **4,000-unit daily write budget** debited before the provider write |
 | `videos.insert` | 3 new upload | **1 unit/call in its own default 100-call/day bucket** | Do not subtract this from the 10,000-unit shared pool; resumable continuation does not open a replacement session after an uncertain send |
 | `thumbnails.set` | 3 optional thumbnail after upload | 50 shared units | Separate follow-up outcome; a thumbnail failure does not erase the uploaded-video receipt |
 | `commentThreads.list` | 4 Published/Held thread pages | 1 shared unit per page | Stage 4 read limiter: 120 requests/60 s per user, per action, fail closed |
@@ -110,7 +110,7 @@ Sources, read for Stage 6 on 26 November 2026:
 | Analytics v2 `reports.query` | 5 summary/daily/top-videos, channel or one video | 1 Analytics quota unit/request | Per-user admission 120/60 s; data 60/600 s and 300/86400 s; project attempt ceiling 2,000/Pacific day |
 | 6B benchmark: `channels.list` + `playlistItems.list` + `videos.list` | 6B compare up to three public channels the owner names | 1 shared unit per call, **at most 3 units per channel** (1 when the channel is not found, 2 when it has no uploads and `videos.list` is skipped, 3 otherwise) — at most **9 units** for three channels | Dedicated project bucket `youtube-channel-benchmark:budget:data:<YYYY-MM-DD Pacific>`, **300 units per Pacific day**, debited by the units actually spent; per user **10 requests/10 min** and **30 requests/24 h**; an unreadable counter refuses the read |
 
-A normal Stage 3 edit needs one pre-read `videos.list` plus one `videos.update`: **51 shared units before the read-after-write verification**. The verification read costs one additional unit, so a completed read → update → verify sequence costs **52 units**. Category catalog retrieval, when needed, adds one unit.
+A Phase 4A edit needs one `videos.list` snapshot (1) + the category catalog (1) + `videos.update` (50) + the verification `videos.list` (1) = **53 units**. Opening the editor costs one unit. The pre-write re-read is part of the snapshot read, and the write is attempted exactly once.
 
 ### 3.2 Stage 5 Pacific-day ceilings and reserve arithmetic
 
@@ -272,13 +272,13 @@ All automated provider calls in these suites use fakes/fixtures. No test should 
 
 ### Journey 3 — Edit published video metadata
 
-**Prerequisite:** a separately reviewed activation must enable the write path and its D1/D5 evidence. At the Stage 6 baseline the write gate is hard-off. If that gate is still false, show the disabled state and code/test evidence only; do not claim a live edit occurred.
+**Prerequisite:** the write path is live (Phase 4A). Its `If-Match` rehearsal and activation evidence are `docs/reports/2026-11-27-youtube-if-match-rehearsal.md` and `docs/decisions/2026-11-27-youtube-phase4a-if-match-and-edit-activation.md`.
 
-**Actions when activated:** On `/youtube`, open an existing owned video → Edit video details. Change title/description/tags/category/privacy/language or declarations as appropriate for the fixture. Review and save; wait for YouTube verification; open the original watch URL.
+**Actions:** On `/youtube`, open an existing owned video → Edit video details. Change the title, the description, the tags or the category as appropriate for the fixture. Review and save; wait for YouTube verification; open the original watch URL. Then change the same video in YouTube Studio while the editor is open, save again, and show the conflict refusal.
 
-**Expected:** The same video has the new metadata and preserved media bytes. There is no video deletion or replacement. Conflict and unknown-outcome states never trigger an automatic second write.
+**Expected:** The same video has the new title, description, tags and category, with preserved media bytes. There is no video deletion or replacement. Conflict and unknown-outcome states never trigger an automatic second write, and a refused write limit reports its wait time with nothing written.
 
-**Capture:** Before/after editor, verified result, and unchanged watch URL. Narrate the 51-unit read+update cost, plus one unit for verification and one for category catalog when used.
+**Capture:** Before/after editor, verified result, and unchanged watch URL. Narrate the 53-unit save cost (1 snapshot + 1 category catalog + 50 update + 1 verification), the 10-per-10-minute and 50-per-24-hour per-user limits, and the 4,000-unit daily write budget.
 
 ### Journey 4 — Upload a new video
 
@@ -343,7 +343,7 @@ All automated provider calls in these suites use fakes/fixtures. No test should 
 - [ ] Production migration application and verification receipts cover all eight migrations in §4.2.
 - [ ] Full deployed Edge Function per-file SHA-256 output and Edge Functions Sync log match the demonstrated merge commit.
 - [ ] Actual Data and Analytics quota limits and recent Data API feature peaks are read from Cloud Console and compared with §3.
-- [ ] Feature activation state is stated accurately, including the published-edit write gate and per-account Stage 4/5 rollout controls.
+- [ ] Feature activation state is stated accurately, including the live published-edit write path with its limiter and budget, and the per-account Stage 4/5 rollout controls.
 - [ ] All ten demo journeys are recorded with masking rules applied and no secret/private evidence exposed.
 - [ ] Offline test outputs are attached for the exact candidate head, including Stage 6 legal tests, analytics tests, typecheck, and targeted zero-warning ESLint.
 - [ ] Any remaining live unknown is labeled as such; no repository-only evidence is presented as live production proof.

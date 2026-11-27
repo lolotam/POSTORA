@@ -21,19 +21,23 @@ async function openEditor(page: Page, locale: "en" | "ar" = "en") {
 }
 
 test.describe("YouTube Stage 3 offline journeys", () => {
-  test("EN edit success: snapshot, privacy confirmation, title change and verified save", async ({ page }) => {
+  test("EN edit success: snapshot, title, description and tag change, and verified save", async ({ page }) => {
     await startStage3Journey(page, { edit: "available" });
     await openEditor(page);
     await page.getByLabel("Title", { exact: true }).fill("Renamed in the offline journey");
-    await page.getByRole("checkbox", { name: /changes who can see the video/i }).check();
-    await expect(page.getByRole("checkbox", { name: /changes who can see the video/i })).toBeChecked();
+    await page.getByLabel("Description", { exact: true }).fill("Description edited in the offline journey");
+    await page.getByLabel("Tags (comma-separated)", { exact: true }).fill("offline, journey");
     await page.getByRole("button", { name: /^save$/i }).click();
     await expect(page.getByRole("status")).toContainText(/match your changes/i);
     // The success is only meaningful if the intended mutation reached the wire.
     expect(youtubeFixtureState.updateRequests).toHaveLength(1);
     expect(youtubeFixtureState.updateRequests[0]).toMatchObject({
       videoId: VIDEO.id,
-      changes: { title: "Renamed in the offline journey" },
+      changes: {
+        title: "Renamed in the offline journey",
+        description: "Description edited in the offline journey",
+        tags: ["offline", "journey"],
+      },
     });
     expect(typeof youtubeFixtureState.updateRequests[0].baseRevision).toBe("string");
   });
@@ -104,10 +108,12 @@ test.describe("YouTube Stage 3 offline journeys", () => {
     await startStage3Journey(page, { edit: "available" });
     await page.setViewportSize({ width: 320, height: 720 });
     await openEditor(page);
-    const save = page.getByRole("button", { name: /^save$/i });
-    await save.focus();
-    await expect(save).toBeFocused();
+    const title = page.getByLabel("Title", { exact: true });
+    await title.focus();
+    await expect(title).toBeFocused();
+    // The editor is a keyboard-reachable sequence of real fields.
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("checkbox", { name: /changes who can see the video/i })).toBeVisible();
+    await expect(page.getByLabel("Description", { exact: true })).toBeFocused();
+    await expect(page.getByRole("button", { name: /^save$/i })).toBeVisible();
   });
 });

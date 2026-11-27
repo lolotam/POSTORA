@@ -367,14 +367,13 @@ Deno.test("a failed provider catalog read is a typed refusal with a retry hint",
   assertEquals(body.retry_after_seconds, 900);
 });
 
-Deno.test("edit capability stays disabled until conditional-write enforcement is proven", async () => {
+Deno.test("edit capability is available for native all-scopes accounts", async () => {
   const { handler } = fixture();
   const response = await handler(request({ operation: "capabilities", account_id: ACCOUNT_ID }));
   const body = await response.json();
 
   assertEquals(body.data.capabilities.edit_metadata, {
-    state: "unavailable",
-    reason: "provider_unsupported",
+    state: "available",
   });
   assertEquals(body.data.capabilities.browse, { state: "available" });
 });
@@ -538,7 +537,7 @@ Deno.test("the approved synthetic composition drives a real connected snapshot a
     },
     clock: { now: () => new Date("2026-11-22T10:00:00.000Z") },
     writeGuard: {
-      authorizeWrite: () => Promise.resolve(true),
+      authorizeWrite: () => Promise.resolve({ ok: true as const }),
       stillBound: () => Promise.resolve(true),
     },
   });
@@ -557,10 +556,128 @@ Deno.test("the approved synthetic composition drives a real connected snapshot a
     base_revision: revision, changes: { title: "Renamed" },
   }));
   assertEquals(saved.status, 200);
+  const savedBody = await saved.json();
+  assertEquals(savedBody.data.values.title, "Renamed");
+  assertEquals(savedBody.data.revision !== revision, true);
   assertEquals(writes.length, 1);
   assertEquals(writes[0].etag, '"etag-1"');
   assertEquals(writes[0].part, "snippet");
   assertEquals((writes[0].body.snippet as Record<string, unknown>).title, "Renamed");
+});
+
+Deno.test("edit_snapshot and update_video are gated by admit() before editPort is called", async () => {
+  const cases: Array<{
+    name: string;
+    overrides: Parameters<typeof fixture>[0];
+    expectedStatus: number;
+    expectedCode: string;
+    expectedRetryAfter?: number;
+  }> = [
+    {
+      name: "composio",
+      overrides: { account: { authProvider: "composio" } },
+      expectedStatus: 409,
+      expectedCode: "provider_unsupported",
+    },
+    {
+      name: "reconnect required",
+      overrides: { account: { needsReauth: true } },
+      expectedStatus: 409,
+      expectedCode: "reconnect_required",
+    },
+    {
+      name: "read rate limit",
+      overrides: { rateLimit: { allowed: false, retryAfterSeconds: 33 } },
+      expectedStatus: 429,
+      expectedCode: "rate_limited",
+      expectedRetryAfter: 33,
+    },
+  ];
+
+  for (const testCase of cases) {
+    for (const operation of ["edit_snapshot", "update_video"] as const) {
+      let portCalled = 0;
+      const { handler } = fixture({
+        ...testCase.overrides,
+        edit: {
+          snapshot: () => {
+            portCalled += 1;
+            throw new Error("should not run");
+          },
+          update: () => {
+            portCalled += 1;
+            throw new Error("should not run");
+          },
+        },
+      });
+      const body = operation === "edit_snapshot"
+        ? { operation, account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" }
+        : {
+          operation,
+          account_id: ACCOUNT_ID,
+          video_id: "videoAAAAAAA",
+          base_revision: "rev-1",
+          changes: { title: "Renamed" },
+        };
+      const response = await handler(request(body));
+      assertEquals(response.status, testCase.expectedStatus, `${testCase.name} (${operation})`);
+      const json = await response.json();
+      assertEquals(json.error, testCase.expectedCode, `${testCase.name} (${operation})`);
+      if (testCase.expectedRetryAfter !== undefined) {
+        assertEquals(json.retry_after_seconds, testCase.expectedRetryAfter, `${testCase.name} (${operation})`);
+      }
+      assertEquals(portCalled, 0, `${testCase.name} (${operation}) must not call editPort`);
+    }
+  }
+});
+
+Deno.test("edit_snapshot and update_video refuse missing_scope when force-ssl is absent even if readonly is granted", async () => {
+  let portCalled = 0;
+  const { handler, calls } = fixture({
+    account: { accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly] } },
+    edit: {
+      snapshot: () => {
+        portCalled += 1;
+        throw new Error("should not run");
+      },
+      update: () => {
+        portCalled += 1;
+        throw new Error("should not run");
+      },
+    },
+  });
+  for (const body of [
+    { operation: "edit_snapshot", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA" },
+    { operation: "update_video", account_id: ACCOUNT_ID, video_id: "videoAAAAAAA", base_revision: "rev-1", changes: { title: "Renamed" } },
+  ]) {
+    const response = await handler(request(body));
+    assertEquals(response.status, 403);
+    assertEquals((await response.json()).error, "missing_scope");
+  }
+  assertEquals(portCalled, 0);
+  assertEquals(calls.rateLimit, 0);
+});
+
+Deno.test("handler maps rate_limited EditFailure to HTTP 429 with retry_after_seconds", async () => {
+  const { handler } = fixture({
+    edit: {
+      snapshot: () => Promise.reject(new EditFailure("rate_limited", "slow down", { retryAfterSeconds: 75 })),
+      update: () => Promise.reject(new EditFailure("rate_limited", "slow down", { retryAfterSeconds: 75 })),
+      failureCode: (error) => error instanceof EditFailure ? error.code : null,
+      retryAfterSeconds: (error) => error instanceof EditFailure ? error.retryAfterSeconds : undefined,
+    },
+  });
+  const response = await handler(request({
+    operation: "update_video",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    base_revision: "rev-1",
+    changes: { title: "New" },
+  }));
+  assertEquals(response.status, 429);
+  const body = await response.json();
+  assertEquals(body.error, "rate_limited");
+  assertEquals(body.retry_after_seconds, 75);
 });
 
 Deno.test("edit requests with unknown keys or empty changes are invalid", async () => {

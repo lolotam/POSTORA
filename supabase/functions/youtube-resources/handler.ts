@@ -74,6 +74,7 @@ export interface YouTubeEditPort {
     privacyConfirmation: { to: string } | null;
   }): Promise<{ snapshot: EditSnapshot; verified: boolean }>;
   failureCode?(error: unknown): EditFailureCode | null;
+  retryAfterSeconds?(error: unknown): number | undefined;
 }
 
 export interface YouTubeResourceAccount {
@@ -478,9 +479,9 @@ export function createYouTubeResourcesHandler(
         requestId,
       });
     }
-    // D1/D5: production never supplies the edit port, so every edit is
-    // refused before admission or any provider call. Tests inject a fake
-    // provider-backed port and exercise the same handler branch offline.
+    // Phase 4A: when the edit port is enabled, edit operations pass through
+    // admit() first (Composio, browse capability, stored channel, read limiter)
+    // before any provider read or write.
     if (parsed.data.operation === "edit_snapshot" || parsed.data.operation === "update_video") {
       if (!ports.edit) {
         return await refuse(req, {
@@ -492,17 +493,39 @@ export function createYouTubeResourcesHandler(
         });
       }
       const editPort = ports.edit;
-      const channelId = account.channelId;
-      if (channelId === null) {
+      const editCapability = deriveYouTubeCapabilities({
+        id: account.id,
+        channelId: account.channelId,
+        channelTitle: account.channelTitle,
+        authProvider: account.authProvider,
+        needsReauth: account.needsReauth,
+        hasAccessToken: Boolean(account.accessToken),
+        hasRefreshToken: Boolean(account.refreshToken),
+        accountMetadata: account.accountMetadata,
+      }).capabilities.edit_metadata;
+      if (editCapability?.state === "unavailable") {
         return await refuse(req, {
           operation: parsed.data.operation,
-          code: "reconnect_required",
+          code: editCapability.reason,
           userId,
           accountId,
           requestId,
         });
       }
       try {
+        const admission = await admit(account, userId);
+        const channelId = admission === null ? account.channelId : null;
+        if (admission !== null || channelId === null) {
+          return await refuse(req, {
+            operation: parsed.data.operation,
+            code: admission?.code ?? "reconnect_required",
+            userId,
+            accountId,
+            requestId,
+          }, admission?.retryAfterSeconds !== undefined
+            ? { retry_after_seconds: admission.retryAfterSeconds }
+            : undefined);
+        }
         if (parsed.data.operation === "edit_snapshot") {
           const snapshot = await editPort.snapshot({
             accountId,
@@ -547,7 +570,12 @@ export function createYouTubeResourcesHandler(
         if (code === "internal_error") {
           console.error("[youtube-resources] edit failed:", error instanceof Error ? error.name : "unknown");
         }
-        return await refuse(req, { operation: parsed.data.operation, code, userId, accountId, requestId });
+        const retryAfter = editPort.retryAfterSeconds?.(error);
+        return await refuse(
+          req,
+          { operation: parsed.data.operation, code, userId, accountId, requestId },
+          retryAfter !== undefined ? { retry_after_seconds: retryAfter } : undefined,
+        );
       }
     }
     async function runAdmittedPort<T>(
