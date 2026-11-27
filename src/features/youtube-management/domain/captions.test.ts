@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CAPTION_CONTENT_MAX_BYTES } from "../../../../supabase/functions/youtube-resources/captionFile";
 import {
   CAPTION_CONTENT_MAX_BYTES as FRONTEND_CAPTION_CONTENT_MAX_BYTES,
+  captionListFailureFromErrorCode,
   captionOutcomeFromErrorCode,
   inferCaptionFormatFromFileName,
   measureCaptionUtf8Bytes,
@@ -81,5 +82,35 @@ describe("captionOutcomeFromErrorCode", () => {
     expect(captionOutcomeFromErrorCode("something_new")).toBe("outcome_unknown");
     expect(captionOutcomeFromErrorCode(null)).toBe("outcome_unknown");
     expect(captionOutcomeFromErrorCode(undefined)).toBe("outcome_unknown");
+  });
+});
+
+describe("captionListFailureFromErrorCode", () => {
+  it.each([
+    ["missing_scope", "missing_scope"],
+    ["reconnect_required", "reconnect_required"],
+    ["rate_limited", "rate_limited"],
+    ["quota_exceeded", "quota_exceeded"],
+    ["not_found", "not_found"],
+  ])("keeps the %s reason apart", (code, expected) => {
+    expect(captionListFailureFromErrorCode(code)).toBe(expected);
+  });
+
+  it.each([
+    ["write_not_enabled"],
+    ["provider_unsupported"],
+    ["invalid_request"],
+  ])("calls %s unavailable, because a second list would fail the same way", (code) => {
+    expect(captionListFailureFromErrorCode(code)).toBe("unavailable");
+  });
+
+  it("calls an unanswered provider retryable, and nothing else", () => {
+    expect(captionListFailureFromErrorCode("upstream_unavailable")).toBe("retryable");
+  });
+
+  it("falls back to a plain failure for an unknown or missing code", () => {
+    expect(captionListFailureFromErrorCode("something_new")).toBe("failed");
+    expect(captionListFailureFromErrorCode(null)).toBe("failed");
+    expect(captionListFailureFromErrorCode(undefined)).toBe("failed");
   });
 });

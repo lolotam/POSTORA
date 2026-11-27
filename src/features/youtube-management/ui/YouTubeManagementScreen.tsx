@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,10 +14,16 @@ import { trimVideosToFirstPage, useYouTubeVideos } from "../application/useYouTu
 import { useYouTubeThumbnailMedia } from "../application/useYouTubeThumbnailMedia";
 import { youtubeResourceKey } from "../application/queryKeys";
 import { useAuth } from "@/hooks/useAuth";
+import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
 import { useYouTubeVideo } from "../application/useYouTubeVideo";
-import type { YouTubeResourcesGateway, YouTubeThumbnailMediaGateway } from "../application/ports";
+import type {
+  YouTubeResourcesGateway,
+  YouTubeThumbnailAiGateway,
+  YouTubeThumbnailMediaGateway,
+} from "../application/ports";
 import { defaultYouTubeResourcesGateway } from "../infrastructure/supabaseYouTubeResourcesGateway";
 import { defaultYouTubeThumbnailMediaGateway } from "../infrastructure/supabaseYouTubeThumbnailMediaGateway";
+import { defaultYouTubeThumbnailAiGateway } from "../infrastructure/supabaseYouTubeThumbnailAiGateway";
 import { YouTubeResourceNotice } from "./YouTubeResourceNotice";
 import { YouTubeAccountPicker } from "./YouTubeAccountPicker";
 import { YouTubeChannelSummary } from "./YouTubeChannelSummary";
@@ -30,6 +36,8 @@ export interface YouTubeManagementScreenProps {
   gateway?: YouTubeResourcesGateway;
   /** The creator's own media library, used to offer a thumbnail image. */
   mediaGateway?: YouTubeThumbnailMediaGateway;
+  /** The app's image generator, used to create a thumbnail from a prompt. */
+  aiGateway?: YouTubeThumbnailAiGateway;
   // The page's connected-accounts query can fail; the screen then offers a
   // retry instead of pretending no channel is connected.
   accountsError?: unknown;
@@ -44,12 +52,14 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
     accountsLoading,
     gateway = defaultYouTubeResourcesGateway,
     mediaGateway = defaultYouTubeThumbnailMediaGateway,
+    aiGateway = defaultYouTubeThumbnailAiGateway,
     accountsError,
     onRetryAccounts,
   } = props;
   const { t, i18n } = useTranslation("accounts");
   const queryClient = useQueryClient();
   const userId = useAuth().user?.id ?? "anonymous";
+  const { tiers: resolvedImageTiers } = useResolvedImageModels();
   const locale: "en" | "ar" = i18n.language.startsWith("ar") ? "ar" : "en";
 
   const [pickedAccountId, setPickedAccountId] = useState<string | null>(null);
@@ -89,6 +99,24 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
   const videos = useYouTubeVideos({ gateway, accountId: activeAccountId, enabled: canBrowse });
   const video = useYouTubeVideo({ gateway, accountId: activeAccountId, videoId: selectedVideoId, enabled: canBrowse && selectedVideoId !== null });
   const thumbnailMedia = useYouTubeThumbnailMedia({ gateway: mediaGateway, enabled: canChangeThumbnail });
+
+  // The media gateway may not be able to store an image; the thumbnail dialog
+  // then offers the library and the generator only.
+  const uploadThumbnailImage = useMemo(() => {
+    const upload = mediaGateway.uploadOwnedImage;
+    if (!upload) return undefined;
+    return async (params: { blob: Blob; fileName: string; mimeType: "image/jpeg" | "image/png" }) => {
+      const created = await upload.call(mediaGateway, params);
+      void thumbnailMedia.refetch();
+      return created;
+    };
+  }, [mediaGateway, thumbnailMedia]);
+
+  const generateThumbnailImage = useMemo(() => {
+    if (!aiGateway) return undefined;
+    return (params: { prompt: string; referenceImage?: string; referenceImages?: readonly string[] }) =>
+      aiGateway.generate(params);
+  }, [aiGateway]);
 
   const errorCode = (error: unknown): YouTubeResourceErrorCode =>
     error instanceof YouTubeResourceError ? error.code : "upstream_unavailable";
@@ -322,6 +350,10 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
         thumbnailCandidatesLoading={thumbnailMedia.isPending}
         thumbnailCandidatesError={thumbnailMedia.error}
         onRetryThumbnailCandidates={() => void thumbnailMedia.refetch()}
+        currentThumbnailUrl={video.data?.data.thumbnail_url ?? null}
+        onUploadThumbnailImage={uploadThumbnailImage}
+        onGenerateThumbnailImage={generateThumbnailImage}
+        resolvedImageTiers={resolvedImageTiers}
         onSetThumbnail={gateway.setThumbnail ? async (mediaFileId) => {
           if (!activeAccountId || !selectedVideoId) return "outcome_unknown";
           let result: YouTubeThumbnailOutcome;

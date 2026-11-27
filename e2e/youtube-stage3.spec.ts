@@ -21,6 +21,52 @@ async function openEditor(page: Page, locale: "en" | "ar" = "en") {
 }
 
 test.describe("YouTube Stage 3 offline journeys", () => {
+  test("the drawer shows a poster and mounts the player only after Play", async ({ page }) => {
+    const embedRequestsBeforePlay: string[] = [];
+    let playClicked = false;
+    page.on("request", (req) => {
+      if (!playClicked && req.url().includes("youtube-nocookie.com")) {
+        embedRequestsBeforePlay.push(req.url());
+      }
+    });
+    await startStage3Journey(page, { edit: "available" });
+    await page.goto("/youtube", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: new RegExp(VIDEO.title, "i") }).click();
+    const drawer = page.getByRole("dialog");
+    await expect(drawer).toBeVisible();
+
+    // Nothing is loaded from YouTube's embed host before the creator presses Play.
+    const playButton = drawer.getByRole("button", { name: /play video/i });
+    await expect(playButton).toBeVisible();
+    await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(0);
+    expect(embedRequestsBeforePlay).toEqual([]);
+
+    playClicked = true;
+    await playButton.click();
+
+    await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(1);
+    await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveAttribute("src", /embed\/AbcD1234eFg/);
+  });
+
+  test("the edit button opens the editor and closes it again", async ({ page }) => {
+    await startStage3Journey(page, { edit: "available" });
+    await openEditor(page);
+
+    await page.getByRole("button", { name: /edit video details/i }).click();
+
+    await expect(page.getByLabel("Title", { exact: true })).toBeHidden();
+  });
+
+  test("a saved edit closes the editor and keeps the confirmation visible", async ({ page }) => {
+    await startStage3Journey(page, { edit: "available" });
+    await openEditor(page);
+    await page.getByLabel("Title", { exact: true }).fill("Renamed in the offline journey");
+    await page.getByRole("button", { name: /^save$/i }).click();
+
+    await expect(page.getByRole("status")).toContainText(/match your changes/i);
+    await expect(page.getByLabel("Title", { exact: true })).toBeHidden();
+  });
+
   test("EN edit success: snapshot, title, description and tag change, and verified save", async ({ page }) => {
     await startStage3Journey(page, { edit: "available" });
     await openEditor(page);

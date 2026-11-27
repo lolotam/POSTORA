@@ -1,10 +1,26 @@
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ResolvedModelCards, type ResolvedTier } from "@/components/ai/ResolvedModelCards";
+import { MediaLibraryPicker } from "@/components/post/MediaLibraryPicker";
+import { StockMediaPicker, type SelectedMedia } from "@/components/post/StockMediaPicker";
+import { handleAIError } from "@/lib/aiErrorHandler";
+import type { UploadedFile } from "@/hooks/usePostForm";
 import type { YouTubeCapabilityReason, YouTubeCapabilityState } from "../domain/types";
 import {
+  THUMBNAIL_MAX_BYTES,
+  checkThumbnailFile,
   isDirectThumbnailCandidate,
+  isThumbnailFileFailure,
   type YouTubeThumbnailCandidate,
   type YouTubeThumbnailOutcome,
 } from "../domain/thumbnail";
@@ -19,6 +35,24 @@ export interface YouTubeThumbnailChangeProps {
   onRetryCandidates?: () => void;
   /** Injected write seam; the call is made once per confirmed choice. */
   onSetThumbnail?: (mediaFileId: string) => Promise<YouTubeThumbnailOutcome>;
+  /** The thumbnail the video shows today, so the creator sees what changes. */
+  currentThumbnailUrl?: string | null;
+  /** Stores an image the creator picked on this device. */
+  onUploadImage?: (params: {
+    blob: Blob;
+    fileName: string;
+    mimeType: "image/jpeg" | "image/png";
+  }) => Promise<YouTubeThumbnailCandidate>;
+  /** Generates an image with the app's own image generator. */
+  onGenerateAiImage?: (params: {
+    prompt: string;
+    referenceImage?: string;
+    referenceImages?: readonly string[];
+  }) => Promise<{ imageUrl: string }>;
+  /** Turns a generated image into a storable thumbnail. */
+  prepareAiImageBlob?: (imageUrl: string) => Promise<{ blob: Blob; mimeType: "image/jpeg" | "image/png" }>;
+  /** Configured image generation model tiers to display in the AI tab. */
+  resolvedImageTiers?: readonly ResolvedTier[];
 }
 
 /** Why the control is disabled, in the creator's words. */
@@ -54,6 +88,34 @@ function ThumbnailUnavailableReason({ reason }: { reason: YouTubeCapabilityReaso
   return <p className="text-xs text-muted-foreground">{message}</p>;
 }
 
+/** A file size the creator can read at a glance. */
+function formatBytes(bytes: number | null): string {
+  if (bytes === null) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The 96 px preview of the thumbnail the video shows. */
+function ThumbnailPreview({ url, note }: { url: string | null; note: string | null }): JSX.Element {
+  const { t } = useTranslation("accounts");
+  return (
+    <div className="space-y-1">
+      <div className="aspect-video w-24 overflow-hidden rounded border bg-muted">
+        {url ? (
+          <img
+            src={url}
+            alt={t("youtubeManagement.thumbnail.dialog.previewAlt", "Thumbnail preview")}
+            loading="lazy"
+            className="h-full w-full object-cover"
+          />
+        ) : null}
+      </div>
+      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
+    </div>
+  );
+}
+
 /** The one image list the creator may choose from. */
 function ThumbnailImageChoices({
   candidates,
@@ -69,10 +131,14 @@ function ThumbnailImageChoices({
   return (
     <RadioGroup value={selectedId} onValueChange={onSelect} disabled={disabled}>
       {candidates.map((candidate) => (
-        <div key={candidate.id} className="flex items-center gap-2">
+        <label key={candidate.id} className="flex items-center gap-2">
           <RadioGroupItem value={candidate.id} aria-label={candidate.file_name} disabled={disabled} />
+          {candidate.preview_url ? (
+            <img src={candidate.preview_url} alt="" loading="lazy" className="h-9 w-16 rounded object-cover" />
+          ) : null}
           <span className="text-sm">{candidate.file_name}</span>
-        </div>
+          <span className="text-xs text-muted-foreground">{formatBytes(candidate.file_size)}</span>
+        </label>
       ))}
     </RadioGroup>
   );
@@ -201,8 +267,256 @@ function ThumbnailOutcomeMessage({ outcome }: { outcome: YouTubeThumbnailOutcome
   );
 }
 
+function decodePercentEncodedBytes(payload: string): Uint8Array {
+  const bytes: number[] = [];
+  for (let i = 0; i < payload.length; i += 1) {
+    if (payload[i] === "%" && i + 2 < payload.length) {
+      const hex = payload.slice(i + 1, i + 3);
+      const parsed = Number.parseInt(hex, 16);
+      if (!Number.isNaN(parsed)) {
+        bytes.push(parsed);
+        i += 2;
+        continue;
+      }
+    }
+    bytes.push(payload.charCodeAt(i) & 0xff);
+  }
+  return new Uint8Array(bytes);
+}
+
+function decodeInlineImageDataUrl(dataUrl: string): Blob {
+  const commaIndex = dataUrl.indexOf(",");
+  if (commaIndex === -1) throw new Error("Invalid data URL");
+  const header = dataUrl.slice(5, commaIndex);
+  const payload = dataUrl.slice(commaIndex + 1);
+  const parts = header.split(";");
+  const mimeType = parts[0] || "image/png";
+  const isBase64 = parts.includes("base64");
+  if (isBase64) {
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mimeType });
+  }
+  return new Blob([decodePercentEncodedBytes(payload)], { type: mimeType });
+}
+
+async function loadGeneratedImageBlob(imageUrl: string): Promise<Blob> {
+  if (/^data:image\//i.test(imageUrl)) {
+    return decodeInlineImageDataUrl(imageUrl);
+  }
+  const response = await fetch(imageUrl);
+  if (!response.ok) throw new Error("The generated image could not be fetched");
+  return response.blob();
+}
+
 /**
- * Replaces the thumbnail of a published video from the creator's own library.
+ * Turns a generated image into a storable thumbnail.
+ *
+ * The generator may answer with any size and any format, and YouTube accepts
+ * neither: the image is drawn to a 1280x720 canvas with a cover fit and
+ * encoded as JPEG at a falling quality until it fits under 2 MB.
+ */
+async function prepareGeneratedThumbnail(imageUrl: string): Promise<{ blob: Blob; mimeType: "image/jpeg" | "image/png" }> {
+  const sourceBlob = await loadGeneratedImageBlob(imageUrl);
+  const source = await createImageBitmap(sourceBlob);
+  const canvas = document.createElement("canvas");
+  canvas.width = 1280;
+  canvas.height = 720;
+  try {
+    if (source.width <= 0 || source.height <= 0) {
+      throw new Error("The generated image has invalid dimensions");
+    }
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("The browser could not draw the generated image");
+    const scale = Math.max(canvas.width / source.width, canvas.height / source.height);
+    const width = source.width * scale;
+    const height = source.height * scale;
+    context.drawImage(source, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+  } finally {
+    source.close?.();
+  }
+  for (const quality of [0.9, 0.8, 0.7, 0.6, 0.5]) {
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (blob && blob.size <= THUMBNAIL_MAX_BYTES) return { blob, mimeType: "image/jpeg" };
+  }
+  throw new Error("The generated image could not be brought under 2 MB");
+}
+
+/** The file the creator picked on this device. */
+function UploadFileTab({
+  disabled,
+  errorMessage,
+  onFile,
+}: {
+  disabled: boolean;
+  errorMessage: string | null;
+  onFile: (file: File | undefined) => void;
+}): JSX.Element {
+  const { t } = useTranslation("accounts");
+  const inputId = useId();
+  return (
+    <div className="space-y-2">
+      <label htmlFor={inputId} className="text-xs font-medium">
+        {t("youtubeManagement.thumbnail.dialog.uploadLabel", "Choose a JPEG or PNG image")}
+      </label>
+      <input
+        id={inputId}
+        type="file"
+        accept="image/jpeg,image/png"
+        disabled={disabled}
+        onChange={(event) => onFile(event.target.files?.[0])}
+        className="text-xs"
+      />
+      {errorMessage ? <p className="text-xs text-muted-foreground">{errorMessage}</p> : null}
+    </div>
+  );
+}
+
+/** The generator, its prompt and the reference images it works from. */
+function GenerateWithAiTab({
+  disabled,
+  canGenerate,
+  resolvedTiers,
+  prompt,
+  onPromptChange,
+  references,
+  onReferenceFiles,
+  onRemoveReference,
+  libraryCandidates,
+  onUseLibraryReference,
+  onOpenLibraryPicker,
+  onOpenStockPicker,
+  onGenerate,
+  generatedImageUrl,
+  onUseGeneratedImage,
+  errorMessage,
+}: {
+  disabled: boolean;
+  canGenerate: boolean;
+  resolvedTiers: ResolvedTier[];
+  prompt: string;
+  onPromptChange: (prompt: string) => void;
+  references: string[];
+  onReferenceFiles: (files: FileList | null) => void;
+  onRemoveReference: (index: number) => void;
+  libraryCandidates: readonly YouTubeThumbnailCandidate[];
+  onUseLibraryReference: (previewUrl: string) => void;
+  onOpenLibraryPicker: () => void;
+  onOpenStockPicker: () => void;
+  onGenerate: () => void;
+  generatedImageUrl: string | null;
+  onUseGeneratedImage: () => void;
+  errorMessage: string | null;
+}): JSX.Element {
+  const { t } = useTranslation("accounts");
+  const promptInputId = useId();
+  const referenceInputId = useId();
+  return (
+    <div className="space-y-2">
+      <ResolvedModelCards tiers={resolvedTiers} />
+      <label htmlFor={promptInputId} className="text-xs font-medium">
+        {t("youtubeManagement.thumbnail.dialog.promptLabel", "Describe the thumbnail")}
+      </label>
+      <textarea
+        id={promptInputId}
+        value={prompt}
+        disabled={disabled}
+        onChange={(event) => onPromptChange(event.target.value)}
+        className="min-h-20 w-full rounded-md border bg-background p-2 text-sm"
+      />
+      <label htmlFor={referenceInputId} className="text-xs font-medium">
+        {t("youtubeManagement.thumbnail.dialog.referenceLabel", "Reference images (up to five)")}
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          id={referenceInputId}
+          type="file"
+          accept="image/*"
+          multiple
+          disabled={disabled || references.length >= 5}
+          onChange={(event) => onReferenceFiles(event.target.files)}
+          className="text-xs"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled || references.length >= 5}
+          onClick={onOpenLibraryPicker}
+        >
+          {t("youtubeManagement.thumbnail.dialog.tabLibrary", "Media library")}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled || references.length >= 5}
+          onClick={onOpenStockPicker}
+        >
+          {t("youtubeManagement.thumbnail.dialog.stockReference", "Stock")}
+        </Button>
+      </div>
+      {references.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {references.map((reference, index) => (
+            <div key={`${index}:${reference}`} className="relative">
+              <img src={reference} alt="" className="h-9 w-16 rounded object-cover" />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={disabled}
+                className="h-5 px-1 text-[10px]"
+                onClick={() => onRemoveReference(index)}
+              >
+                ×
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {libraryCandidates.length > 0 ? (
+        <div className="space-y-1">
+          <p className="text-xs font-medium">
+            {t("youtubeManagement.thumbnail.dialog.libraryReferenceLabel", "Or use one of your own images")}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {libraryCandidates.map((candidate) => (
+              <Button
+                key={candidate.id}
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled || !candidate.preview_url || references.length >= 5}
+                onClick={() => candidate.preview_url && onUseLibraryReference(candidate.preview_url)}
+              >
+                {candidate.file_name}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <Button type="button" size="sm" disabled={disabled || !canGenerate} onClick={onGenerate}>
+        {t("youtubeManagement.thumbnail.dialog.generate", "Generate")}
+      </Button>
+      {generatedImageUrl ? (
+        <div className="space-y-2">
+          <img src={generatedImageUrl} alt="" className="w-full rounded border" />
+          <Button type="button" size="sm" disabled={disabled} onClick={onUseGeneratedImage}>
+            {t("youtubeManagement.thumbnail.dialog.useAiImage", "Use this AI thumbnail")}
+          </Button>
+        </div>
+      ) : null}
+      {errorMessage ? <p className="text-xs text-muted-foreground">{errorMessage}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Replaces the thumbnail of a published video from the creator's own media.
  *
  * The flow is deliberately two steps: a pick, then an explicit confirmation,
  * because the thumbnail is what viewers see on YouTube. The write happens
@@ -216,12 +530,29 @@ export function YouTubeThumbnailChange({
   candidatesError,
   onRetryCandidates,
   onSetThumbnail,
+  currentThumbnailUrl,
+  onUploadImage,
+  onGenerateAiImage,
+  prepareAiImageBlob = prepareGeneratedThumbnail,
+  resolvedImageTiers = [],
 }: YouTubeThumbnailChangeProps): JSX.Element {
-  const { t } = useTranslation("accounts");
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const { t, i18n } = useTranslation("accounts");
+  const resolvedTiers = [...resolvedImageTiers];
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [tab, setTab] = useState("library");
   const [chosen, setChosen] = useState<YouTubeThumbnailCandidate | null>(null);
+  const [appliedCandidate, setAppliedCandidate] = useState<YouTubeThumbnailCandidate | null>(null);
   const [outcome, setOutcome] = useState<YouTubeThumbnailOutcome | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiImageUrl, setAiImageUrl] = useState<string | null>(null);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [references, setReferences] = useState<string[]>([]);
+  const [readingReferences, setReadingReferences] = useState(false);
+  const dialogSessionRef = useRef(0);
+  const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
+  const [stockPickerOpen, setStockPickerOpen] = useState(false);
 
   const available = capability?.state === "available";
   // Only JPEG and PNG can be sent to `thumbnails.set`; everything else the
@@ -232,9 +563,17 @@ export function YouTubeThumbnailChange({
 
   const openPicker = () => {
     if (submitting) return;
-    setPickerOpen(true);
+    dialogSessionRef.current += 1;
+    setDialogOpen(true);
     setChosen(null);
     setOutcome(null);
+    setUploadError(null);
+    setAiError(null);
+    setAiImageUrl(null);
+    setAiPrompt("");
+    setReferences([]);
+    setReadingReferences(false);
+    onRetryCandidates?.();
   };
 
   const selectImage = (id: string) => {
@@ -249,7 +588,12 @@ export function YouTubeThumbnailChange({
       const result = await onSetThumbnail(chosen.id);
       setOutcome(result);
       if (result === "applied") {
-        setPickerOpen(false);
+        setAppliedCandidate(chosen);
+        setDialogOpen(false);
+        setChosen(null);
+      } else if (result === "outcome_unknown") {
+        // Clear pending confirmation on an unknown outcome so a second click
+        // cannot immediately re-send without selecting again.
         setChosen(null);
       }
     } finally {
@@ -257,38 +601,203 @@ export function YouTubeThumbnailChange({
     }
   };
 
+  const handleUpload = async (file: File | undefined) => {
+    if (!file || !onUploadImage || submitting) return;
+    setUploadError(null);
+    setChosen(null);
+    setSubmitting(true);
+    try {
+      const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+      const check = checkThumbnailFile({ declaredType: file.type, size: file.size, head });
+      if (isThumbnailFileFailure(check)) {
+        // The file is refused before it leaves the page: nothing is stored and
+        // no request is made.
+        setUploadError(check.reason);
+        return;
+      }
+      const candidate = await onUploadImage({ blob: file, fileName: file.name, mimeType: check.mimeType });
+      setChosen(candidate);
+    } catch {
+      setUploadError("failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGenerate = async () => {
+    if (!onGenerateAiImage || !onUploadImage || submitting || readingReferences) return;
+    setAiError(null);
+    setChosen(null);
+    setAiImageUrl(null);
+    setSubmitting(true);
+    try {
+      const result = await onGenerateAiImage({
+        prompt: aiPrompt,
+        referenceImage: references[0],
+        ...(references.length > 0 ? { referenceImages: references } : {}),
+      });
+      setAiImageUrl(result.imageUrl);
+    } catch (error) {
+      setAiError("failed");
+      handleAIError(error, "YouTube AI thumbnail");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleUseGeneratedImage = async () => {
+    if (!aiImageUrl || !onUploadImage || submitting) return;
+    setAiError(null);
+    setChosen(null);
+    setSubmitting(true);
+    try {
+      const prepared = await prepareAiImageBlob(aiImageUrl);
+      const head = new Uint8Array(await prepared.blob.slice(0, 16).arrayBuffer());
+      const check = checkThumbnailFile({ declaredType: prepared.mimeType, size: prepared.blob.size, head });
+      if (isThumbnailFileFailure(check)) throw new Error(check.reason);
+      const candidate = await onUploadImage({
+        blob: prepared.blob,
+        fileName: "ai-thumbnail.jpg",
+        mimeType: check.mimeType,
+      });
+      setChosen(candidate);
+    } catch {
+      // Nothing is stored and nothing is sent when the generated image cannot
+      // become a thumbnail.
+      setAiError("not_prepared");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleReferenceFiles = async (files: FileList | null) => {
+    if (!files || submitting || readingReferences) return;
+    const session = dialogSessionRef.current;
+    setAiError(null);
+    const room = 5 - references.length;
+    const picked = Array.from(files).slice(0, Math.max(room, 0));
+    if (picked.some((file) => file.size > THUMBNAIL_MAX_BYTES)) {
+      setAiError("failed");
+      return;
+    }
+    setReadingReferences(true);
+    try {
+      const dataUrls = await Promise.all(picked.map((file) => readAsDataUrl(file)));
+      if (dialogSessionRef.current !== session) return;
+      setReferences((current) => [...current, ...dataUrls].slice(0, 5));
+    } catch {
+      if (dialogSessionRef.current === session) setAiError("failed");
+    } finally {
+      if (dialogSessionRef.current === session) setReadingReferences(false);
+    }
+  };
+
+  const uploadErrorMessage = uploadError === "too_large"
+    ? t("youtubeManagement.thumbnail.dialog.tooLarge", "That image is larger than 2 MB. Choose a smaller one.")
+    : uploadError === "type_mismatch"
+      ? t("youtubeManagement.thumbnail.dialog.typeMismatch", "That file is not the format it says it is. Choose a JPEG or a PNG.")
+      : uploadError === "not_jpeg_png"
+        ? t("youtubeManagement.thumbnail.dialog.notJpegPng", "YouTube accepts JPEG and PNG images only.")
+        : uploadError === "failed"
+          ? t("youtubeManagement.thumbnail.dialog.uploadFailed", "Postora could not store that image. Nothing was changed.")
+          : null;
+
+  const aiErrorMessage = aiError === "not_prepared"
+    ? t("youtubeManagement.thumbnail.dialog.notPrepared", "This image could not be prepared as a thumbnail")
+    : aiError === "failed"
+      ? t("youtubeManagement.thumbnail.dialog.generateFailed", "The image could not be generated. Nothing was changed.")
+      : null;
+
+  const previewUrl = appliedCandidate?.preview_url ?? currentThumbnailUrl ?? null;
+  const previewNote = appliedCandidate
+    ? t("youtubeManagement.thumbnail.dialog.appliedNote", "YouTube may take a few minutes to show the new thumbnail")
+    : null;
+
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={!available || !onSetThumbnail || submitting} onClick={openPicker}>
-          {t("youtubeManagement.thumbnail.change", "Change thumbnail")}
-        </Button>
-        {!available || !onSetThumbnail ? <ThumbnailUnavailableReason reason={unavailableReason} /> : null}
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="flex flex-col gap-2">
+          <Button type="button" size="sm" variant="outline" disabled={!available || !onSetThumbnail || submitting} onClick={openPicker}>
+            {t("youtubeManagement.thumbnail.change", "Change thumbnail")}
+          </Button>
+          {!available || !onSetThumbnail ? <ThumbnailUnavailableReason reason={unavailableReason} /> : null}
+        </div>
+        <ThumbnailPreview url={previewUrl} note={previewNote} />
       </div>
 
-      {pickerOpen ? (
-        <div className="space-y-3 rounded-lg border p-3">
-          <p className="text-sm font-semibold">{t("youtubeManagement.thumbnail.pickerTitle", "Choose a thumbnail image")}</p>
-          <p className="text-xs text-muted-foreground">
-            {t("youtubeManagement.thumbnail.pickerHint", "YouTube accepts JPEG and PNG images only.")}
-          </p>
-          <ThumbnailPickerBody
-            candidates={eligible}
-            loading={candidatesLoading}
-            error={candidatesError}
-            onRetry={onRetryCandidates}
-            selectedId={chosen?.id ?? ""}
-            disabled={submitting}
-            onSelect={selectImage}
-          />
-          {excludedCount > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t(
-                "youtubeManagement.thumbnail.excluded",
-                "Some images in your library were excluded because YouTube accepts JPEG and PNG only.",
-              )}
-            </p>
-          ) : null}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent dir={i18n.language?.startsWith("ar") ? "rtl" : "ltr"} className="max-w-lg max-h-[85dvh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t("youtubeManagement.thumbnail.pickerTitle", "Choose a thumbnail image")}</DialogTitle>
+            <DialogDescription>
+              {t("youtubeManagement.thumbnail.pickerHint", "YouTube accepts JPEG and PNG images only.")}
+            </DialogDescription>
+          </DialogHeader>
+
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList>
+              <TabsTrigger value="upload">
+                {t("youtubeManagement.thumbnail.dialog.tabUpload", "Upload file")}
+              </TabsTrigger>
+              <TabsTrigger value="library">
+                {t("youtubeManagement.thumbnail.dialog.tabLibrary", "Media library")}
+              </TabsTrigger>
+              <TabsTrigger value="ai">
+                {t("youtubeManagement.thumbnail.dialog.tabAi", "Generate with AI")}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="upload" className="space-y-2">
+              <UploadFileTab
+                disabled={submitting || !onUploadImage}
+                errorMessage={uploadErrorMessage}
+                onFile={(file) => void handleUpload(file)}
+              />
+            </TabsContent>
+
+            <TabsContent value="library" className="space-y-3">
+              <ThumbnailPickerBody
+                candidates={eligible}
+                loading={candidatesLoading}
+                error={candidatesError}
+                onRetry={onRetryCandidates}
+                selectedId={chosen?.id ?? ""}
+                disabled={submitting}
+                onSelect={selectImage}
+              />
+              {excludedCount > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "youtubeManagement.thumbnail.excluded",
+                    "Some images in your library were excluded because YouTube accepts JPEG and PNG only.",
+                  )}
+                </p>
+              ) : null}
+            </TabsContent>
+
+            <TabsContent value="ai" className="space-y-2">
+              <GenerateWithAiTab
+                disabled={submitting || readingReferences}
+                canGenerate={onGenerateAiImage !== undefined && onUploadImage !== undefined && !readingReferences && aiPrompt.trim().length > 0}
+                resolvedTiers={resolvedTiers}
+                prompt={aiPrompt}
+                onPromptChange={setAiPrompt}
+                references={references}
+                onReferenceFiles={(files) => void handleReferenceFiles(files)}
+                onRemoveReference={(index) => setReferences((current) => current.filter((_, idx) => idx !== index))}
+                libraryCandidates={eligible}
+                onUseLibraryReference={(previewUrl) => setReferences((current) =>
+                  current.length < 5 ? [...current, previewUrl] : current)}
+                onOpenLibraryPicker={() => setLibraryPickerOpen(true)}
+                onOpenStockPicker={() => setStockPickerOpen(true)}
+                onGenerate={() => void handleGenerate()}
+                generatedImageUrl={aiImageUrl}
+                onUseGeneratedImage={() => void handleUseGeneratedImage()}
+                errorMessage={aiErrorMessage}
+              />
+            </TabsContent>
+          </Tabs>
+
           {chosen ? (
             <ThumbnailConfirmation
               candidate={chosen}
@@ -297,10 +806,52 @@ export function YouTubeThumbnailChange({
               onCancel={() => setChosen(null)}
             />
           ) : null}
-        </div>
+          {outcome ? <ThumbnailOutcomeMessage outcome={outcome} /> : null}
+        </DialogContent>
+      </Dialog>
+
+      {libraryPickerOpen ? (
+        <MediaLibraryPicker
+          open={libraryPickerOpen}
+          onOpenChange={setLibraryPickerOpen}
+          imagesOnly
+          maxFiles={5}
+          currentFileCount={references.length}
+          onSelect={(files: UploadedFile[]) => {
+            const urls = files
+              .map((file) => file.previewUrl || file.cloudinaryUrl || "")
+              .filter((url) => url.length > 0);
+            setReferences((current) => [...current, ...urls].slice(0, 5));
+            setLibraryPickerOpen(false);
+          }}
+        />
       ) : null}
 
-      {outcome ? <ThumbnailOutcomeMessage outcome={outcome} /> : null}
+      {stockPickerOpen ? (
+        <StockMediaPicker
+          open={stockPickerOpen}
+          onOpenChange={setStockPickerOpen}
+          onSelect={(media: SelectedMedia) => {
+            const url = media.thumbnailUrl || media.url;
+            if (url) {
+              setReferences((current) => (current.length < 5 ? [...current, url] : current));
+            }
+            setStockPickerOpen(false);
+          }}
+        />
+      ) : null}
+
+      {!dialogOpen && outcome ? <ThumbnailOutcomeMessage outcome={outcome} /> : null}
     </div>
   );
+}
+
+/** Reads a picked reference image as a data URL the generator can take. */
+async function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("The reference image could not be read"));
+    reader.readAsDataURL(file);
+  });
 }

@@ -5,7 +5,7 @@ import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 
-import { YouTubeVideoEditCard } from "../YouTubeVideoEditCard";
+import { YouTubeVideoEditCard, type EditSaveOutcome } from "../YouTubeVideoEditCard";
 
 vi.mock("@/hooks/useFeatureFlags", () => ({
   useFeatureFlags: () => ({ flags: { analyticsYoutube: false }, isLoading: false }),
@@ -72,6 +72,10 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 const visibleText = (element: HTMLElement) => element.textContent?.replace(/[\u2068\u2069]/g, "");
 
+// The category dropdown is the only combobox of the editor; the embedded
+// player has a speed selector of its own.
+const categoryCombobox = () => screen.getByRole("combobox", { name: "Category" });
+
 beforeEach(cleanup);
 
 describe("YouTubeVideoEditCard", () => {
@@ -87,7 +91,7 @@ describe("YouTubeVideoEditCard", () => {
 
     expect(screen.getByRole("button", { name: "Edit video details" })).toBeDisabled();
     expect(screen.getByText(/currently unavailable for this channel/)).toBeInTheDocument();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Category" })).not.toBeInTheDocument();
   });
 
   it("uses the same numbered category dropdown and preserves an unlisted category", async () => {
@@ -101,8 +105,7 @@ describe("YouTubeVideoEditCard", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
 
-    const combobox = screen.getByRole("combobox");
-    expect(visibleText(combobox)).toBe("998 (Currently unavailable)");
+    expect(visibleText(categoryCombobox())).toBe("998 (Currently unavailable)");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
@@ -232,16 +235,22 @@ describe("YouTubeVideoEditCard", () => {
   });
 
   it("hydrates draft values from the fresh snapshot and updates baseRevision after a save", async () => {
-    const onSnapshot = vi.fn().mockResolvedValue({
-      revision: "rev-fresh-1",
+    // The server answers a snapshot with the revision it currently holds, and
+    // a saved write is the new revision.
+    let currentRevision = "rev-fresh-1";
+    const onSnapshot = vi.fn(async () => ({
+      revision: currentRevision,
       values: {
         title: "Studio title",
         description: "Studio description",
         tags: ["studio", "fresh"],
         categoryId: "22",
       },
+    }));
+    const onSave = vi.fn(async () => {
+      currentRevision = "rev-fresh-2";
+      return { outcome: "saved" as const, revision: "rev-fresh-2" };
     });
-    const onSave = vi.fn().mockResolvedValue({ outcome: "saved", revision: "rev-fresh-2" });
     await renderUi(
       <YouTubeVideoEditCard
         video={video}
@@ -264,8 +273,13 @@ describe("YouTubeVideoEditCard", () => {
       baseRevision: "rev-fresh-1",
     })));
 
+    // A saved write closes the editor, so the next one starts by reopening it
+    // and reading the revision the server now holds.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    await waitFor(() => expect(screen.getByLabelText("Title")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Second rename" } });
-    fireEvent.click(save);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({
       title: "Second rename",
       baseRevision: "rev-fresh-2",
@@ -316,6 +330,146 @@ describe("YouTubeVideoEditCard", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
 
-    expect(visibleText(screen.getByRole("combobox"))).toBe("22 (الأشخاص والمدونات)");
+    expect(visibleText(categoryCombobox())).toBe("22 (الأشخاص والمدونات)");
+  });
+});
+
+describe("YouTubeVideoEditCard — the edit toggle", () => {
+  it("closes the editor on the second click without saving anything", async () => {
+    const onSave = vi.fn().mockResolvedValue("saved");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSave={onSave}
+        onSnapshot={vi.fn().mockResolvedValue("rev-1")}
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "Edit video details" });
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("reads a fresh snapshot when the editor is opened again", async () => {
+    const onSnapshot = vi.fn().mockResolvedValue("rev-1");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={onSnapshot}
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "Edit video details" });
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(1));
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(2));
+  });
+
+  it("says whether the editor is open", async () => {
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "Edit video details" });
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-controls", "youtube-video-edit-form");
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(document.querySelector("#youtube-video-edit-form")).not.toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("closes the form after a saved write and keeps the confirmation visible", async () => {
+    const onSave = vi.fn().mockResolvedValue("saved");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSave={onSave}
+        onSnapshot={vi.fn().mockResolvedValue("rev-1")}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
+    expect(screen.getByText("Current details match your changes.")).toBeInTheDocument();
+  });
+
+  it("keeps the form open and the draft intact after a conflict", async () => {
+    const onSave = vi.fn().mockResolvedValue("edit_conflict");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSave={onSave}
+        onSnapshot={vi.fn().mockResolvedValue("rev-1")}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed" } });
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(screen.getByText(/Review the latest details/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Title")).toHaveValue("Renamed");
+  });
+
+  it("cannot be closed while a write is in flight", async () => {
+    let release: (() => void) | null = null;
+    const onSave = vi.fn(() => new Promise<EditSaveOutcome>((resolve) => { release = () => resolve("saved"); }));
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSave={onSave}
+        onSnapshot={vi.fn().mockResolvedValue("rev-1")}
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "Edit video details" });
+    fireEvent.click(toggle);
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(toggle).toBeDisabled());
+    release?.();
+    await waitFor(() => expect(toggle).not.toBeDisabled());
   });
 });

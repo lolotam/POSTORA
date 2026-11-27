@@ -171,6 +171,7 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - Replace the thumbnail of a video you already uploaded from `/youtube`, with an owned JPEG or PNG image from your own media library, only after you pick the image and confirm the change; Postora never replaces the video's media bytes and never deletes the video
 - List your channel's playlists so you can pick a destination playlist, and add a newly uploaded video to the playlist you select; Postora never creates, renames, reorders, or deletes playlists and never removes playlist items
 - List the caption tracks of a video you already uploaded from `/youtube`, only when you ask for the list, and add a new caption track from an .srt or .vtt file you choose after you confirm the upload; Postora never modifies, replaces, or deletes existing caption tracks
+- Load YouTube's embedded player in the creator's own browser when they press Play on a video. When you press Play on a video in Postora, your browser loads YouTube's embedded player from youtube-nocookie.com. Google receives the request directly from your browser under YouTube's Terms of Service and Google's Privacy Policy. Postora does not receive or store playback data.
 - Edit published video metadata on your instruction, without replacing video bytes or deleting videos
 - Read, create, reply to, edit, delete, and moderate comments on your own videos
 - Display your own channel and video analytics (summary, daily trend, top videos, viewer country, device type, traffic sources, and audience retention, with optional browser-local export to your own device) to you, the signed-in owner, only where enabled and after you accept Analytics Purpose Clause Version 2 (November 26, 2026) for the current connection; analytics numbers are read on demand and are not stored by Postora
@@ -213,14 +214,14 @@ Limited Use requirements.
 
 ### Step 4: Video Demonstration
 
-Create a masked screen recording of these nine journeys, using an owner-controlled test channel and synthetic identifiers wherever a denial is required:
+Create a masked screen recording of these ten journeys, using an owner-controlled test channel and synthetic identifiers wherever a denial is required:
 
 1. **Connect:** account chooser and permission dialog with all three scopes, followed by the Postora success state.
 2. **Channel and video browse:** `/youtube` channel summary, uploads paging, and full details for an owned video.
 3. **Published metadata edit:** on `/youtube`, open an owned video, click **Edit video details**, change the title, the description, the tags or the category, save, and show the verified result at the same watch URL; then show the refusal path by changing the same video in YouTube Studio while the editor is open and saving again — the editor must report "YouTube changed since this was opened" and write nothing. Never replace media bytes or delete a video.
 4. **New upload and thumbnail replacement:** publish a new video with chosen metadata and, optionally, a custom thumbnail; when a playlist of the same channel is selected in Create Post, show the video listed in that playlist exactly once; then, from `/youtube`, replace the thumbnail of an already uploaded video with an owned JPEG or PNG image from the media library, show the confirmation step before the write, and show the confirmed result on the video.
 5. **Comments and moderation:** read Published and Held for review, create/reply/edit an own comment, and demonstrate publish and reject on a controlled or already-held comment (moving a published comment to hold is disabled at the current baseline via `STAGE4_HOLD_FROM_PUBLISHED = false`); show the separate ban confirmation only if that capability is enabled for the test account.
-6. **On-demand analytics:** accept Analytics Purpose Clause v1 at `/analytics/youtube`, show channel/video reports, withdraw, and prove no further report loads. Reconnect later to show fresh acceptance is required.
+6. **On-demand analytics:** accept Analytics Purpose Clause Version 2 at `/analytics/youtube`, show channel/video reports, withdraw, and prove no further report loads. Reconnect later to show fresh acceptance is required.
 7. **Denial:** use a synthetic foreign account/video ID and a connection with missing scope to show safe `not_found`/reconnect states with no data or write.
 8. **Disconnect and reconnect:** Profiles → Connected Accounts → Disconnect, immediate local removal and provider-revocation outcome, followed by the account chooser and permission prompt on reconnect.
 9. **Caption tracks:** from `/youtube`, open an owned video, click **Show caption tracks** and show that nothing was listed before the click, then upload an owner-supplied `.srt` or `.vtt` file with a language and a track name, show the explicit confirmation step before the write, and show the confirmed new track in the list; never show an existing track being edited, replaced, or deleted.
@@ -438,6 +439,7 @@ Once verified:
 | 1.1 | 2026-11-26 | Postora Team | Stage 6: complete three-scope Stage 1–5 justifications, exact OAuth prompt, revocation/fallback, analytics purpose acceptance, and eight-journey demo package |
 | 1.2 | 2026-11-27 | Postora Team | Stage 3B: playlist justifications (`playlists.list` under readonly, `playlistItems.insert` under force-ssl) and the single-channel playlist selector |
 | 1.3 | 2026-11-27 | Postora Team | Stage 6A: caption justifications (`captions.list` and `captions.insert` under force-ssl), the 512 KB UTF-8 file ceiling, the explicit-upload confirmation, the nine-journey demo package, and the "no modification or deletion of existing caption tracks" wording |
+| 1.4 | 2026-11-27 | Postora Team | Stage 6B & Phase 7.0 (`PR-15A`): public channel benchmark disclosure (`channels.list`, `playlistItems.list`, `videos.list` under readonly with `Cache-Control: no-store`), ten-journey demo package, Analytics Purpose Clause Version 2, and privacy-enhanced embedded player (`youtube-nocookie.com`) disclosure |
 
 ---
 

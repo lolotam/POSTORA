@@ -338,6 +338,12 @@ const GoogleApiDisclosure = () => {
                   modifies, replaces, or deletes existing caption tracks
                 </li>
                 <li>
+                  <strong>Embedded Playback:</strong> When you press Play on a video in Postora, your browser loads
+                  YouTube's embedded player from youtube-nocookie.com. Google receives the request directly from your
+                  browser under YouTube's Terms of Service and Google's Privacy Policy. Postora does not receive or
+                  store playback data.
+                </li>
+                <li>
                   <strong>Authentication:</strong> To verify your identity and maintain your connected account status
                 </li>
                 <li>

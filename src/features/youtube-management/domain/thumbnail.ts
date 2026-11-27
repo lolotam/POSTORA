@@ -8,6 +8,19 @@
 import { DIRECT_THUMBNAIL_MIMES } from "./types";
 import { isDefinitiveRefusalCode } from "./errors";
 
+/**
+ * YouTube's 2 MiB maximum thumbnail file size.
+ *
+ * The edge function's own constant, re-exported so the page and the server can
+ * never disagree about it (ARCHITECTURE.md §22).
+ */
+import {
+  THUMBNAIL_MAX_BYTES,
+  sniffThumbnailType,
+} from "../../../../supabase/functions/youtube-resources/thumbnailMedia";
+
+export { THUMBNAIL_MAX_BYTES, sniffThumbnailType };
+
 /** One row of the creator's own media library, as the picker needs it. */
 export interface YouTubeThumbnailCandidate {
   id: string;
@@ -16,6 +29,65 @@ export interface YouTubeThumbnailCandidate {
   mime_type: string;
   file_type: string;
   file_size: number | null;
+  /** Display only: where the browser can show the image. Never sent to YouTube. */
+  preview_url?: string | null;
+}
+
+/** The MIME types a declared file type may name. */
+const DECLARED_THUMBNAIL_TYPES = new Set<string>(DIRECT_THUMBNAIL_MIMES);
+
+/** Why a picked image was refused before it was stored. */
+export type ThumbnailFileFailureReason = "not_jpeg_png" | "too_large" | "type_mismatch";
+
+/** The verdict on one picked image. */
+export type ThumbnailFileCheck =
+  | { ok: true; mimeType: "image/jpeg" | "image/png" }
+  | { ok: false; reason: ThumbnailFileFailureReason };
+
+/**
+ * Whether the image was refused.
+ *
+ * A type guard rather than an inline `!check.ok`: this repository compiles
+ * without `strictNullChecks`, where TypeScript does not narrow a union by a
+ * boolean discriminant.
+ */
+export function isThumbnailFileFailure(
+  check: ThumbnailFileCheck,
+): check is { ok: false; reason: ThumbnailFileFailureReason } {
+  return check.ok === false;
+}
+
+/**
+ * Checks one file before it is stored.
+ *
+ * The order matters: an unsupported type is refused before the bytes are
+ * sniffed, and a mismatch between the declared type and the bytes is a
+ * different refusal from an unsupported type, because the creator can fix one
+ * by picking a different file and the other by re-saving the same picture in
+ * the right format.
+ */
+export function checkThumbnailFile(input: {
+  declaredType: string;
+  size: number;
+  head: Uint8Array;
+}): ThumbnailFileCheck {
+  const declared = input.declaredType.toLowerCase().split(";")[0].trim();
+  // "image/jpg" is what some browsers and tools write for a JPEG.
+  const normalized = declared === "image/jpg" ? "image/jpeg" : declared;
+  if (normalized !== "" && !DECLARED_THUMBNAIL_TYPES.has(normalized)) {
+    return { ok: false, reason: "not_jpeg_png" };
+  }
+  const sniffed = sniffThumbnailType(input.head);
+  if (sniffed === null) {
+    return { ok: false, reason: "not_jpeg_png" };
+  }
+  if (normalized !== "" && normalized !== sniffed) {
+    return { ok: false, reason: "type_mismatch" };
+  }
+  if (input.size <= 0 || input.size > THUMBNAIL_MAX_BYTES) {
+    return { ok: false, reason: "too_large" };
+  }
+  return { ok: true, mimeType: sniffed };
 }
 
 /**

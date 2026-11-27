@@ -4,8 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { formatIsoDuration } from "../domain/formatIsoDuration";
+import type { YouTubePlayerSizeMode } from "../domain/player";
 import type { YouTubeVideoDetails } from "../domain/types";
-import { YouTubeVideoThumbnail } from "./YouTubeVideoThumbnail";
+import { YouTubeVideoPlayer } from "./YouTubeVideoPlayer";
 
 export interface YouTubeVideoDetailProps {
   video: YouTubeVideoDetails;
@@ -14,10 +15,22 @@ export interface YouTubeVideoDetailProps {
   categoryLabel?: string | null;
   showUpdated?: boolean;
   showHeading?: boolean;
+  /** How large the embedded player is drawn; the drawer owns it. */
+  playerSizeMode?: YouTubePlayerSizeMode;
+  onPlayerSizeModeChange?: (mode: YouTubePlayerSizeMode) => void;
 }
 
 export function YouTubeVideoDetail(props: YouTubeVideoDetailProps): JSX.Element {
-  const { video, fetchedAt, accountId, categoryLabel, showUpdated = true, showHeading = true } = props;
+  const {
+    video,
+    fetchedAt,
+    accountId,
+    categoryLabel,
+    showUpdated = true,
+    showHeading = true,
+    playerSizeMode,
+    onPlayerSizeModeChange,
+  } = props;
   const { t, i18n } = useTranslation("accounts");
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const notAvailable = t("youtubeManagement.detail.notAvailable", "Not available");
@@ -53,7 +66,17 @@ export function YouTubeVideoDetail(props: YouTubeVideoDetailProps): JSX.Element 
   return (
     <Card>
       <CardContent className="space-y-5 pt-1">
-        <YouTubeVideoThumbnail url={video.thumbnail_url} />
+        <YouTubeVideoPlayer
+          key={video.id}
+          videoId={video.id}
+          title={video.title}
+          thumbnailUrl={video.thumbnail_url}
+          durationIso8601={video.duration_iso8601}
+          privacyStatus={video.privacy_status}
+          uploadStatus={video.upload_status}
+          sizeMode={playerSizeMode}
+          onSizeModeChange={onPlayerSizeModeChange}
+        />
         <div className="space-y-2">
           {showHeading ? <h3 className="text-lg font-semibold">{video.title}</h3> : <p className="text-lg font-semibold">{video.title}</p>}
           <div className="flex flex-wrap gap-3">

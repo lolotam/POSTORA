@@ -14,6 +14,13 @@ function pageText(container: HTMLElement) {
   return (container.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
+// The embedded player is loaded by the creator's own browser, so every legal
+// page says where the request goes and what Postora never sees.
+const EMBEDDED_PLAYER_DISCLOSURE =
+  "When you press Play on a video in Postora, your browser loads YouTube's embedded player from "
+  + "youtube-nocookie.com. Google receives the request directly from your browser under YouTube's "
+  + "Terms of Service and Google's Privacy Policy. Postora does not receive or store playback data.";
+
 describe("YouTube legal disclosures", () => {
   it.each([
     ["Google API Services Disclosure", <GoogleApiDisclosure />],
@@ -24,6 +31,16 @@ describe("YouTube legal disclosures", () => {
 
     expect(pageText(container)).toContain("Last updated: November 26, 2026");
     expect(pageText(container)).not.toContain("Last updated: January 8, 2026");
+  });
+
+  it.each([
+    ["Google API Services Disclosure", <GoogleApiDisclosure />],
+    ["Postora Privacy Policy", <Privacy />],
+    ["Postora Terms of Service", <Terms />],
+  ])("discloses the embedded player on %s", (_heading, page) => {
+    const { container } = renderPage(page);
+
+    expect(pageText(container)).toContain(EMBEDDED_PLAYER_DISCLOSURE);
   });
 
   it("discloses every requested YouTube scope by its full URL", () => {

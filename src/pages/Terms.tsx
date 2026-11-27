@@ -83,6 +83,7 @@ const Terms = () => {
                 </a>
                 ) applies to your use of YouTube features
               </li>
+              <li>When you press Play on a video in Postora, your browser loads YouTube's embedded player from youtube-nocookie.com. Google receives the request directly from your browser under YouTube's Terms of Service and Google's Privacy Policy. Postora does not receive or store playback data.</li>
               <li>You can revoke Postora's access to your YouTube account at any time via your{" "}
                 <a 
                   href="https://myaccount.google.com/permissions" 

@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { upsertChaptersBlock } from "../../../../supabase/functions/_shared/youtubeChapters";
+import { buildYouTubeSuggestContext } from "./youtubeSuggestContext";
 
 interface YouTubeAISuggestionsProps {
   type: "title" | "description" | "tags" | "chapters";
@@ -28,10 +29,14 @@ interface YouTubeAISuggestionsProps {
 
 export function YouTubeAISuggestions(props: YouTubeAISuggestionsProps) {
   if (props.type === "chapters") return <YouTubeChapterSuggestions {...props} />;
-  return <YouTubeLegacyAISuggestions {...props} />;
+  return <YouTubeLegacyAISuggestions {...props} type={props.type} />;
 }
 
-function YouTubeLegacyAISuggestions({ type, context = "", secondaryContext, onSelect }: YouTubeAISuggestionsProps) {
+type YouTubeLegacyAISuggestionsProps = Omit<YouTubeAISuggestionsProps, "type"> & {
+  type: "title" | "description" | "tags";
+};
+
+function YouTubeLegacyAISuggestions({ type, context = "", secondaryContext, onSelect }: YouTubeLegacyAISuggestionsProps) {
   const { t } = useTranslation("postsettings");
   const [isLoading, setIsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -67,7 +72,7 @@ function YouTubeLegacyAISuggestions({ type, context = "", secondaryContext, onSe
 
       const { data, error } = await supabase.functions.invoke("generate-caption", {
         body: {
-          context: type === "tags" ? `Title: ${context}\nDescription: ${secondaryContext || ""}` : context,
+          context: buildYouTubeSuggestContext(type, context, secondaryContext),
           platform: "youtube",
           language,
           requestType,

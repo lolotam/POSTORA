@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -8,6 +9,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { YouTubeResourceError } from "../domain/errors";
+import type { YouTubePlayerSizeMode } from "../domain/player";
 import type {
   YouTubeCaptionFormat,
   YouTubeCaptionTrack,
@@ -18,6 +20,7 @@ import type {
 } from "../domain/types";
 import type { YouTubeThumbnailCandidate, YouTubeThumbnailOutcome } from "../domain/thumbnail";
 import type { EditSaveResult, EditSnapshotInput } from "./YouTubeVideoEditCard";
+import type { ResolvedTier } from "@/components/ai/ResolvedModelCards";
 import { YouTubeVideoEditCard } from "./YouTubeVideoEditCard";
 import { YouTubeThumbnailChange } from "./YouTubeThumbnailChange";
 import { YouTubeCaptionsSection } from "./YouTubeCaptionsSection";
@@ -40,6 +43,10 @@ export function YouTubeVideoDrawer({
   thumbnailCandidatesError,
   onRetryThumbnailCandidates,
   onSetThumbnail,
+  currentThumbnailUrl,
+  onUploadThumbnailImage,
+  onGenerateThumbnailImage,
+  resolvedImageTiers,
   captionsCapability,
   onListCaptions,
   onUploadCaption,
@@ -68,6 +75,22 @@ export function YouTubeVideoDrawer({
   thumbnailCandidatesError?: unknown;
   onRetryThumbnailCandidates?: () => void;
   onSetThumbnail?: (mediaFileId: string) => Promise<YouTubeThumbnailOutcome>;
+  /** The thumbnail the video shows today. */
+  currentThumbnailUrl?: string | null;
+  /** Stores an image the creator picked on this device. */
+  onUploadThumbnailImage?: (params: {
+    blob: Blob;
+    fileName: string;
+    mimeType: "image/jpeg" | "image/png";
+  }) => Promise<YouTubeThumbnailCandidate>;
+  /** Generates a thumbnail image with the app's own image generator. */
+  onGenerateThumbnailImage?: (params: {
+    prompt: string;
+    referenceImage?: string;
+    referenceImages?: readonly string[];
+  }) => Promise<{ imageUrl: string }>;
+  /** Configured image generation model tiers to display in the AI tab. */
+  resolvedImageTiers?: readonly ResolvedTier[];
   /** The server's derived caption capability; null until it is known. */
   captionsCapability?: YouTubeCapabilityState | null;
   /** Lists the video's caption tracks; never called without a click. */
@@ -88,12 +111,20 @@ export function YouTubeVideoDrawer({
   const updatedLabel = parsedAt && !Number.isNaN(parsedAt.getTime())
     ? new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(parsedAt)
     : null;
+  // The drawer owns the player's size: Theater widens the drawer while the
+  // same player keeps playing.
+  const [playerSizeMode, setPlayerSizeMode] = useState<YouTubePlayerSizeMode>("compact");
+  useEffect(() => {
+    setPlayerSizeMode("compact");
+  }, [details?.id, open]);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side={locale === "ar" ? "left" : "right"}
         dir={locale === "ar" ? "rtl" : "ltr"}
-        className="w-full sm:max-w-xl lg:max-w-2xl overflow-y-auto"
+        className={playerSizeMode === "theater"
+          ? "w-full sm:max-w-[min(96vw,1200px)] overflow-y-auto"
+          : "w-full sm:max-w-xl lg:max-w-2xl overflow-y-auto"}
       >
         <SheetHeader>
           <SheetTitle>{details?.title ?? t("youtubeManagement.drawer.title", "Video details")}</SheetTitle>
@@ -118,17 +149,24 @@ export function YouTubeVideoDrawer({
               onSnapshot={onSnapshot}
               onSave={onSave}
               disabledReason={disabledReason}
+              playerSizeMode={playerSizeMode}
+              onPlayerSizeModeChange={setPlayerSizeMode}
             />
             <YouTubeThumbnailChange
+              key={`thumbnail:${details.id}`}
               capability={thumbnailCapability ?? null}
               candidates={thumbnailCandidates ?? []}
               candidatesLoading={thumbnailCandidatesLoading ?? false}
               candidatesError={thumbnailCandidatesError ?? null}
               onRetryCandidates={onRetryThumbnailCandidates}
               onSetThumbnail={onSetThumbnail}
+              currentThumbnailUrl={currentThumbnailUrl ?? details.thumbnail_url}
+              onUploadImage={onUploadThumbnailImage}
+              onGenerateAiImage={onGenerateThumbnailImage}
+              resolvedImageTiers={resolvedImageTiers}
             />
             <YouTubeCaptionsSection
-              key={details.id}
+              key={`captions:${details.id}`}
               capability={captionsCapability ?? null}
               videoId={details.id}
               onListCaptions={onListCaptions}
