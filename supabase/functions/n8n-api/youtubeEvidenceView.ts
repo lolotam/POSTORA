@@ -180,7 +180,7 @@ export function sanitizePostForPublicRead<T>(post: T): T {
         return entry;
       }
       const responseData = entry.response_data;
-      if (!("youtube_publish_evidence" in responseData)) {
+      if (!("youtube_publish_evidence" in responseData) || !responseData.youtube_publish_evidence) {
         return entry;
       }
       platformPostsChanged = true;

@@ -145,11 +145,7 @@ import {
   YOUTUBE_PLAYLIST_INSERT_UNIT_COST,
 } from "../_shared/youtubeWriteBudget.ts";
 import { checkCaptionUploadCounter } from "../_shared/youtubeWriteCounters.ts";
-import {
-  hasUnscrubbedYoutubeCaptionContent,
-  scrubSettledPostCaptionInDb,
-  scrubSettledYoutubeCaptionMetadata,
-} from "./youtubeCaptionSettlement.ts";
+import { scrubSettledPostCaptionInDb } from "./youtubeCaptionSettlement.ts";
 import { resolveYouTubeVideoTitle } from "../_shared/youtubeVideoTitle.ts";
 import { resolveYoutubeThumbnail } from "./youtubeThumbnailIntake.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
@@ -1859,7 +1855,8 @@ async function scrubSettledPostCaptionForPost(
         await supabase
           .from("posts")
           .update({ metadata })
-          .eq("id", id),
+          .eq("id", id)
+          .in("status", ["completed", "partial", "failed"]),
     },
     postId,
   );
@@ -2240,6 +2237,7 @@ async function handleNotificationOnly(
     const reason = claimRes?.reason ?? claimError?.message ?? "claim_refused";
     await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id, message: "Notification recovery claim refused", metadata: { event: "legacy_notification_candidate_refused", post_id: postId, reason: claimError ? "claim_unavailable" : reason } });
     if (claimError) return createErrorResponse("Notification claim unavailable", 503);
+    await scrubSettledPostCaptionForPost(supabase, post.id);
     return createJsonResponse({
       success: true,
       notification_only: true,
@@ -2831,12 +2829,8 @@ Deno.serve(async (req) => {
     if (!Array.isArray(platformsToPost) || platformsToPost.length === 0) {
       const msg = "No platforms selected for this post";
       console.error(msg, { postId: post_id, overridePlatforms });
-      await supabase.from("posts").update({
-        status: "failed",
-        ...(hasUnscrubbedYoutubeCaptionContent(post.metadata as Record<string, unknown> | null | undefined)
-          ? { metadata: scrubSettledYoutubeCaptionMetadata(post.metadata as Record<string, unknown> | null | undefined) }
-          : {}),
-      }).eq("id", post_id);
+      await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+      await scrubSettledPostCaptionForPost(supabase, post_id);
       return createErrorResponse(msg, 400);
     }
 
@@ -2892,12 +2886,8 @@ Deno.serve(async (req) => {
         if (logError) console.error("Deferred account refusal log failed:", logError);
         return createErrorResponse("The deferred account is no longer active or owned by this post owner. Retry reconciliation after restoring access.", 503);
       }
-      await supabase.from("posts").update({
-        status: "failed",
-        ...(hasUnscrubbedYoutubeCaptionContent(post.metadata as Record<string, unknown> | null | undefined)
-          ? { metadata: scrubSettledYoutubeCaptionMetadata(post.metadata as Record<string, unknown> | null | undefined) }
-          : {}),
-      }).eq("id", post_id);
+      await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+      await scrubSettledPostCaptionForPost(supabase, post_id);
       return createErrorResponse(msg, 400);
     }
 
@@ -10124,7 +10114,7 @@ function extractYoutubeCaptionFollowUp(
     const record = raw as Record<string, unknown>;
     return {
       language: typeof record.language === "string" ? record.language : "",
-      name: typeof record.name === "string" ? record.name : "",
+      name: typeof record.name === "string" ? record.name : "\0",
       format: (record.format === "srt" || record.format === "vtt" ? record.format : "") as "srt" | "vtt",
       content: typeof record.content === "string" ? record.content : "",
     };

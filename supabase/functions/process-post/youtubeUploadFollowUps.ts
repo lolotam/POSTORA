@@ -430,6 +430,7 @@ async function uploadYoutubeCaption(
   try {
     const response = await deps.fetchImpl(CAPTIONS_UPLOAD_ENDPOINT, {
       method: "POST",
+      redirect: "manual",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": `multipart/related; boundary=${boundary}`,
