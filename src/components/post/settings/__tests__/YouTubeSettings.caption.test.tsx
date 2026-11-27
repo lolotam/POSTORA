@@ -91,6 +91,10 @@ beforeEach(() => {
   playlistCatalog.loading = false;
   playlistCatalog.loadingMore = false;
   playlistCatalog.unavailable = false;
+  Object.assign(playlistCatalog, {
+    capabilitiesLoading: false,
+    capabilitiesUnavailable: false,
+  });
   playlistCatalog.hasMore = false;
   playlistCatalog.loadMore.mockClear();
   playlistCatalog.retry.mockClear();
@@ -281,8 +285,78 @@ describe("YouTubeSettings upload-time Subtitles / CC section", () => {
         name: "",
         format: "vtt",
         content: GENERATED_VTT,
+        source: "audio",
+        sourceKey: "https://cdn.example.com/video.mp4",
       },
     });
+  });
+
+  it("preserves attached subtitle content when switching to 'Other (BCP-47 code)' and re-emits valid captionTrack once custom code is entered", async () => {
+    const { onSettingsChange } = renderSettings();
+    const validVtt = "WEBVTT\n\n00:00.000 --> 00:02.500\nHello world\n";
+    const file = makeSubtitleFile(validVtt, "captions.vtt");
+
+    fireEvent.change(screen.getByLabelText("Subtitle file (.srt or .vtt)"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() =>
+      expect(onSettingsChange).toHaveBeenCalledWith({
+        captionTrack: {
+          language: "en",
+          name: "",
+          format: "vtt",
+          content: validVtt,
+        },
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Subtitle language"), { target: { value: "other" } });
+
+    expect(screen.getByTestId("youtube-caption-error")).toHaveTextContent(
+      "Enter a valid BCP-47 language code, for example en or ar-EG.",
+    );
+    expect(screen.getByTestId("youtube-caption-file-size")).toHaveTextContent(
+      /512 KB.*44 UTF-8 bytes/,
+    );
+    expect(onSettingsChange).toHaveBeenLastCalledWith({
+      captionTrack: {
+        language: "",
+        name: "",
+        format: "vtt",
+        content: validVtt,
+      },
+    });
+
+    const customLangInput = screen.getByLabelText("BCP-47 language code");
+    fireEvent.change(customLangInput, { target: { value: "ar-EG" } });
+
+    expect(screen.queryByTestId("youtube-caption-error")).toBeNull();
+    expect(onSettingsChange).toHaveBeenLastCalledWith({
+      captionTrack: {
+        language: "ar-EG",
+        name: "",
+        format: "vtt",
+        content: validVtt,
+      },
+    });
+  });
+
+  it("shows a retry notice when subtitle capability verification fails and keeps controls disabled until verified", async () => {
+    Object.assign(playlistCatalog, {
+      capabilities: null,
+      capabilitiesLoading: false,
+      capabilitiesUnavailable: true,
+    });
+
+    renderSettings();
+
+    expect(screen.getByLabelText("Subtitle file (.srt or .vtt)")).toBeDisabled();
+    expect(screen.getByTestId("youtube-captions-capability-unavailable")).toHaveTextContent(
+      "Could not verify subtitle permissions for this channel.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry permissions" }));
+    expect(playlistCatalog.retry).toHaveBeenCalledTimes(1);
   });
 
   it("disables Subtitles / CC for Composio-managed accounts and when manage_captions capability is unavailable", async () => {

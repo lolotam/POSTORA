@@ -156,6 +156,7 @@ describe("YouTube legal disclosures", () => {
     const text = pageText(container);
 
     expect(text).toContain("attach an .srt or .vtt caption file to a new video upload in Create Post");
+    expect(text).toContain("attach subtitles generated from the video's audio in Create Post");
     expect(text).toContain("after the video upload completes");
     expect(text).toContain("youtube.force-ssl");
   });

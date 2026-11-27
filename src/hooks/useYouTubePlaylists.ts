@@ -8,6 +8,8 @@ import type {
 export interface YouTubePlaylistsState {
   playlists: YouTubePlaylistListItem[];
   capabilities: YouTubeAccountCapabilities["capabilities"] | null;
+  capabilitiesLoading: boolean;
+  capabilitiesUnavailable: boolean;
   loading: boolean;
   loadingMore: boolean;
   /** The list could not be read; the creator can retry without losing the choice. */
@@ -31,6 +33,8 @@ const gateway = new SupabaseYouTubeResourcesGateway();
 export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylistsState {
   const [playlists, setPlaylists] = useState<YouTubePlaylistListItem[]>([]);
   const [capabilities, setCapabilities] = useState<YouTubeAccountCapabilities["capabilities"] | null>(null);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const [capabilitiesUnavailable, setCapabilitiesUnavailable] = useState(false);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -54,6 +58,8 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
     if (!accountId) {
       setPlaylists([]);
       setCapabilities(null);
+      setCapabilitiesLoading(false);
+      setCapabilitiesUnavailable(false);
       cursorRef.current = null;
       setNextPageToken(null);
       setLoading(false);
@@ -75,15 +81,25 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
     setUnavailable(false);
 
     if (typeof gateway.getCapabilities === "function") {
+      setCapabilitiesLoading(true);
+      setCapabilitiesUnavailable(false);
       gateway.getCapabilities(accountId)
         .then((result) => {
           if (generationRef.current !== generation) return;
-          setCapabilities(result?.data?.capabilities ?? null);
+          const nextCaps = result?.data?.capabilities ?? null;
+          setCapabilities(nextCaps);
+          setCapabilitiesUnavailable(nextCaps === null);
+          setCapabilitiesLoading(false);
         })
         .catch(() => {
           if (generationRef.current !== generation) return;
           setCapabilities(null);
+          setCapabilitiesUnavailable(true);
+          setCapabilitiesLoading(false);
         });
+    } else {
+      setCapabilitiesLoading(false);
+      setCapabilitiesUnavailable(false);
     }
 
     gateway.listPlaylists({ accountId })
@@ -134,18 +150,20 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   }, [accountId]);
 
   const retry = useCallback(() => {
-    // A failed page is retried where it failed; a list that never arrived is
-    // read again from the first page.
-    if (playlists.length > 0 && cursorRef.current !== null) {
+    // A failed page is retried where it failed; a list that never arrived (or a
+    // failed capabilities check when playlists succeeded) is read again.
+    if (unavailable && playlists.length > 0 && cursorRef.current !== null) {
       loadMore();
       return;
     }
     setAttempt((value) => value + 1);
-  }, [loadMore, playlists.length]);
+  }, [loadMore, playlists.length, unavailable]);
 
   return {
     playlists,
     capabilities,
+    capabilitiesLoading,
+    capabilitiesUnavailable,
     loading,
     loadingMore,
     unavailable,

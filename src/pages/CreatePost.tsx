@@ -69,6 +69,53 @@ function canonicalIntentJson(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
+/** Deterministic non-reversible UTF-8 content digest so submit_fingerprint never stores raw subtitle cues. */
+function captionContentDigest(content: string): { content_digest: string; byte_length: number } {
+  const bytes = new TextEncoder().encode(content);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < bytes.length; i += 1) {
+    h1 ^= bytes[i];
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 ^= bytes[i] ^ (i & 0xff);
+    h2 = Math.imul(h2, 0x85ebca6b) >>> 0;
+  }
+  const hex1 = h1.toString(16).padStart(8, "0");
+  const hex2 = h2.toString(16).padStart(8, "0");
+  return {
+    content_digest: `fnv1a64:${hex1}${hex2}:${bytes.byteLength}`,
+    byte_length: bytes.byteLength,
+  };
+}
+
+function fingerprintYoutubeSettings(youtubeSettings: Record<string, unknown>): Record<string, unknown> {
+  const rawCaption = youtubeSettings.youtube_caption;
+  if (!rawCaption || typeof rawCaption !== "object" || Array.isArray(rawCaption)) {
+    return youtubeSettings;
+  }
+  const record = rawCaption as Record<string, unknown>;
+  if (typeof record.content !== "string") {
+    return youtubeSettings;
+  }
+  const { content, ...restCaption } = record;
+  return {
+    ...youtubeSettings,
+    youtube_caption: {
+      ...restCaption,
+      ...captionContentDigest(content),
+    },
+  };
+}
+
+function fingerprintYoutubeSettingsWithoutCaptionContent(
+  youtubeSettings: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!("youtube_caption" in youtubeSettings)) return youtubeSettings;
+  const next = { ...youtubeSettings };
+  delete next.youtube_caption;
+  return next;
+}
+
 export default function CreatePost() {
   const location = useLocation();
   const editIdentity = new URLSearchParams(location.search).get("edit") || "";
@@ -310,6 +357,86 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     }
     return map;
   }, [connectedAccounts, selectedAccountIds]);
+
+  const { youtubeCaption, setYoutubeCaption } = platformSettings;
+  const previousSelectedYoutubeChannelKeyRef = useRef<string | null>(null);
+  const hasSelectedYoutubeChannelRef = useRef(false);
+  useEffect(() => {
+    if (accountsLoading) return;
+    const selectedYoutubeAccounts = connectedAccounts.filter(
+      (account) => account.platform === "youtube" && selectedAccountIds.includes(account.id),
+    );
+    const hasComposioYoutube = selectedYoutubeAccounts.some(
+      (account) => (account as { auth_provider?: string }).auth_provider === "composio",
+    );
+    const nativeYoutubeAccounts = selectedYoutubeAccounts.filter(
+      (account) => (account as { auth_provider?: string }).auth_provider !== "composio",
+    );
+    const distinctNativeChannels = new Set(
+      nativeYoutubeAccounts.map((account) => {
+        const channelId = account.platform_user_id?.trim();
+        return channelId && channelId.length > 0 ? `channel:${channelId}` : `account:${account.id}`;
+      }),
+    );
+    const singleChannelKey =
+      !hasComposioYoutube && distinctNativeChannels.size === 1 ? [...distinctNativeChannels][0] : null;
+    if (singleChannelKey !== null) {
+      hasSelectedYoutubeChannelRef.current = true;
+    }
+    const channelChanged =
+      previousSelectedYoutubeChannelKeyRef.current !== null &&
+      singleChannelKey !== null &&
+      previousSelectedYoutubeChannelKeyRef.current !== singleChannelKey;
+    if (singleChannelKey !== null || !youtubeCaption) {
+      previousSelectedYoutubeChannelKeyRef.current = singleChannelKey;
+    }
+    const ineligibleTarget =
+      hasComposioYoutube ||
+      distinctNativeChannels.size > 1 ||
+      (distinctNativeChannels.size === 0 && hasSelectedYoutubeChannelRef.current) ||
+      channelChanged;
+    if (
+      ineligibleTarget &&
+      youtubeCaption &&
+      !youtubeCaption.alreadySubmitted
+    ) {
+      setYoutubeCaption(null);
+    }
+  }, [
+    accountsLoading,
+    connectedAccounts,
+    selectedAccountIds,
+    setYoutubeCaption,
+    youtubeCaption,
+  ]);
+
+  const currentYoutubeVideoSourceKey = useMemo(() => {
+    if (uploadMethod === "url") {
+      return urlMediaType === "video" && videoUrl.trim().length > 0 ? videoUrl.trim() : null;
+    }
+    const videoFile = files.find((f) => f.fileType === "video");
+    return videoFile?.previewUrl ?? videoFile?.cloudinaryUrl ?? videoFile?.storagePath ?? null;
+  }, [files, uploadMethod, urlMediaType, videoUrl]);
+
+  useEffect(() => {
+    if (
+      youtubeCaption &&
+      !youtubeCaption.alreadySubmitted &&
+      youtubeCaption.source === "audio"
+    ) {
+      if (
+        !currentYoutubeVideoSourceKey ||
+        (youtubeCaption.sourceKey &&
+          youtubeCaption.sourceKey !== currentYoutubeVideoSourceKey)
+      ) {
+        setYoutubeCaption(null);
+      }
+    }
+  }, [
+    currentYoutubeVideoSourceKey,
+    setYoutubeCaption,
+    youtubeCaption,
+  ]);
 
   // Handle account toggle
   const handleAccountToggle = async (accountId: string, platform: Platform) => {
@@ -639,25 +766,30 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           key !== "submit_id" && key !== "submit_fingerprint" && key !== "publish_enqueue_accepted"
         ),
       );
-      const submitFingerprint = canonicalIntentJson({
-        platforms: [...selectedPlatforms].sort(),
-        accountIds: [...selectedAccountIds].sort(),
-        // Media order is publishing intent. The array is NOT sorted: reordering
-        // a carousel is a different submission, not the same one retried.
-        localMediaIds: files.map((file) => file.storagePath),
-        // The external source identity, not a derived upload id, so recovery
-        // never needs to upload the same URL again to match its own intent.
-        intake: {
-          uploadMethod,
-          urlMediaType,
-          imageUrls: imageUrls.trim(),
-          videoUrl: videoUrl.trim(),
-        },
-        caption: caption.trim(),
-        scheduledAt: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
-        scheduleTimezone: scheduleTimezone || null,
-        youtube: youtubeSettings,
-      });
+      const buildIntentEnvelope = (yt: Record<string, unknown>) =>
+        canonicalIntentJson({
+          platforms: [...selectedPlatforms].sort(),
+          accountIds: [...selectedAccountIds].sort(),
+          // Media order is publishing intent. The array is NOT sorted: reordering
+          // a carousel is a different submission, not the same one retried.
+          localMediaIds: files.map((file) => file.storagePath),
+          // The external source identity, not a derived upload id, so recovery
+          // never needs to upload the same URL again to match its own intent.
+          intake: {
+            uploadMethod,
+            urlMediaType,
+            imageUrls: imageUrls.trim(),
+            videoUrl: videoUrl.trim(),
+          },
+          caption: caption.trim(),
+          scheduledAt: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
+          scheduleTimezone: scheduleTimezone || null,
+          youtube: yt,
+        });
+      const submitFingerprint = buildIntentEnvelope(fingerprintYoutubeSettings(youtubeSettings));
+      const settledCaptionlessFingerprint = buildIntentEnvelope(
+        fingerprintYoutubeSettingsWithoutCaptionContent(youtubeSettings),
+      );
 
       type RecoveredPost = {
         id: string;
@@ -685,7 +817,14 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         if (!pending) return { state: "none" };
         const existingMetadata = pending.metadata as Record<string, unknown> | null;
         if (existingMetadata?.submit_id !== submitId) return { state: "conflict", reason: "owner" };
-        if (existingMetadata?.submit_fingerprint !== submitFingerprint) {
+        const existingCaption = existingMetadata?.youtube_caption as Record<string, unknown> | undefined;
+        const captionWasScrubbedOnSettlement =
+          Boolean(existingCaption && typeof existingCaption === "object" && !("content" in existingCaption));
+        const fingerprintMatches =
+          existingMetadata?.submit_fingerprint === submitFingerprint ||
+          (captionWasScrubbedOnSettlement &&
+            existingMetadata?.submit_fingerprint === settledCaptionlessFingerprint);
+        if (!fingerprintMatches) {
           return { state: "conflict", reason: "intent" };
         }
         return {

@@ -212,15 +212,26 @@ describe("useYouTubePlaylists", () => {
     );
 
     await waitFor(() => expect(result.current.capabilities).toEqual(sampleCapabilities));
+    expect(result.current.capabilitiesLoading).toBe(false);
+    expect(result.current.capabilitiesUnavailable).toBe(false);
     expect(getCapabilitiesMock).toHaveBeenCalledWith("acc-1");
 
     getCapabilitiesMock.mockRejectedValueOnce(new Error("provider error"));
     rerender({ accountId: "acc-2" });
 
     await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+    await waitFor(() => expect(result.current.capabilitiesUnavailable).toBe(true));
     expect(result.current.capabilities).toBeNull();
+    expect(result.current.capabilitiesLoading).toBe(false);
+
+    getCapabilitiesMock.mockResolvedValueOnce(capabilitiesEnvelope(sampleCapabilities));
+    await act(async () => { result.current.retry(); });
+    await waitFor(() => expect(result.current.capabilities).toEqual(sampleCapabilities));
+    expect(result.current.capabilitiesUnavailable).toBe(false);
 
     rerender({ accountId: null });
     expect(result.current.capabilities).toBeNull();
+    expect(result.current.capabilitiesLoading).toBe(false);
+    expect(result.current.capabilitiesUnavailable).toBe(false);
   });
 });

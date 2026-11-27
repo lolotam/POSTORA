@@ -13,6 +13,10 @@ export interface YouTubeUploadCaptionState {
   format: "srt" | "vtt";
   content?: string;
   alreadySubmitted?: boolean;
+  source?: "file" | "audio";
+  sourceKey?: string | null;
+  pendingRead?: boolean;
+  captionEligible?: boolean;
 }
 
 export type LocationSource = "threads" | "facebook" | "nominatim" | "meta";
@@ -599,8 +603,16 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       ...(selectedPlatforms.includes("youtube") &&
       youtubeCaption !== null &&
       !youtubeCaption.alreadySubmitted &&
+      !youtubeCaption.pendingRead &&
+      youtubeCaption.captionEligible !== false &&
       typeof youtubeCaption.content === "string" &&
-      youtubeCaption.content.length > 0
+      youtubeCaption.content.length > 0 &&
+      validateCaptionUploadInput({
+        language: youtubeCaption.language.trim(),
+        name: youtubeCaption.name.trim(),
+        format: youtubeCaption.format,
+        content: youtubeCaption.content,
+      }).ok === true
         ? {
             youtube_caption: {
               language: youtubeCaption.language.trim(),
@@ -712,6 +724,18 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     postoraScheduledAt: Date | null = null,
   ): string | null => {
     if (youtubeCaption && !youtubeCaption.alreadySubmitted) {
+      if (youtubeCaption.pendingRead) {
+        return t(
+          "youtube.captionReadInProgress",
+          "Please wait for the subtitle file to finish loading before publishing.",
+        );
+      }
+      if (youtubeCaption.captionEligible === false) {
+        return t(
+          "youtube.captionsCapabilityUnconfirmedError",
+          "Verify subtitle permissions for the selected YouTube channel or clear the subtitle file before publishing.",
+        );
+      }
       const validation = validateCaptionUploadInput({
         language: youtubeCaption.language.trim(),
         name: youtubeCaption.name.trim(),

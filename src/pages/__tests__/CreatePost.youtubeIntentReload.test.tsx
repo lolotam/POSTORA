@@ -369,6 +369,12 @@ describe("CreatePost YouTube customized lost-ACK reload", () => {
       format: "vtt",
       content: "WEBVTT\n\n00:00.000 --> 00:02.000\nHello world\n",
     });
+    expect(
+      String((fixture.stored!.metadata as Record<string, unknown>).submit_fingerprint ?? ""),
+    ).not.toContain("Hello world");
+    expect(
+      String((fixture.stored!.metadata as Record<string, unknown>).submit_fingerprint ?? ""),
+    ).toContain("content_digest");
     first.unmount();
 
     sessionStorage.removeItem("postora_post_draft");

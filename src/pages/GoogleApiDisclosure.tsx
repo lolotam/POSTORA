@@ -275,7 +275,7 @@ const GoogleApiDisclosure = () => {
                           <code className="bg-muted px-1 rounded">captions.insert</code>). When you attach an{" "}
                           <code className="bg-muted px-1 rounded">.srt</code> or{" "}
                           <code className="bg-muted px-1 rounded">.vtt</code> caption file to a new video upload in
-                          Create Post, Postora sends that caption track to YouTube after the video upload completes
+                          Create Post (or attach subtitles generated from the video&apos;s audio in Create Post), Postora sends that caption track to YouTube after the video upload completes
                           through <code className="bg-muted px-1 rounded">captions.insert</code> under{" "}
                           <code className="bg-muted px-1 rounded">youtube.force-ssl</code>, and removes the caption
                           text from the post&apos;s stored metadata once publishing settles. Postora never modifies,
@@ -343,7 +343,7 @@ const GoogleApiDisclosure = () => {
                   page (<code className="bg-muted px-1 rounded">/youtube</code>) and confirm the upload, or when you
                   attach an <code className="bg-muted px-1 rounded">.srt</code> or{" "}
                   <code className="bg-muted px-1 rounded">.vtt</code> caption file to a new video upload in Create Post
-                  (which is sent to YouTube after the video upload completes under{" "}
+                  (or attach subtitles generated from the video&apos;s audio in Create Post, which is sent to YouTube after the video upload completes under{" "}
                   <code className="bg-muted px-1 rounded">youtube.force-ssl</code> and scrubbed from stored post
                   metadata once publishing settles). Postora never modifies, replaces, or deletes existing caption tracks
                 </li>
