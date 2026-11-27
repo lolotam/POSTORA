@@ -60,6 +60,8 @@ interface RecordedRequest {
   contentType: string | null;
   bodyLength: number;
   bytes: Uint8Array | null;
+  /** The body of a request that carried one as text, such as the session request. */
+  bodyText: string | null;
 }
 
 interface FakeProvider {
@@ -94,6 +96,7 @@ function fakeProvider(answers: ScriptedAnswer[]): FakeProvider {
       contentType: headers.get("content-type"),
       bodyLength: bytes?.byteLength ?? 0,
       bytes,
+      bodyText: typeof body === "string" ? body : null,
     });
 
     const answer = answers[index];
@@ -229,7 +232,7 @@ async function run(
     now,
     sleep: async () => {},
     uploadUrl: `${SESSION_HOST}/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`,
-    uploadBody: { snippet: { title: "A video" } },
+    uploadBody: session.uploadBody,
     effectAuthority,
   });
   return { outcome, store };
@@ -1013,4 +1016,188 @@ Deno.test("the read-only status probe reports an incomplete upload without follo
   assertEquals(requests[0].range, `bytes */${TOTAL_BYTES}`);
   assertEquals(requests[0].bodyBytes, 0);
   assertEquals(requests[0].redirect, "manual");
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The schedule the provider session is opened with
+//
+// Time passes between the request being built and the provider being asked
+// for a session: a stored upload session can be picked up by a later worker,
+// after the time the post asked for has gone by. A schedule that no longer
+// qualifies is not sent, and the outcome says the video was uploaded as
+// private and not scheduled.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** The clock the schedule is judged against. */
+const SCHEDULE_NOW_MS = 1_700_000_000_000;
+
+/** The body of the request that asked the provider for a session. */
+function sessionRequestBody(provider: FakeProvider): { status: Record<string, unknown> } {
+  const sessionRequest = provider.requests.find((request) => request.method === "POST");
+  assert(sessionRequest !== undefined);
+  return JSON.parse(String(sessionRequest.bodyText)) as { status: Record<string, unknown> };
+}
+
+/** Runs one upload on the clock this suite controls. */
+function runOnScheduleClock(
+  provider: FakeProvider,
+  session: YoutubeUploadSessionRecord,
+): Promise<{ outcome: ResumableUploadOutcome }> {
+  return run(
+    provider,
+    session,
+    undefined,
+    undefined,
+    undefined,
+    SCHEDULE_NOW_MS + 120_000,
+    () => SCHEDULE_NOW_MS,
+  );
+}
+
+Deno.test("a schedule that is still valid reaches the provider unchanged", async () => {
+  const publishAt = new Date(SCHEDULE_NOW_MS + 60 * 60_000).toISOString();
+  const provider = fakeProvider([
+    { status: 200, headers: { Location: SESSION_URI } },
+    ...completeUploadFrom(0),
+  ]);
+  const { outcome } = await runOnScheduleClock(
+    provider,
+    record({
+      uploadBody: {
+        snippet: { title: "A video" },
+        status: { privacyStatus: "private", publishAt },
+      },
+    }),
+  );
+
+  assertEquals(sessionRequestBody(provider).status.publishAt, publishAt);
+  // The schedule was honoured, so nothing is reported about it.
+  assertEquals(outcome, { kind: "completed", videoId: VIDEO_ID });
+});
+
+Deno.test("a schedule that is gone by is not sent to the provider", async () => {
+  const unusable = [
+    { name: "a time that is too soon", publishAt: new Date(SCHEDULE_NOW_MS + 5 * 60_000).toISOString() },
+    { name: "a time that has passed", publishAt: new Date(SCHEDULE_NOW_MS - 60 * 60_000).toISOString() },
+  ];
+
+  for (const schedule of unusable) {
+    const provider = fakeProvider([
+      { status: 200, headers: { Location: SESSION_URI } },
+      ...completeUploadFrom(0),
+    ]);
+    const { outcome } = await runOnScheduleClock(
+      provider,
+      record({
+        uploadBody: {
+          snippet: { title: "A video" },
+          status: { privacyStatus: "private", publishAt: schedule.publishAt },
+        },
+      }),
+    );
+
+    const sent = sessionRequestBody(provider).status;
+    assertEquals(sent.publishAt, undefined, schedule.name);
+    assertEquals(sent.privacyStatus, "private", schedule.name);
+    assertEquals(
+      outcome,
+      { kind: "completed", videoId: VIDEO_ID, scheduleWarning: "stale_schedule" },
+      schedule.name,
+    );
+  }
+});
+
+Deno.test("a session opened after its schedule went stale preserves the stale warning across a later continuation run", async () => {
+  const stalePublishAt = new Date(SCHEDULE_NOW_MS + 5 * 60_000).toISOString();
+  let currentNowMs = SCHEDULE_NOW_MS;
+  const store = createInMemoryYoutubeUploadSessionStore({ now: () => currentNowMs });
+
+  // Run 1: opens the provider session (stripping publishAt), then stops at the deadline before writing any chunk.
+  const run1Provider = fakeProvider([
+    { status: 200, headers: { Location: SESSION_URI } },
+  ]);
+  const initialRecord = record({
+    uploadBody: {
+      snippet: { title: "A video" },
+      status: { privacyStatus: "private", publishAt: stalePublishAt },
+    },
+  });
+  let nowCalls = 0;
+  const run1 = await run(
+    run1Provider,
+    initialRecord,
+    undefined,
+    store,
+    undefined,
+    SCHEDULE_NOW_MS + 1_000,
+    () => {
+      nowCalls += 1;
+      // First two calls are inside openProviderSession; third call is the while-loop deadline check.
+      if (nowCalls >= 3) currentNowMs = SCHEDULE_NOW_MS + 2_000;
+      return currentNowMs;
+    },
+  );
+  assertEquals(run1.outcome.kind, "resumable");
+  const storedAfterRun1 = Array.from(store.sessions.values())[0];
+  assertEquals(storedAfterRun1.sessionUri, SESSION_URI);
+  assertEquals(storedAfterRun1.lastOutcome, "stale_schedule");
+
+  // Run 2: inherits the open sessionUri and completes the byte upload.
+  const run2Provider = fakeProvider([
+    { status: 308 },
+    ...completeUploadFrom(0),
+  ]);
+  const claimed = await store.claim({
+    sessionId: storedAfterRun1.id,
+    leaseToken: "lease-1",
+    leaseMs: 300_000,
+  });
+  assert(claimed.record !== null);
+  const run2Outcome = await runResumableVideoUpload({
+    fetchImpl: run2Provider.fetchImpl,
+    store,
+    session: claimed.record,
+    leaseToken: "lease-1",
+    accessToken: "token-1",
+    source: memorySource(TOTAL_BYTES),
+    totalBytes: TOTAL_BYTES,
+    mimeType: "video/mp4",
+    deadlineMs: currentNowMs + 120_000,
+    now: () => currentNowMs,
+    sleep: async () => {},
+    uploadUrl: `${SESSION_HOST}/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`,
+    uploadBody: claimed.record.uploadBody,
+    effectAuthority: () => Promise.resolve({ authorized: true, reason: null }),
+  });
+  assertEquals(run2Outcome, {
+    kind: "completed",
+    videoId: VIDEO_ID,
+    scheduleWarning: "stale_schedule",
+  });
+});
+
+Deno.test("a session that already exists is never rewritten", async () => {
+  const publishAt = new Date(SCHEDULE_NOW_MS - 60 * 60_000).toISOString();
+  const provider = fakeProvider([
+    // The probe of the inherited session.
+    acceptBytesThrough(5_242_880),
+    ...completeUploadFrom(5_242_880),
+  ]);
+  const { outcome } = await runOnScheduleClock(
+    provider,
+    record({
+      sessionUri: SESSION_URI,
+      confirmedBytes: 1_000,
+      bytesSent: YOUTUBE_RESUMABLE_CHUNK_BYTES,
+      uploadBody: {
+        snippet: { title: "A video" },
+        status: { privacyStatus: "private", publishAt },
+      },
+    }),
+  );
+
+  // Google fixed that session's metadata when it was opened, so no second
+  // session is asked for and no body is sent again.
+  assertEquals(provider.requests.filter((request) => request.method === "POST").length, 0);
+  assertEquals(outcome, { kind: "completed", videoId: VIDEO_ID });
 });

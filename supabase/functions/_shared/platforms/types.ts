@@ -184,6 +184,7 @@ export interface PlatformMetadata {
   youtube_made_for_kids?: boolean | null;
   youtube_self_declared_for_kids?: boolean | null;
   youtube_scheduled_start_time?: string | null;
+  youtube_publish_at?: string | null;
   youtube_notify_subscribers?: boolean;
   youtube_default_language?: string | null;
   youtube_thumbnail_url?: string | null;

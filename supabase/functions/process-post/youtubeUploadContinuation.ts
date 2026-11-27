@@ -39,6 +39,10 @@ import {
   type YoutubeUploadSessionRecord,
 } from "./youtubeResumableUpload.ts";
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
+import {
+  hasYoutubeScheduleRequest,
+  YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE,
+} from "../_shared/youtubePublishOptions.ts";
 import { YOUTUBE_UPLOAD_REASON, type YoutubeUploadReason } from "./youtubeUploadPolicy.ts";
 import { isUncertainUploadOutcome } from "./youtubeUploadOutcome.ts";
 import { youtubeDeclarationProofOf } from "../_shared/youtubePublishSafety.ts";
@@ -919,6 +923,38 @@ function mediaSendabilityReason(code: string): YoutubeUploadReason {
     : YOUTUBE_UPLOAD_REASON.media_unavailable;
 }
 
+/** The publish time the session's stored request carried, if it carried one. */
+function sessionPublishAt(session: YoutubeUploadSessionRecord): unknown {
+  const status = session.uploadBody?.status;
+  if (typeof status !== "object" || status === null || Array.isArray(status)) return undefined;
+  return (status as Record<string, unknown>).publishAt;
+}
+
+/**
+ * What the settlement says about the schedule.
+ *
+ * The upload run knows whether the provider took the schedule. A session that
+ * was opened without one, although the post asked for one, means the time had
+ * gone by before the provider was asked for a session: the video was uploaded
+ * as private and not scheduled, and the settlement says so.
+ */
+function scheduleEvidenceOf(
+  metadata: Record<string, unknown>,
+  session: YoutubeUploadSessionRecord,
+  outcome: { kind: "completed"; videoId: string; scheduleWarning?: "stale_schedule" },
+): { scheduled: boolean; scheduleWarning?: "stale_schedule" } {
+  const scheduledPublishAt = sessionPublishAt(session);
+  const wasStrippedAtOpen =
+    outcome.scheduleWarning === "stale_schedule" || session.lastOutcome === "stale_schedule";
+  const scheduleWarning = wasStrippedAtOpen || (hasYoutubeScheduleRequest(metadata) && !scheduledPublishAt)
+    ? "stale_schedule"
+    : undefined;
+  return {
+    scheduled: Boolean(scheduledPublishAt) && !wasStrippedAtOpen,
+    ...(scheduleWarning ? { scheduleWarning } : {}),
+  };
+}
+
 /**
  * Turns the outcome of one upload attempt into the public result.
  *
@@ -989,6 +1025,7 @@ async function interpretOutcome(args: {
       return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.reconcile);
     }
 
+    const scheduleEvidence = scheduleEvidenceOf(post.metadata, session, outcome);
     const settled = await ports.settleUpload({
       sessionId: session.id,
       leaseToken,
@@ -1008,7 +1045,11 @@ async function interpretOutcome(args: {
           thumbnailReason: followUpResults?.thumbnail.reason,
           commentState: followUpResults?.first_comment.state,
           commentReason: followUpResults?.first_comment.reason,
+          ...scheduleEvidence,
         }),
+        ...(scheduleEvidence.scheduleWarning === "stale_schedule"
+          ? { warnings: [YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE] }
+          : {}),
       },
     });
     if (!settled.settled) {
@@ -1079,7 +1120,10 @@ async function interpretOutcome(args: {
     responseData: {
       youtube_upload_reason: reason,
       ...(uncertain ? { publish_outcome: "uncertain" } : {}),
-      youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
+      youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, {
+        effectivePrivacy: "unknown",
+        scheduled: false,
+      }),
     },
   });
   if (!settled.settled) {

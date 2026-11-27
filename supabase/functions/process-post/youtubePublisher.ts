@@ -10,9 +10,12 @@
  */
 
 import {
+  effectiveYoutubePrivacy,
   YOUTUBE_DEFAULT_CATEGORY_ID,
+  YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE,
   YOUTUBE_UPLOAD_UNCONFIRMED_OPTIONS,
-  youtubePrivacyOrDefault,
+  hasYoutubeScheduleRequest,
+  resolveYoutubePublishAt,
 } from "../_shared/youtubePublishOptions.ts";
 
 const YOUTUBE_UPLOAD_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/videos";
@@ -28,6 +31,13 @@ export interface YoutubeUploadRequestInput {
   title: string;
   description: string;
   tags: string[];
+  /**
+   * The instant the requested schedule is judged against.
+   *
+   * It is injected so a test can say what "now" is. A caller that has no
+   * reason to care leaves it out, and the clock of the machine decides.
+   */
+  now?: Date;
 }
 
 export interface YoutubeUploadRequest {
@@ -44,6 +54,13 @@ export interface YoutubeUploadRequest {
    * was applied when the provider did not confirm it.
    */
   warnings: string[];
+  /**
+   * Set when the post asked for a native schedule that could not be honoured.
+   *
+   * The video was uploaded as private and not scheduled, and the customer is
+   * told so instead of being told the schedule was applied.
+   */
+  scheduleWarning?: "stale_schedule" | null;
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -93,13 +110,52 @@ function buildSnippet(
   return snippet;
 }
 
-function buildStatus(metadata: Record<string, unknown>): Record<string, unknown> {
+/**
+ * What the post asked the provider to schedule.
+ *
+ * `none` is a post that asked for nothing, and it keeps the request exactly
+ * what it was before native scheduling existed. `scheduled` is a time the
+ * provider can be given. `stale` is a request that cannot be honoured, and it
+ * ends private and unscheduled: the video is never published earlier or
+ * wider than the post asked for.
+ */
+type YoutubeScheduleRequest =
+  | { kind: "none" }
+  | { kind: "scheduled"; publishAt: string }
+  | { kind: "stale" };
+
+/**
+ * Reads the schedule the post asked for.
+ *
+ * The presence of the request is decided by one pure function, so the
+ * publisher, the privacy helper and the evidence cannot disagree about it.
+ */
+function resolveRequestedSchedule(
+  metadata: Record<string, unknown>,
+  now: Date,
+): YoutubeScheduleRequest {
+  if (!hasYoutubeScheduleRequest(metadata)) return { kind: "none" };
+  const resolved = resolveYoutubePublishAt(metadata.youtube_publish_at, now);
+  return resolved.ok ? { kind: "scheduled", publishAt: resolved.publishAt } : { kind: "stale" };
+}
+
+function buildStatus(
+  metadata: Record<string, unknown>,
+  schedule: YoutubeScheduleRequest,
+): Record<string, unknown> {
   const status: Record<string, unknown> = {
-    privacyStatus: youtubePrivacyOrDefault(metadata.youtube_visibility),
+    // A scheduled upload is private whatever the privacy field says: YouTube
+    // makes the video public at the scheduled time, and a schedule that
+    // cannot be honoured never becomes public at all.
+    privacyStatus: effectiveYoutubePrivacy(metadata),
     embeddable: booleanOrDefault(metadata.youtube_allow_embedding, true),
     publicStatsViewable: booleanOrDefault(metadata.youtube_public_stats_viewable, true),
     license: metadata.youtube_license === "creativeCommon" ? "creativeCommon" : "youtube",
   };
+
+  if (schedule.kind === "scheduled") {
+    status.publishAt = schedule.publishAt;
+  }
 
   // An untouched checkbox is not a declaration. Sending an implicit `false`
   // would assert to Google that the creator checked "No" when they did not.
@@ -181,16 +237,17 @@ function collectUnconfirmedWarnings(metadata: Record<string, unknown>): string[]
  * `snippet.categoryId`, `snippet.defaultLanguage`, `status.embeddable`,
  * `status.license`, `status.privacyStatus`, `status.publicStatsViewable`,
  * `status.selfDeclaredMadeForKids`, `status.containsSyntheticMedia`,
- * `recordingDetails.recordingDate` and
+ * `status.publishAt`, `recordingDetails.recordingDate` and
  * `paidProductPlacementDetails.hasPaidProductPlacement`.
  */
 export function buildYoutubeUploadRequest(
   input: YoutubeUploadRequestInput,
 ): YoutubeUploadRequest {
   const metadata = (input.metadata ?? {}) as Record<string, unknown>;
+  const schedule = resolveRequestedSchedule(metadata, input.now ?? new Date());
   const body: Record<string, unknown> = {
     snippet: buildSnippet(input, metadata),
-    status: buildStatus(metadata),
+    status: buildStatus(metadata, schedule),
   };
   const parts = ["snippet", "status"];
 
@@ -215,13 +272,22 @@ export function buildYoutubeUploadRequest(
   const notifySubscribers = booleanOrDefault(metadata.youtube_notify_subscribers, true);
   const part = parts.join(",");
 
-  return {
+  const warnings = collectUnconfirmedWarnings(metadata);
+  if (schedule.kind === "stale") {
+    warnings.push(YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE);
+  }
+
+  const request: YoutubeUploadRequest = {
     url: buildYoutubeUploadUrl({ part, notifySubscribers }),
     part,
     body,
     notifySubscribers,
-    warnings: collectUnconfirmedWarnings(metadata),
+    warnings,
   };
+  if (schedule.kind === "stale") {
+    request.scheduleWarning = "stale_schedule";
+  }
+  return request;
 }
 
 /**

@@ -51,6 +51,17 @@ const ATTEMPT = "2026-11-18T00:00:00.000Z";
 const VIDEO_ID = "abcdefghijk";
 /** The clock this world runs on. */
 const NOW_MS = 1_700_000_000_000;
+/**
+ * The metadata every world starts with.
+ *
+ * The creator answered the declarations, so the upload may go on. A test that
+ * adds an option of its own spreads this, so the answers are kept.
+ */
+const DECLARATION_METADATA = {
+  youtube_made_for_kids: false,
+  youtube_contains_synthetic_media: false,
+  youtube_declaration_proof: { version: 3, made_for_kids: false, contains_synthetic_media: false, source: "form" },
+};
 
 /** What the fake outside world was asked to do. */
 interface World {
@@ -132,11 +143,7 @@ function world(options: WorldOptions = {}): World {
     mediaFileIds: [MEDIA_ID],
     thumbnailUrl: null,
     firstComment: null,
-    metadata: {
-      youtube_made_for_kids: false,
-      youtube_contains_synthetic_media: false,
-      youtube_declaration_proof: { version: 3, made_for_kids: false, contains_synthetic_media: false, source: "form" },
-    },
+    metadata: { ...DECLARATION_METADATA },
     ...options.post,
   };
   const account: ContinuationAccount = {
@@ -823,6 +830,139 @@ Deno.test("a finished upload settles the public row", async () => {
   assertEquals(evidence.effective_privacy, "unknown");
   assertEquals(evidence.thumbnail.state, "not_requested");
   assertEquals(evidence.first_comment.state, "not_requested");
+});
+
+Deno.test("a continuation that could not use the schedule says so on the settled row", async () => {
+  const w = world({
+    post: {
+      metadata: {
+        ...DECLARATION_METADATA,
+        youtube_visibility: "public",
+        youtube_publish_at: "2026-11-18T00:00:00.000Z",
+      },
+    },
+    outcome: { kind: "completed", videoId: VIDEO_ID, scheduleWarning: "stale_schedule" },
+  });
+  await continueYoutubeUpload(w.ports, request);
+
+  const evidence = w.settled[0].responseData.youtube_publish_evidence as {
+    requested_privacy: string;
+    requested_publish_at: string | null;
+    scheduled: boolean;
+    schedule_warning: string | null;
+  };
+  // The post asked for public, and the video was uploaded private and not
+  // scheduled.
+  assertEquals(evidence.requested_privacy, "private");
+  assertEquals(evidence.scheduled, false);
+  assertEquals(evidence.schedule_warning, "stale_schedule");
+  assertEquals(evidence.requested_publish_at, "2026-11-18T00:00:00.000Z");
+  assertEquals(w.settled[0].responseData.warnings, [
+    "The YouTube schedule time could not be used, so the video was uploaded as private and not scheduled.",
+  ]);
+});
+
+Deno.test("a continuation that inherits a session whose schedule was stripped in an earlier run still records the stale warning", async () => {
+  const publishAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  const w = world({
+    post: {
+      metadata: {
+        ...DECLARATION_METADATA,
+        youtube_visibility: "public",
+        youtube_publish_at: publishAt,
+      },
+    },
+    session: {
+      lastOutcome: "stale_schedule",
+      uploadBody: {
+        snippet: { title: "A video" },
+        status: {
+          selfDeclaredMadeForKids: false,
+          containsSyntheticMedia: false,
+          privacyStatus: "private",
+          publishAt,
+        },
+      },
+    },
+    outcome: { kind: "completed", videoId: VIDEO_ID },
+  });
+  await continueYoutubeUpload(w.ports, request);
+
+  const evidence = w.settled[0].responseData.youtube_publish_evidence as {
+    requested_privacy: string;
+    requested_publish_at: string | null;
+    scheduled: boolean;
+    schedule_warning: string | null;
+  };
+  assertEquals(evidence.requested_privacy, "private");
+  assertEquals(evidence.scheduled, false);
+  assertEquals(evidence.schedule_warning, "stale_schedule");
+  assertEquals(evidence.requested_publish_at, publishAt);
+  assertEquals(w.settled[0].responseData.warnings, [
+    "The YouTube schedule time could not be used, so the video was uploaded as private and not scheduled.",
+  ]);
+});
+
+Deno.test("a failed continuation on a scheduled post records scheduled as false while keeping the requested time", async () => {
+  const publishAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  const w = world({
+    post: {
+      metadata: {
+        ...DECLARATION_METADATA,
+        youtube_visibility: "public",
+        youtube_publish_at: publishAt,
+      },
+    },
+    outcome: { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, retryable: false },
+  });
+  await continueYoutubeUpload(w.ports, request);
+
+  const evidence = w.settled[0].responseData.youtube_publish_evidence as {
+    requested_privacy: string;
+    requested_publish_at: string | null;
+    scheduled: boolean;
+    schedule_warning: string | null;
+  };
+  assertEquals(evidence.requested_privacy, "private");
+  assertEquals(evidence.scheduled, false);
+  assertEquals(evidence.schedule_warning, null);
+  assertEquals(evidence.requested_publish_at, publishAt);
+});
+
+Deno.test("a continuation that kept the schedule records it on the settled row", async () => {
+  const publishAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  const w = world({
+    post: {
+      metadata: {
+        ...DECLARATION_METADATA,
+        youtube_visibility: "public",
+        youtube_publish_at: publishAt,
+      },
+    },
+    session: {
+      uploadBody: {
+        snippet: { title: "A video" },
+        status: {
+          selfDeclaredMadeForKids: false,
+          containsSyntheticMedia: false,
+          publishAt,
+        },
+      },
+    },
+    outcome: { kind: "completed", videoId: VIDEO_ID },
+  });
+  await continueYoutubeUpload(w.ports, request);
+
+  const evidence = w.settled[0].responseData.youtube_publish_evidence as {
+    requested_privacy: string;
+    requested_publish_at: string | null;
+    scheduled: boolean;
+    schedule_warning: string | null;
+  };
+  assertEquals(evidence.requested_privacy, "private");
+  assertEquals(evidence.scheduled, true);
+  assertEquals(evidence.schedule_warning, null);
+  assertEquals(evidence.requested_publish_at, publishAt);
 });
 
 Deno.test("observed follow-up outcomes are recorded on the native settlement", async () => {

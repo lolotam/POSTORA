@@ -18,6 +18,9 @@ const unsupportedCases: Array<[string, unknown]> = [
   ["youtube_allowed_countries", ["KW"]],
   ["youtube_blocked_countries", ["US"]],
   ["youtube_first_comment", "First"],
+  ["youtube_publish_at", "2026-12-01T12:00:00Z"],
+  ["youtube_publish_at", "   "],
+  ["youtube_publish_at", 1700000000],
 ];
 
 for (const [key, value] of unsupportedCases) {
@@ -58,6 +61,7 @@ Deno.test("Composio YouTube reports explicit No/No declarations as unexpressible
       youtube_allowed_countries: [],
       youtube_blocked_countries: null,
       youtube_first_comment: undefined,
+      youtube_publish_at: "",
     }),
     ["youtube_made_for_kids", "youtube_contains_synthetic_media"],
   );
