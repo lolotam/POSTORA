@@ -2,6 +2,8 @@
 
 26 November 2026 · six phases, seventeen PRs, simplest and lowest-risk first · one debate round folded in · baseline `51dd753b9331bbe28d8ca060e4c5b727a47dc9fc` · [specification](../specs/2026-11-26-youtube-vnext-roadmap-and-ux.md)
 
+Amended 27 November 2026: **Phase 7** added (execution rows 18–23, six more PRs: `PR-15A`, `PR-16` … `PR-20`; spec §14). Phase 7 baseline: `origin/main` at `24ec1698` (PR #506). Codex Astra 6.2 debate round completed on 27 November 2026 (`APPROVE WITH AMENDMENTS`, `D-P7-1` … `D-P7-8` folded in below).
+
 ## Execution order
 
 Work top to bottom. A row starts only when its "Needs" column is satisfied. Tiers follow `CLAUDE.md` → "Delivery tiers"; the tier card is asked per PR.
@@ -13,6 +15,12 @@ Work top to bottom. A row starts only when its "Needs" column is satisfied. Tier
 1. **Until PR-7A is deployed, the UI must neither expose native scheduling nor emit `youtube_publish_at`.** PR-7B does not start before PR-7A's deployment is verified (spec §7.2).
 2. **Backend before frontend** for PR-8, PR-13 and PR-15: the Edge Function is deployed before, or in the same window as, the frontend merge, so the UI never calls an operation the deployed function rejects. Where one PR holds both sides, its Edge Functions are deployed from the PR's head commit and smoke-tested before the PR merges to `main` (merging is what deploys the frontend).
 3. **PR-8A's migration is applied in production before PR-8 merges**, and before any other PR that debits the unit budget (PR-10, PR-11, PR-14, PR-15).
+
+**Three more for Phase 7 (rows 18–23):**
+
+4. **Until PR-17's `process-post` is deployed and smoke-tested, the UI must neither show the Subtitles/CC section nor emit `youtube_caption`** (spec §14.3). An older `process-post` ignores the key silently.
+5. **Backend before frontend** for PR-16 (`transcribe-media`), PR-18 (`youtube-resources`) and PR-19 (`generate-caption`): each function is deployed from the PR's head and smoke-tested before the PR merges. PR-15A's `generate-caption` change keeps the request and response shape, so it may deploy with the merge.
+6. **No PR-15A player code merges before OD-7 and OD-8 are answered**, because the PR changes the production CSP. The other four items of PR-15A do not wait for them; if the cards are slow, the player ships as a second PR (`PR-15A-2`) and the rest goes first.
 
 | # | PR | Phase | Delivers | Tier | Edge Functions deployed | Needs | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -33,12 +41,20 @@ Work top to bottom. A row starts only when its "Needs" column is satisfied. Tier
 | 15 | PR-11 | 4B | `set_thumbnail` operation, `manage_thumbnail` capability, drawer control | **Heavy** | `youtube-resources` (+ `process-post` if the intake moves) | PR-8 (budget helper), PR-4. **Not** PR-9 or PR-10 | ✅ Merged (`#503`) |
 | 16 | PR-14 | 6A | Captions list and upload, `manage_captions` capability, capped body reader, disclosure | **Heavy** | `youtube-resources` | PR-8 (budget helper), PR-4, OD-6, quota extension decision. Reuses the write plumbing if PR-10 or PR-11 landed first, otherwise builds it | ✅ Merged (`#504`) |
 | 17 | PR-15 | 6B | `youtube-channel-benchmark` function and feature, disclosure | **Heavy** | `youtube-channel-benchmark` (new), **before the frontend merge** | OD-4 go, PR-8A applied | ✅ Merged (`#505`) |
+| 18 | PR-15A | 7.0 | AI Suggest context fix, drawer player, edit toggle, rich thumbnail dialog, caption error reporting | **Heavy** | `generate-caption` | OD-7, OD-8 (player only); storage-policy check (thumbnail dialog) | Not started |
+| 19 | PR-16 | 7A | `segments` from `transcribe-media`, `.srt`/`.vtt` and timed-outline formatters, "from audio" button | Medium | `transcribe-media`, **before the frontend merge** | OD-12 | Not started |
+| 20 | PR-17 | 7B | `youtube_caption` metadata key, fourth follow-up, Subtitles/CC section | **Heavy** | `process-post`, `n8n-api`, `youtube-resources`, **deployed and smoke-tested before the UI emits the key** | OD-9, OD-6; PR-16 for the autofill only | Not started |
+| 21 | PR-18 | 7C | `create_playlist` operation, `manage_playlists` capability, "+ New playlist" dialog, disclosure | **Heavy** | `youtube-resources`, **before the frontend merge** | OD-10, OD-3 | Not started |
+| 22 | PR-19 | 7D | Packaging score rules, `youtube_title_thumbnail_score` request type, score card | Medium | `generate-caption`, **before the frontend merge** | PR-15A (shared sanitized path in the same file) | Not started |
+| 23 | PR-20 | 7E | Privacy select with confirmation in the drawer editor, order-pinning tests, disclosure | **Heavy** | `youtube-resources` (only if step 0 finds the envelope gap) | OD-11, OD-3; PR-15A (same edit card file); Waleed's card to merge | Not started |
 
 PR numbers are stable identifiers, so they no longer rise with the row number: PR-12 and PR-13 moved up, and PR-7 became PR-7A and PR-7B with PR-8A added. The PR sections below stay grouped by phase number.
 
 Parallel lanes that do not touch the same files: {PR-1 → PR-2} with {PR-3}; {PR-5, PR-6} with {PR-12 → PR-13}; PR-7A with PR-8A; PR-9 can start any time after PR-4.
 
-Owner decisions OD-1 … OD-6 are defined in spec §3. None blocks Phase 1.
+Phase 7 lanes: PR-15A, PR-16 and PR-18 touch different files and can run in parallel. PR-17 follows PR-16 only for the autofill and shares `YouTubeSettings.tsx` with PR-18, so those two do not run at the same time. PR-19 and PR-20 follow PR-15A because they edit `generate-caption/handler.ts` and `YouTubeVideoEditCard.tsx`, which it changes.
+
+Owner decisions OD-1 … OD-12 are defined in spec §3. None blocks Phase 1. OD-7 … OD-12 belong to Phase 7.
 
 ## 0. Rules for every PR
 
@@ -505,6 +521,176 @@ Heavy. Starts with the policy read, before any code.
 Gates: Deno for the new function; Vitest on the new feature and the legal test; typecheck; ESLint; i18n; three guard skills.
 
 Exit on staging: three public channels with uploads compared for nine units (verify by counter); an unknown handle costs one unit and shows "not found" without failing the others; a channel with no uploads costs two; with the budget refused, the columns show the quota notice, not "not found", and a second Compare retries them; the eleventh request in ten minutes is refused.
+
+---
+
+## Phase 7 — post-vNext UX fixes, drawer player and creator extensions
+
+Spec §14. Rules §§0.1–0.5 apply unchanged. Every path below was checked against `origin/main` at `24ec1698`; a path marked **new** does not exist there.
+
+**Reference check already done (27 November 2026)**, to be repeated only if a PR starts more than a month later: `playlists.insert` — 50 units; scopes `youtube`, `youtube.force-ssl`, `youtubepartner` (not `youtube.upload`). `captions.insert` — 400 units; scopes `youtube.force-ssl`, `youtubepartner`; endpoint `https://www.googleapis.com/upload/youtube/v3/captions`. IFrame player — `playVideo`, `pauseVideo`, `stopVideo`, `mute`, `unMute`, `setVolume(0..100)`, `setPlaybackRate`, `getAvailablePlaybackRates` (per video) are documented; `setPlaybackQuality` is not documented; `modestbranding` is deprecated with no effect; `rel=0` limits related videos to the same channel; `origin` should accompany `enablejsapi=1`. Required Minimum Functionality — viewport at least 200 × 200 px, nothing in front of the player, no autoplay before the player is more than half visible. Still to check in its PR: which configured OpenAI transcription models accept `timestamp_granularities[]` (PR-16).
+
+### PR-15A — UX debug fixes, drawer player, rich thumbnail dialog (spec §14.1)
+
+**Heavy**: plan debate round, three guard skills, Waleed's card for the CSP change. Branch `feat/youtube-vnext-p7-0-ux-fixes`. Five items; commit each separately so one can be reverted alone.
+
+| Step | File | Action |
+| --- | --- | --- |
+| 0a | `ssh-contabo-mcp`, read-only | **Caption cause 1 is a hypothesis.** List the deployed `youtube-resources/*.ts` and the `_shared` files it imports under the functions volume, hash them, and compare with `git show origin/main:<path> \| sha256sum`. Record the table in the PR. Differ → redeploy per `docs/runbooks/deploy-edge-function.md` and re-test "Show caption tracks"; match → write "deployment ruled out" and go on. Also read the last `youtube-resources` refusals in the function logs for `operation: "captions"` and record the codes seen |
+| 0b | `supabase_postora_mcp`, read-only | Read the storage policies of bucket `media` and the RLS policies of `media_files`. Required: insert confined to the `{auth.uid()}/` prefix, and `user_id = auth.uid()` on row insert. Missing → stop item 4, card Waleed (a policy change is a migration) |
+| 0c | `src/pages/MediaLibrary.tsx`, `src/pages/media-library/utils.ts` | Find the function that uploads a library file and inserts its row, and `libraryFilePublicUrl`. Item 4 reuses that row shape and URL resolution |
+| 0d | OD-7 and OD-8 cards | Asked now so the answers arrive while items 1, 3, 4 and 5 are built |
+| **1** | **AI Suggest (§14.1.1)** | |
+| 1.1 | `src/components/post/settings/YouTubeAISuggestions.tsx` + component test | Extract `buildYouTubeSuggestContext(type, title, description)`; failing table test first (four rows; whitespace-only draft is empty); `YouTubeLegacyAISuggestions` calls it instead of the inline ternary |
+| 1.2 | `supabase/functions/generate-caption/handler.test.ts` | Failing cases: description and tags context kept to 6,000 characters; text inside the delimited block and escaped; output filter (over-length, `<`/`>`, empty → `422 suggestions_invalid`); the three-marker log-capture test |
+| 1.3 | `supabase/functions/generate-caption/handler.ts` | Add `youtube_title`, `youtube_description`, `youtube_tags` to `YouTubeAiFeature`; route them through `invokeYouTubeAi` / `logYouTubeAiSuccess` / `logYouTubeAiFailure`; delete the branch's `response.text()`, `error_message`, `error_stack` and bracket-repair fallback; new prompts per the spec with the six placeholders verbatim; caps 500 / 6,000 / 6,000. `invokeYouTubeAi` takes `maxTokens` and `temperature` per feature instead of its `chapters ? 4096 : 1024` ternary: 4,096 / 0.8 for these three, existing values for chapters and replies (assert both in the test). Keep the code-fence strip. The `brand_intelligence` and generic caption branches are not touched |
+| 1.4 | `src/components/post/settings/YouTubeSettings.tsx` | No change expected (props are already right); confirm with the component test |
+| **2** | **Drawer player (§14.1.2) — after OD-7 and OD-8** | |
+| 2.0 | Spike, no product code | On a throwaway local page, embed one public video from `youtube-nocookie.com` with `enablejsapi=1` and `origin`, and record: whether the embed posts anything before the parent speaks; which parent message starts its reports; the exact shape of a state report; whether `playVideo`, `pauseVideo`, `setVolume`, `mute` and `setPlaybackRate` commands act. Paste the captured messages into the PR and use them as test fixtures. No reliable handshake → build the player without the playback group (spec §14.1.2) and tell Waleed under OD-8 |
+| 2.1 | `src/features/youtube-management/domain/player.ts` (**new**) + `domain/player.test.ts` (**new**) | Tests first: id pattern, exact embed URL, watch URL, `parsePlayerMessage` on valid / non-JSON / wrong shape / oversized input |
+| 2.2 | `src/features/youtube-management/ui/YouTubeVideoPlayer.tsx` (**new**) + `ui/__tests__/YouTubeVideoPlayer.test.tsx` (**new**) | Poster → iframe on Play; listener with origin and source checks; commands with the constant target origin; 3 s handshake fallback; toolbar below the player; three size modes with one mounted iframe; fullscreen with rejection caught; private and processing notices |
+| 2.3 | `ui/YouTubeVideoDetail.tsx`, `ui/YouTubeVideoDrawer.tsx` + their tests | Render the player in place of `YouTubeVideoThumbnail`; drawer owns the Theater width class; player unmounts on close, video change and account change. `YouTubeVideoThumbnail.tsx` stays for the library views |
+| 2.4 | `nginx.conf`, `public/_headers`, `src/lib/__tests__/cspRegression.test.ts` | Add `frame-src 'self' https://www.youtube-nocookie.com;` (`D-P7-1`) to both; test asserts the exact segment in both files, that the two policies are identical, and the existing no-wildcard rule |
+| 2.5 | `src/pages/Privacy.tsx`, `src/pages/GoogleApiDisclosure.tsx`, `src/pages/__tests__/YouTubeLegalDisclosures.test.tsx`, `docs/YOUTUBE-OAUTH-VERIFICATION-GUIDE.md` | The embedded-player sentence (wording approved in OD-7); bump "Last updated" on the legal pages together |
+| **3** | **Edit toggle (§14.1.3)** | |
+| 3.1 | `ui/__tests__/YouTubeVideoEditCard.test.tsx` | Failing cases: second click closes with no save; reopen re-reads the snapshot; `saved` closes and the message stays; `edit_conflict` stays open; disabled while saving; `aria-expanded` |
+| 3.2 | `ui/YouTubeVideoEditCard.tsx` | Toggle handler; `setEditing(false)` on `saved`; move the `role="status"` line out of the `editing` block to under the button row |
+| **4** | **Thumbnail dialog (§14.1.4)** | |
+| 4.1 | `domain/thumbnail.ts` + `domain/thumbnail.test.ts` (**new**) | `THUMBNAIL_MAX_BYTES`, `sniffThumbnailType`, `checkThumbnailFile`, `preview_url` on the candidate; tests first |
+| 4.2 | `application/ports.ts`, `infrastructure/supabaseYouTubeThumbnailMediaGateway.ts` + gateway test (**new**) | `uploadOwnedImage` (session user id, deterministic `id = crypto.randomUUID()` and `{userId}/{id}.{ext}` path, row insert, check whether row with `id` and `user_id` exists before deleting object on insert error per `D-P7-2`); `preview_url` on listed rows |
+| 4.3 | `application/ports.ts`, `infrastructure/supabaseYouTubeThumbnailAiGateway.ts` (**new**) + test | `YouTubeThumbnailAiGateway.generate`: the same `generate-image` body `src/hooks/useYouTubeThumbnails.tsx` sends, resolved the same way |
+| 4.4 | `ui/YouTubeThumbnailChange.tsx` + test, `ui/YouTubeVideoDrawer.tsx`, `ui/YouTubeManagementScreen.tsx` | Dialog with three tabs; canvas materialisation for AI results; small preview; gateways passed as props from the composition root; the existing confirmation and single `onSetThumbnail` call kept |
+| 4.5 | `src/features/youtube-management/tests/architecture.test.ts` | Must pass unchanged. If it refuses the shared pickers, pass them in as render props from `YouTubeManagementScreen.tsx`; do not loosen the test |
+| **5** | **Caption errors (§14.1.5)** | |
+| 5.1 | `domain/captions.ts` + `domain/captions.test.ts` | `captionListFailureFromErrorCode`; one case per table row |
+| 5.2 | `ui/YouTubeCaptionsSection.tsx` + its test | `catch (error)` reads `code` and `retryAfterSeconds`; per-failure message; Retry only for `retryable` |
+| 6 | `src/i18n/locales/ar/accounts.json`, `src/i18n/locales/ar/postsettings.json` | Arabic for `youtubeManagement.player.*`, `.thumbnail.dialog.*`, `.captions.listError.*` |
+| 7 | `e2e/youtube-stage3.spec.ts` | Update selectors that assumed the static thumbnail and the radio list; add: Play mounts the iframe, edit toggle closes |
+
+`youtube-resources` has no diff in this PR. If item 4 seems to need one, stop: the invariant in spec §14.1.4 is the point of the design.
+
+Gates: Deno check and test for `generate-caption` (the CI step "Typecheck and test YouTube AI chapters and generate-caption"); `npx vitest run src/features/youtube-management src/components/post/settings src/lib/__tests__/cspRegression.test.ts src/pages/__tests__/YouTubeLegalDisclosures.test.tsx`; typecheck; ESLint; `npm run check:i18n`; `npx playwright test e2e/youtube-stage3.spec.ts`; `clean-code-guard`, `test-guard`, `waleed-security-reviewer`.
+
+Deploy: `generate-caption` per the runbook with SHA256 parity. The CSP ships with the frontend image; after the deploy, read the live response header and record that `frame-src` is present.
+
+Exit on staging, English and Arabic: a description suggestion made with a draft reflects the draft, and one made without it still works; the drawer shows a poster, Play starts the video, each toolbar control acts, Theater widens the drawer without restarting playback, Mini stays in view while scrolling, Stop returns to the poster, and the browser's network log shows no request to a Google host before Play; a private video shows its notice; the edit button toggles and a save closes the form with the confirmation visible; a device upload, a library pick and an AI image each become the thumbnail after confirmation; a 3 MB file is refused before any upload; "Show caption tracks" on a channel without `youtube.force-ssl` shows the reconnect message and no Retry.
+
+Rollback: revert the item's commit. Reverting item 2 also removes `frame-src`; nothing else depends on it.
+
+### PR-16 — segment-timed transcription and formatters (spec §14.2)
+
+Medium. Needs OD-12. Branch `feat/youtube-vnext-p7a-transcript-segments`.
+
+| Step | File | Action |
+| --- | --- | --- |
+| 0 | Google / OpenAI reference; `supabase/functions/transcribe-media/index.ts` | Confirm which configured models accept `timestamp_granularities[]=segment` with `verbose_json`. Read `downloadMedia(mediaUrl)`: if the URL is fetched without a host allow-list, record it as a separate security finding (issue for Waleed); this PR does not widen it and does not fix it |
+| 1 | `supabase/functions/_shared/youtubeTranscriptFormats.ts` (**new**) + `youtubeTranscriptFormats.test.ts` (**new**) | Tests first: `segmentsToSrt`, `segmentsToVtt`, `segmentsToTimedOutline`; validator round-trip through `validateCaptionUploadInput`; outline ≤ 8,000 characters on a three-hour fixture of continuous speech (this needs the per-line text cut, not only wider windows); first line `00:00`; a chapter list drawn from the outline passes `parseChapterLines` and the subset rule |
+| 2 | `supabase/functions/transcribe-media/handler.ts` (**new**) + `handler.test.ts` (**new**), `index.ts` | Move the tier logic into `handler.ts` unchanged; then add the `timestamp_granularities[]` field on the OpenAI tier, `validateSegments`, and the optional `segments` response key. `index.ts` keeps CORS, authentication and the response. No transcript, segment text, or signed `mediaUrl` in any log (`D-P7-3`) |
+| 3 | `.github/workflows/ci.yml` | `transcribe-media` has no CI step today. Add a named Deno check-and-test step for it and for the new `_shared` test under the D9 exception (§0.3); confirm both files ran in the job log |
+| 4 | `src/hooks/useTranscription.ts` + test | Carry `segments` (absent → `null`) |
+| 5 | `src/components/post/settings/YouTubeAISuggestions.tsx` + component test | "Extract chapters and subtitles from the video's audio": with segments, fill the outline, set timing `"provided"`, offer the two downloads; without, show the no-timing message |
+| 6 | `src/i18n/locales/ar/postsettings.json` | `youtubeAI.chapters.fromAudio.*` |
+
+Gates: Deno for `transcribe-media` and the `_shared` test; `npx vitest run src/components/post/settings src/hooks`; typecheck; ESLint; i18n; `clean-code-guard`, `test-guard`.
+
+Deploy `transcribe-media` from the PR head before merging. Exit on staging: an uploaded video with speech yields an outline starting at `00:00`, chapters that insert into the description, and `.srt` and `.vtt` files that the `/youtube` caption upload form accepts; with the no-timing tier forced, the message appears and nothing is filled; the existing transcription feature behaves as before.
+
+Rollback: revert and redeploy. The new key is optional, so either side can be reverted alone.
+
+### PR-17 — upload-time captions (spec §14.3)
+
+**Heavy**: debate round, three guard skills, staging deploy of `process-post` alone right after merge. Needs OD-9 and the OD-6 ceiling. Two PRs, like PR-7A / PR-7B: **PR-17A** is the backend, **PR-17B** the UI. PR-17B does not start until PR-17A's deployment record exists.
+
+**PR-17A** — branch `feat/youtube-vnext-p7b-caption-followup-backend`.
+
+| Step | File | Action |
+| --- | --- | --- |
+| 1 | `supabase/functions/_shared/captionFile.ts` (**new**, moved) + `_shared/captionFile.test.ts`; `youtube-resources/captionFile.ts` | Move the module and its tests; the old path re-exports every name. Run the whole `youtube-resources` suite before any other change: it must pass untouched |
+| 2 | `supabase/functions/_shared/youtubeWriteCounters.ts` (**new**, moved) + test; `youtube-resources/writeLimits.ts` | Move `parseStrictRateLimitDecision` and the caption-upload counter; re-export at the old path; keys `youtube-resources:caption-upload:day`, 2 per 86,400 s, unchanged |
+| 3 | `process-post/youtubeUploadFollowUps.test.ts` | Failing cases for every branch of spec §14.3, the single 400 debit, one request on timeout, order, and the playlist step passing 50 through the new signature |
+| 4 | `process-post/youtubeUploadFollowUps.ts` | `caption` on the request and the results; `uploadYoutubeCaption`; `debitWriteBudget(units)`; `checkCaptionUploadAllowance` and `hasCaptionScope` deps (`youtube.force-ssl` required in `granted_scopes` → `skipped / missing_scope` with zero counter and budget calls per `D-P7-4`). Body built with an explicit multipart boundary; text never logged (log only HTTP status and stable code) |
+| 5 | `process-post/index.ts` (both `runYoutubeFollowUps` call sites), `process-post/youtubeUploadContinuation.ts` | Pass `caption` and the two deps; find the call sites with `grep -n "runYoutubeFollowUps(" supabase/functions/process-post/`. Nothing else changes in the entrypoint |
+| 6 | Settlement (`D-P7-5`) | Extract pure `scrubSettledYoutubeCaptionMetadata(metadata)` with its own test and apply it on all terminal post settlement updates (`completed`, `partial`, `failed`) so `youtube_caption.content` is removed while `{ language, name, format }` remains |
+| 7 | `process-post/youtubePublishEvidence.ts`, `n8n-api/youtubeEvidenceView.ts` + tests | `caption` evidence (language, format, byte length; never the text); `not_requested` for older rows |
+| 8 | The three `interface PlatformMetadata` copies (`grep -rn "interface PlatformMetadata" supabase/functions`) | Add `youtube_caption` |
+| 9 | `n8n-api` | Reject the key on create; strip it on read; add the new test file to the explicit `n8n-api` list in `ci.yml` |
+| 10 | Log-capture test | A marker in the caption text; success, refusal and thrown paths |
+
+Gates: the CI `process-post` Deno command; Deno for `youtube-resources` and `n8n-api`; typecheck; the three guard skills.
+
+Deploy `process-post`, `n8n-api` and `youtube-resources`, then smoke-test on the fixture channel with the key written directly on a test post (the UI cannot send it yet): (1) no key — publish unchanged; (2) a valid `.vtt` — the track appears in YouTube Studio, the write bucket rose by exactly 400, the per-user counter by 1; (3) a malformed file — `skipped / invalid_caption`, both counters unchanged, the video published; (4) a third caption in a day — `skipped / rate_limited`, budget unchanged; (5) after settlement the stored metadata has no `content`. Each real upload is a 400-unit write and needs the D5-style fixture approval the project already uses. Record the results and SHA256 parity; that record is PR-17B's entry condition.
+
+**PR-17B** — branch `feat/youtube-vnext-p7b-caption-ui`. Medium.
+
+| Step | File | Action |
+| --- | --- | --- |
+| 1 | `src/hooks/usePlatformSettings.tsx`, `src/pages/CreatePost.tsx` | State, serialisation and rehydration of `youtube_caption`; the key is **omitted** when no caption is chosen; a settled post without `content` rehydrates as "already submitted" |
+| 2 | `src/components/post/settings/YouTubeSettings.tsx` | Subtitles/CC section: file input, "Use subtitles from the audio" (PR-16), language, track name, size against 512 KB, the two-per-day note; browser validation with the shared validator; disabled for Composio and when `manage_captions` is not available |
+| 3 | `grep -rn "first_comment" src` | Add the caption outcome to every publish-evidence renderer |
+| 4 | Legal pages, legal test, verification guide | Caption-at-upload sentence |
+| 5 | `src/i18n/locales/ar/postsettings.json`; component and rehydration tests | — |
+
+Rollback: PR-17B alone at any time. PR-17A only after PR-17B is reverted; stored posts carrying the key are then simply ignored by the older function.
+
+### PR-18 — inline playlist creation (spec §14.4)
+
+**Heavy**. Needs OD-10 and the OD-3 wording. Branch `feat/youtube-vnext-p7c-create-playlist`. Backend deployed from the PR head and smoke-tested before the PR merges.
+
+| Step | File | Action |
+| --- | --- | --- |
+| 1 | `supabase/functions/youtube-resources/contracts.ts`, `contracts.test.ts`, `capabilities.ts`, `capabilities.test.ts` | `create_playlist` request and result types; `unit_costs.playlist_create: 50`; `manage_playlists?` derived from `readonly` **and** `force_ssl`; table test including "`upload` alone is not enough" |
+| 2 | `youtube-resources/writeLimits.ts` + `writeLimits.test.ts` | `YOUTUBE_PLAYLIST_CREATE_DAILY_LIMIT` (`youtube-resources:playlist-create:day`, 5 per 86,400 s), `checkPlaylistCreateCounter`, `YOUTUBE_PLAYLIST_CREATE_UNIT_COST = 50` |
+| 3 | `youtube-resources/playlistWriteComposition.ts` (**new**) + `playlistWriteComposition.test.ts` (**new**) | Tests first, one per numbered step of the spec: a refusal makes no later call; validation and counter refusals debit nothing; one `POST` on timeout; a 2xx naming another channel is `outcome_unknown` |
+| 4 | `youtube-resources/handler.ts`, `index.ts` + `handler.test.ts`, `requestExamples.fixture.ts` | Strict `CreatePlaylistRequest`; `requestedOperationOf`; `YouTubePlaylistWritePort` wired in `index.ts` with the real counter, budget and `stillBound` |
+| 5 | `src/features/youtube-management/application/ports.ts`, `infrastructure/supabaseYouTubeResourcesGateway.ts` + test | `createPlaylist?` |
+| 6 | `src/hooks/useYouTubePlaylists.ts` + `src/hooks/__tests__/useYouTubePlaylists.test.tsx` | `createPlaylist` mutation; refetch on success and on `outcome_unknown` |
+| 7 | `src/components/post/settings/YouTubeSettings.tsx` + component test | "+ New playlist" entry and dialog; enabled only when `manage_playlists?.state === "available"` (`D-P7-6`); select the new id on success; select nothing and never auto-retry on `outcome_unknown`; hidden for Composio and for more than one distinct native channel |
+| 8 | `src/pages/GoogleApiDisclosure.tsx`, `src/pages/Privacy.tsx`, `src/pages/Terms.tsx`, `src/pages/__tests__/YouTubeLegalDisclosures.test.tsx`, `docs/YOUTUBE-OAUTH-VERIFICATION-GUIDE.md`, `docs/reports/2026-11-26-youtube-stage6-approval-package.md` | Playlist creation described; the pinned "does not create, rename, reorder, or delete playlists" sentence rewritten; spec §13's line amended in this PR |
+| 9 | `src/i18n/locales/ar/postsettings.json` | Dialog strings |
+
+Gates: Deno for `youtube-resources`; Vitest on management, settings, the hook and the legal test; typecheck; ESLint; i18n; three guard skills.
+
+Exit on the fixture channel: a playlist is created and selected; the write bucket rose by exactly 50; the sixth creation in a day is refused with a wait; with the budget refused (fake RPC) the answer is `quota_exceeded` and no request reached Google; an account with `youtube.upload` but not `youtube.force-ssl` shows the reconnect reason.
+
+Rollback: revert and redeploy `youtube-resources`; the capability disappears and the entry hides itself. Playlists already created stay on YouTube.
+
+### PR-19 — packaging score (spec §14.5)
+
+Medium. After PR-15A. Branch `feat/youtube-vnext-p7d-packaging-score`.
+
+| Step | File | Action |
+| --- | --- | --- |
+| 1 | `supabase/functions/_shared/youtubePackagingScore.ts` (**new**) + `youtubePackagingScore.test.ts` (**new**) | Tests first: `scoreMobileLength`, every validator refusal, required integer `thumbnail_synergy` when `hasThumbnailText` is `true` (`D-P7-7`), weight rescale with a `null` synergy, duplicate and over-long titles |
+| 2 | `supabase/functions/generate-caption/handler.ts` + `handler.test.ts` | `youtube_title_thumbnail_score` on the sanitized path; Zod schema for the JSON `context`; delimited block; `422 score_invalid`; log-capture test with four markers (title, thumbnail text, description, provider failure body). Add the new `_shared` test file to the `generate-caption` CI step |
+| 3 | `src/lib/youtubePackagingScoreClient.ts` (**new**) + test | The one function that invokes `generate-caption` for a score and maps AI errors |
+| 4 | `src/components/post/settings/YouTubePackagingScoreCard.tsx` (**new**) + test | Presentational; `requestScore` injected; `null` synergy bar; "Use this title" |
+| 5 | `src/components/post/settings/YouTubeSettings.tsx` | Card under the title; `onSettingsChange({ title })` |
+| 6 | `src/features/youtube-management/application/ports.ts` (`YouTubePackagingScoreGateway`), `ui/YouTubeManagementScreen.tsx`, `ui/YouTubeVideoDrawer.tsx`, `ui/YouTubeVideoEditCard.tsx` + tests | Card inside the open editor; fills the draft title and marks it dirty; never saves |
+| 7 | `src/i18n/locales/ar/postsettings.json`, `src/i18n/locales/ar/accounts.json` | `youtubeAI.score.*`, `youtubeManagement.score.*` |
+
+Gates: Deno for `generate-caption` and the `_shared` test; Vitest on settings and management; typecheck; ESLint; i18n; `clean-code-guard`, `test-guard`. Deploy `generate-caption` from the PR head before merging.
+
+Exit on staging: a 95-character title scores low on mobile length; a title with a thumbnail description shows four bars and without one shows three plus the hint; "Use this title" fills the field in both places and saves nothing in the drawer.
+
+### PR-20 — privacy editing in the drawer (spec §14.6)
+
+**Heavy**: debate round, three guard skills, **Waleed's card before merge** (permissions). After PR-15A. Branch `feat/youtube-vnext-p7e-privacy-edit`.
+
+| Step | File | Action |
+| --- | --- | --- |
+| 0 | `supabase/functions/youtube-resources/handler.ts` (the `editEnvelope` helper), `editLifecycle.ts` | Verified (`D-P7-8`): `editEnvelope` already returns `restrictions: { scheduleProtected: boolean }` inside `data`. Expose `restrictions?: { scheduleProtected: boolean }` on the frontend `YouTubeEditSnapshot` port (`src/features/youtube-management/application/ports.ts`) and map it in `supabaseYouTubeResourcesGateway.ts` |
+| 1 | `youtube-resources/editLifecycle.test.ts`, `editComposition.guard.test.ts` | Pin the order with counting fakes: schedule-protected, missing confirmation and mismatched confirmation each → `invalid_request` with zero counter, budget, catalog and provider-write calls; a confirmed change writes once; a differing re-read is `outcome_unknown`. These should pass against today's code; a failure is a finding, not a test to loosen |
+| 2 | `src/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway.ts` + test | Confirm `privacy_status` and `privacy_confirmation` are sent only when provided; map `restrictions: { scheduleProtected }` from `data.restrictions` (`D-P7-8`) |
+| 3 | `ui/YouTubeVideoEditCard.tsx` + test | Privacy select seeded from the snapshot; disabled whenever `snapshot.restrictions?.scheduleProtected !== false` (fail-closed if `restrictions` is absent, `D-P7-8`); confirmation checkbox when changed, cleared on change, Public wording; `onSave` draft gains optional `privacyStatus` |
+| 4 | `ui/YouTubeManagementScreen.tsx`, `ui/YouTubeVideoDrawer.tsx` + tests | Pass `privacy_status` and `privacyConfirmation: { to }` only when changed and confirmed |
+| 5 | Legal pages, legal test, verification guide, approval package | Privacy added to the editable fields, with the confirmation |
+| 6 | `src/i18n/locales/ar/accounts.json`; `e2e/youtube-stage3.spec.ts` | Strings; a privacy change journey |
+
+Gates: Deno for `youtube-resources`; Vitest on management and the legal test; typecheck; ESLint; i18n; Playwright; three guard skills.
+
+Deploy `youtube-resources` only if step 0 changed it, and then before the merge. Exit on the fixture channel: Private → Unlisted and back, each after ticking the box, with YouTube Studio showing the change; Save disabled without the tick; a scheduled fixture video shows the disabled select; a request forged without the confirmation returns `invalid_request` and the edit counters did not move.
+
+Rollback: revert the PR. The server contract predates it and stays.
 
 ---
 

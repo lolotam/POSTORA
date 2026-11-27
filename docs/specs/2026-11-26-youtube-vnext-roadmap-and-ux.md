@@ -2,6 +2,8 @@
 
 26 November 2026 · six phases, ordered simplest first · tiers per phase in §2 · implementation baseline `51dd753b9331bbe28d8ca060e4c5b727a47dc9fc` (`feat/youtube-vnext-roadmap-and-ux`) · [implementation plan](../plans/2026-11-26-youtube-vnext-roadmap-and-ux.md)
 
+Amended 27 November 2026: **Phase 7** (§14) added after Phases 1–6 shipped — UX debug fixes, an embedded drawer player and five creator extensions, `PR-15A` and `PR-16` … `PR-20`. Phase 7 baseline: `origin/main` at `24ec1698` (PR #506).
+
 ## 1. Outcome
 
 One roadmap that takes the shipped YouTube Stages 1–6 to a complete creator surface:
@@ -44,6 +46,12 @@ Every phase is independently shippable. A later phase never blocks an earlier on
 | 5B | CSV and print export | Browser only | Light-sized, ships inside 5A's PR (Medium) | 0 | No |
 | 6A | Caption list and upload | Most expensive call in the API (400 units) | **Heavy** | 50 per list, 1 + 400 per upload | No |
 | 6B | Public channel benchmark | Reverses a Stage 2 invariant; policy review (OD-4) | **Heavy** | Up to 3 per channel (1 not found, 2 no uploads) | No |
+| 7.0 | UX debug fixes: AI Suggest context, embedded drawer player, edit toggle, rich thumbnail dialog, caption error reporting (§14.1) | Fixes on shipped surfaces; changes the CSP and adds browser-side storage writes (OD-7, OD-8) | **Heavy** | 0 (the player is an embed, not an API call) | No (verify storage policies) |
+| 7A | Segment-timed transcription, `.srt`/`.vtt` builder, auto-timed chapters (§14.2) | Additive field on an existing function plus pure formatters | Medium | 0 | No |
+| 7B | Upload-time captions and the `captions.insert` follow-up (§14.3) | Fourth non-idempotent follow-up; caption text stored on the post (OD-9) | **Heavy** | 400 per captioned upload | No |
+| 7C | Inline "+ New playlist" (`playlists.insert`) (§14.4) | New write; reverses a stated non-goal and a pinned legal sentence (OD-10) | **Heavy** | 50 per playlist | No |
+| 7D | AI title and thumbnail packaging score (§14.5) | No Google call; one AI request type and a pure scorer | Medium | 0 | No |
+| 7E | Privacy editing of a published video in the drawer (§14.6) | Server contract already live; UI exposes a visibility-changing write (OD-11) | **Heavy** | 53 per save (unchanged) | No |
 
 **Phase numbers and run order.** Phase numbers follow the brief and are kept so the two documents stay comparable. By risk, however, Phase 5 is simpler than Phases 3 and 4: it is read-only, lives inside a pipeline that already exists, and needs no migration (unless OD-2 finds one) and no change to publishing. Phases 3 and 4 change what gets published and add a SQL migration. **Phase 5 therefore runs immediately after Phase 2**, before the weighted-counter migration and before any publishing change. The run order is Phase 1 → 2 → 5 → 3 → 4 → 6; the plan's execution table is written in that order.
 
@@ -55,7 +63,7 @@ Unit costs and scopes for operations that are new to this repository come from p
 
 ## 3. Brief versus repository — owner decisions
 
-The brief conflicts with the baseline in six places. Nothing here is silently resolved; each is a card for Waleed before its phase starts.
+The brief conflicts with the baseline in six places for Phases 1–6 (OD-1 … OD-6) and in six more for Phase 7 (OD-7 … OD-12). Nothing here is silently resolved; each is a card for Waleed before its phase starts.
 
 | ID | Phase | Brief says | Repository says | Recommendation |
 | --- | --- | --- | --- | --- |
@@ -65,6 +73,12 @@ The brief conflicts with the baseline in six places. Nothing here is silently re
 | OD-4 | 6B | Compare public channels through `youtube-resources`-style reads. | `youtubeReadClient.getVideo` and the handler guarantee "this endpoint cannot look up videos outside the connected channel". `src/features/competitor-tracking/` already exists (no YouTube support). YouTube's API Services Developer Policies restrict how API data about other channels may be shown and combined; that page was not read in this session. | Build 6B as its own Edge Function and its own feature folder so the Stage 2 invariant stays literally true. Do the policy read first; Waleed decides go/no-go and whether it should live under competitor tracking instead. |
 | OD-5 | 2A | AI "generates YouTube-valid timestamps". | Nothing in the upload flow knows what happens when in the video. `transcribe-media` returns plain text plus a duration, with no segment times. A model given only a title invents timestamps. | Ship 2A with a timed source required: the creator's outline with times, or pasted timed text. Offer an "estimated" mode only with a visible warning. Segment-timed transcription is a follow-up (2A.2). |
 | OD-6 | 3B, 4, 6 | Per-user caps only. | `YOUTUBE_RESOURCE_QUOTA_POLICY.provider_quota` is `"not_tracked"`. The project default is 10,000 Data API units per Pacific day. At the brief's 50 edits per user per day and 53 units per save, one user can spend 2,650 units; four users exhaust the project. One caption upload is 4% of the daily quota. | Add one fail-closed project-wide write budget (§10) before any Phase 4 or 6 write goes live, and request a Google quota extension before Phase 6A is offered to all users. Numbers in §10 are proposals for Waleed. |
+| OD-7 | 7.0 | Embed the YouTube IFrame player in the drawer with a custom toolbar that includes a **quality selector** (`setPlaybackQuality`) and `modestbranding=1`. | The production CSP (`nginx.conf`, `public/_headers`) is `default-src 'self'` with **no `frame-src`**, so cross-origin iframes are blocked while same-origin frames are allowed through `default-src 'self'`. Read on 27 November 2026: the IFrame API reference no longer documents `setPlaybackQuality` (only the `onPlaybackQualityChange` event); the player-parameters page says `modestbranding` "is deprecated and has no effect"; `rel=0` now limits related videos to the same channel; with `enablejsapi=1` the page says to always send `origin`. "Required Minimum Functionality" demands a viewport of at least 200 × 200 px, no element in front of any part of the player, and no automatic playback before the player is more than half visible. | **Approved (with `D-P7-1`):** Add `frame-src 'self' https://www.youtube-nocookie.com;` to both CSP files so existing same-origin frames stay permitted alongside the YouTube privacy-enhanced embed host. Ship **no quality selector** (quality stays in the player's own gear menu, with a hint + reported quality label in the toolbar), drop `modestbranding`, send `origin`. Toolbar sits below the player, never over it. No iframe and zero requests to `youtube-nocookie.com` occur before the creator clicks Play. §14.1.2. |
+| OD-8 | 7.0 | Drive the player "using the YouTube IFrame Player `postMessage` API". | Google documents the JavaScript wrapper (`https://www.youtube.com/iframe_api`, `YT.Player`), not the raw message format. The wrapper is a third-party script running **inside Postora's origin**, next to the session token; the raw messages keep Google's code inside its own frame. | **Approved:** Use raw `postMessage` (`event: "listening"`, `event: "command"`) with strict origin (`https://www.youtube-nocookie.com`) and `event.source === iframe.contentWindow` checks, and keep the custom toolbar's playback controls resilient: when the player does not answer within 3 s of `load` the playback group hides and a one-line hint tells the creator to use the native player controls while Size (`Compact`, `Theater`, `Mini`), `Fullscreen`, and `Open on YouTube / Pop-out` stay active. No third-party script is loaded into Postora's origin. §14.1.2. |
+| OD-9 | 7B | Add `youtube_caption: { language, name, format, content }` to `PlatformMetadata`. | §13 says "No storage of … caption files in Postora's database". The key puts up to 512 KiB of caption text into `posts.metadata`, which is read by the publisher, the history views and the n8n API. | **Approved (with `D-P7-4` & `D-P7-5`):** Accept the key as specified, with four guards (§14.3): the public n8n API neither accepts nor returns `youtube_caption.content`; no evidence, log line or list view carries `content`; `content` is scrubbed from the stored metadata across all terminal settlement paths (`completed`, `partial`, `failed`), leaving `{ language, name, format }`; §13 is amended. |
+| OD-10 | 7C | Create playlists from Create Post; capability "`readonly` + `force-ssl` or `upload`". | §13 and the pinned legal sentence say Postora "does not create, rename, reorder, or delete playlists" (`YouTubeLegalDisclosures.test.tsx`). Read on 27 November 2026: `playlists.insert` is authorised by `youtube`, `youtube.force-ssl` and `youtubepartner` — **not** by `youtube.upload` — and costs 50 units. | **Approved (with `D-P7-6`):** Capability `manage_playlists` requires `youtube.readonly` **and** `youtube.force-ssl` (unknown/absent capability disables creation fail-closed). §13, the three legal pages, the legal test and the verification guide change in the same PR. §14.4. |
+| OD-11 | 7E | Add privacy editing to `update_video` (`editLifecycle.ts`, `editComposition.ts`). | It is already there. `UpdateVideoRequest` accepts `privacy_status` with `privacy_confirmation`, `validateEditChanges` refuses a schedule-protected video and `update` checks the confirmation, all before `authorizeWrite`. Phase 4A left only the UI out ("Privacy changes stay out of the first activation", §8.1). | **Approved (with `D-P7-8`):** 7E adds tests that pin that order, maps `restrictions.scheduleProtected` from the `edit_snapshot` envelope onto the frontend port (`restrictions?.scheduleProtected !== false` disables the privacy select fail-closed), adds the drawer control with explicit confirmation checkbox, and updates the disclosure. §14.6. |
+| OD-12 | 7A | `transcribe-media/handler.ts` returns `segments` beside `text` and `durationSeconds`. | There is no `handler.ts`; the function is one `index.ts`. Its response fields are `transcript`, `language` and `duration`. It already sends `response_format: "verbose_json"` to OpenAI. It has three provider tiers, and the Gemini tier returns plain text with no times. | **Approved (with `D-P7-3`):** Keep the existing field names. `segments` is additive and **optional**: present only when the provider returned usable times, never synthesised. Extracting `handler.ts` with sanitized error logging (no signed URLs or raw transcript/segment text in logs) is part of the PR (§12 adapter shape). §14.2. |
 
 ## 4. Shared building blocks
 
@@ -700,6 +714,8 @@ Proposal for Waleed. The default project quota is 10,000 Data API units per Paci
 | Phase 4B thumbnail change | 51 | **New budget** (50 debited) |
 | Phase 6A caption list / upload | 50 / 401 | **New budget** |
 | Phase 6B channel lookup | 3 | **New budget** (own bucket) |
+| Phase 7B caption at upload (§14.3) | 400 | Same write bucket; shares the 2-per-day user counter with 6A |
+| Phase 7C playlist creation (§14.4) | 50 | Same write bucket; 5 per user per day |
 
 - New bucket `youtube-resources:budget:write:<YYYY-MM-DD Pacific>`, proposed ceiling **4,000 units**, debited by the write's own cost (50 or 400) in **one atomic call** to `check_weighted_rate_limit` (§4.3, added by the Phase 3B-pre migration) and read through the strict parser. A debit that would pass the ceiling is refused whole: a 400-unit caption upload with 300 units left is refused and leaves the 300 untouched. `check_rate_limit` cannot do this and is not used for unit budgets. The bucket is keyed on the same Pacific-day arithmetic Stage 5 uses (`youtube-analytics/window.ts` `pacificBudgetBucketKey`; the day calculation is extracted to `_shared` when its second consumer arrives, with the analytics keys unchanged).
 - Interactive writes are refused with `quota_exceeded` when the budget is spent or unreadable. The playlist follow-up is `skipped / quota_budget`.
@@ -827,6 +843,19 @@ Each phase is accepted separately.
 - [x] **1A, 1B** Refresh costs one page on both screens however many were loaded.
 - [x] **Every phase** Its Deno, Vitest, typecheck, ESLint and i18n gates pass (plan §0.3); guard skills run for its tier; legal pages and their test match shipped behaviour; changed Edge Functions are deployed per `docs/runbooks/deploy-edge-function.md` and verified.
 
+Phase 7 (§14), not started:
+
+- [ ] **7.0 AI Suggest** Description suggestions use the title alone when the description is empty and title plus draft when it is not; tag suggestions use both; no title, draft or provider body appears in any log line (log-capture test); every returned suggestion fits YouTube's limits and carries no `<` or `>`.
+- [ ] **7.0 Player** OD-7 and OD-8 recorded. Nothing is requested from Google until the creator presses Play; the iframe URL is built only from an id matching `^[A-Za-z0-9_-]{11}$`; messages are accepted only from `https://www.youtube-nocookie.com` and from the player's own window; no element is drawn over the player; the player is never smaller than 200 × 200 px; it is removed on Stop, on drawer close and on video change; `frame-src` names that one host and nothing else.
+- [ ] **7.0 Edit toggle** The button opens and closes the editor; a successful save closes it and the "Current details match your changes." line stays visible; every other outcome leaves the editor open.
+- [ ] **7.0 Thumbnail dialog** Upload, library and AI tabs each end in an owned JPEG or PNG `media_files` row of at most 2 MB; `set_thumbnail` still receives only a `media_file_id`; `youtube-resources` is unchanged; the write is sent once per confirmed choice.
+- [ ] **7.0 Caption errors** Each of `missing_scope`, `reconnect_required`, `rate_limited`, `quota_exceeded`, `not_found` and a retryable failure shows its own message; Retry is offered only where a repeat can succeed; deployed `youtube-resources` matches `main` by SHA256.
+- [ ] **7A** `segments` is returned only when the provider supplied times and they pass validation; the generated `.srt` and `.vtt` pass `validateCaptionUploadInput`; the timed outline fits 8,000 characters and starts at `00:00`; chapters built from it pass the time-subset rule.
+- [ ] **7B** OD-9 recorded. The caption is validated before any quota is spent, counts against the creator's two uploads per day, debits 400 units once, is sent once, and never changes the upload receipt; `content` appears in no log, evidence row or API view and is removed from the stored post on settlement.
+- [ ] **7C** OD-10 recorded. A playlist is created only with `youtube.force-ssl`, at most five per user per day, after a 50-unit debit, in one attempt; a lost answer is `outcome_unknown`; the new playlist is selected only when Google's answer names the bound channel.
+- [ ] **7D** `overall_score` is computed by the server from validated parts; `thumbnail_synergy` is `null` when no thumbnail description was given; "Use this title" only fills a field; no title or thumbnail text reaches a log.
+- [ ] **7E** OD-11 recorded. Privacy cannot be saved without the confirmation matching the chosen value; a scheduled video's privacy control is disabled and a forged request is refused with zero counter, budget and provider-write calls; the saved response is the verified re-read.
+
 ## 13. Non-goals
 
 - No new OAuth scope. Every operation here is covered by the three scopes already granted (`youtube.readonly`, `youtube.upload`, `youtube.force-ssl`), subject to the plan's reference check.
@@ -836,3 +865,409 @@ Each phase is accepted separately.
 - No refactor of `StudioVideoPicker.tsx`, `process-post/index.ts` or the three `PlatformMetadata` copies beyond the two added keys.
 - No unified project-wide quota ledger; §10 is a bounded write budget, not an accounting of every unit.
 - No PDF library and no new runtime dependency in any phase.
+
+**Amendments made by Phase 7.** Two lines above stop being true when their PR ships, and each is rewritten in that PR, not before:
+
+- "no playlist creation" ends with PR-18 (OD-10). Rename, reorder, deletion and item removal stay non-goals.
+- "No storage of … caption files" is narrowed by PR-17 (OD-9): a caption chosen for a **new upload** is held on that post until it settles, then removed. Captions of existing videos are still never stored.
+
+Phase 7 adds its own non-goals in §14.7.
+
+## 14. Phase 7 — post-vNext UX fixes, drawer player and creator extensions
+
+Six PRs. `PR-15A` repairs and completes surfaces Phases 2, 4 and 6 shipped; `PR-16` … `PR-20` add five features that each reuse plumbing already in `main`. Every rule of §1 holds. Statements below about current code were read from `origin/main` at `24ec1698`; statements about Google's behaviour were read from Google's reference pages on 27 November 2026 unless marked "from the brief".
+
+| PR | Phase | Section | Tier | Edge Functions changed | Owner decisions |
+| --- | --- | --- | --- | --- | --- |
+| PR-15A | 7.0 | §14.1 | **Heavy** | `generate-caption` | OD-7, OD-8 |
+| PR-16 | 7A | §14.2 | Medium | `transcribe-media` | OD-12 |
+| PR-17 | 7B | §14.3 | **Heavy** | `process-post`, `n8n-api`, `youtube-resources` (re-export only) | OD-9, OD-6 |
+| PR-18 | 7C | §14.4 | **Heavy** | `youtube-resources` | OD-10, OD-3 |
+| PR-19 | 7D | §14.5 | Medium | `generate-caption` | — |
+| PR-20 | 7E | §14.6 | **Heavy** | `youtube-resources` (tests; code only if step 0 finds a gap) | OD-11, OD-3 |
+
+### 14.1 Phase 7.0 — `PR-15A`: UX debug fixes, drawer player, rich thumbnail dialog
+
+Five independent items in one PR. None changes `youtube-resources`.
+
+#### 14.1.1 `/post` AI Suggest — title, description, tags
+
+**Defect.** `YouTubeSettings.tsx` already passes `secondaryContext={settings.description}` to the description suggester, but `YouTubeLegacyAISuggestions` sends `context` alone unless `type === "tags"`, so a creator's draft description is ignored. On the server, `generate-caption/handler.ts` cuts the context to 1,000 characters (500 for titles), which would truncate "title + draft" even if it arrived.
+
+**Client (`src/components/post/settings/YouTubeAISuggestions.tsx`).** The request `context` is built by one pure function, `buildYouTubeSuggestContext(type, title, description)`:
+
+| `type` | `requestType` | `context` sent |
+| --- | --- | --- |
+| `title` | `youtube_title` | `settings.title` |
+| `description`, description empty (`!secondaryContext?.trim()`) | `youtube_description` | `settings.title` |
+| `description`, draft present | `youtube_description` | `` `Title: ${context}\nDraft Description / Notes: ${secondaryContext}` `` |
+| `tags` | `youtube_tags` | `` `Title: ${context}\nDescription: ${secondaryContext || ""}` `` |
+
+A written title stays required for all three (the existing guard and its three messages are unchanged). `YouTubeSettings.tsx` already passes the right props; it changes only if a prop name does.
+
+**Server (`supabase/functions/generate-caption/handler.ts`).**
+
+- Context caps become 500 characters for `youtube_title` (unchanged) and **6,000** for `youtube_description` and `youtube_tags` (a 100-character title, a 5,000-character description and the labels fit; the body schema's 10,000 limit is unchanged).
+- The creator's text is placed inside a delimited block after `escapePromptTagDelimiters`, and the system prompt calls it data and says to ignore instructions inside it. Today it is interpolated between plain quotes.
+- **`youtube_title`:** five click-worthy, search-optimised titles, each at most 100 characters, in the selected language. The model is not given trend data and no web search runs, so neither the prompt nor the UI claims live trends.
+- **`youtube_description`:** three descriptions of roughly 900–1,500 characters, each with a hook in the first two lines (the part shown before "Show more"), key points, a call to action, relevant search keywords in natural sentences, three to five hashtags at the end, and these placeholders, exactly as written, for the creator to replace: `[MEETING / BOOKING LINK]`, `[OTHER CHANNEL / PARTNER CHANNEL]`, `[YOUR WEBSITE]`, `[YOUR INSTAGRAM]`, `[YOUR TIKTOK]`, `[YOUR TWITTER/X]`. When the context has a `Draft Description / Notes:` part, the prompt says to expand and optimise that draft and keep its facts, links and names; otherwise to write from the title alone. The prompt forbids inventing URLs, statistics or promises.
+- **`youtube_tags`:** five comma-separated tag sets derived from the title **and** the description.
+- **Output filter.** Before answering, the server drops any suggestion that is not a string, is empty, contains `<` or `>`, or is over its field's limit (title 100, description 5,000, tag set 500 characters). Zero survivors is `422 { error: "suggestions_invalid" }`; the raw model text is never returned. Today's bracket-repair fallback, which can return the raw text as one suggestion, is removed for these three types.
+- **Logging.** A creator's draft now enters the prompt, so these three request types move onto the sanitized pipeline Phase 2 built (`invokeYouTubeAi`, `logYouTubeAiSuccess`, `logYouTubeAiFailure`; `YouTubeAiFeature` gains the three literals). The branch stops calling `response.text()` on a failure and stops logging `error_message` and `error_stack`. The response shape `{ suggestions: string[] }` is unchanged.
+- **Token budget.** `invokeYouTubeAi` today sends `max_tokens: 1024` and `temperature: 0.4` for everything except chapters, while this branch used 4,096 and 0.8. Three 1,500-character descriptions do not fit 1,024 tokens, least of all in Arabic, and would fail the output filter almost every time. The helper therefore takes its budget per feature: `youtube_title`, `youtube_description` and `youtube_tags` keep **4,096 tokens and temperature 0.8**; chapters keep 4,096 and 0.4; the comment reply keeps 1,024 and 0.4. Stripping a Markdown code fence around the model's JSON stays; only the fallback that returns unparsed text as a suggestion goes.
+
+**Tests.** A Vitest table for `buildYouTubeSuggestContext` (four rows above, whitespace-only draft counts as empty); a component test that the description request carries both parts when a draft exists; `handler.test.ts` for the three caps, the delimited block, the output filter (over-length, angle brackets, empty set → 422), and a **log-capture test** with one marker in the title, one in the draft and one in the stubbed provider's failure body, none of which may appear in any `console`, logger or `logAiCall` argument on the success, invalid-output, provider-failure and thrown-exception paths.
+
+#### 14.1.2 `/youtube` drawer — embedded video player
+
+**Precondition: OD-7 and OD-8.** The player is an embed. It makes no Data API call and spends no quota; the creator's own browser talks to YouTube.
+
+**Files.**
+
+| File | Change |
+| --- | --- |
+| `src/features/youtube-management/domain/player.ts` (new, pure) + test | `YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/`; `YOUTUBE_EMBED_ORIGIN = "https://www.youtube-nocookie.com"`; `buildYouTubeEmbedUrl(videoId, pageOrigin): string \| null`; `buildYouTubeWatchUrl(videoId): string \| null`; `YOUTUBE_PLAYBACK_RATES`; `playerCommand(func, args)`; `parsePlayerMessage(data): PlayerInfo \| null` |
+| `src/features/youtube-management/ui/YouTubeVideoPlayer.tsx` (new) + test | Poster, iframe, toolbar, size modes |
+| `ui/YouTubeVideoDetail.tsx` | Renders `YouTubeVideoPlayer` where `YouTubeVideoThumbnail` is today |
+| `ui/YouTubeVideoDrawer.tsx` | Owns the drawer width for Theater mode; unmounts the player on close and on video change |
+| `nginx.conf`, `public/_headers`, `src/lib/__tests__/cspRegression.test.ts` | `frame-src 'self' https://www.youtube-nocookie.com;` |
+| `src/pages/Privacy.tsx`, `src/pages/GoogleApiDisclosure.tsx`, `src/pages/__tests__/YouTubeLegalDisclosures.test.tsx`, `docs/YOUTUBE-OAUTH-VERIFICATION-GUIDE.md` | Embedded-player sentence (below) |
+
+**Click to play (`D-P7-1`).** Until the creator presses Play the component renders a poster only: the video's `thumbnail_url` (or a local SVG placeholder when `thumbnail_url` is null), the duration badge (`formatIsoDuration`), a privacy note and a real `<button>` labelled "Play video". No iframe exists and zero requests to `youtube-nocookie.com` (YouTube's embed player) occur before Play. Pressing Play mounts the iframe; that press is the user gesture, and the drawer is open and in view, so the autoplay requirement (player more than half visible) is met.
+
+**Embed URL.** `buildYouTubeEmbedUrl` returns `null` unless the id matches `YOUTUBE_VIDEO_ID_PATTERN`; a `null` leaves the poster in place with no Play button. Otherwise:
+
+```text
+https://www.youtube-nocookie.com/embed/<id>?enablejsapi=1&playsinline=1&rel=0&autoplay=1&origin=<encodeURIComponent(window.location.origin)>
+```
+
+The id is the only variable part and comes from the `video` operation, which already proved the video belongs to the bound channel. `modestbranding` is not sent (deprecated, no effect). `controls` is left at its default, so the native controls are always present. The iframe carries `title`, `allow="autoplay; encrypted-media; picture-in-picture; fullscreen"`, `allowFullScreen` and `referrerPolicy="strict-origin-when-cross-origin"`.
+
+**Messaging rules (OD-8).**
+
+- Commands go out with `iframe.contentWindow.postMessage(json, YOUTUBE_EMBED_ORIGIN)`. The target origin is that constant, never `"*"`.
+- An incoming message is used only when `event.origin === YOUTUBE_EMBED_ORIGIN` **and** `event.source === iframe.contentWindow`. Its `data` is parsed defensively by `parsePlayerMessage`; anything that is not the expected shape is ignored. Only these fields are read: player state, volume, muted, playback rate, available playback rates and the current quality label. No field is rendered as HTML.
+- The listener is added when the iframe mounts and removed when it unmounts.
+- **Handshake — unverified, proven by a spike before the component is built.** The raw format is not documented, so this specification does not assert it. The expectation, from how Google's own wrapper behaves, is that the embed stays silent until the parent posts a `listening` event to it after `load`, and then reports its state. Plan step 2.0 proves on a real embed which message starts the reports and which fields they carry, and records the captured shapes in `domain/player.test.ts` as fixtures. If no reliable handshake exists, the playback group of the toolbar is not built and the player ships with native controls plus the size, fullscreen and open-on-YouTube controls; that outcome is reported to Waleed under OD-8.
+- **Degradation.** If no valid player message arrives within 3 seconds of the iframe's `load` event, the custom toolbar's playback group is hidden and a one-line note says to use the controls inside the player. Size, fullscreen and "Open on YouTube" keep working because they do not depend on messages.
+
+**Toolbar.** Rendered in a `role="toolbar"` row **below** the player, never over it.
+
+| Control | Mechanism |
+| --- | --- |
+| Play / Pause / Stop | `playVideo`, `pauseVideo`, `stopVideo`. Stop also unmounts the iframe and returns to the poster, which ends the connection to YouTube |
+| Mute / Unmute, volume slider 0–100 | `mute`, `unMute`, `setVolume` |
+| Speed | `setPlaybackRate`. Options start as 0.25×, 0.5×, 0.75×, 1×, 1.25×, 1.5×, 1.75×, 2× and are narrowed to the rates the player reports for this video once known; the shown value follows the player's own report |
+| Quality | **No selector** (OD-7). A hint reads "Change quality from the gear menu in the player", with the current quality label when the player reports one |
+| Size: Compact | Default. Player fills the drawer's content width at 16:9 |
+| Size: Theater | The drawer widens to `sm:max-w-[min(96vw,1200px)]`; the player grows with it. The same iframe element stays mounted, so playback continues |
+| Size: Mini | The player shrinks to 356 × 200 px and becomes `sticky top-0` inside the drawer's scroll container, so it stays in view while the creator scrolls the details. Never below 200 × 200 px. It is not moved to a portal: reparenting an iframe reloads it, and the drawer's transform would capture a `position: fixed` child |
+| Fullscreen | `requestFullscreen()` on the wrapper that holds the iframe and the toolbar; a rejected promise is caught and the button is hidden when `document.fullscreenEnabled` is false |
+| Open on YouTube / Pop-out | A link, and `window.open(url, "_blank", "noopener,noreferrer,width=960,height=600")`, both to `buildYouTubeWatchUrl(id)`, never to a string taken from a message |
+
+**Private and unfinished videos.** For `privacy_status === "private"` a notice is shown on the poster and stays under the player: "This video is private. It plays here only if this browser is signed in to the Google account that owns it. Otherwise open it on YouTube." When `upload_status` is not `processed`, a note says YouTube may still be processing the video. Neither state is detected from the player; both come from the `video` operation.
+
+**Lifecycle.** One player at most. It is unmounted when the drawer closes, when the selected video changes and when the account changes, so nothing keeps playing out of sight.
+
+**CSP (`D-P7-1`).** Both `nginx.conf` and `public/_headers` gain `frame-src 'self' https://www.youtube-nocookie.com;` so existing same-origin frames stay permitted alongside the YouTube privacy-enhanced embed host, and nothing else changes in the policy. `cspRegression.test.ts` gains: the `frame-src` segment equals `'self' https://www.youtube-nocookie.com` in both files, the two files' policies are identical, and the existing no-wildcard rule still passes.
+
+**Disclosure.** "When you press Play on a video in Postora, your browser loads YouTube's embedded player from youtube-nocookie.com. Google receives the request directly from your browser under YouTube's Terms of Service and Google's Privacy Policy. Postora does not receive or store playback data."
+
+**i18n** (namespace `accounts`): `youtubeManagement.player.*`.
+
+**Tests.** `player.test.ts`: id pattern (10 and 12 characters, a slash, a query string and an empty value are refused), the exact URL, `parsePlayerMessage` on valid, non-JSON, wrong-shape and oversized input. Component: no iframe before Play; the iframe `src` after Play; a message from another origin and one from another window are ignored; a command's target origin is the constant; the toolbar hides after 3 s of silence; Stop, drawer close and video change each remove the iframe; the mini size is at least 200 × 200; the private notice; Arabic rendering with the toolbar in RTL and its numeric values (speed, volume) kept left-to-right.
+
+#### 14.1.3 `/youtube` drawer — "Edit video details" toggle and close on save
+
+`YouTubeVideoEditCard.tsx` only.
+
+- The button toggles. Closed → `openEditor()` as today (fresh draft, snapshot read). Open → `setEditing(false)` with no save and no request; the draft is discarded and the next open starts from a new snapshot. The button carries `aria-expanded` and `aria-controls`, and is disabled while `saving` so an editor cannot be closed over a write in flight.
+- A save whose outcome is `"saved"` calls `setEditing(false)`. Every other outcome (`edit_conflict`, `rate_limited`, `refused`, `outcome_unknown`) leaves the editor open with the draft intact.
+- The outcome line moves **out of** the `editing` block to directly under the button row, keeping `role="status"`. Today it is rendered inside the block, so closing the editor would hide the confirmation. It is cleared when the editor is opened again and when the video changes, as now.
+- The post-write revision handling and the dirty-field rules are unchanged.
+
+**Tests.** Second click closes with zero `onSave` calls; reopening calls `onSnapshot` again; `"saved"` closes the form and "Current details match your changes." is in the document; `edit_conflict` keeps the form open; the button is disabled while saving; `aria-expanded` follows the state.
+
+#### 14.1.4 `/youtube` drawer — rich thumbnail dialog and small preview
+
+**Invariant kept.** `set_thumbnail` still takes `{ account_id, video_id, media_file_id }` and nothing else. The server still loads the row by `id` and `user_id`, requires `image/jpeg` or `image/png`, downloads at most 2 MB from Postora's own storage and checks the magic bytes (§8.2). No URL reaches the server. **`youtube-resources` is not modified by this item.** Every tab below ends by producing an owned `media_files` row; the confirmation step and the single write are the ones Phase 4B shipped.
+
+**Contracts (frontend only).**
+
+```ts
+// domain/thumbnail.ts
+export const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
+export interface YouTubeThumbnailCandidate {
+  id: string; file_name: string; mime_type: string; file_type: string; file_size: number | null;
+  preview_url: string | null;                    // new; display only
+}
+export function sniffThumbnailType(head: Uint8Array): "image/jpeg" | "image/png" | null;
+export function checkThumbnailFile(input: { declaredType: string; size: number; head: Uint8Array }):
+  { ok: true; mimeType: "image/jpeg" | "image/png" } | { ok: false; reason: "not_jpeg_png" | "too_large" | "type_mismatch" };
+
+// application/ports.ts
+export interface YouTubeThumbnailMediaGateway {
+  listOwnedImages(params: { userId: string }): Promise<YouTubeThumbnailCandidate[]>;
+  uploadOwnedImage(params: { blob: Blob; fileName: string; mimeType: "image/jpeg" | "image/png" }):
+    Promise<YouTubeThumbnailCandidate>;          // new
+}
+export interface YouTubeThumbnailAiGateway {     // new
+  generate(params: { prompt: string; referenceImage?: string; signal?: AbortSignal }): Promise<{ imageUrl: string }>;
+}
+```
+
+- `checkThumbnailFile` mirrors the server's rule so a bad file is refused before any upload; the server stays the authority.
+- `uploadOwnedImage` (in `infrastructure/supabaseYouTubeThumbnailMediaGateway.ts`, `D-P7-2`) takes the user id from the session, never from a parameter; generates a deterministic client UUID `id = crypto.randomUUID()` and storage path `{userId}/{id}.{ext}` per upload attempt; uploads to bucket `media` under `{userId}/{id}.{ext}`; inserts the `media_files` row with `id`, `user_id`, `file_path`, `file_type: "image"`, the verified `mime_type`, `storage_bucket: "media"`, `file_size` and the original file name in `metadata`; and returns the candidate. If the row insert throws or returns an error after the object was stored (including a lost response where the insert may have succeeded), the gateway checks whether the row with `id` and `user_id` exists in `media_files`: if found, it returns that candidate without deleting the stored object; only when the row is confirmed absent does it remove the stored object and fail. It reuses the row shape and path convention of the app's existing library upload (plan step 0 names it), so the file also appears in the media library.
+- **Tenancy.** These are browser writes under the creator's own JWT, so storage and table RLS are the enforcement. Plan step 0 verifies that the `media` bucket's insert policy confines a user to their own `{auth.uid()}/` prefix and that `media_files` insert requires `user_id = auth.uid()`. If either is missing, the item stops and a card goes to Waleed; it is not papered over in the client.
+- `preview_url` is resolved by the gateway the way `MediaLibrary.tsx` resolves a library file's URL (`libraryFilePublicUrl` in `src/pages/media-library/utils.ts`). It is used only as an `<img src>`, is never sent to an Edge Function, and `null` renders a placeholder.
+
+**Small preview.** Beside the "Change thumbnail" button: a 96 px wide 16:9 image of the video's current `thumbnail_url`. After an `applied` outcome it shows the applied candidate's `preview_url` with the caption "YouTube may take a few minutes to show the new thumbnail" until the `video` query's refetch returns.
+
+**Dialog (`YouTubeThumbnailChange.tsx`, replacing the radio list).** A `Dialog` with three tabs, `dir` set from the locale:
+
+1. **Upload file.** A file input accepting JPEG and PNG. The first bytes are read and `checkThumbnailFile` runs; a refusal shows its reason and uploads nothing. A pass calls `uploadOwnedImage` and selects the returned candidate.
+2. **Media library.** The owned JPEG and PNG candidates as image cards (preview, file name, size), single selection, with the existing loading, empty, error-and-retry and "some images were excluded" states.
+3. **Generate with AI.** The flow of `/post`: `ResolvedModelCards`, a prompt textarea, up to five reference images from device upload, `MediaLibraryPicker` or `StockMediaPicker`, then `YouTubeThumbnailAiGateway.generate`, which sends the same `generate-image` request `/post` sends today (`prompt`, `aspectRatio: "16:9"`, the first reference image, `async: true`). `generate-image` is not changed. Choosing a result **materialises** it: the image is fetched in the browser, drawn to a 1280 × 720 canvas (cover fit), encoded as JPEG at decreasing quality (0.9 down to 0.5) until it is at most 2 MB, checked with `checkThumbnailFile`, then stored through `uploadOwnedImage`. If the image cannot be fetched, decoded or brought under 2 MB, the message is "This image could not be prepared as a thumbnail" and nothing is stored or sent. AI errors go through `handleAIError`; generation counts against the creator's existing AI image limits.
+
+Whichever tab produced it, the selected candidate goes to the existing confirmation ("This replaces the thumbnail viewers see on YouTube"), and Confirm calls `onSetThumbnail(candidate.id)` once. Stock photos are reference images for the AI tab only; a stock image is never sent to YouTube directly.
+
+**Layering.** `ui/` files receive both gateways as props from the composition root (`YouTubeManagementScreen.tsx`), which stays the only `ui/` file importing `infrastructure`. The shared pickers are imported from `@/components/…` the way `YouTubeCategorySelect` already is. `tests/architecture.test.ts` must stay green.
+
+**i18n** (namespace `accounts`): `youtubeManagement.thumbnail.dialog.*`.
+
+**Tests.** `thumbnail.test.ts`: signatures, 2 MB boundary (2,097,152 accepted, 2,097,153 refused), a PNG labelled JPEG is `type_mismatch`, WebP and GIF refused. Gateway: path starts with the session user id; the row shape; cleanup when the insert fails. Component: each tab ends with `onSetThumbnail` called once with a media id and never with a URL; an oversize upload makes no gateway call; the AI path that cannot reach 2 MB stores nothing; preview fallback; the confirmation still gates the write.
+
+#### 14.1.5 `/youtube` drawer — "Show caption tracks" error reporting
+
+**Two causes, stated at their evidence level.**
+
+1. **Hypothesis, to be verified first:** production `youtube-resources` may be older than `main` and answer `400 invalid_request` to `operation: "captions"`. The first plan step compares the SHA256 of every deployed `youtube-resources` and imported `_shared` file with `git show origin/main:<path>`. If they differ, redeploying is the fix for that cause. If they match, this cause is ruled out and the report says so.
+2. **Proven from the code:** `YouTubeCaptionsSection.tsx` `loadTracks` uses a bare `catch {}` and always shows "Postora could not read the caption tracks of this video.", so a creator cannot tell a missing permission from a spent allowance.
+
+**Fix.** `domain/captions.ts` gains a pure mapper beside `captionOutcomeFromErrorCode`:
+
+```ts
+export type CaptionListFailure =
+  | "missing_scope" | "reconnect_required" | "rate_limited" | "quota_exceeded"
+  | "not_found" | "unavailable" | "retryable" | "failed";
+export function captionListFailureFromErrorCode(code: string | null | undefined): CaptionListFailure;
+```
+
+| Server code | Failure | Message (English default) | Retry button |
+| --- | --- | --- | --- |
+| `missing_scope` | `missing_scope` | "Reconnect this channel and allow Postora to manage your YouTube account to read captions." | No; link to reconnect |
+| `reconnect_required` | `reconnect_required` | "This channel needs to be reconnected before captions can be read." | No; link to reconnect |
+| `rate_limited` | `rate_limited` | "You have reached today's limit for reading caption tracks. Try again in {{time}}." (generic wording when no wait is given) | No |
+| `quota_exceeded` | `quota_exceeded` | "Postora's YouTube quota for today is used up. Try again tomorrow." | No |
+| `not_found` | `not_found` | "This video is no longer on the connected channel." | No |
+| `write_not_enabled`, `provider_unsupported`, `invalid_request` | `unavailable` | "Captions are not available for this channel right now." | No |
+| `upstream_unavailable` | `retryable` | "YouTube did not answer. Try again." | **Yes** |
+| anything else, or not a `YouTubeResourceError` | `failed` | Today's generic sentence | No |
+
+Retry is offered for `retryable` only, because a list costs 50 units and one of ten daily reads; repeating a refusal that cannot change wastes both. `loadTracks` reads `error.code` and `error.retryAfterSeconds` from the `YouTubeResourceError` the screen already rethrows; a failed read still never looks like an empty list.
+
+**i18n** (namespace `accounts`): `youtubeManagement.captions.listError.*`.
+
+**Tests.** `captions.test.ts`: one case per row; `invalid_request` maps to `unavailable`, not to a retry. Component: each failure renders its own message; Retry appears only for `upstream_unavailable`; the wait is shown for `rate_limited`.
+
+### 14.2 Phase 7A — `PR-16`: segment-timed transcription, `.srt`/`.vtt` builder, auto-timed chapters
+
+This is follow-up 2A.2 named in OD-5. **Precondition: OD-12.**
+
+**`transcribe-media`.** The function becomes `index.ts` (adapter: CORS, authentication, body parsing, response) plus a new `handler.ts` holding the tier logic, moved without behaviour change (§12). The request (`mediaUrl`, optional `model`) and today's response fields are unchanged; one field is added:
+
+```ts
+{ success: true, transcript: string, language: string, duration: number,
+  modelUsed: string, tierUsed: string,
+  segments?: Array<{ start: number; end: number; text: string }> }   // new; seconds
+```
+
+- The OpenAI tier already sends `response_format: "verbose_json"`; it additionally sends `timestamp_granularities[]=segment` and reads `segments[].start`, `.end`, `.text`. The plan's reference check confirms which configured models accept that parameter; a model that does not is called exactly as today and yields no segments.
+- A tier that returns no times (Gemini today) yields **no** `segments` key. Times are never estimated from text length.
+- **Validation before returning.** Segments are kept only if every one has finite `0 <= start < end`, starts are non-decreasing, `end <= duration + 1` when the duration is known, and the trimmed text is 1–500 characters; at most 5,000 segments. If any check fails the whole array is dropped (the transcript is still returned). A partly trusted timeline is worse than none.
+- **Sanitized logging (`D-P7-3`).** Neither the transcript, the segments, nor the `mediaUrl` (which may be a signed URL containing a token query string) may appear in any log line added or moved into `handler.ts`; provider failures log only the tier identifier, HTTP status, and a stable error code.
+- An old client ignores the new key; a new client treats a missing key as "timing unavailable".
+
+**Pure formatters — `supabase/functions/_shared/youtubeTranscriptFormats.ts`** (new), imported by the frontend the way `youtubeChapters.ts` is:
+
+```ts
+export interface TranscriptSegment { start: number; end: number; text: string }
+export function segmentsToSrt(segments: TranscriptSegment[]): string;
+export function segmentsToVtt(segments: TranscriptSegment[]): string;
+export function segmentsToTimedOutline(segments: TranscriptSegment[], maxChars?: number): string; // default 8000
+```
+
+- **SRT:** cues numbered from 1, `HH:MM:SS,mmm --> HH:MM:SS,mmm`, blank line between cues, CRLF-free `\n` line ends. **VTT:** first line `WEBVTT`, then `HH:MM:SS.mmm --> HH:MM:SS.mmm` cues. In both, cue text has NUL removed, any `-->` replaced, and line breaks collapsed to spaces; an empty input yields `""`.
+- Both outputs must pass `validateCaptionUploadInput` (the Phase 6A validator) for the same segments; a test asserts it, including Arabic text. A result over 512 KiB is not truncated by the formatter; the caller reports it through the validator's `caption_invalid`.
+- **Timed outline:** lines `MM:SS text` (or `H:MM:SS` from one hour), times floored to whole seconds, built by grouping segments into windows of at least 30 seconds, one line per window. Widening windows alone cannot make a long transcript fit, because the spoken text stays the same length, so **each line's text is also cut** at a word boundary: the per-line limit starts at 160 characters and the window starts at 30 seconds; while the outline is longer than `maxChars` the window doubles (up to 10 minutes) and then the per-line limit halves (down to 24 characters). The outline is a list of timed cues for the chapter model, not a transcript. **The first line is always `00:00`.** That makes the outline a legal input for `youtube_chapters` in `"provided"` mode: it fits the 8,000-character cap, and because the server's time-subset rule only allows times that appear in the input, a chapter list starting at `00:00` is reachable.
+
+**UI (`YouTubeAISuggestions.tsx`, `type: "chapters"`).** A button, "Extract chapters and subtitles from the video's audio", enabled only when `videoSourceUrl` is an `https:` URL the function can fetch; a local `blob:` preview of a file that has not been uploaded yet keeps it disabled with the hint "Available after the video is uploaded". It is an explicit click because transcription spends the creator's AI allowance. It calls the existing `useTranscription` hook (which gains `segments`), then:
+
+- with segments: fills the outline box with `segmentsToTimedOutline`, sets timing to `"provided"`, and offers "Download .srt" and "Download .vtt" (a `Blob` and a revoked object URL, no network call). Chapters are then generated, previewed and inserted by the unchanged Phase 2A flow;
+- without segments: shows "This transcription has no timing, so chapters and subtitles cannot be built from it" and changes nothing.
+
+**i18n** (namespace `postsettings`, `src/i18n/locales/ar/postsettings.json`): `youtubeAI.chapters.fromAudio.*`.
+
+**Tests.** Deno: formatter cases (ordering, hour rollover, `-->` in text, Arabic, empty input, validator round-trip, outline under 8,000 characters for a three-hour fixture, first line `00:00`, a chapters fixture built from the outline passes `parseChapterLines` and the subset rule); `handler.test.ts` (new) for segments present, absent on the no-timing tier, dropped when out of order or past the duration, and unchanged legacy fields. Vitest: button disabled without a URL; the two branches above; downloads make no gateway call.
+
+### 14.3 Phase 7B — `PR-17`: upload-time captions and the `captions.insert` follow-up
+
+**Precondition: OD-9; OD-6's ceiling.** Read on 27 November 2026: `captions.insert` costs 400 units, is authorised by `youtube.force-ssl`, and uploads to `https://www.googleapis.com/upload/youtube/v3/captions`.
+
+**Rollout rule.** Until `process-post` with this follow-up is deployed and smoke-tested, the UI neither shows the section nor emits `youtube_caption`. An older `process-post` ignores the key silently, and a creator would believe subtitles were attached. The plan therefore delivers `PR-17` as two pull requests, PR-17A (backend) and PR-17B (UI), the way Phase 3A was split.
+
+**Shared validator.** `youtube-resources/captionFile.ts` moves to `supabase/functions/_shared/captionFile.ts` with its tests; the old path becomes a re-export so `youtube-resources` is byte-for-byte unchanged in behaviour. `validateCaptionUploadInput`, `CAPTION_CONTENT_MAX_BYTES` (512 KiB, UTF-8 bytes), `CAPTION_LANGUAGE_PATTERN` and `CAPTION_NAME_MAX_LENGTH` have one definition.
+
+**Metadata key** (all three `PlatformMetadata` copies — `process-post/index.ts`, `n8n-api/index.ts`, `_shared/platforms/types.ts` — per `ARCHITECTURE.md` "Known live violation"; no fourth copy):
+
+```ts
+youtube_caption?: { language: string; name: string; format: "srt" | "vtt"; content: string } | null;
+```
+
+`undefined` and `null` mean no caption and leave the publish path byte-identical. Any other value is a request; one that fails validation is never sent to Google.
+
+**Guards on the stored text (`OD-9`, `D-P7-4`, `D-P7-5`).**
+
+- The public n8n API does not accept the key on create and strips `youtube_caption.content` from every post it returns.
+- Evidence, logs, error messages and the history views never contain `content`. Evidence records the language, the format and the byte length only.
+- When the post settles across any terminal settlement path (`completed`, `partial`, `failed`), `content` is scrubbed from the stored `posts.metadata.youtube_caption` object via a pure helper (`scrubSettledYoutubeCaptionMetadata`), leaving `{ language, name, format }`.
+- `content` is plain text. It is never rendered as HTML anywhere.
+
+**Follow-up (`process-post/youtubeUploadFollowUps.ts`).** `YoutubeFollowUpRequest` gains `caption: { language; name; format; content } | null`; `YoutubeFollowUpResults` gains `caption: YoutubeFollowUpOutcome`. Order becomes thumbnail, first comment, playlist, **caption**, so the three existing follow-ups keep their place and their share of the worker's time. `uploadYoutubeCaption`:
+
+1. `validateCaptionUploadInput` — free. Invalid → `skipped / invalid_caption`.
+1a. Scope (`D-P7-4`) — free. `captions.insert` requires `youtube.force-ssl` in the account's `granted_scopes`. When `hasCaptionScope()` returns `false` (i.e. `youtube.force-ssl` is not explicitly present in `granted_scopes`), the result is `skipped / missing_scope` with zero counter and budget calls: an unverified or missing scope must never spend the creator's daily upload or 400 project units. The answer arrives through `hasCaptionScope(): boolean`, computed by the caller from the account row it already loaded.
+2. `budgetMs() <= 0` → `skipped / no_time`.
+3. `canWrite()` false → `skipped / authority_lost`.
+4. Per-user allowance: the **same** counter Phase 6A uses, `youtube-resources:caption-upload:day` (2 per 24 h), through the strict parser. Refused or unreadable → `skipped / rate_limited`. A creator therefore gets two caption uploads a day in total, whichever screen they use; without this one account could drain the project budget from Create Post.
+5. Project write budget: debit **400** in one `check_weighted_rate_limit` call. Refused or unreadable → `skipped / quota_budget`.
+6. `canWrite()` again, then one multipart `POST …/upload/youtube/v3/captions?part=snippet&uploadType=multipart` with `{ snippet: { videoId, language, name, isDraft: false } }` and the file part, `AbortSignal.timeout(min(budgetMs, 60 s))`.
+7. 2xx → `applied`. 409 → `failed / conflict`. Other non-2xx → `failed / refused`, logging only the HTTP status and stable error code (never raw provider text that could echo caption content, `D-P7-4`). Thrown or timed out → `unknown / answer_lost`.
+
+No ownership read is needed: the video id is the one this run just created on `request.channelId`. The insert is **sent once and never retried**. It runs only in the run that created the video and can never fail the publish or erase the upload receipt.
+
+**Dependencies.** `YoutubeFollowUpDeps.debitWriteBudget` changes from `() => Promise<boolean>` to `(units: number) => Promise<boolean>`; the playlist step passes 50 and the caption step 400. A new dep, `checkCaptionUploadAllowance(): Promise<boolean>`, is implemented with the strict counter helper, which moves from `youtube-resources/writeLimits.ts` to `_shared/youtubeWriteCounters.ts` (re-exported at the old path, keys and limits unchanged) so `process-post` does not import another function's folder.
+
+**Evidence.** `youtubePublishEvidence.ts` adds `caption: YoutubeFollowUpEvidence` (`not_requested` when the key is absent, which covers every older row); `n8n-api/youtubeEvidenceView.ts` and every `src/` renderer of publish evidence show it beside thumbnail, first comment and playlist.
+
+**UI (`YouTubeSettings.tsx`, `usePlatformSettings.tsx`, `CreatePost.tsx`).** A "Subtitles / CC" section: a file input (`.srt`, `.vtt`) or "Use subtitles from the audio" (PR-16's generated file, when present), a language select, a track name (0–150 characters), the file size against the 512 KB limit, and the note "Counts as one of your two caption uploads per day. Added after the video is uploaded." Validation runs in the browser with the shared validator before the value is stored. The section is disabled with the existing mismatch pattern for Composio accounts and when the selected native account lacks the `manage_captions` capability, and the key is then not sent. When no caption is chosen the key is **omitted**. Rehydration restores language, name and format; if `content` was already removed (a settled post reopened), the section shows the track as "already submitted" and offers a new file.
+
+**Disclosure (OD-3).** The legal pages, their test and the guide add that a caption file the creator attaches to a new upload is sent to YouTube after the upload under `youtube.force-ssl`.
+
+**Tests.** `captionFile` suite green at its new path and through the re-export. `youtubeUploadFollowUps.test.ts`: every numbered branch; an invalid caption makes zero counter, budget and provider calls; a refused allowance makes zero budget and provider calls; the debit is called once with 400; exactly one request on timeout; a caption failure leaves the other three outcomes intact; order preserved; the playlist step still debits 50 through the new signature. `youtubePublishEvidence.test.ts` and the n8n view with and without the key. A **log-capture test** with a marker in the caption text across success, refusal and thrown paths. `n8n-api`: the key is rejected on create and absent on read. A settlement test: `content` is gone from the stored metadata, the other three fields remain. Component and rehydration tests: omitted key, Composio disabled, byte-limit refusal, autofill from PR-16.
+
+### 14.4 Phase 7C — `PR-18`: inline "+ New playlist"
+
+**Precondition: OD-10.**
+
+```ts
+// request (youtube-resources)
+{ operation: "create_playlist", account_id: string,
+  title: string,             // 1..150 characters after trim, no "<" or ">", no line breaks
+  description?: string,      // 0..5000 UTF-8 bytes, no "<" or ">"
+  privacy_status: "public" | "unlisted" | "private" }
+
+// success data
+{ playlist: YouTubePlaylistListItem }
+```
+
+- `YOUTUBE_RESOURCE_QUOTA_POLICY.unit_costs.playlist_create: 50`. The title and description limits are the brief's; Google's reference page states neither, so a provider `400` is mapped to `invalid_request` through the existing classifier.
+- `YouTubeAccountCapabilities.capabilities` gains an additive optional `manage_playlists?`, derived like `manage_captions`: reconnect → `reconnect_required`; Composio → `provider_unsupported`; available with `youtube.readonly` **and** `youtube.force-ssl`; a recorded scope list without them → `missing_scope`; otherwise `unknown`. `youtube.upload` does not authorise this call (OD-10).
+- The schema is `.strict()`; `requestedOperationOf` learns the literal; the body still arrives through `readJsonBodyCapped`.
+
+**Sequence — `youtube-resources/playlistWriteComposition.ts`** (new), behind a `YouTubePlaylistWritePort` so `index.ts` stays an adapter:
+
+1. Authenticate; load the account by `id` and owner; `admit()`.
+2. `manage_playlists` must be `available`, else the capability's reason.
+3. Validate the three fields — free.
+4. `checkPlaylistCreateCounter` (`youtube-resources:playlist-create:day`, **5 per 24 h** per user, strict parser, in `writeLimits.ts`). Refused → `rate_limited` with `retry_after_seconds`; unreadable → `upstream_unavailable`.
+5. `debitWriteBudget(50)` on the project write bucket (§10). Refused or unreadable → `quota_exceeded`.
+6. `stillBound` (the Phase 4A re-read).
+7. One `POST https://www.googleapis.com/youtube/v3/playlists?part=snippet,status` with `{ snippet: { title, description }, status: { privacyStatus } }` and a 15 s timeout.
+8. 2xx whose body parses, has an id matching `YOUTUBE_PLAYLIST_ID_PATTERN` and has `snippet.channelId` equal to the bound channel → success. A 2xx that fails any of those, a thrown fetch or a timeout → `outcome_unknown`. 401 → `reconnect_required`; 403 → the existing classifier; other non-2xx → its typed code. **Never retried**: a second call creates a second playlist.
+
+No ownership pre-read is needed, because nothing existing is modified and `stillBound` ties the token to the channel; the answer's `channelId` is checked instead. The counter counts attempts, including refused ones.
+
+**UI (`YouTubeSettings.tsx`, `src/hooks/useYouTubePlaylists.ts`, `D-P7-6`).** A "+ New playlist" entry in the selector opens a dialog (title, description, privacy with no default selected). On success the hook's query is refetched and the new id is selected. On `outcome_unknown` the dialog closes, the list is refetched and a notice says "YouTube may have created the playlist. Check the list before trying again."; nothing is auto-selected and no automatic retry ever runs. The entry is hidden under the same conditions that disable the selector (Composio, more than one distinct native channel) and enabled **only when `manage_playlists?.state === "available"`** (when `manage_playlists` is absent on an older backend response or not `"available"`, playlist creation is disabled with its reason). The gateway port gains `createPlaylist?`.
+
+**Disclosure.** `/google-api-disclosure`, `/privacy`, `/terms`, `YouTubeLegalDisclosures.test.tsx` and the guide: Postora can create a playlist on the owner's instruction; it still does not rename, reorder or delete playlists or remove items. The pinned sentence in the legal test changes with it.
+
+**Tests.** `contracts.test.ts`, `capabilities.test.ts` (full derivation table, `upload` alone is not enough); composition tests for each numbered step proving no later call after a refusal, zero budget debit on a validation or counter refusal, one `POST` on timeout, a 2xx naming another channel is `outcome_unknown`; `handler.test.ts` (strict schema, admission shared, `retry_after_seconds`); `writeLimits.test.ts`; hook and dialog tests (refetch, select, unknown outcome selects nothing, hidden for two channels); the legal test.
+
+### 14.5 Phase 7D — `PR-19`: AI title and thumbnail packaging score
+
+No Google call. The model sees text only: **no image is sent**. The creator may describe the thumbnail in words.
+
+**Pure rules — `supabase/functions/_shared/youtubePackagingScore.ts`** (new), shared with the frontend:
+
+```ts
+export interface PackagingScore {
+  overall_score: number;                       // integer 0..100, computed, never taken from the model
+  breakdown: { hook: number; clarity: number; mobile_length: number; thumbnail_synergy: number | null };
+  strengths: string[];                         // 0..3, each 1..140 characters
+  fixes: string[];                             // 0..3, each 1..140 characters
+  better_titles: [string, string, string];
+}
+export function scoreMobileLength(title: string): number;
+export function validatePackagingModelOutput(raw: unknown, input: { title: string; hasThumbnailText: boolean }):
+  { ok: true; value: PackagingScore } | { ok: false; reason: "bad_shape" | "bad_score" | "bad_title" | "bad_text" };
+```
+
+- `mobile_length` is deterministic (full marks up to 60 characters, falling to zero at 100) and is computed by the server, not asked of the model.
+- `hook` and `clarity` come from the model and must be integers 0–100. When `hasThumbnailText` is `true` (`thumbnail_text` non-empty after trim), `thumbnail_synergy` from the model **must** be an integer 0–100 (missing or non-integer fails validation with `bad_score` → `422 score_invalid`, `D-P7-7`). When `hasThumbnailText` is `false`, `thumbnail_synergy` is forced to `null` whatever the model returned.
+- `overall_score` is the rounded weighted mean — hook 35, clarity 30, mobile length 15, thumbnail synergy 20 — with the weights rescaled over the parts that are present (sum 100 when synergy is present; sum 80 rescaled to 100 when synergy is `null`).
+- Each `better_titles` entry must be 1–100 characters, single-line, free of `<` and `>`, and different from the input title and from each other. Strings in `strengths` and `fixes` have control characters stripped. Any failure is a refusal; nothing partial is returned.
+
+**Request** — `generate-caption` gains `requestType: "youtube_title_thumbnail_score"`:
+
+```ts
+{ requestType: "youtube_title_thumbnail_score", platform: "youtube", language: "english" | "arabic",
+  context: JSON.stringify({ title: string /* 1..100 */, thumbnail_text?: string /* ≤ 300 */, description?: string /* ≤ 1000 */ }) }
+```
+
+**Response** — `{ score: PackagingScore }`, or `422 { error: "score_invalid" }`. Budget: 2,048 tokens, temperature 0.4 (the JSON answer with three titles and six short strings does not fit the helper's 1,024 default in Arabic). It runs on the sanitized pipeline (`invokeYouTubeAi`, `logYouTubeAiSuccess`, `logYouTubeAiFailure`): only the stable class, the request id, the model and tier identifiers and the numeric scores may be logged; no title, thumbnail text, description, model output or provider body. All three inputs are hostile text inside a delimited block.
+
+**UI — `src/components/post/settings/YouTubePackagingScoreCard.tsx`** (new). A presentational card with an injected `requestScore(input)`; it does not import Supabase. It shows the overall score, the four bars (the synergy bar reads "Describe your thumbnail to score this" when `null`), strengths, fixes and three titles, each with "Use this title". The score is advice, labelled "AI estimate, not a YouTube metric".
+
+- In `YouTubeSettings.tsx`: under the title field; "Use this title" calls `onSettingsChange({ title })`.
+- In the `/youtube` drawer: inside the open editor; "Use this title" fills the draft title and marks it dirty. It never saves. `requestScore` reaches the drawer from the composition root through a new `YouTubePackagingScoreGateway` port.
+
+**i18n**: `postsettings` `youtubeAI.score.*`; `accounts` `youtubeManagement.score.*`.
+
+**Tests.** Deno: every validator branch, the weight rescale with and without synergy, missing/non-integer `thumbnail_synergy` when `hasThumbnailText` is `true` refused (`D-P7-7`), `scoreMobileLength` boundaries, duplicate and over-long titles refused; handler branch (valid, invalid output → 422, hostile fixture cannot change the contract, auth, rate limit); a **log-capture test** with four markers (in the title, the thumbnail text, the description, and the provider's failure body). Vitest: card states, the `null` synergy bar, "Use this title" in both hosts, no save triggered in the drawer, AI errors through `handleAIError`.
+
+### 14.6 Phase 7E — `PR-20`: privacy editing of a published video
+
+**Precondition: OD-11.**
+
+**What exists.** `UpdateVideoRequest` (`handler.ts`) accepts `changes.privacy_status` and `privacy_confirmation: { to }`. In `editComposition.ts` `update`, after the snapshot read and the revision check, `validateEditChanges` refuses a privacy change on a snapshot whose `restrictions.scheduleProtected` is true, and a missing or mismatched confirmation is refused, both as `invalid_request` and both **before** `authorizeWrite`. `planEditUpdate` writes `status.privacyStatus`; `verifyEditResult` fails as `outcome_unknown` when the re-read privacy differs. `editEnvelope` in `handler.ts` already returns `restrictions: { scheduleProtected: boolean }` inside `data`, and the frontend port's `updateVideo` already carries `privacy_status` and `privacyConfirmation`.
+
+**Server & Gateway work (`D-P7-8`).**
+
+- Tests that pin the order, in `editLifecycle.test.ts` and `editComposition.guard.test.ts`: a privacy change on a schedule-protected video, a missing confirmation and a confirmation naming a different value each end as `invalid_request` with **zero** per-user counter calls, zero budget debits, zero catalog reads and zero provider writes; a confirmed change writes once and returns the verified re-read; a re-read showing another privacy is `outcome_unknown`.
+- Expose `restrictions?: { scheduleProtected: boolean }` on the frontend `YouTubeEditSnapshot` port (`src/features/youtube-management/application/ports.ts`) and map `data.restrictions` in `supabaseYouTubeResourcesGateway.ts` `getEditSnapshot`. No server envelope change is required because `editEnvelope` already returns `restrictions.scheduleProtected`.
+- A scheduled video (`status.publishAt` set) keeps its privacy protected: changing it would cancel or pre-empt the schedule, which is outside this phase.
+
+**UI (`YouTubeVideoEditCard.tsx`, `YouTubeManagementScreen.tsx`).**
+
+- A Privacy select (Public, Unlisted, Private) in the editor, seeded from the snapshot's `privacyStatus`. It is disabled, with the reason "This video is scheduled on YouTube. Its privacy changes at the scheduled time.", whenever `snapshot.restrictions?.scheduleProtected !== false` (fail-closed if `restrictions` is absent, `D-P7-8`), and disabled without a value when the current privacy is not one of the three.
+- When the selected value differs from the snapshot's, a required checkbox appears: "I understand this changes who can see this video on YouTube." For a change **to** Public the label adds "It becomes visible to everyone." **Save** stays disabled until it is ticked. Changing the select again clears the tick.
+- `privacy_status` and `privacyConfirmation: { to }` are sent only when the value changed and the box is ticked; an unchanged privacy is omitted from the request, so a title-only save is identical to today's.
+- Outcomes, limits and cost are those of §8.1: 53 units per save, the same burst and daily counters, one write, `outcome_unknown` on a lost answer.
+
+**Disclosure.** `/google-api-disclosure`, `/privacy`, `/terms`, the legal test and the guide: the editable fields become title, description, tags, category **and privacy**, changed only on the owner's explicit confirmation.
+
+**i18n** (namespace `accounts`): `youtubeManagement.detail.privacy*`.
+
+**Tests.** Server cases above. Component: select seeded from the snapshot; disabled when schedule-protected; Save disabled until the box is ticked; the tick clears when the value changes; an unchanged privacy sends neither field; a changed one sends both with matching values; the Public wording. `e2e/youtube-stage3.spec.ts`: a privacy change in the drawer. The legal test.
+
+### 14.7 Phase 7 non-goals
+
+- No change to `set_thumbnail`, `captions`, `upload_caption` or any other existing `youtube-resources` operation's contract.
+- No programmatic quality control, no playlist or autoplay-next inside the embedded player, no playback analytics, no player on any page but the `/youtube` drawer.
+- No image is sent to an AI model for scoring; no vision model.
+- No playlist rename, reorder or deletion; no removal of playlist items.
+- No caption download, replacement, deletion or translation; no captions for Composio-managed accounts.
+- No change to a scheduled video's privacy or publish time from the drawer.
+- No new option in the public n8n API or the n8n community node.
+- No new OAuth scope and no new runtime dependency.
