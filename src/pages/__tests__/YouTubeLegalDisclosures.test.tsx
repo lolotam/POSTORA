@@ -112,6 +112,36 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("Postora never modifies, replaces, or deletes existing caption tracks");
   });
 
+  it("discloses comparing public channels the user names, without storing the figures", () => {
+    const { container } = renderPage(<GoogleApiDisclosure />);
+    const text = pageText(container);
+
+    expect(text).toContain("Compare up to three public YouTube channels you name");
+    expect(text).toContain("channels.list");
+    expect(text).toContain("playlistItems.list");
+    expect(text).toContain("videos.list");
+    expect(text).toContain("/youtube/benchmark");
+    expect(text).toContain("Cache-Control: no-store");
+    expect(text).toContain("never written to a database or to browser storage");
+    expect(text).toContain("does not combine the figures of different channels into one score");
+    expect(text).toContain("Public Channel Benchmark:");
+  });
+
+  it("reconciles the Privacy policy with the public channel benchmark", () => {
+    const { container } = renderPage(<Privacy />);
+    const text = pageText(container);
+
+    expect(text).toContain(
+      "The public statistics of up to three public YouTube channels you name yourself on the YouTube Channel Benchmark page",
+    );
+    expect(text).toContain(
+      "Compare up to three public YouTube channels you name yourself on the YouTube Channel Benchmark page",
+    );
+    expect(text).toContain("Public channel benchmark figures are never stored");
+    expect(text).toContain("Cache-Control: no-store");
+    expect(text).toContain("without combining the figures of different channels into one score");
+  });
+
   it("covers comment creation, own-comment actions, and moderation", () => {
     const { container } = renderPage(<GoogleApiDisclosure />);
     const text = pageText(container);

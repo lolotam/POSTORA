@@ -80,6 +80,7 @@ const FLAG_LABELS: Record<keyof FeatureFlags, string> = {
   analyticsTiktok: "Analytics: TikTok",
   analyticsYoutube: "Analytics: YouTube",
   youtubeManagement: "YouTube Channel",
+  youtubeBenchmark: "YouTube Benchmark",
 };
 
 export function FeatureFlagIndicator() {

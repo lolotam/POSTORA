@@ -206,6 +206,19 @@ const GoogleApiDisclosure = () => {
                           only after you explicitly accept the Analytics Purpose Clause inside Postora for the current
                           connection, and only where analytics is enabled, displaying the numbers solely to you without storing them.
                         </li>
+                        <li>
+                          <strong>Compare up to three public YouTube channels you name</strong> on the YouTube Channel
+                          Benchmark page (<code className="bg-muted px-1 rounded">/youtube/benchmark</code>) through{" "}
+                          <code className="bg-muted px-1 rounded">channels.list</code>,{" "}
+                          <code className="bg-muted px-1 rounded">playlistItems.list</code> and{" "}
+                          <code className="bg-muted px-1 rounded">videos.list</code>. You type the handle or channel ID of
+                          each channel yourself; Postora reads only the public statistics of those channels and the public
+                          metrics of their recent public videos. The answers are shown to you in your browser, are never
+                          written to a database or to browser storage, and the responses are sent with{" "}
+                          <code className="bg-muted px-1 rounded">Cache-Control: no-store</code>. Postora does not
+                          combine the figures of different channels into one score, and it never reads a channel you did
+                          not name.
+                        </li>
                       </ul>
                     </div>
 
@@ -341,6 +354,17 @@ const GoogleApiDisclosure = () => {
                   These numbers are displayed solely to you as the signed-in channel owner (and may be exported by you from your browser to your own device as CSV or print),
                   read on demand when you open the analytics page, and are never stored by Postora. You can stop this use immediately from the analytics page;
                   doing so does not change your Google permissions, publishing, or comments.
+                </li>
+                <li>
+                  <strong>Public Channel Benchmark:</strong> To compare up to three public YouTube channels that you
+                  name yourself on the YouTube Channel Benchmark page (
+                  <code className="bg-muted px-1 rounded">/youtube/benchmark</code>), using the read-only scope. Postora
+                  reads the public statistics of each named channel and the public metrics of its recent public videos,
+                  shows each channel in its own column, and computes the per-video averages in your browser. Nothing
+                  read here is stored by Postora: the responses are sent with{" "}
+                  <code className="bg-muted px-1 rounded">Cache-Control: no-store</code>, no benchmark figure is written
+                  to a database, a log or browser storage, and the figures of different channels are never combined
+                  into a single score.
                 </li>
               </ul>
 

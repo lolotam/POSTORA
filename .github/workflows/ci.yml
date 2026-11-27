@@ -475,6 +475,13 @@ jobs:
           deno check --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-analytics/index.ts
           deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-analytics/
 
+      - name: Typecheck and test youtube-channel-benchmark
+        run: |
+          set -euo pipefail
+          map=".github/deno/process-post-import-map.json"
+          deno check --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-channel-benchmark/index.ts
+          deno test --allow-env --allow-read --node-modules-dir=none --import-map="${map}" supabase/functions/youtube-channel-benchmark/
+
       - name: Typecheck and test comment-manager
         run: |
           set -euo pipefail

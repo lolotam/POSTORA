@@ -402,6 +402,7 @@ All edge functions are in `supabase/functions/` and deployed to Supabase.
 | `facebook-oauth` | Handle Facebook/Instagram OAuth flow and page selection |
 | `tiktok-oauth` | TikTok OAuth authorization and token exchange |
 | `youtube-oauth` | YouTube OAuth with channel selection |
+| `youtube-channel-benchmark` | On-demand public YouTube channel benchmark (1-3 handles/IDs, no-store) |
 | `pinterest-oauth` | Pinterest OAuth flow |
 | `pinterest-boards` | Fetch user's Pinterest boards |
 | `process-post` | Process and publish posts to platforms |

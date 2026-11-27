@@ -398,6 +398,7 @@ All edge functions are in `supabase/functions/` and deployed to Supabase.
 | `sweep-ai-image-staging` | Cron (every 30 min): deletes AI image staging copies (`postora/<user>/ai-tmp/` in Openinary) whose follow-up token expired; spec `docs/superpowers/specs/2026-10-30-ai-image-tools-without-cloudinary-design.md` |
 | `youtube-resources` | Owner-bound YouTube capability contract and native read-only browse (`capabilities`, `channel`, `videos`, `video` operations); spec `docs/specs/2026-11-20-youtube-stage2-resource-browse.md` |
 | `youtube-analytics` | On-demand, owner-accepted YouTube channel and video analytics; no analytics values stored; spec `docs/specs/2026-11-24-youtube-stage5-analytics.md` |
+| `youtube-channel-benchmark` | On-demand public YouTube channel benchmark (1-3 handles/IDs, no-store) |
 
 ---
 
