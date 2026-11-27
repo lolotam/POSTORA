@@ -38,7 +38,12 @@ import {
 } from "../_shared/youtubePublishOptions.ts";
 import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
 import { parseExplicitDeclaration, YOUTUBE_DECLARATION_FORM_KEYS } from "./formDeclarations.ts";
-import { youtubeEvidenceOf } from "./youtubeEvidenceView.ts";
+import {
+  hasDisallowedYoutubeCaptionInput,
+  sanitizePostForPublicRead,
+  stripYoutubeCaptionFromMetadata,
+  youtubeEvidenceOf,
+} from "./youtubeEvidenceView.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
@@ -244,6 +249,12 @@ interface PlatformMetadata {
   youtube_recording_date?: string;
   youtube_publish_at?: string | null;
   youtube_playlist_id?: string | null;
+  youtube_caption?: {
+    language: string;
+    name: string;
+    format: 'srt' | 'vtt';
+    content?: string;
+  } | null;
   // Legacy YouTube field names, still accepted. The canonical names above win
   // when both are present.
   youtube_category_id?: string;
@@ -613,6 +624,16 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // Webhook configuration for this specific post
     webhook_url, // URL to send status callbacks
   } = body;
+
+  if (hasDisallowedYoutubeCaptionInput(body)) {
+    await recordApiRefusal(supabase, { userId, route: '/api/v1/post', code: 'YOUTUBE_CAPTION_NOT_SUPPORTED', status: 400 });
+    return new Response(JSON.stringify({
+      error: 'youtube_caption is not supported via the public API',
+      code: 'youtube_caption_not_supported',
+    }), {
+      status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
 
   if (instagram_share_to_story !== undefined && typeof instagram_share_to_story !== 'boolean') {
     await recordApiRefusal(supabase, { userId, route: '/api/v1/post', code: 'INVALID_INSTAGRAM_STORY_OPTION', status: 400 });
@@ -1437,12 +1458,12 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
   return new Response(
     JSON.stringify({
       success: true,
-      post,
+      post: sanitizePostForPublicRead(post),
       scheduled: !!finalScheduledAt,
       ...(platformResults ? { platform_results: platformResults } : {}),
       ...(youtubeWarnings.length > 0 ? { warnings: youtubeWarnings } : {}),
       message: finalScheduledAt ? 'Post scheduled successfully' : 'Post created and processing started',
-      metadata_applied: metadata,
+      metadata_applied: stripYoutubeCaptionFromMetadata(metadata),
       account_ids_used: validatedAccountIds || 'auto-selected first account per platform'
     }),
     { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -1751,8 +1772,12 @@ async function handleGetPosts(req: Request, supabase: any, userId: string, url: 
     );
   }
 
+  const sanitizedPosts = Array.isArray(posts)
+    ? posts.map((row: unknown) => sanitizePostForPublicRead(row))
+    : posts;
+
   return new Response(
-    JSON.stringify({ success: true, posts, limit, offset, filters: { platform, account_id: accountId, date_from: dateFrom, date_to: dateTo } }),
+    JSON.stringify({ success: true, posts: sanitizedPosts, limit, offset, filters: { platform, account_id: accountId, date_from: dateFrom, date_to: dateTo } }),
     { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 }
@@ -2038,19 +2063,21 @@ async function handleGetPostById(req: Request, supabase: any, userId: string, po
     return apiError(req, 'Post not found', 404, 'NOT_FOUND');
   }
 
+  const sanitizedPost = sanitizePostForPublicRead(post);
+
   return new Response(
     JSON.stringify({
       success: true,
       post: {
-        id: post.id,
-        caption: post.caption,
-        platforms: post.platforms,
-        status: post.status,
-        scheduled_at: post.scheduled_at,
-        posted_at: post.posted_at,
-        created_at: post.created_at,
-        source: post.source,
-        platform_results: (post.platform_posts || []).map(toPlatformResult)
+        id: sanitizedPost.id,
+        caption: sanitizedPost.caption,
+        platforms: sanitizedPost.platforms,
+        status: sanitizedPost.status,
+        scheduled_at: sanitizedPost.scheduled_at,
+        posted_at: sanitizedPost.posted_at,
+        created_at: sanitizedPost.created_at,
+        source: sanitizedPost.source,
+        platform_results: (sanitizedPost.platform_posts || []).map(toPlatformResult)
       }
     }),
     { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -2772,6 +2799,8 @@ export async function handleRequest(req: Request): Promise<Response> {
     return getSafeErrorResponse(error, 'Internal server error. Please try again.');
   }
 }
+
+export { handleCreatePost, handleGetPostById, handleGetPosts };
 
 if (import.meta.main) {
   Deno.serve(handleRequest);

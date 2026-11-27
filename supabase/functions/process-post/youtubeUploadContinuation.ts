@@ -47,7 +47,7 @@ import { YOUTUBE_UPLOAD_REASON, type YoutubeUploadReason } from "./youtubeUpload
 import { isUncertainUploadOutcome } from "./youtubeUploadOutcome.ts";
 import { youtubeDeclarationProofOf } from "../_shared/youtubePublishSafety.ts";
 import { youtubeEvidenceFromMetadata, type YoutubePublishEvidence } from "./youtubePublishEvidence.ts";
-import type { YoutubeFollowUpResults } from "./youtubeUploadFollowUps.ts";
+import type { YoutubeCaptionFollowUpInput, YoutubeFollowUpResults } from "./youtubeUploadFollowUps.ts";
 
 /** What the continuation is asked to do. */
 export interface YoutubeContinuationRequest {
@@ -82,6 +82,8 @@ export interface ContinuationPost {
   firstComment: string | null;
   /** The playlist the customer asked to add the video to, if any. */
   playlistId?: string | null;
+  /** The caption track the customer asked to attach after upload, if any. */
+  caption?: YoutubeCaptionFollowUpInput | null;
   /**
    * The post metadata, so a resumed upload can check D3 provenance. A legacy
    * boolean without a versioned proof is not a declaration.
@@ -99,6 +101,7 @@ export interface ContinuationAccount {
   accessToken: string | null;
   needsReauth: boolean;
   tokenRefreshPending?: boolean;
+  hasCaptionScope?: boolean;
 }
 
 /** The media file, as far as the continuation needs it. */
@@ -254,6 +257,7 @@ export interface YoutubeContinuationPorts {
     videoId: string;
     channelId: string;
     accessToken: string;
+    hasCaptionScope?: boolean;
   }): Promise<YoutubeFollowUpResults | void>;
   /**
    * Whether this worker may write to the provider NOW.
@@ -728,7 +732,16 @@ export async function continueYoutubeUpload(
   const stopped = await stopOnLostAuthority();
   if (stopped) return stopped;
 
-  return await interpretOutcome({ ports, request, session, outcome, post, accessToken, channelId: account.channelId });
+  return await interpretOutcome({
+    ports,
+    request,
+    session,
+    outcome,
+    post,
+    accessToken,
+    channelId: account.channelId,
+    hasCaptionScope: account.hasCaptionScope === true,
+  });
 }
 
 /**
@@ -980,8 +993,9 @@ async function interpretOutcome(args: {
   post: ContinuationPost;
   accessToken: string;
   channelId: string;
+  hasCaptionScope?: boolean;
 }): Promise<ContinuationResult> {
-  const { ports, request, session, outcome, post, accessToken, channelId } = args;
+  const { ports, request, session, outcome, post, accessToken, channelId, hasCaptionScope } = args;
   const { leaseToken } = request;
 
   if (outcome.kind === "completed") {
@@ -1005,7 +1019,15 @@ async function interpretOutcome(args: {
     try {
       const followUpAuthority = await ports.effectAuthority({ sessionId: session.id, leaseToken });
       if (followUpAuthority.authorized) {
-        const observed = await ports.followUps({ post, videoId: outcome.videoId, channelId, accessToken, sessionId: session.id, leaseToken });
+        const observed = await ports.followUps({
+          post,
+          videoId: outcome.videoId,
+          channelId,
+          accessToken,
+          sessionId: session.id,
+          leaseToken,
+          hasCaptionScope,
+        });
         if (observed) followUpResults = observed;
       }
     } catch {
@@ -1049,6 +1071,8 @@ async function interpretOutcome(args: {
           commentReason: followUpResults?.first_comment.reason,
           playlistState: followUpResults?.playlist?.state,
           playlistReason: followUpResults?.playlist?.reason,
+          captionState: followUpResults?.caption?.state,
+          captionReason: followUpResults?.caption?.reason,
           ...scheduleEvidence,
         }),
         ...(scheduleEvidence.scheduleWarning === "stale_schedule"

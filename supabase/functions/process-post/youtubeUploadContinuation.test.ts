@@ -980,6 +980,7 @@ Deno.test("observed follow-up outcomes are recorded on the native settlement", a
       thumbnail: { state: "applied", reason: null },
       first_comment: { state: "skipped", reason: "no_time" },
       playlist: { state: "not_requested", reason: null },
+      caption: { state: "not_requested", reason: null },
     },
   });
   await continueYoutubeUpload(w.ports, request);
@@ -1137,6 +1138,43 @@ Deno.test("the run that created the video does the follow-ups", async () => {
   const result = await continueYoutubeUpload(w.ports, request);
   assertEquals(result.status, "completed");
   assertEquals(w.followUps, [VIDEO_ID]);
+});
+
+Deno.test("continuation records caption follow-up state and reason in settled youtube_publish_evidence", async () => {
+  const vtt = "WEBVTT\n\n00:00.000 --> 00:02.000\nHello\n";
+  const w = world({
+    outcome: { kind: "completed", videoId: VIDEO_ID },
+    post: {
+      metadata: {
+        ...DECLARATION_METADATA,
+        youtube_caption: {
+          language: "en",
+          name: "English",
+          format: "vtt",
+          content: vtt,
+        },
+      },
+    },
+    followUpResults: {
+      thumbnail: { state: "not_requested", reason: null },
+      first_comment: { state: "not_requested", reason: null },
+      playlist: { state: "not_requested", reason: null },
+      caption: { state: "applied", reason: null },
+    },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.settled.length, 1);
+  const evidence = w.settled[0].responseData.youtube_publish_evidence as {
+    caption: { state: string; reason: string | null; language?: string; format?: string; byte_length?: number };
+  };
+  assertEquals(evidence.caption, {
+    state: "applied",
+    reason: null,
+    language: "en",
+    format: "vtt",
+    byte_length: new TextEncoder().encode(vtt).byteLength,
+  });
 });
 
 Deno.test("a run that inherits a receipt does not repeat the follow-ups", async () => {

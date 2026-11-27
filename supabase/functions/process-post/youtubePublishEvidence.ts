@@ -6,6 +6,7 @@
  * an uncertain acknowledgement never claims either outcome succeeded.
  */
 
+import { measureUtf8Bytes } from "../_shared/captionFile.ts";
 import {
   effectiveYoutubePrivacy,
   hasYoutubeScheduleRequest,
@@ -17,6 +18,9 @@ export type YoutubeFollowUpState = "not_requested" | "applied" | "skipped" | "fa
 export interface YoutubeFollowUpEvidence {
   state: YoutubeFollowUpState;
   reason: string | null;
+  language?: string | null;
+  format?: "srt" | "vtt" | null;
+  byte_length?: number | null;
 }
 
 export interface YoutubePublishEvidence {
@@ -36,6 +40,7 @@ export interface YoutubePublishEvidence {
   thumbnail: YoutubeFollowUpEvidence;
   first_comment: YoutubeFollowUpEvidence;
   playlist: YoutubeFollowUpEvidence;
+  caption: YoutubeFollowUpEvidence;
 }
 
 export interface YoutubeEvidenceInput {
@@ -47,12 +52,18 @@ export interface YoutubeEvidenceInput {
   thumbnailRequested: boolean;
   commentRequested: boolean;
   playlistRequested?: boolean;
+  captionRequested?: boolean;
   thumbnailState?: YoutubeFollowUpState;
   thumbnailReason?: string | null;
   commentState?: YoutubeFollowUpState;
   commentReason?: string | null;
   playlistState?: YoutubeFollowUpState;
   playlistReason?: string | null;
+  captionState?: YoutubeFollowUpState;
+  captionReason?: string | null;
+  captionLanguage?: string | null;
+  captionFormat?: "srt" | "vtt" | null;
+  captionByteLength?: number | null;
 }
 
 const NEGATIVE_REASONS = new Set([
@@ -63,10 +74,27 @@ const NEGATIVE_REASONS = new Set([
   "answer_lost",
   "not_owned",
   "quota_budget",
+  "invalid_caption",
+  "missing_scope",
+  "rate_limited",
+  "conflict",
 ]);
 
 function sanitizedReason(reason: string | null | undefined): string | null {
   return reason && NEGATIVE_REASONS.has(reason) ? reason : null;
+}
+
+function safeCaptionLanguage(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 35) {
+    return null;
+  }
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    if (code <= 0x1F || code === 0x7F) return null;
+  }
+  return trimmed;
 }
 
 export function youtubePublishEvidence(input: YoutubeEvidenceInput): YoutubePublishEvidence {
@@ -87,6 +115,22 @@ export function youtubePublishEvidence(input: YoutubeEvidenceInput): YoutubePubl
     playlist: {
       state: input.playlistRequested ? input.playlistState ?? "unknown" : "not_requested",
       reason: input.playlistRequested ? sanitizedReason(input.playlistReason) : null,
+    },
+    caption: {
+      state: input.captionRequested ? input.captionState ?? "unknown" : "not_requested",
+      reason: input.captionRequested ? sanitizedReason(input.captionReason) : null,
+      ...(input.captionRequested && input.captionLanguage ? { language: input.captionLanguage } : {}),
+      ...(input.captionRequested && (input.captionFormat === "srt" || input.captionFormat === "vtt")
+        ? { format: input.captionFormat }
+        : {}),
+      ...(
+        input.captionRequested &&
+        typeof input.captionByteLength === "number" &&
+        Number.isInteger(input.captionByteLength) &&
+        input.captionByteLength >= 0
+          ? { byte_length: input.captionByteLength }
+          : {}
+      ),
     },
   };
 }
@@ -184,6 +228,29 @@ export function youtubeEvidenceFromMetadata(
     (typeof values.youtube_thumbnail_url === "string" && values.youtube_thumbnail_url.length > 0);
   const commentRequested = typeof values.youtube_first_comment === "string" && values.youtube_first_comment.length > 0;
   const playlistRequested = typeof values.youtube_playlist_id === "string" && values.youtube_playlist_id.trim().length > 0;
+  const rawCaption = values.youtube_caption;
+  const captionRequested = rawCaption !== undefined && rawCaption !== null;
+  let captionLanguage: string | null = null;
+  let captionFormat: "srt" | "vtt" | null = null;
+  let captionByteLength: number | null = null;
+
+  if (rawCaption && typeof rawCaption === "object" && !Array.isArray(rawCaption)) {
+    const captionRecord = rawCaption as Record<string, unknown>;
+    captionLanguage = safeCaptionLanguage(captionRecord.language);
+    if (captionRecord.format === "srt" || captionRecord.format === "vtt") {
+      captionFormat = captionRecord.format;
+    }
+    if (typeof captionRecord.content === "string") {
+      captionByteLength = measureUtf8Bytes(captionRecord.content);
+    } else if (
+      typeof captionRecord.byte_length === "number" &&
+      Number.isInteger(captionRecord.byte_length) &&
+      captionRecord.byte_length >= 0
+    ) {
+      captionByteLength = captionRecord.byte_length;
+    }
+  }
+
   const schedule = scheduleEvidenceOf(values, overrides);
   return youtubePublishEvidence({
     // The privacy that is recorded is the privacy that was asked for, and a
@@ -195,6 +262,7 @@ export function youtubeEvidenceFromMetadata(
     thumbnailRequested: overrides.thumbnailRequested ?? thumbnailRequested,
     commentRequested: overrides.commentRequested ?? commentRequested,
     playlistRequested: overrides.playlistRequested ?? playlistRequested,
+    captionRequested: overrides.captionRequested ?? captionRequested,
     effectivePrivacy: overrides.effectivePrivacy,
     thumbnailState: overrides.thumbnailState,
     thumbnailReason: overrides.thumbnailReason,
@@ -202,5 +270,10 @@ export function youtubeEvidenceFromMetadata(
     commentReason: overrides.commentReason,
     playlistState: overrides.playlistState,
     playlistReason: overrides.playlistReason,
+    captionState: overrides.captionState,
+    captionReason: overrides.captionReason,
+    captionLanguage: overrides.captionLanguage ?? captionLanguage,
+    captionFormat: overrides.captionFormat ?? captionFormat,
+    captionByteLength: overrides.captionByteLength ?? captionByteLength,
   });
 }

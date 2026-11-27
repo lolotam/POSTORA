@@ -186,6 +186,12 @@ export interface PlatformMetadata {
   youtube_scheduled_start_time?: string | null;
   youtube_publish_at?: string | null;
   youtube_playlist_id?: string | null;
+  youtube_caption?: {
+    language: string;
+    name: string;
+    format: "srt" | "vtt";
+    content?: string;
+  } | null;
   youtube_notify_subscribers?: boolean;
   youtube_default_language?: string | null;
   youtube_thumbnail_url?: string | null;
