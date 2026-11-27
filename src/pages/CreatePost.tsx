@@ -975,15 +975,6 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           }
         }
 
-        if (pendingWasNone) {
-          sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
-            fingerprint: submitFingerprint,
-            youtubeSettings: youtubeIntentMetadata,
-            scheduleRequested: platformSettings.youtubeScheduleRequested,
-            intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
-          }));
-        }
-
         if (files.some((file) => !file.uploaded || !file.storagePath)) {
           throw new Error("Every selected media item must finish uploading and have a media ID. The post was not saved.");
         }
@@ -998,6 +989,15 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             const uploaded = await uploadUrlToStorage(videoUrl.trim(), "video");
             mediaFileIds = [...mediaFileIds, uploaded.id];
           }
+        }
+
+        if (pendingWasNone) {
+          sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
+            fingerprint: submitFingerprint,
+            youtubeSettings: youtubeIntentMetadata,
+            scheduleRequested: platformSettings.youtubeScheduleRequested,
+            intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
+          }));
         }
       }
 

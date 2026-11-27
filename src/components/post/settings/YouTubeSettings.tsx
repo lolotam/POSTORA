@@ -138,6 +138,11 @@ interface YouTubeSettingsProps {
 
 const MAX_THUMBNAIL_REFERENCES = 5;
 
+// Module-level monotonic sequence so an in-flight subtitle read survives step
+// navigation and remounts, while any clear or replacement in a later mount
+// advances the shared sequence and invalidates the old read.
+let nextYoutubeCaptionReadSeq = 0;
+
 // A select option cannot carry an empty value, so "no playlist" is a
 // sentinel that is translated back to an empty playlist id.
 const PLAYLIST_NONE_VALUE = "__none__";
@@ -325,7 +330,7 @@ export function YouTubeSettings({
       settings.captionTrack &&
       !settings.captionTrack.alreadySubmitted
     ) {
-      captionFileReadSeqRef.current += 1;
+      nextYoutubeCaptionReadSeq += 1;
       onSettingsChange({ captionTrack: null });
       return;
     }
@@ -384,7 +389,6 @@ export function YouTubeSettings({
   );
   const [captionTrackName, setCaptionTrackName] = useState<string>(settings.captionTrack?.name ?? "");
   const [captionError, setCaptionError] = useState<string | null>(null);
-  const captionFileReadSeqRef = useRef(0);
   const captionFileInputRef = useRef<HTMLInputElement>(null);
   const latestCaptionTrackRef = useRef(settings.captionTrack);
   latestCaptionTrackRef.current = settings.captionTrack;
@@ -498,8 +502,7 @@ export function YouTubeSettings({
   };
 
   const handleCaptionFileChange = async (chosen: File | undefined) => {
-    const seq = ++captionFileReadSeqRef.current;
-    const readToken = `read-${seq}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const readSeq = ++nextYoutubeCaptionReadSeq;
     setCaptionError(null);
     if (!chosen) return;
     const format = inferUploadCaptionFormat(chosen.name);
@@ -519,18 +522,18 @@ export function YouTubeSettings({
         name: captionTrackName,
         format,
         pendingRead: true,
-        readToken,
+        readSeq,
       },
     });
     let content: string;
     try {
       if (typeof chosen.arrayBuffer === "function") {
         const buffer = await chosen.arrayBuffer();
-        if (seq !== captionFileReadSeqRef.current || latestCaptionTrackRef.current?.readToken !== readToken) return;
+        if (readSeq !== nextYoutubeCaptionReadSeq || latestCaptionTrackRef.current?.readSeq !== readSeq) return;
         content = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
       } else {
         content = await chosen.text();
-        if (seq !== captionFileReadSeqRef.current || latestCaptionTrackRef.current?.readToken !== readToken) return;
+        if (readSeq !== nextYoutubeCaptionReadSeq || latestCaptionTrackRef.current?.readSeq !== readSeq) return;
         if (content.includes("\uFFFD")) {
           setCaptionError(
             t(
@@ -543,7 +546,7 @@ export function YouTubeSettings({
         }
       }
     } catch {
-      if (seq !== captionFileReadSeqRef.current || latestCaptionTrackRef.current?.readToken !== readToken) return;
+      if (readSeq !== nextYoutubeCaptionReadSeq || latestCaptionTrackRef.current?.readSeq !== readSeq) return;
       setCaptionError(
         t(
           "youtube.captionsInvalidEncoding",
@@ -553,16 +556,19 @@ export function YouTubeSettings({
       onSettingsChange({ captionTrack: null });
       return;
     }
-    if (seq !== captionFileReadSeqRef.current || latestCaptionTrackRef.current?.readToken !== readToken) return;
+    if (readSeq !== nextYoutubeCaptionReadSeq || latestCaptionTrackRef.current?.readSeq !== readSeq) return;
     const bytes = measureUtf8Bytes(content);
     if (bytes > CAPTION_CONTENT_MAX_BYTES) {
       setCaptionError(t("youtube.captionsFileTooLarge", "Subtitle file exceeds the 512 KB UTF-8 limit."));
       onSettingsChange({ captionTrack: null });
       return;
     }
+    const pendingTrack = latestCaptionTrackRef.current;
+    const finalLang = pendingTrack?.pendingRead ? pendingTrack.language : latestResolvedCaptionLanguageRef.current;
+    const finalName = pendingTrack?.pendingRead ? pendingTrack.name : latestCaptionTrackNameRef.current;
     applyAndValidateCaptionTrack(
-      latestResolvedCaptionLanguageRef.current,
-      latestCaptionTrackNameRef.current,
+      finalLang,
+      finalName,
       format,
       content,
       latestCaptionEligibleRef.current ? undefined : { captionEligible: false },
@@ -571,7 +577,7 @@ export function YouTubeSettings({
 
   const handleUseAudioSubtitles = () => {
     if (!audioSubtitles || captionsSectionDisabled) return;
-    captionFileReadSeqRef.current += 1;
+    nextYoutubeCaptionReadSeq += 1;
     const bytes = measureUtf8Bytes(audioSubtitles.vtt);
     if (bytes > CAPTION_CONTENT_MAX_BYTES) {
       setCaptionError(t("youtube.captionsFileTooLarge", "Subtitle file exceeds the 512 KB UTF-8 limit."));
@@ -592,6 +598,13 @@ export function YouTubeSettings({
         source: activeCaptionSource,
         sourceKey: activeCaptionSourceKey,
       });
+    } else if (settings.captionTrack?.pendingRead) {
+      onSettingsChange({
+        captionTrack: {
+          ...settings.captionTrack,
+          language: nextLang,
+        },
+      });
     } else if (choice !== CUSTOM_CAPTION_LANGUAGE) {
       setCaptionError(null);
     }
@@ -605,6 +618,13 @@ export function YouTubeSettings({
         source: activeCaptionSource,
         sourceKey: activeCaptionSourceKey,
       });
+    } else if (settings.captionTrack?.pendingRead) {
+      onSettingsChange({
+        captionTrack: {
+          ...settings.captionTrack,
+          language: nextLang,
+        },
+      });
     }
   };
 
@@ -616,11 +636,18 @@ export function YouTubeSettings({
         source: activeCaptionSource,
         sourceKey: activeCaptionSourceKey,
       });
+    } else if (settings.captionTrack?.pendingRead) {
+      onSettingsChange({
+        captionTrack: {
+          ...settings.captionTrack,
+          name: sliced,
+        },
+      });
     }
   };
 
   const handleClearCaptionTrack = () => {
-    captionFileReadSeqRef.current += 1;
+    nextYoutubeCaptionReadSeq += 1;
     setCaptionError(null);
     if (captionFileInputRef.current) {
       captionFileInputRef.current.value = "";
