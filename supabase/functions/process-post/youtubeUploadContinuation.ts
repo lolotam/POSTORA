@@ -1120,7 +1120,10 @@ async function interpretOutcome(args: {
     responseData: {
       youtube_upload_reason: reason,
       ...(uncertain ? { publish_outcome: "uncertain" } : {}),
-      youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, { effectivePrivacy: "unknown" }),
+      youtube_publish_evidence: youtubeEvidenceFromMetadata(post.metadata, {
+        effectivePrivacy: "unknown",
+        scheduled: false,
+      }),
     },
   });
   if (!settled.settled) {

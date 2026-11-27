@@ -131,6 +131,7 @@ import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { assertNativeYoutubeDeclarations } from "../_shared/youtubePublishSafety.ts";
 import {
   effectiveYoutubePrivacy,
+  hasYoutubeScheduleRequest,
   YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE,
 } from "../_shared/youtubePublishOptions.ts";
 import {
@@ -10892,13 +10893,16 @@ async function postToYouTube(
   const wasStrippedAtOpen =
     outcome.scheduleWarning === "stale_schedule" || uploadRecord.lastOutcome === "stale_schedule";
   const scheduled = Boolean(savedPublishAt) && !wasStrippedAtOpen;
-  const scheduleWarning = wasStrippedAtOpen
-    ? "stale_schedule"
-    : uploadRequest.scheduleWarning ?? null;
-  const settledWarnings = scheduleWarning === "stale_schedule" &&
-    !uploadRequest.warnings.includes(YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE)
-    ? [...uploadRequest.warnings, YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE]
-    : uploadRequest.warnings;
+  const scheduleWarning =
+    wasStrippedAtOpen || (hasYoutubeScheduleRequest(metadata) && !savedPublishAt)
+      ? "stale_schedule"
+      : null;
+  const baseWarnings = uploadRequest.warnings.filter(
+    (warning) => warning !== YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE,
+  );
+  const settledWarnings = scheduleWarning === "stale_schedule"
+    ? [...baseWarnings, YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE]
+    : baseWarnings;
 
   const settlement = await settleYoutubeUpload(store, opened.record.id, leaseToken, {
     status: "success",

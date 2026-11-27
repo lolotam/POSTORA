@@ -903,6 +903,32 @@ Deno.test("a continuation that inherits a session whose schedule was stripped in
   ]);
 });
 
+Deno.test("a failed continuation on a scheduled post records scheduled as false while keeping the requested time", async () => {
+  const publishAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  const w = world({
+    post: {
+      metadata: {
+        ...DECLARATION_METADATA,
+        youtube_visibility: "public",
+        youtube_publish_at: publishAt,
+      },
+    },
+    outcome: { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, retryable: false },
+  });
+  await continueYoutubeUpload(w.ports, request);
+
+  const evidence = w.settled[0].responseData.youtube_publish_evidence as {
+    requested_privacy: string;
+    requested_publish_at: string | null;
+    scheduled: boolean;
+    schedule_warning: string | null;
+  };
+  assertEquals(evidence.requested_privacy, "private");
+  assertEquals(evidence.scheduled, false);
+  assertEquals(evidence.schedule_warning, null);
+  assertEquals(evidence.requested_publish_at, publishAt);
+});
+
 Deno.test("a continuation that kept the schedule records it on the settled row", async () => {
   const publishAt = new Date(Date.now() + 60 * 60_000).toISOString();
   const w = world({
