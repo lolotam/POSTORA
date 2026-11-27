@@ -224,6 +224,7 @@ SUITES=(
   youtube_comment_operations.sql
   youtube_stage4_key_integrity.sql
   youtube_analytics_stage5_rollout.sql
+  youtube_weighted_rate_limit.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.
