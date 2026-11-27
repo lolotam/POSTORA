@@ -509,7 +509,7 @@ function parseArrayField(value: any, fieldName: string): string[] {
 }
 
 // Handle POST /api/v1/post - Create a new post with platform-specific metadata
-export async function handleCreatePost(req: Request, supabase: any, userId: string, body: any, userPreferredTimezone?: string | null) {
+async function handleCreatePost(req: Request, supabase: any, userId: string, body: any, userPreferredTimezone?: string | null) {
   const corsHeaders = restrictedCorsHeaders(req);
   console.log('Creating post for user:', userId, 'with fields:', Object.keys(body || {}));
 
@@ -1702,7 +1702,7 @@ async function handleGetAccounts(req: Request, supabase: any, userId: string, ur
 }
 
 // Handle GET /api/v1/posts - Get post history
-export async function handleGetPosts(req: Request, supabase: any, userId: string, url: URL) {
+async function handleGetPosts(req: Request, supabase: any, userId: string, url: URL) {
   const corsHeaders = restrictedCorsHeaders(req);
   console.log('Fetching posts for user:', userId);
 
@@ -2040,7 +2040,7 @@ function toPlatformResult(pp: any) {
 }
 
 // Handle GET /api/v1/post/:id - Get single post status with platform results
-export async function handleGetPostById(req: Request, supabase: any, userId: string, postId: string) {
+async function handleGetPostById(req: Request, supabase: any, userId: string, postId: string) {
   const corsHeaders = restrictedCorsHeaders(req);
   console.log('Fetching post by ID:', postId, 'for user:', userId);
 
@@ -2799,6 +2799,8 @@ export async function handleRequest(req: Request): Promise<Response> {
     return getSafeErrorResponse(error, 'Internal server error. Please try again.');
   }
 }
+
+export { handleCreatePost, handleGetPostById, handleGetPosts };
 
 if (import.meta.main) {
   Deno.serve(handleRequest);
