@@ -35,6 +35,7 @@ export interface YoutubePublishEvidence {
   schedule_warning: "stale_schedule" | null;
   thumbnail: YoutubeFollowUpEvidence;
   first_comment: YoutubeFollowUpEvidence;
+  playlist: YoutubeFollowUpEvidence;
 }
 
 export interface YoutubeEvidenceInput {
@@ -45,13 +46,24 @@ export interface YoutubeEvidenceInput {
   scheduleWarning?: "stale_schedule" | null;
   thumbnailRequested: boolean;
   commentRequested: boolean;
+  playlistRequested?: boolean;
   thumbnailState?: YoutubeFollowUpState;
   thumbnailReason?: string | null;
   commentState?: YoutubeFollowUpState;
   commentReason?: string | null;
+  playlistState?: YoutubeFollowUpState;
+  playlistReason?: string | null;
 }
 
-const NEGATIVE_REASONS = new Set(["no_time", "authority_lost", "refused", "download_failed", "answer_lost"]);
+const NEGATIVE_REASONS = new Set([
+  "no_time",
+  "authority_lost",
+  "refused",
+  "download_failed",
+  "answer_lost",
+  "not_owned",
+  "quota_budget",
+]);
 
 function sanitizedReason(reason: string | null | undefined): string | null {
   return reason && NEGATIVE_REASONS.has(reason) ? reason : null;
@@ -71,6 +83,10 @@ export function youtubePublishEvidence(input: YoutubeEvidenceInput): YoutubePubl
     first_comment: {
       state: input.commentRequested ? input.commentState ?? "unknown" : "not_requested",
       reason: input.commentRequested ? sanitizedReason(input.commentReason) : null,
+    },
+    playlist: {
+      state: input.playlistRequested ? input.playlistState ?? "unknown" : "not_requested",
+      reason: input.playlistRequested ? sanitizedReason(input.playlistReason) : null,
     },
   };
 }
@@ -167,6 +183,7 @@ export function youtubeEvidenceFromMetadata(
   const thumbnailRequested = (typeof values.youtube_thumbnail_media_id === "string" && values.youtube_thumbnail_media_id.length > 0) ||
     (typeof values.youtube_thumbnail_url === "string" && values.youtube_thumbnail_url.length > 0);
   const commentRequested = typeof values.youtube_first_comment === "string" && values.youtube_first_comment.length > 0;
+  const playlistRequested = typeof values.youtube_playlist_id === "string" && values.youtube_playlist_id.trim().length > 0;
   const schedule = scheduleEvidenceOf(values, overrides);
   return youtubePublishEvidence({
     // The privacy that is recorded is the privacy that was asked for, and a
@@ -177,10 +194,13 @@ export function youtubeEvidenceFromMetadata(
     scheduleWarning: schedule.scheduleWarning,
     thumbnailRequested: overrides.thumbnailRequested ?? thumbnailRequested,
     commentRequested: overrides.commentRequested ?? commentRequested,
+    playlistRequested: overrides.playlistRequested ?? playlistRequested,
     effectivePrivacy: overrides.effectivePrivacy,
     thumbnailState: overrides.thumbnailState,
     thumbnailReason: overrides.thumbnailReason,
     commentState: overrides.commentState,
     commentReason: overrides.commentReason,
+    playlistState: overrides.playlistState,
+    playlistReason: overrides.playlistReason,
   });
 }

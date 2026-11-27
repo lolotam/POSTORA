@@ -38,7 +38,7 @@ function gateway(browse: YouTubeCapabilityState = { state: "available" }): YouTu
       capabilities: { browse, upload: { state: "available" as const }, comments: { state: "available" as const } },
       quota: {
         provider_quota: "not_tracked" as const,
-        unit_costs: { channel: 1 as const, videos_page: 2 as const, video: 1 as const },
+        unit_costs: { channel: 1 as const, videos_page: 2 as const, video: 1 as const, playlists_page: 1 as const },
         per_user_burst: { limit: 30 as const, window_seconds: 600 as const },
         per_user_daily: { limit: 300 as const, window_seconds: 86400 as const },
       },

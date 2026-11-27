@@ -337,6 +337,15 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       }
     }
 
+    if (platform === "youtube" && !isAdding) {
+      const remainingYoutube = selectedAccountIds.filter(id =>
+        id !== accountId && connectedAccounts.find(a => a.id === id && a.platform === "youtube")
+      ).length;
+      if (remainingYoutube === 0) {
+        platformSettings.setYoutubePlaylist("");
+      }
+    }
+
     if (platform === "tiktok" && isAdding) {
       platformSettings.fetchTiktokCreatorInfo(accountId);
     }
@@ -359,6 +368,9 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       if (platform === "pinterest") {
         platformSettings.setPinterestBoards([]);
         platformSettings.setSelectedPinterestBoard("");
+      }
+      if (platform === "youtube") {
+        platformSettings.setYoutubePlaylist("");
       }
     } else {
       setSelectedAccountIds(prev => [...new Set([...prev, ...platformAccountIds])]);
@@ -482,6 +494,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       thumbnailMode: thumbnailMediaId ? "upload" : "auto",
       publishAt: text("youtube_publish_at") ?? "",
       scheduleRequested: Boolean((text("youtube_publish_at") ?? "").trim()),
+      playlist: text("youtube_playlist_id") ?? "",
     };
   };
 

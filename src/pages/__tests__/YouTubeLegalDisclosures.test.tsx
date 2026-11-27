@@ -67,9 +67,22 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("videos.update");
     expect(text).toContain("title, description, tags, category, privacy, language, made-for-kids and synthetic-media declarations");
     expect(text).toContain("Postora does not replace existing video media bytes or delete your videos.");
-    expect(text).toContain("does not manage playlists or channel settings, replace existing video media bytes, or delete videos");
+    expect(text).toContain("can add a newly uploaded video to an existing playlist you choose through the narrower force-ssl scope");
+    expect(text).toContain("does not create, rename, reorder, or delete playlists or remove playlist items, change channel settings, replace existing video media bytes, or delete videos");
+    expect(text).not.toContain("does not manage playlists or channel settings");
     expect(text).not.toContain("(managing playlists, editing or deleting existing videos, channel settings)");
     expect(text).not.toContain("This scope does not allow us to edit or delete your existing videos.");
+  });
+
+  it("discloses reading the channel's playlists and adding a new video to a chosen one", () => {
+    const { container } = renderPage(<GoogleApiDisclosure />);
+    const text = pageText(container);
+
+    expect(text).toContain("List your channel's playlists");
+    expect(text).toContain("playlists.list");
+    expect(text).toContain("Add a newly uploaded video to an existing playlist");
+    expect(text).toContain("playlistItems.insert");
+    expect(text).toContain("Postora does not create, rename, reorder, or delete playlists, and does not remove items from a playlist.");
   });
 
   it("covers comment creation, own-comment actions, and moderation", () => {
@@ -116,8 +129,11 @@ describe("YouTube legal disclosures", () => {
 
     expect(text).toContain("Your uploaded videos and their details when you browse your channel in Postora");
     expect(text).toContain("Published video metadata when published metadata editing is enabled and you instruct Postora to edit details");
+    expect(text).toContain("The playlists of your channel (playlist ID, title, privacy status) when you open YouTube publishing settings for a single connected channel or choose a destination playlist for a video you publish");
     expect(text).toContain("let you browse your uploaded videos and their full details");
     expect(text).toContain("Edit published video metadata only when that feature is enabled (currently disabled at the production baseline)");
+    expect(text).toContain("List your channel's playlists so you can choose a destination playlist when publishing, and add a newly uploaded video to the playlist you select");
+    expect(text).toContain("Postora never creates, renames, reorders, or deletes playlists and never removes playlist items");
     expect(text).toContain("Read, create, reply to, edit, delete, and moderate comments");
     expect(text).toContain("send that comment's text and the video title to the configured AI provider solely to draft a reply");
     expect(text).toContain("Analytics Purpose Clause, Version 2, dated November 26, 2026");

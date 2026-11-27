@@ -344,6 +344,7 @@ DECLARE
   v_b jsonb;
   v_stored integer;
   v_source text;
+  v_unlocked_reads integer;
 BEGIN
   -- Session A opens a transaction and debits 300 of the remaining 450.
   -- The bucket row is locked FOR UPDATE for the life of that transaction.
@@ -363,14 +364,23 @@ BEGIN
   PERFORM pg_temp.wrl_wait_blocked_by(
     v_pid_b, v_pid_a, 'the second concurrent weighted debit');
 
-  -- The wait only means something if the serialization is the bucket row
-  -- lock the plan specifies, so the body is checked for it too.
+  -- The wait proves the two debits were SERIALIZED. That the serialization
+  -- is the bucket row lock the plan specifies is a separate fact, and it is
+  -- read off the function body: EVERY statement that reads the bucket row
+  -- must be a locking read. A single unlocked read is enough to lose the
+  -- guarantee, so the body is checked statement by statement rather than by
+  -- looking for one "FOR UPDATE" somewhere in it.
   SELECT prosrc INTO v_source
     FROM pg_proc
    WHERE oid = 'public.check_weighted_rate_limit(text,integer,integer,integer)'::regprocedure;
-  ASSERT position('for update' in lower(v_source)) > 0
-     OR position('for no key update' in lower(v_source)) > 0,
-    'the weighted counter serializes concurrent debits with SELECT ... FOR UPDATE on the bucket row';
+  SELECT count(*) INTO v_unlocked_reads
+    FROM regexp_split_to_table(lower(v_source), ';') AS s(stmt)
+   WHERE stmt LIKE '%select%'
+     AND stmt LIKE '%from public.rate_limit_buckets%'
+     AND stmt NOT LIKE '%for update%'
+     AND stmt NOT LIKE '%for no key update%';
+  ASSERT v_unlocked_reads = 0,
+    'every read of the bucket row is a locking read (SELECT ... FOR UPDATE), so concurrent debits serialize on that row';
 
   -- A commits; B then reads 350 and refuses its own 300.
   PERFORM extensions.dblink_exec('wrl_a', 'COMMIT');

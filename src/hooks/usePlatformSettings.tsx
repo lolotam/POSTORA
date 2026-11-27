@@ -581,6 +581,11 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       ...(selectedPlatforms.includes("youtube") && youtubePublishAt.trim().length > 0
         ? { youtube_publish_at: youtubePublishAt.trim() }
         : {}),
+      // No playlist key at all when no playlist was chosen, so a post without a
+      // playlist stays unchanged on the wire.
+      ...(selectedPlatforms.includes("youtube") && youtubePlaylist.trim().length > 0
+        ? { youtube_playlist_id: youtubePlaylist.trim() }
+        : {}),
       // Facebook Reel description
       facebook_reel_description: facebookReelDescription || null,
       // Threads settings

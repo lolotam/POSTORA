@@ -100,6 +100,11 @@ const VideoRequest = z.object({
   account_id: AccountId,
   video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
 }).strict();
+const PlaylistsRequest = z.object({
+  operation: z.literal("playlists"),
+  account_id: AccountId,
+  page_token: z.string().min(1).max(256).optional(),
+}).strict();
 // Edit requests are accepted only so the contract can be exercised and refused
 // with a stable code. A strict shape keeps a future enabled path from ever
 // accepting an untyped provider part or an arbitrary metadata field.
@@ -131,6 +136,7 @@ const RequestSchema = z.discriminatedUnion("operation", [
   ChannelRequest,
   VideosRequest,
   VideoRequest,
+  PlaylistsRequest,
   EditSnapshotRequest,
   UpdateVideoRequest,
 ]);
@@ -142,8 +148,8 @@ function requestedOperationOf(body: unknown): string {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "unknown";
   const requested = (body as Record<string, unknown>).operation;
   return requested === "capabilities" || requested === "categories" || requested === "channel" ||
-      requested === "videos" || requested === "video" || requested === "edit_snapshot" ||
-      requested === "update_video"
+      requested === "videos" || requested === "video" || requested === "playlists" ||
+      requested === "edit_snapshot" || requested === "update_video"
     ? requested
     : "unknown";
 }
@@ -494,6 +500,7 @@ export function createYouTubeResourcesHandler(
     // one repeat-on-401 path and one response shape.
     const videos = refusedOperation === "videos" ? parsed.data : null;
     const video = refusedOperation === "video" ? parsed.data : null;
+    const playlists = refusedOperation === "playlists" ? parsed.data : null;
     try {
       const admission = await admit(account, userId);
       // admit refuses a row without a stored channel as reconnect_required, so the
@@ -525,6 +532,12 @@ export function createYouTubeResourcesHandler(
           }
           if (video !== null) {
             return ports.youtube.getVideo(accessToken, { channelId, videoId: video.video_id });
+          }
+          if (playlists !== null) {
+            return ports.youtube.listPlaylists(accessToken, {
+              channelId,
+              ...(playlists.page_token ? { pageToken: playlists.page_token } : {}),
+            });
           }
           return ports.youtube.getChannel(accessToken, { channelId });
         },

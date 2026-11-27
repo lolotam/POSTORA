@@ -23,6 +23,7 @@ export const YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS = [
   "youtube_blocked_countries",
   "youtube_first_comment",
   "youtube_publish_at",
+  "youtube_playlist_id",
 ] as const;
 
 function nonEmptyString(value: unknown): boolean {

@@ -46,6 +46,55 @@ describe("YouTube publish evidence in History", () => {
     expect(block.textContent).toContain("First comment: Applied");
   });
 
+  it("shows the playlist outcome next to the thumbnail and the first comment", async () => {
+    await renderUi(
+      <YouTubePublishEvidence
+        evidence={{
+          requested_privacy: "private",
+          effective_privacy: "private",
+          thumbnail: { state: "applied", reason: null },
+          first_comment: { state: "not_requested", reason: null },
+          playlist: { state: "applied", reason: null },
+        }}
+      />,
+    );
+    const block = screen.getByTestId("youtube-publish-evidence");
+    expect(block.textContent).toContain("Playlist: Applied");
+  });
+
+  it("reports the playlist as not requested when the row never carried one", async () => {
+    await renderUi(
+      <YouTubePublishEvidence
+        evidence={{
+          requested_privacy: "private",
+          effective_privacy: "private",
+          thumbnail: { state: "applied", reason: null },
+          first_comment: { state: "not_requested", reason: null },
+        }}
+      />,
+    );
+    const block = screen.getByTestId("youtube-publish-evidence");
+    expect(block.textContent).toContain("Playlist: Not requested");
+  });
+
+  it("keeps a failed playlist from claiming the other follow-ups failed", async () => {
+    await renderUi(
+      <YouTubePublishEvidence
+        evidence={{
+          requested_privacy: "private",
+          effective_privacy: "private",
+          thumbnail: { state: "applied", reason: null },
+          first_comment: { state: "applied", reason: null },
+          playlist: { state: "failed", reason: "not_owned" },
+        }}
+      />,
+    );
+    const block = screen.getByTestId("youtube-publish-evidence");
+    expect(block.textContent).toContain("Playlist: Failed (not_owned)");
+    expect(block.textContent).toContain("Thumbnail: Applied");
+    expect(block.textContent).toContain("First comment: Applied");
+  });
+
   it("renders nothing when no evidence was recorded", async () => {
     const { container } = await renderUi(<YouTubePublishEvidence evidence={null} />);
     expect(container.firstChild).toBeNull();

@@ -18,6 +18,7 @@ Deno.test("settled evidence is allowlisted with honest unknown where unobserved"
     effective_privacy: "unknown",
     thumbnail: { state: "applied", reason: null },
     first_comment: { state: "unknown", reason: "answer_lost" },
+    playlist: { state: "not_requested", reason: null },
   });
   assertEquals(JSON.stringify(view).includes("must-not-leak"), false);
 });
@@ -51,4 +52,29 @@ Deno.test("malformed states fall back to unknown instead of claiming success", (
   assertEquals(view?.effective_privacy, "unknown");
   assertEquals(view?.thumbnail, { state: "applied", reason: null });
   assertEquals(view?.first_comment, { state: "applied", reason: null });
+  assertEquals(view?.playlist, { state: "not_requested", reason: null });
+});
+
+Deno.test("playlist evidence allows not_owned and quota_budget reasons and defaults absent key to not_requested", () => {
+  const withPlaylist = youtubeEvidenceOf({
+    youtube_publish_evidence: {
+      requested_privacy: "private",
+      effective_privacy: "private",
+      thumbnail: { state: "not_requested", reason: null },
+      first_comment: { state: "not_requested", reason: null },
+      playlist: { state: "skipped", reason: "quota_budget" },
+    },
+  }, "youtube");
+  assertEquals(withPlaylist?.playlist, { state: "skipped", reason: "quota_budget" });
+
+  const notOwned = youtubeEvidenceOf({
+    youtube_publish_evidence: {
+      requested_privacy: "private",
+      effective_privacy: "private",
+      thumbnail: { state: "not_requested", reason: null },
+      first_comment: { state: "not_requested", reason: null },
+      playlist: { state: "failed", reason: "not_owned" },
+    },
+  }, "youtube");
+  assertEquals(notOwned?.playlist, { state: "failed", reason: "not_owned" });
 });

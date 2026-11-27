@@ -42,7 +42,9 @@ describe("YouTube publishing option contract", () => {
       metadata: { youtube_has_paid_product_placement: false, youtube_has_paid_promotion: true },
       rejected: ["youtube_has_paid_product_placement"],
     },
-  ])("reports the same unsupported paid-placement fields in the browser and API ($metadata)", ({
+    { metadata: { youtube_playlist_id: "PLabc123" }, rejected: ["youtube_playlist_id"] },
+    { metadata: { youtube_playlist_id: "" }, rejected: [] },
+  ])("reports the same unsupported YouTube options in the browser and API ($metadata)", ({
     metadata,
     rejected,
   }) => {

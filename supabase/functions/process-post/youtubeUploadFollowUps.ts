@@ -29,6 +29,8 @@ export interface YoutubeFollowUpRequest {
   thumbnailUrl: string | null;
   /** The first comment the customer asked for, if any. */
   firstComment: string | null;
+  /** The playlist the customer asked to add the video to, if any. */
+  playlistId?: string | null;
 }
 
 /** The bytes of a file the follow-ups send. */
@@ -60,10 +62,15 @@ export interface YoutubeFollowUpDeps {
    * Zero means there is no time for it, so it is skipped.
    */
   budgetMs(): number;
+  /** Debits the project-wide write budget before a playlist insert. */
+  debitWriteBudget?: () => Promise<boolean>;
 }
 
 const THUMBNAIL_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set";
 const COMMENT_ENDPOINT = "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet";
+const PLAYLISTS_PRECHECK_ENDPOINT = "https://www.googleapis.com/youtube/v3/playlists";
+const PLAYLIST_ITEMS_ENDPOINT = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet";
+const PLAYLIST_ID_PATTERN = /^[A-Za-z0-9_-]{10,64}$/;
 
 export interface YoutubeFollowUpOutcome {
   state: "not_requested" | "applied" | "skipped" | "failed" | "unknown";
@@ -73,6 +80,7 @@ export interface YoutubeFollowUpOutcome {
 export interface YoutubeFollowUpResults {
   thumbnail: YoutubeFollowUpOutcome;
   first_comment: YoutubeFollowUpOutcome;
+  playlist: YoutubeFollowUpOutcome;
 }
 
 const NOT_REQUESTED: YoutubeFollowUpOutcome = { state: "not_requested", reason: null };
@@ -95,7 +103,10 @@ export async function runYoutubeFollowUps(
   const first_comment = request.firstComment
     ? await postYoutubeFirstComment(request.videoId, request.channelId, request.accessToken, request.firstComment, deps)
     : NOT_REQUESTED;
-  return { thumbnail, first_comment };
+  const playlist = request.playlistId
+    ? await addToYoutubePlaylist(request.videoId, request.channelId, request.accessToken, request.playlistId, deps)
+    : NOT_REQUESTED;
+  return { thumbnail, first_comment, playlist };
 }
 
 async function setYoutubeThumbnail(
@@ -179,6 +190,117 @@ async function postYoutubeFirstComment(
     // comment posted twice is a duplicate on the customer's channel, and a
     // timeout says nothing about whether the first one arrived.
     console.warn("Error posting first comment:", redactProviderText(error));
+    return { state: "unknown", reason: "answer_lost" };
+  }
+}
+
+async function verifyPlaylistOwnership(
+  playlistId: string,
+  channelId: string,
+  accessToken: string,
+  timeoutMs: number,
+  fetchImpl: typeof fetch,
+): Promise<YoutubeFollowUpOutcome | null> {
+  try {
+    const response = await fetchImpl(
+      `${PLAYLISTS_PRECHECK_ENDPOINT}?part=snippet&id=${encodeURIComponent(playlistId)}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    );
+    if (!response.ok) {
+      return {
+        state: "failed",
+        reason: response.status === 404 || response.status === 403 ? "not_owned" : "refused",
+      };
+    }
+    const body = await response.json().catch(() => null) as {
+      items?: Array<{ id?: unknown; snippet?: { channelId?: unknown } }>;
+    } | null;
+    const item = Array.isArray(body?.items)
+      ? body.items.find((entry) => entry?.id === playlistId)
+      : undefined;
+    if (!item || item.snippet?.channelId !== channelId) {
+      return { state: "failed", reason: "not_owned" };
+    }
+    return null;
+  } catch (error) {
+    console.warn("Error verifying YouTube playlist ownership:", redactProviderText(error));
+    return { state: "failed", reason: "refused" };
+  }
+}
+
+async function addToYoutubePlaylist(
+  videoId: string,
+  channelId: string,
+  accessToken: string,
+  playlistId: string,
+  deps: YoutubeFollowUpDeps,
+): Promise<YoutubeFollowUpOutcome> {
+  if (!PLAYLIST_ID_PATTERN.test(playlistId)) {
+    return { state: "failed", reason: "not_owned" };
+  }
+  const precheckBudgetMs = deps.budgetMs();
+  if (precheckBudgetMs <= 0) return { state: "skipped", reason: "no_time" };
+  try {
+    if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
+  } catch (error) {
+    console.warn("Error checking write authority before YouTube playlist precheck:", redactProviderText(error));
+    return { state: "skipped", reason: "authority_lost" };
+  }
+
+  const ownershipFailure = await verifyPlaylistOwnership(
+    playlistId,
+    channelId,
+    accessToken,
+    precheckBudgetMs,
+    deps.fetchImpl,
+  );
+  if (ownershipFailure) return ownershipFailure;
+
+  try {
+    if (!deps.debitWriteBudget || !await deps.debitWriteBudget()) {
+      return { state: "skipped", reason: "quota_budget" };
+    }
+  } catch (error) {
+    console.warn("Error debiting YouTube write budget for playlist insert:", redactProviderText(error));
+    return { state: "skipped", reason: "quota_budget" };
+  }
+  try {
+    if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
+  } catch (error) {
+    console.warn("Error checking write authority before YouTube playlist insert:", redactProviderText(error));
+    return { state: "skipped", reason: "authority_lost" };
+  }
+  const insertBudgetMs = deps.budgetMs();
+  if (insertBudgetMs <= 0) return { state: "skipped", reason: "no_time" };
+
+  try {
+    const response = await deps.fetchImpl(PLAYLIST_ITEMS_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        snippet: {
+          playlistId,
+          resourceId: { kind: "youtube#video", videoId },
+        },
+      }),
+      signal: AbortSignal.timeout(insertBudgetMs),
+    });
+    if (response.ok) {
+      console.log("Video added to YouTube playlist successfully");
+      return { state: "applied", reason: null };
+    }
+    console.warn("Failed to add video to playlist:", redactProviderText(await response.text()));
+    return { state: "failed", reason: "refused" };
+  } catch (error) {
+    // Never retry playlistItems.insert: a second call adds the video twice.
+    console.warn("Error adding video to playlist:", redactProviderText(error));
     return { state: "unknown", reason: "answer_lost" };
   }
 }

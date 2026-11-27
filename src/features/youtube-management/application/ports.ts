@@ -2,6 +2,7 @@ import type {
   YouTubeAccountCapabilities,
   YouTubeCategoryOption,
   YouTubeChannelDetails,
+  YouTubePlaylistsPage,
   YouTubeResourceSuccess,
   YouTubeVideoDetails,
   YouTubeVideosPage,
@@ -33,5 +34,7 @@ export interface YouTubeResourcesGateway {
   }>>;
   getChannel(accountId: string): Promise<YouTubeResourceSuccess<YouTubeChannelDetails>>;
   listVideos(params: { accountId: string; pageToken?: string | null }): Promise<YouTubeResourceSuccess<YouTubeVideosPage>>;
+  /** The playlists of the account's own channel, one page at a time. */
+  listPlaylists?(params: { accountId: string; pageToken?: string | null }): Promise<YouTubeResourceSuccess<YouTubePlaylistsPage>>;
   getVideo(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<YouTubeVideoDetails>>;
 }

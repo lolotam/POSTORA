@@ -10,6 +10,7 @@ import {
 import {
   YOUTUBE_SCOPE,
   type YouTubeChannelDetails,
+  type YouTubePlaylistsPage,
   type YouTubeVideoDetails,
   type YouTubeVideosPage,
 } from "./contracts.ts";
@@ -101,6 +102,7 @@ function fixture(overrides: {
   channelResults?: Array<YouTubeReadResult<YouTubeChannelDetails>>;
   uploadResults?: Array<YouTubeReadResult<YouTubeVideosPage>>;
   videoResults?: Array<YouTubeReadResult<YouTubeVideoDetails>>;
+  playlistResults?: Array<YouTubeReadResult<YouTubePlaylistsPage>>;
   rateLimit?: { allowed: boolean; retryAfterSeconds: number };
   tokenError?: boolean;
   rateLimitError?: boolean;
@@ -110,9 +112,11 @@ function fixture(overrides: {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
   const refreshToken = crypto.randomUUID() + crypto.randomUUID();
   const calls = { auth: 0, load: 0, tokens: 0, channel: 0, uploads: 0, video: 0, rateLimit: 0 };
+  let playlistCalls = 0;
   const forceFlags: boolean[] = [];
   const uploadInputs: Array<{ channelId: string; pageSize: number; pageToken?: string }> = [];
   const videoInputs: Array<{ channelId: string; videoId: string }> = [];
+  const playlistInputs: Array<{ channelId: string; pageToken?: string }> = [];
   const logs: YouTubeResourceRefusal[] = [];
   let minted = 0;
   const account: YouTubeResourceAccount = {
@@ -211,6 +215,25 @@ function fixture(overrides: {
         calls.video++;
         return Promise.resolve(queued ?? { ok: true, value: VIDEO });
       },
+      listPlaylists: (_token, input) => {
+        playlistInputs.push(input);
+        const queued = overrides.playlistResults?.[playlistCalls];
+        playlistCalls++;
+        return Promise.resolve(
+          queued ?? {
+            ok: true,
+            value: {
+              items: [{
+                id: "PLfixtureplaylist001",
+                title: "My Playlist",
+                privacy_status: "public",
+                thumbnail_url: null,
+              }],
+              next_page_token: "PL_NEXT",
+            },
+          },
+        );
+      },
     },
     rateLimit: {
       check: () => {
@@ -227,6 +250,7 @@ function fixture(overrides: {
     logs,
     uploadInputs,
     videoInputs,
+    playlistInputs,
     accessToken,
     refreshToken,
   };
@@ -949,4 +973,40 @@ Deno.test("the single forced-refresh repeat also covers the video operation", as
   assertEquals(response.status, 200);
   assertEquals(forceFlags, [false, true]);
   assertEquals(calls.video, 2);
+});
+
+Deno.test("playlists operation pages through admit and providerRead, and shares 401 refresh and invalid_cursor", async () => {
+  const { handler, calls, forceFlags, playlistInputs } = fixture({
+    playlistResults: [
+      { ok: false, code: "reconnect_required", unauthorized: true },
+      {
+        ok: true,
+        value: {
+          items: [{ id: "PLfixtureplaylist001", title: "My Playlist", privacy_status: "public", thumbnail_url: null }],
+          next_page_token: "NEXT_CURSOR",
+        },
+      },
+    ],
+  });
+  const response = await handler(request({ operation: "playlists", account_id: ACCOUNT_ID, page_token: "P1" }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.data.next_page_token, "NEXT_CURSOR");
+  assertEquals(body.data.items.length, 1);
+  assertEquals(forceFlags, [false, true]);
+  assertEquals(playlistInputs.length, 2);
+  assertEquals(playlistInputs, [{ channelId: CHANNEL_ID, pageToken: "P1" }, { channelId: CHANNEL_ID, pageToken: "P1" }]);
+
+  const badCursor = fixture({
+    playlistResults: [{ ok: false, code: "invalid_cursor", unauthorized: false }],
+  });
+  const cursorResp = await badCursor.handler(request({ operation: "playlists", account_id: ACCOUNT_ID, page_token: "bad" }));
+  assertEquals(cursorResp.status, 400);
+  assertEquals((await cursorResp.json()).error, "invalid_cursor");
+
+  const composio = fixture({ account: { authProvider: "composio" } });
+  const composioResp = await composio.handler(request({ operation: "playlists", account_id: ACCOUNT_ID }));
+  assertEquals(composioResp.status, 409);
+  assertEquals((await composioResp.json()).error, "provider_unsupported");
+  assertEquals(composio.playlistInputs.length, 0);
 });

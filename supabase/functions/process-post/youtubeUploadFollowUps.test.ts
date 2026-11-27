@@ -246,3 +246,163 @@ Deno.test("authority lost during a thumbnail download prevents both provider wri
   assertEquals(w.downloads.length, 1);
   assertEquals(w.calls.length, 0);
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// The playlist insert
+// ───────────────────────────────────────────────────────────────────────────
+
+const PLAYLIST_ID = "PLfixtureplaylist001";
+const CHANNEL_ID = "UCfixturechannel000000001";
+
+function playlistWorld(options: {
+  budgetMs?: number | (() => number);
+  canWrite?: () => Promise<boolean>;
+  debitWriteBudget?: () => Promise<boolean>;
+  precheck?: { status: number; body: unknown } | "throw";
+  insert?: { status: number; body?: unknown } | "throw";
+} = {}) {
+  const calls: Call[] = [];
+  let budgetDebits = 0;
+  let precheckCalls = 0;
+  let insertCalls = 0;
+
+  const deps: YoutubeFollowUpDeps = {
+    canWrite: options.canWrite ?? (() => Promise.resolve(true)),
+    downloadThumbnail: () => Promise.resolve({ blob: new Blob(["bytes"]), mimeType: "image/jpeg" }),
+    budgetMs: () => (typeof options.budgetMs === "function"
+      ? options.budgetMs()
+      : options.budgetMs ?? 5_000),
+    debitWriteBudget: async () => {
+      budgetDebits += 1;
+      return options.debitWriteBudget ? await options.debitWriteBudget() : true;
+    },
+    fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? "GET";
+      calls.push({
+        url,
+        method,
+        bounded: init?.signal instanceof AbortSignal,
+        ...(typeof init?.body === "string" ? { body: JSON.parse(init.body) as Record<string, unknown> } : {}),
+      });
+      if (url.includes("/playlists?")) {
+        precheckCalls += 1;
+        if (options.precheck === "throw") return Promise.reject(new Error("precheck timeout"));
+        const p = options.precheck ?? {
+          status: 200,
+          body: { items: [{ id: PLAYLIST_ID, snippet: { channelId: CHANNEL_ID } }] },
+        };
+        return Promise.resolve(Response.json(p.body, { status: p.status }));
+      }
+      if (url.includes("/playlistItems?")) {
+        insertCalls += 1;
+        if (options.insert === "throw") return Promise.reject(new Error("insert timeout"));
+        const ins = options.insert ?? { status: 200, body: { id: "PLI_1" } };
+        return Promise.resolve(Response.json(ins.body ?? {}, { status: ins.status }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    },
+  };
+
+  return { calls, deps, counts: () => ({ budgetDebits, precheckCalls, insertCalls }) };
+}
+
+Deno.test("playlist follow-up runs after thumbnail and first_comment, verifies ownership, debits budget, and inserts once", async () => {
+  const w = playlistWorld();
+  const results = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: THUMBNAIL_URL,
+    firstComment: "Hello",
+    playlistId: PLAYLIST_ID,
+  }, w.deps);
+
+  assertEquals(results.thumbnail, { state: "applied", reason: null });
+  assertEquals(results.first_comment, { state: "applied", reason: null });
+  assertEquals(results.playlist, { state: "applied", reason: null });
+  assertEquals(w.counts(), { budgetDebits: 1, precheckCalls: 1, insertCalls: 1 });
+  assertEquals(w.calls.map((c) => c.method), ["POST", "POST", "GET", "POST"]);
+  assertEquals(w.calls[3].body, {
+    snippet: { playlistId: PLAYLIST_ID, resourceId: { kind: "youtube#video", videoId: VIDEO_ID } },
+  });
+});
+
+Deno.test("playlist follow-up rejects malformed or foreign playlist id before debiting budget", async () => {
+  const malformed = playlistWorld();
+  const badIdResult = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    playlistId: "bad/id",
+  }, malformed.deps);
+  assertEquals(badIdResult.playlist, { state: "failed", reason: "not_owned" });
+  assertEquals(malformed.counts(), { budgetDebits: 0, precheckCalls: 0, insertCalls: 0 });
+
+  const foreign = playlistWorld({
+    precheck: { status: 200, body: { items: [{ id: PLAYLIST_ID, snippet: { channelId: "UCother0000000000000002" } }] } },
+  });
+  const foreignResult = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    playlistId: PLAYLIST_ID,
+  }, foreign.deps);
+  assertEquals(foreignResult.playlist, { state: "failed", reason: "not_owned" });
+  assertEquals(foreign.counts(), { budgetDebits: 0, precheckCalls: 1, insertCalls: 0 });
+});
+
+Deno.test("playlist follow-up handles budget refusal, authority loss, no_time, refused insert, and timeout", async () => {
+  const quotaRefused = playlistWorld({ debitWriteBudget: () => Promise.resolve(false) });
+  const r1 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: CHANNEL_ID, accessToken: "t",
+    thumbnailUrl: THUMBNAIL_URL, firstComment: "Hi", playlistId: PLAYLIST_ID,
+  }, quotaRefused.deps);
+  assertEquals(r1.thumbnail, { state: "applied", reason: null });
+  assertEquals(r1.first_comment, { state: "applied", reason: null });
+  assertEquals(r1.playlist, { state: "skipped", reason: "quota_budget" });
+  assertEquals(quotaRefused.counts().insertCalls, 0);
+
+  const noTime = playlistWorld({ budgetMs: 0 });
+  const r2 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: CHANNEL_ID, accessToken: "t",
+    thumbnailUrl: null, firstComment: null, playlistId: PLAYLIST_ID,
+  }, noTime.deps);
+  assertEquals(r2.playlist, { state: "skipped", reason: "no_time" });
+
+  const authLost = playlistWorld({ canWrite: () => Promise.resolve(false) });
+  const r3 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: CHANNEL_ID, accessToken: "t",
+    thumbnailUrl: null, firstComment: null, playlistId: PLAYLIST_ID,
+  }, authLost.deps);
+  assertEquals(r3.playlist, { state: "skipped", reason: "authority_lost" });
+
+  const refused = playlistWorld({ insert: { status: 403, body: { error: { message: "forbidden" } } } });
+  const r4 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: CHANNEL_ID, accessToken: "t",
+    thumbnailUrl: null, firstComment: null, playlistId: PLAYLIST_ID,
+  }, refused.deps);
+  assertEquals(r4.playlist, { state: "failed", reason: "refused" });
+  assertEquals(refused.counts().insertCalls, 1);
+
+  const timedOut = playlistWorld({ insert: "throw" });
+  const r5 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: CHANNEL_ID, accessToken: "t",
+    thumbnailUrl: null, firstComment: null, playlistId: PLAYLIST_ID,
+  }, timedOut.deps);
+  assertEquals(r5.playlist, { state: "unknown", reason: "answer_lost" });
+  assertEquals(timedOut.counts().insertCalls, 1);
+
+  const authThrow = playlistWorld({ canWrite: () => Promise.reject(new Error("effectAuthority failed")) });
+  const r6 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: CHANNEL_ID, accessToken: "t",
+    thumbnailUrl: THUMBNAIL_URL, firstComment: null, playlistId: PLAYLIST_ID,
+  }, authThrow.deps);
+  assertEquals(r6.thumbnail, { state: "unknown", reason: "answer_lost" });
+  assertEquals(r6.playlist, { state: "skipped", reason: "authority_lost" });
+  assertEquals(authThrow.counts().insertCalls, 0);
+});

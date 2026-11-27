@@ -4,6 +4,7 @@ import type {
   YouTubeAccountCapabilities,
   YouTubeCategoryOption,
   YouTubeChannelDetails,
+  YouTubePlaylistsPage,
   YouTubeResourceSuccess,
   YouTubeVideoDetails,
   YouTubeVideosPage,
@@ -54,6 +55,11 @@ function isChannelData(value: unknown): value is YouTubeChannelDetails {
 }
 
 function isVideosData(value: unknown): value is YouTubeVideosPage {
+  if (!isRecord(value) || !Array.isArray(value.items)) return false;
+  return value.next_page_token === null || typeof value.next_page_token === "string";
+}
+
+function isPlaylistsData(value: unknown): value is YouTubePlaylistsPage {
   if (!isRecord(value) || !Array.isArray(value.items)) return false;
   return value.next_page_token === null || typeof value.next_page_token === "string";
 }
@@ -167,6 +173,17 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
         ...(params.pageToken ? { page_token: params.pageToken } : {}),
       },
       isVideosData,
+    );
+  }
+
+  listPlaylists(params: { accountId: string; pageToken?: string | null }): Promise<YouTubeResourceSuccess<YouTubePlaylistsPage>> {
+    return call(
+      {
+        operation: "playlists",
+        account_id: params.accountId,
+        ...(params.pageToken ? { page_token: params.pageToken } : {}),
+      },
+      isPlaylistsData,
     );
   }
 

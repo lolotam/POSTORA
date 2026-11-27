@@ -73,7 +73,7 @@ vi.mock("@/components/post/PlatformSettingsSection", () => ({
     youtubeSettingsState: {
       visibility: string; madeForKids: boolean | null;
       containsSyntheticMedia: boolean | null; thumbnailMediaId: string | null;
-      publishAt?: string; scheduleRequested?: boolean;
+      publishAt?: string; scheduleRequested?: boolean; playlist: string;
     };
     onYoutubeSettingsChange: (changes: Record<string, unknown>) => void;
   }) => (
@@ -86,6 +86,7 @@ vi.mock("@/components/post/PlatformSettingsSection", () => ({
       <button type="button" onClick={() => onYoutubeSettingsChange({ publishAt: fixture.scheduledIso, scheduleRequested: true })}>Schedule on YouTube</button>
       <button type="button" onClick={() => onYoutubeSettingsChange({ publishAt: "", scheduleRequested: true })}>Request schedule without time</button>
       <button type="button" onClick={() => onYoutubeSettingsChange({ publishAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(), scheduleRequested: true })}>Schedule too soon</button>
+      <button type="button" onClick={() => onYoutubeSettingsChange({ playlist: "PLfixture1" })}>Set playlist</button>
       <span data-testid="youtube-values">{JSON.stringify({
         visibility: youtubeSettingsState.visibility,
         madeForKids: youtubeSettingsState.madeForKids,
@@ -93,6 +94,7 @@ vi.mock("@/components/post/PlatformSettingsSection", () => ({
         thumbnailMediaId: youtubeSettingsState.thumbnailMediaId,
         publishAt: youtubeSettingsState.publishAt,
         scheduleRequested: youtubeSettingsState.scheduleRequested,
+        playlist: youtubeSettingsState.playlist,
       })}</span>
     </div>
   ),
@@ -280,6 +282,49 @@ describe("CreatePost YouTube customized lost-ACK reload", () => {
     );
     expect(fixture.stored).toBeNull();
     expect(fixture.enqueue).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("serializes youtube_playlist_id when a playlist is chosen and restores it across a lost-ACK reload", async () => {
+    const user = userEvent.setup();
+    const first = render(<CreatePost />, { wrapper: wrapper() });
+    await user.type(screen.getByLabelText("Caption"), "YouTube playlist");
+    await user.click(screen.getByRole("button", { name: "Next: Select Platforms" }));
+    await user.click(screen.getByRole("button", { name: "Choose account" }));
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Set playlist" }));
+    await user.click(screen.getByRole("button", { name: "Next: Review & Schedule" }));
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+    await waitFor(() => expect(fixture.stored).toBeTruthy());
+    expect((fixture.stored!.metadata as Record<string, unknown>).youtube_playlist_id).toBe("PLfixture1");
+    first.unmount();
+
+    sessionStorage.removeItem("postora_post_draft");
+
+    const second = render(<CreatePost />, { wrapper: wrapper() });
+    await user.type(screen.getByLabelText("Caption"), "YouTube playlist");
+    await user.click(screen.getByRole("button", { name: "Next: Select Platforms" }));
+    await user.click(screen.getByRole("button", { name: "Choose account" }));
+    await waitFor(() => expect(screen.getByTestId("youtube-values")).toHaveTextContent('"playlist":"PLfixture1"'));
+
+    await user.click(screen.getByRole("button", { name: "Next: Review & Schedule" }));
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+    await waitFor(() => expect(fixture.toasts.join(" ")).toMatch(/Already submitted/i));
+    expect(fixture.toasts.join(" ")).not.toMatch(/Submission changed/i);
+    second.unmount();
+  });
+
+  it("sends no playlist key when no playlist was chosen", async () => {
+    const user = userEvent.setup();
+    const view = render(<CreatePost />, { wrapper: wrapper() });
+    await user.type(screen.getByLabelText("Caption"), "YouTube without playlist");
+    await user.click(screen.getByRole("button", { name: "Next: Select Platforms" }));
+    await user.click(screen.getByRole("button", { name: "Choose account" }));
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Next: Review & Schedule" }));
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+    await waitFor(() => expect(fixture.stored).toBeTruthy());
+    expect("youtube_playlist_id" in (fixture.stored!.metadata as Record<string, unknown>)).toBe(false);
     view.unmount();
   });
 });

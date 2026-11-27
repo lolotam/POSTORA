@@ -140,6 +140,10 @@ import {
   type YoutubeEvidenceInput,
   type YoutubePublishEvidence,
 } from "./youtubePublishEvidence.ts";
+import {
+  debitYouTubeWriteBudget,
+  YOUTUBE_PLAYLIST_INSERT_UNIT_COST,
+} from "../_shared/youtubeWriteBudget.ts";
 import { resolveYouTubeVideoTitle } from "../_shared/youtubeVideoTitle.ts";
 import { resolveYoutubeThumbnail } from "./youtubeThumbnailIntake.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
@@ -580,6 +584,7 @@ interface PlatformMetadata
   youtube_blocked_countries?: string[] | null;
   youtube_first_comment?: string | null;
   youtube_thumbnail_url?: string | null;
+  youtube_playlist_id?: string | null;
 }
 
 /**
@@ -10051,7 +10056,11 @@ const THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024;
  * second one is skipped rather than started when the worker has already run
  * out of time.
  */
-function youtubeFollowUpDeps(mediaHosts: Set<string>, canWrite: () => Promise<boolean>): YoutubeFollowUpDeps {
+function youtubeFollowUpDeps(
+  mediaHosts: Set<string>,
+  canWrite: () => Promise<boolean>,
+  supabase: SupabaseClient,
+): YoutubeFollowUpDeps {
   return {
     fetchImpl: fetch,
     canWrite,
@@ -10072,6 +10081,14 @@ function youtubeFollowUpDeps(mediaHosts: Set<string>, canWrite: () => Promise<bo
       return { blob: new Blob([bytes], { type: mimeType }), mimeType };
     },
     budgetMs: () => followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now()),
+    debitWriteBudget: async () =>
+      (await debitYouTubeWriteBudget({
+        rpc: async (fn, params) =>
+          await supabase.rpc(fn, params).abortSignal(
+            AbortSignal.timeout(followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now())),
+          ),
+        units: YOUTUBE_PLAYLIST_INSERT_UNIT_COST,
+      })).allowed,
   };
 }
 
@@ -10165,6 +10182,9 @@ function buildYoutubeContinuationPorts(
           : [],
         thumbnailUrl: thumbnail.ok ? thumbnail.url : null,
         firstComment: typeof metadata.youtube_first_comment === "string" ? metadata.youtube_first_comment : null,
+        playlistId: typeof metadata.youtube_playlist_id === "string" && metadata.youtube_playlist_id.trim().length > 0
+          ? metadata.youtube_playlist_id.trim()
+          : null,
         metadata,
       };
     },
@@ -10402,10 +10422,11 @@ function buildYoutubeContinuationPorts(
           accessToken: args.accessToken,
           thumbnailUrl: args.post.thumbnailUrl,
           firstComment: args.post.firstComment,
+          playlistId: args.post.playlistId ?? null,
         },
         youtubeFollowUpDeps(mediaHosts, async () => (await store.effectAuthority({
           sessionId: args.sessionId, leaseToken: args.leaseToken,
-        })).authorized),
+        })).authorized, supabase),
       );
     },
 
@@ -10867,10 +10888,13 @@ async function postToYouTube(
         accessToken,
         thumbnailUrl: thumbnailUrl ?? null,
         firstComment: firstComment ?? null,
+        playlistId: typeof metadata?.youtube_playlist_id === "string" && metadata.youtube_playlist_id.trim().length > 0
+          ? metadata.youtube_playlist_id.trim()
+          : null,
       },
       youtubeFollowUpDeps(mediaHosts, async () => (await store.effectAuthority({
         sessionId: uploadSessionId, leaseToken,
-      })).authorized),
+      })).authorized, supabase),
     );
   } else {
     if (thumbnailUrl) console.log("YouTube thumbnail skipped: the video was uploaded by an earlier attempt");
@@ -10916,6 +10940,8 @@ async function postToYouTube(
         thumbnailReason: followUpResults?.thumbnail.reason,
         commentState: followUpResults?.first_comment.state,
         commentReason: followUpResults?.first_comment.reason,
+        playlistState: followUpResults?.playlist.state,
+        playlistReason: followUpResults?.playlist.reason,
         scheduleWarning,
         scheduled,
       }),

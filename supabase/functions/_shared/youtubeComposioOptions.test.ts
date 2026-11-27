@@ -21,6 +21,7 @@ const unsupportedCases: Array<[string, unknown]> = [
   ["youtube_publish_at", "2026-12-01T12:00:00Z"],
   ["youtube_publish_at", "   "],
   ["youtube_publish_at", 1700000000],
+  ["youtube_playlist_id", "PLfixtureplaylist001"],
 ];
 
 for (const [key, value] of unsupportedCases) {

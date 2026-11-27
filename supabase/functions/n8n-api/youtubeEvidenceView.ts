@@ -13,11 +13,20 @@ export interface PublicYoutubeEvidence {
   effective_privacy: string;
   thumbnail: { state: string; reason: string | null };
   first_comment: { state: string; reason: string | null };
+  playlist: { state: string; reason: string | null };
 }
 
 const PRIVACY = ["public", "unlisted", "private"];
 const STATES = ["not_requested", "applied", "skipped", "failed", "unknown"];
-const REASONS = ["no_time", "authority_lost", "refused", "download_failed", "answer_lost"];
+const REASONS = [
+  "no_time",
+  "authority_lost",
+  "refused",
+  "download_failed",
+  "answer_lost",
+  "not_owned",
+  "quota_budget",
+];
 
 function followUp(input: unknown): { state: string; reason: string | null } {
   const item = (input ?? {}) as Record<string, unknown>;
@@ -38,6 +47,7 @@ export function sanitizedYoutubeEvidence(value: unknown): PublicYoutubeEvidence 
     effective_privacy: privacy("effective_privacy", "unknown"),
     thumbnail: followUp(record.thumbnail),
     first_comment: followUp(record.first_comment),
+    playlist: record.playlist ? followUp(record.playlist) : { state: "not_requested", reason: null },
   };
 }
 
