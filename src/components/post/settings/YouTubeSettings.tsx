@@ -386,6 +386,10 @@ export function YouTubeSettings({
   const [captionError, setCaptionError] = useState<string | null>(null);
   const captionFileReadSeqRef = useRef(0);
   const captionFileInputRef = useRef<HTMLInputElement>(null);
+  const latestCaptionTrackRef = useRef(settings.captionTrack);
+  latestCaptionTrackRef.current = settings.captionTrack;
+  const latestCaptionEligibleRef = useRef(captionCapabilityConfirmedEligible);
+  latestCaptionEligibleRef.current = captionCapabilityConfirmedEligible;
 
   const captionTrackLanguage = settings.captionTrack?.language;
   const captionTrackNameProp = settings.captionTrack?.name;
@@ -441,17 +445,15 @@ export function YouTubeSettings({
     nextName: string,
     nextFormat: CaptionFormat,
     nextContent: string,
-    meta?: { source?: "file" | "audio"; sourceKey?: string | null },
+    meta?: { source?: "file" | "audio"; sourceKey?: string | null; captionEligible?: boolean },
   ) => {
     const trimmedLang = nextLanguage.trim();
     const trimmedName = nextName.trim();
-    const sourceMeta =
-      meta?.source !== undefined
-        ? {
-            source: meta.source,
-            ...(meta.sourceKey !== undefined ? { sourceKey: meta.sourceKey } : {}),
-          }
-        : {};
+    const sourceMeta = {
+      ...(meta?.source !== undefined ? { source: meta.source } : {}),
+      ...(meta?.sourceKey !== undefined ? { sourceKey: meta.sourceKey } : {}),
+      ...(meta?.captionEligible === false ? { captionEligible: false } : {}),
+    };
     if (!CAPTION_LANGUAGE_PATTERN.test(trimmedLang)) {
       setCaptionError(
         t("youtube.captionsLanguageInvalid", "Enter a valid BCP-47 language code, for example en or ar-EG."),
@@ -497,6 +499,7 @@ export function YouTubeSettings({
 
   const handleCaptionFileChange = async (chosen: File | undefined) => {
     const seq = ++captionFileReadSeqRef.current;
+    const readToken = `read-${seq}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setCaptionError(null);
     if (!chosen) return;
     const format = inferUploadCaptionFormat(chosen.name);
@@ -516,17 +519,18 @@ export function YouTubeSettings({
         name: captionTrackName,
         format,
         pendingRead: true,
+        readToken,
       },
     });
     let content: string;
     try {
       if (typeof chosen.arrayBuffer === "function") {
         const buffer = await chosen.arrayBuffer();
-        if (seq !== captionFileReadSeqRef.current) return;
+        if (seq !== captionFileReadSeqRef.current || latestCaptionTrackRef.current?.readToken !== readToken) return;
         content = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
       } else {
         content = await chosen.text();
-        if (seq !== captionFileReadSeqRef.current) return;
+        if (seq !== captionFileReadSeqRef.current || latestCaptionTrackRef.current?.readToken !== readToken) return;
         if (content.includes("\uFFFD")) {
           setCaptionError(
             t(
@@ -539,7 +543,7 @@ export function YouTubeSettings({
         }
       }
     } catch {
-      if (seq !== captionFileReadSeqRef.current) return;
+      if (seq !== captionFileReadSeqRef.current || latestCaptionTrackRef.current?.readToken !== readToken) return;
       setCaptionError(
         t(
           "youtube.captionsInvalidEncoding",
@@ -549,6 +553,7 @@ export function YouTubeSettings({
       onSettingsChange({ captionTrack: null });
       return;
     }
+    if (seq !== captionFileReadSeqRef.current || latestCaptionTrackRef.current?.readToken !== readToken) return;
     const bytes = measureUtf8Bytes(content);
     if (bytes > CAPTION_CONTENT_MAX_BYTES) {
       setCaptionError(t("youtube.captionsFileTooLarge", "Subtitle file exceeds the 512 KB UTF-8 limit."));
@@ -560,6 +565,7 @@ export function YouTubeSettings({
       latestCaptionTrackNameRef.current,
       format,
       content,
+      latestCaptionEligibleRef.current ? undefined : { captionEligible: false },
     );
   };
 

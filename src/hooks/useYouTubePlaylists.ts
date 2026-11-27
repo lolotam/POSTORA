@@ -33,9 +33,17 @@ const gateway = new SupabaseYouTubeResourcesGateway();
  */
 export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylistsState {
   const [playlists, setPlaylists] = useState<YouTubePlaylistListItem[]>([]);
-  const [capabilities, setCapabilities] = useState<YouTubeAccountCapabilities["capabilities"] | null>(null);
-  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
-  const [capabilitiesUnavailable, setCapabilitiesUnavailable] = useState(false);
+  const [capabilitiesState, setCapabilitiesState] = useState<{
+    accountId: string | null;
+    capabilities: YouTubeAccountCapabilities["capabilities"] | null;
+    loading: boolean;
+    unavailable: boolean;
+  }>({
+    accountId: null,
+    capabilities: null,
+    loading: false,
+    unavailable: false,
+  });
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -59,32 +67,49 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
     capabilitiesGenerationRef.current = capGeneration;
 
     if (!accountId) {
-      setCapabilities(null);
-      setCapabilitiesLoading(false);
-      setCapabilitiesUnavailable(false);
+      setCapabilitiesState({
+        accountId: null,
+        capabilities: null,
+        loading: false,
+        unavailable: false,
+      });
       return;
     }
 
     if (typeof gateway.getCapabilities === "function") {
-      setCapabilitiesLoading(true);
-      setCapabilitiesUnavailable(false);
+      setCapabilitiesState({
+        accountId,
+        capabilities: null,
+        loading: true,
+        unavailable: false,
+      });
       gateway.getCapabilities(accountId)
         .then((result) => {
           if (capabilitiesGenerationRef.current !== capGeneration) return;
           const nextCaps = result?.data?.capabilities ?? null;
-          setCapabilities(nextCaps);
-          setCapabilitiesUnavailable(nextCaps === null);
-          setCapabilitiesLoading(false);
+          setCapabilitiesState({
+            accountId,
+            capabilities: nextCaps,
+            loading: false,
+            unavailable: nextCaps === null,
+          });
         })
         .catch(() => {
           if (capabilitiesGenerationRef.current !== capGeneration) return;
-          setCapabilities(null);
-          setCapabilitiesUnavailable(true);
-          setCapabilitiesLoading(false);
+          setCapabilitiesState({
+            accountId,
+            capabilities: null,
+            loading: false,
+            unavailable: true,
+          });
         });
     } else {
-      setCapabilitiesLoading(false);
-      setCapabilitiesUnavailable(false);
+      setCapabilitiesState({
+        accountId,
+        capabilities: null,
+        loading: false,
+        unavailable: false,
+      });
     }
   }, [accountId, attempt, capabilitiesAttempt]);
 
@@ -173,6 +198,11 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   const retryCapabilities = useCallback(() => {
     setCapabilitiesAttempt((value) => value + 1);
   }, []);
+
+  const activeAccountMatch = Boolean(accountId) && capabilitiesState.accountId === accountId;
+  const capabilities = activeAccountMatch ? capabilitiesState.capabilities : null;
+  const capabilitiesLoading = Boolean(accountId) && (!activeAccountMatch || capabilitiesState.loading);
+  const capabilitiesUnavailable = activeAccountMatch ? capabilitiesState.unavailable : false;
 
   return {
     playlists,

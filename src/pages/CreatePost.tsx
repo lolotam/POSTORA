@@ -107,33 +107,29 @@ function fingerprintYoutubeSettings(youtubeSettings: Record<string, unknown>): R
   };
 }
 
-function fingerprintYoutubeSettingsWithoutCaptionContent(
-  youtubeSettings: Record<string, unknown>,
-  fallbackCaptionSummary?: { language: string; name: string; format: "srt" | "vtt" } | null,
-): Record<string, unknown> {
-  const rawCaption = youtubeSettings.youtube_caption;
-  if (rawCaption && typeof rawCaption === "object" && !Array.isArray(rawCaption)) {
-    const record = rawCaption as Record<string, unknown>;
-    return {
-      ...youtubeSettings,
-      youtube_caption: {
-        language: typeof record.language === "string" ? record.language : "",
-        name: typeof record.name === "string" ? record.name : "",
-        format: record.format === "srt" || record.format === "vtt" ? record.format : "vtt",
+function normalizeStoredFingerprintCaptionSummary(storedFingerprint: unknown): string | null {
+  if (typeof storedFingerprint !== "string") return null;
+  try {
+    const parsed = JSON.parse(storedFingerprint) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const yt = parsed.youtube as Record<string, unknown> | undefined;
+    if (!yt || typeof yt !== "object" || Array.isArray(yt)) return null;
+    const rawCaption = yt.youtube_caption as Record<string, unknown> | undefined;
+    if (!rawCaption || typeof rawCaption !== "object" || Array.isArray(rawCaption)) return null;
+    return canonicalIntentJson({
+      ...parsed,
+      youtube: {
+        ...yt,
+        youtube_caption: {
+          language: typeof rawCaption.language === "string" ? rawCaption.language : "",
+          name: typeof rawCaption.name === "string" ? rawCaption.name : "",
+          format: rawCaption.format === "srt" || rawCaption.format === "vtt" ? rawCaption.format : "vtt",
+        },
       },
-    };
+    });
+  } catch {
+    return null;
   }
-  if (fallbackCaptionSummary) {
-    return {
-      ...youtubeSettings,
-      youtube_caption: {
-        language: fallbackCaptionSummary.language.trim(),
-        name: fallbackCaptionSummary.name.trim(),
-        format: fallbackCaptionSummary.format,
-      },
-    };
-  }
-  return youtubeSettings;
 }
 
 export default function CreatePost() {
@@ -809,18 +805,18 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           scheduleTimezone: scheduleTimezone || null,
           youtube: yt,
         });
-      const settledSummaryFallback =
-        platformSettings.youtubeCaption?.alreadySubmitted
-          ? {
-              language: platformSettings.youtubeCaption.language,
-              name: platformSettings.youtubeCaption.name,
-              format: platformSettings.youtubeCaption.format,
-            }
-          : null;
       const submitFingerprint = buildIntentEnvelope(fingerprintYoutubeSettings(youtubeSettings));
-      const settledCaptionSummaryFingerprint = buildIntentEnvelope(
-        fingerprintYoutubeSettingsWithoutCaptionContent(youtubeSettings, settledSummaryFallback),
-      );
+      const settledCaptionSummaryFingerprint =
+        platformSettings.youtubeCaption?.alreadySubmitted
+          ? buildIntentEnvelope({
+              ...youtubeSettings,
+              youtube_caption: {
+                language: platformSettings.youtubeCaption.language.trim(),
+                name: platformSettings.youtubeCaption.name.trim(),
+                format: platformSettings.youtubeCaption.format,
+              },
+            })
+          : null;
 
       type RecoveredPost = {
         id: string;
@@ -851,28 +847,12 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         const existingCaption = existingMetadata?.youtube_caption as Record<string, unknown> | undefined;
         const captionWasScrubbedOnSettlement =
           Boolean(existingCaption && typeof existingCaption === "object" && !("content" in existingCaption));
-        const existingSettledFingerprint = captionWasScrubbedOnSettlement && existingMetadata
-          ? buildIntentEnvelope(
-              fingerprintYoutubeSettingsWithoutCaptionContent(
-                Object.fromEntries(
-                  Object.entries(existingMetadata).filter(([key]) =>
-                    key !== "submit_id" &&
-                    key !== "submit_fingerprint" &&
-                    key !== "publish_enqueue_accepted" &&
-                    key !== "schedule_timezone" &&
-                    key !== "final_notified_at" &&
-                    key !== "settlement_rollup_status" &&
-                    key !== "legacy_notification_candidate" &&
-                    key !== "final_notification_intent",
-                  ),
-                ),
-              ),
-            )
-          : null;
         const fingerprintMatches =
           existingMetadata?.submit_fingerprint === submitFingerprint ||
           (captionWasScrubbedOnSettlement &&
-            existingSettledFingerprint === settledCaptionSummaryFingerprint);
+            settledCaptionSummaryFingerprint !== null &&
+            normalizeStoredFingerprintCaptionSummary(existingMetadata?.submit_fingerprint) ===
+              settledCaptionSummaryFingerprint);
         if (!fingerprintMatches) {
           return { state: "conflict", reason: "intent" };
         }
@@ -903,6 +883,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
       };
 
       let recoveredPost: RecoveredPost | null = null;
+      let pendingWasNone = false;
       if (!editPostId) {
         const lookup = await lookupPending();
         if (lookup.state === "conflict") {
@@ -911,12 +892,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
           return;
         }
         if (lookup.state === "none") {
-          sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
-            fingerprint: submitFingerprint,
-            youtubeSettings: youtubeIntentMetadata,
-            scheduleRequested: platformSettings.youtubeScheduleRequested,
-            intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
-          }));
+          pendingWasNone = true;
         }
         if (lookup.state === "found") {
           recoveredPost = lookup.post;
@@ -997,6 +973,15 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
             showErrorToast(t("youtube.scheduleInvalidTitle", "Invalid YouTube schedule"), youtubeError);
             return;
           }
+        }
+
+        if (pendingWasNone) {
+          sessionStorage.setItem(intentSnapshotKey, JSON.stringify({
+            fingerprint: submitFingerprint,
+            youtubeSettings: youtubeIntentMetadata,
+            scheduleRequested: platformSettings.youtubeScheduleRequested,
+            intake: { uploadMethod, urlMediaType, imageUrls: imageUrls.trim(), videoUrl: videoUrl.trim() },
+          }));
         }
 
         if (files.some((file) => !file.uploaded || !file.storagePath)) {

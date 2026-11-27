@@ -16,6 +16,7 @@ export interface YouTubeUploadCaptionState {
   source?: "file" | "audio";
   sourceKey?: string | null;
   pendingRead?: boolean;
+  readToken?: string;
   captionEligible?: boolean;
 }
 
