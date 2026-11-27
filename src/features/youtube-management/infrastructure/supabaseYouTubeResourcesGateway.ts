@@ -1,12 +1,19 @@
 import { supabase } from "@/integrations/supabase/client";
 import { toYouTubeResourceError, YouTubeResourceError } from "../domain/errors";
+import { measureCaptionUtf8Bytes } from "../domain/captions";
+import {
+  CAPTION_CONTENT_MAX_BYTES,
+} from "../domain/types";
 import type {
   YouTubeAccountCapabilities,
   YouTubeCategoryOption,
   YouTubeChannelDetails,
+  YouTubeCaptionFormat,
+  YouTubeCaptionsListData,
   YouTubePlaylistsPage,
   YouTubeResourceSuccess,
   YouTubeSetThumbnailResult,
+  YouTubeUploadCaptionData,
   YouTubeVideoDetails,
   YouTubeVideosPage,
 } from "../domain/types";
@@ -106,10 +113,7 @@ async function call<T>(
     const payload: unknown = context instanceof Response
       ? await context.clone().json().catch(() => null)
       : null;
-    if (payload === null && unreadableFailureCode === "outcome_unknown") {
-      throw new YouTubeResourceError("outcome_unknown");
-    }
-    throw toYouTubeResourceError(payload);
+    throw toYouTubeResourceError(payload, unreadableFailureCode);
   }
   if (data === null || !isEnvelopeFor<T>(data, isData)) {
     throw new YouTubeResourceError(unreadableFailureCode);
@@ -215,6 +219,56 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
         typeof data === "object" && data !== null
         && (data as { video_id?: unknown }).video_id === params.videoId
         && (data as { applied?: unknown }).applied === true,
+      { unreadableFailureCode: "outcome_unknown" },
+    );
+  }
+
+  // The caption tracks of one owned video. The answer must name the same
+  // video that was asked for: a list for another video never reaches the UI.
+  listCaptions(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<YouTubeCaptionsListData>> {
+    return call(
+      { operation: "captions", account_id: params.accountId, video_id: params.videoId },
+      (data): data is YouTubeCaptionsListData =>
+        typeof data === "object" && data !== null
+        && (data as { video_id?: unknown }).video_id === params.videoId
+        && Array.isArray((data as { items?: unknown }).items),
+    );
+  }
+
+  // The caption text is sent as ordinary UTF-8 JSON (plain `JSON.stringify`,
+  // never `\uXXXX`-escaped), so Arabic text reaches YouTube byte for byte.
+  // The method is async on purpose: a refusal is a rejected promise, the
+  // one channel a caller has to handle.
+  async uploadCaption(params: {
+    accountId: string;
+    videoId: string;
+    language: string;
+    name: string;
+    format: YouTubeCaptionFormat;
+    content: string;
+  }): Promise<YouTubeResourceSuccess<YouTubeUploadCaptionData>> {
+    // The browser already knows the file's real size, so an oversize file
+    // is refused here instead of costing a provider call (400 units).
+    if (measureCaptionUtf8Bytes(params.content) > CAPTION_CONTENT_MAX_BYTES) {
+      throw new YouTubeResourceError("caption_invalid");
+    }
+    return call(
+      {
+        operation: "upload_caption",
+        account_id: params.accountId,
+        video_id: params.videoId,
+        language: params.language,
+        name: params.name,
+        format: params.format,
+        content: params.content,
+      },
+      (data): data is YouTubeUploadCaptionData =>
+        typeof data === "object" && data !== null
+        && (data as { video_id?: unknown }).video_id === params.videoId
+        && typeof (data as { track?: unknown }).track === "object"
+        && (data as { track?: unknown }).track !== null,
+      // A lost answer is not a refusal: the upload may already exist on
+      // YouTube, and the creator has to be told to refresh, not to retry.
       { unreadableFailureCode: "outcome_unknown" },
     );
   }

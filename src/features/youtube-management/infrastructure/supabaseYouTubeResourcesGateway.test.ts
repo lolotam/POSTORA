@@ -7,6 +7,7 @@ import {
   YOUTUBE_RESOURCE_REQUEST_EXAMPLES,
 } from "../../../../supabase/functions/youtube-resources/requestExamples.fixture";
 import { YouTubeResourceError } from "../domain/errors";
+import { CAPTION_CONTENT_MAX_BYTES } from "../domain/types";
 import { SupabaseYouTubeResourcesGateway } from "./supabaseYouTubeResourcesGateway";
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -32,7 +33,14 @@ function validDataFor(operation: string): Record<string, unknown> {
       capabilities: { browse: { state: "available" }, upload: { state: "available" }, comments: { state: "available" } },
       quota: {
         provider_quota: "not_tracked",
-        unit_costs: { channel: 1, videos_page: 2, video: 1, playlists_page: 1 },
+        unit_costs: {
+          channel: 1,
+          videos_page: 2,
+          video: 1,
+          playlists_page: 1,
+          captions_list: 50,
+          caption_upload: 400,
+        },
         per_user_burst: { limit: 30, window_seconds: 600 },
         per_user_daily: { limit: 300, window_seconds: 86400 },
       },
@@ -252,5 +260,217 @@ describe("YouTube resources gateway", () => {
       .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(YouTubeResourceError);
     expect((failure as YouTubeResourceError).code).toBe("thumbnail_not_allowed");
+  });
+});
+
+describe("YouTube resources gateway — caption tracks", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  const track = {
+    id: "track-1",
+    language: "en",
+    name: "English",
+    track_kind: "standard",
+    is_draft: false,
+    status: "published",
+    last_updated: null,
+  };
+
+  it("asks for the caption tracks of one video with the account, and no user id", async () => {
+    const page = envelope({ video_id: EXAMPLE_VIDEO_ID, items: [track] });
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({ data: page, error: null });
+
+    const received = await new SupabaseYouTubeResourcesGateway().listCaptions({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+    });
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("youtube-resources", {
+      body: { operation: "captions", account_id: "acc-1", video_id: EXAMPLE_VIDEO_ID },
+      timeout: 15000,
+    });
+    expect(received.data.items).toEqual([track]);
+  });
+
+  it.each([
+    ["a list for another video", { video_id: "another-video", items: [] }],
+    ["a list without tracks", { video_id: EXAMPLE_VIDEO_ID }],
+  ])("rejects %s as upstream_unavailable", async (_scenario, data) => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({ data: envelope(data), error: null });
+    await expect(new SupabaseYouTubeResourcesGateway().listCaptions({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+    })).rejects.toMatchObject({ code: "upstream_unavailable" });
+  });
+
+  it("sends the caption upload with the account, the video, the language, the name, the format and the text", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ video_id: EXAMPLE_VIDEO_ID, track }),
+      error: null,
+    });
+
+    const received = await new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "en",
+      name: "English",
+      format: "vtt",
+      content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n",
+    });
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("youtube-resources", {
+      body: {
+        operation: "upload_caption",
+        account_id: "acc-1",
+        video_id: EXAMPLE_VIDEO_ID,
+        language: "en",
+        name: "English",
+        format: "vtt",
+        content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n",
+      },
+      timeout: 15000,
+    });
+    expect(received.data.track).toEqual(track);
+  });
+
+  it("sends the caption text as raw UTF-8, never as escaped code points", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ video_id: EXAMPLE_VIDEO_ID, track }),
+      error: null,
+    });
+
+    await new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "ar",
+      name: "العربية",
+      format: "srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nمرحبا بالعالم\n",
+    });
+
+    const body = vi.mocked(supabase.functions.invoke).mock.calls[0][1]?.body as { content: string };
+    expect(body.content).toContain("مرحبا بالعالم");
+    expect(JSON.stringify(body)).toContain("مرحبا بالعالم");
+    expect(JSON.stringify(body)).not.toContain("\\u");
+  });
+
+  it("refuses an oversize caption file in the browser, before any provider call", async () => {
+    // Arabic letters cost two UTF-8 bytes each: 300,000 characters are
+    // 600,000 bytes, over the 512 KB ceiling the page enforces.
+    const oversize = "مرحبا".repeat(75_000);
+
+    const failure = await new SupabaseYouTubeResourcesGateway()
+      .uploadCaption({
+        accountId: "acc-1",
+        videoId: EXAMPLE_VIDEO_ID,
+        language: "ar",
+        name: "العربية",
+        format: "srt",
+        content: oversize,
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(YouTubeResourceError);
+    expect((failure as YouTubeResourceError).code).toBe("caption_invalid");
+    expect(supabase.functions.invoke).not.toHaveBeenCalled();
+  });
+
+  it("accepts a caption file of exactly 524,288 UTF-8 bytes", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ video_id: EXAMPLE_VIDEO_ID, track }),
+      error: null,
+    });
+    const exact = "a".repeat(CAPTION_CONTENT_MAX_BYTES);
+
+    await new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "en",
+      name: "English",
+      format: "srt",
+      content: exact,
+    });
+
+    expect(supabase.functions.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns a caption conflict into the server's stable code", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ error: "caption_conflict", request_id: "req-4" }, { status: 409 }),
+      }),
+    });
+    const failure = await new SupabaseYouTubeResourcesGateway()
+      .uploadCaption({
+        accountId: "acc-1",
+        videoId: EXAMPLE_VIDEO_ID,
+        language: "en",
+        name: "English",
+        format: "srt",
+        content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+      })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(YouTubeResourceError);
+    expect((failure as YouTubeResourceError).code).toBe("caption_conflict");
+  });
+
+  it("maps a timed-out or unreadable caption upload to outcome_unknown", async () => {
+    vi.mocked(supabase.functions.invoke).mockRejectedValue(
+      Object.assign(new Error("The operation was aborted due to timeout"), { name: "FunctionsFetchError" }),
+    );
+    await expect(new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "en",
+      name: "English",
+      format: "srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
+
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ message: "Bad Gateway" }, { status: 502 }),
+      }),
+    });
+    await expect(new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "en",
+      name: "English",
+      format: "srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
+  });
+
+  it("rejects a caption answer that names another video as outcome_unknown", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ video_id: "another-video", track }),
+      error: null,
+    });
+    await expect(new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "en",
+      name: "English",
+      format: "srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
+
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ message: "Bad Gateway" }, { status: 502 }),
+      }),
+    });
+    await expect(new SupabaseYouTubeResourcesGateway().uploadCaption({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      language: "en",
+      name: "English",
+      format: "srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
   });
 });

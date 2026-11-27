@@ -17,6 +17,21 @@ export const YOUTUBE_EDIT_DAILY_LIMIT = {
 
 export const YOUTUBE_THUMBNAIL_SET_UNIT_COST = 50;
 
+export const YOUTUBE_CAPTION_LIST_DAILY_LIMIT = {
+  keyPrefix: "youtube-resources:caption-list:day",
+  limit: 10,
+  windowSeconds: 86400,
+} as const;
+
+export const YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT = {
+  keyPrefix: "youtube-resources:caption-upload:day",
+  limit: 2,
+  windowSeconds: 86400,
+} as const;
+
+export const YOUTUBE_CAPTION_LIST_UNIT_COST = 50;
+export const YOUTUBE_CAPTION_UPLOAD_UNIT_COST = 400;
+
 export interface StrictRateLimitDecision {
   allowed: boolean;
   count: number;
@@ -112,6 +127,34 @@ export async function checkUserWriteCounters(input: {
     input.userId,
     YOUTUBE_EDIT_DAILY_LIMIT.limit,
     YOUTUBE_EDIT_DAILY_LIMIT.windowSeconds,
+  );
+}
+
+/** Checks the per-user daily caption list counter (10 lists / 24 h), failing closed. */
+export async function checkCaptionListCounter(input: {
+  rpc: YouTubeWriteBudgetRpc;
+  userId: string;
+}): Promise<WriteCounterResult> {
+  return await checkSingleCounter(
+    input.rpc,
+    YOUTUBE_CAPTION_LIST_DAILY_LIMIT.keyPrefix,
+    input.userId,
+    YOUTUBE_CAPTION_LIST_DAILY_LIMIT.limit,
+    YOUTUBE_CAPTION_LIST_DAILY_LIMIT.windowSeconds,
+  );
+}
+
+/** Checks the per-user daily caption upload counter (2 uploads / 24 h), failing closed. */
+export async function checkCaptionUploadCounter(input: {
+  rpc: YouTubeWriteBudgetRpc;
+  userId: string;
+}): Promise<WriteCounterResult> {
+  return await checkSingleCounter(
+    input.rpc,
+    YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT.keyPrefix,
+    input.userId,
+    YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT.limit,
+    YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT.windowSeconds,
   );
 }
 

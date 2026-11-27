@@ -98,6 +98,20 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("Postora does not create, rename, reorder, or delete playlists, and does not remove items from a playlist.");
   });
 
+  it("discloses listing a video's caption tracks and adding a new one, without touching the existing ones", () => {
+    const { container } = renderPage(<GoogleApiDisclosure />);
+    const text = pageText(container);
+
+    expect(text).toContain("List the caption tracks of a video you already uploaded");
+    expect(text).toContain("captions.list");
+    expect(text).toContain("add a new caption track");
+    expect(text).toContain("captions.insert");
+    expect(text).toContain(".srt");
+    expect(text).toContain(".vtt");
+    expect(text).toContain("only when you ask for the list");
+    expect(text).toContain("Postora never modifies, replaces, or deletes existing caption tracks");
+  });
+
   it("covers comment creation, own-comment actions, and moderation", () => {
     const { container } = renderPage(<GoogleApiDisclosure />);
     const text = pageText(container);
@@ -149,6 +163,10 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("The bytes of a JPEG or PNG image from your own Postora media library when you replace the thumbnail of a video you already uploaded");
     expect(text).toContain("List your channel's playlists so you can choose a destination playlist when publishing, and add a newly uploaded video to the playlist you select");
     expect(text).toContain("Postora never creates, renames, reorders, or deletes playlists and never removes playlist items");
+    expect(text).toContain("The caption tracks of your videos (track ID, language, name, kind, status and draft flag) when you ask Postora to list them");
+    expect(text).toContain("the text of an .srt or .vtt caption file you choose when you upload a new caption track");
+    expect(text).toContain("List the caption tracks of a video you already uploaded and add a new caption track from an .srt or .vtt file you choose");
+    expect(text).toContain("Postora never modifies, replaces, or deletes existing caption tracks");
     expect(text).toContain("Read, create, reply to, edit, delete, and moderate comments");
     expect(text).toContain("send that comment's text and the video title to the configured AI provider solely to draft a reply");
     expect(text).toContain("Analytics Purpose Clause, Version 2, dated November 26, 2026");

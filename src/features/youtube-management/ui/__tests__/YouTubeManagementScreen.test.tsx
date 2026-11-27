@@ -38,7 +38,14 @@ function gateway(browse: YouTubeCapabilityState = { state: "available" }): YouTu
       capabilities: { browse, upload: { state: "available" as const }, comments: { state: "available" as const } },
       quota: {
         provider_quota: "not_tracked" as const,
-        unit_costs: { channel: 1 as const, videos_page: 2 as const, video: 1 as const, playlists_page: 1 as const },
+        unit_costs: {
+          channel: 1 as const,
+          videos_page: 2 as const,
+          video: 1 as const,
+          playlists_page: 1 as const,
+          captions_list: 50 as const,
+          caption_upload: 400 as const,
+        },
         per_user_burst: { limit: 30 as const, window_seconds: 600 as const },
         per_user_daily: { limit: 300 as const, window_seconds: 86400 as const },
       },
@@ -384,7 +391,14 @@ describe("YouTubeManagementScreen thumbnail replacement", () => {
         },
         quota: {
           provider_quota: "not_tracked" as const,
-          unit_costs: { channel: 1 as const, videos_page: 2 as const, video: 1 as const, playlists_page: 1 as const },
+          unit_costs: {
+          channel: 1 as const,
+          videos_page: 2 as const,
+          video: 1 as const,
+          playlists_page: 1 as const,
+          captions_list: 50 as const,
+          caption_upload: 400 as const,
+        },
           per_user_burst: { limit: 30 as const, window_seconds: 600 as const },
           per_user_daily: { limit: 300 as const, window_seconds: 86400 as const },
         },
@@ -488,5 +502,130 @@ describe("YouTubeManagementScreen thumbnail replacement", () => {
     await userEvent.click(screen.getByRole("button", { name: "Confirm thumbnail change" }));
 
     expect(await screen.findByText("This YouTube channel is not eligible to set custom thumbnails.")).toBeInTheDocument();
+  });
+});
+
+
+describe("YouTubeManagementScreen caption tracks", () => {
+  const CAPTION_TRACK = {
+    id: "track-1",
+    language: "en",
+    name: "English",
+    track_kind: "standard",
+    is_draft: false,
+    status: "published",
+    last_updated: null,
+  };
+
+  function captionsGateway(options: {
+    manageCaptions?: YouTubeCapabilityState;
+    listCaptions?: YouTubeResourcesGateway["listCaptions"];
+    uploadCaption?: YouTubeResourcesGateway["uploadCaption"];
+  }): YouTubeResourcesGateway {
+    const base = gateway();
+    return {
+      ...base,
+      getCapabilities: vi.fn((accountId: string) => Promise.resolve(envelope({
+        account_id: accountId,
+        channel_id: `UC-${accountId}`,
+        channel_title: accountId,
+        provider: "native" as const,
+        connection: "ok" as const,
+        scopes: { readonly: "granted" as const, upload: "granted" as const, force_ssl: "granted" as const },
+        capabilities: {
+          browse: { state: "available" as const },
+          upload: { state: "available" as const },
+          comments: { state: "available" as const },
+          manage_captions: options.manageCaptions ?? { state: "available" as const },
+        },
+        quota: {
+          provider_quota: "not_tracked" as const,
+          unit_costs: {
+            channel: 1 as const,
+            videos_page: 2 as const,
+            video: 1 as const,
+            playlists_page: 1 as const,
+            captions_list: 50 as const,
+            caption_upload: 400 as const,
+          },
+          per_user_burst: { limit: 30 as const, window_seconds: 600 as const },
+          per_user_daily: { limit: 300 as const, window_seconds: 86400 as const },
+        },
+      }))),
+      listCaptions: options.listCaptions,
+      uploadCaption: options.uploadCaption,
+    };
+  }
+
+  it("spends no caption list when the drawer opens", async () => {
+    const listCaptions = vi.fn(async () => envelope({ video_id: "acc-a-video", items: [CAPTION_TRACK] }));
+    await renderScreen(
+      <YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={captionsGateway({ listCaptions })} />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+
+    expect(await screen.findByRole("button", { name: "Show caption tracks" })).toBeInTheDocument();
+    expect(listCaptions).not.toHaveBeenCalled();
+  });
+
+  it("lists the tracks of the picked video once the creator asks", async () => {
+    const listCaptions = vi.fn(async () => envelope({ video_id: "acc-a-video", items: [CAPTION_TRACK] }));
+    await renderScreen(
+      <YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={captionsGateway({ listCaptions })} />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Show caption tracks" }));
+
+    await waitFor(() => expect(listCaptions).toHaveBeenCalledTimes(1));
+    expect(listCaptions).toHaveBeenCalledWith({ accountId: "acc-a", videoId: "acc-a-video" });
+    expect(await screen.findByRole("table")).toHaveTextContent("English");
+  });
+
+  it("uploads one caption track after the confirmation and shows the outcome", async () => {
+    const uploadCaption = vi.fn(async () => envelope({ video_id: "acc-a-video", track: CAPTION_TRACK }));
+    await renderScreen(
+      <YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={captionsGateway({ uploadCaption })} />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+    const file = new File(["WEBVTT\n"], "captions.vtt", { type: "text/plain" });
+    await userEvent.upload(await screen.findByLabelText("Caption file (.srt or .vtt)"), file);
+    await userEvent.click(screen.getByRole("button", { name: "Prepare caption upload" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm caption upload" }));
+
+    await waitFor(() => expect(uploadCaption).toHaveBeenCalledTimes(1));
+    expect(uploadCaption).toHaveBeenCalledWith({
+      accountId: "acc-a",
+      videoId: "acc-a-video",
+      language: "en",
+      name: "",
+      format: "vtt",
+      content: "WEBVTT\n",
+    });
+    expect(await screen.findByText("Caption track uploaded to YouTube.")).toHaveAttribute("role", "status");
+  });
+
+  it("disables the caption control when the channel cannot manage captions", async () => {
+    const listCaptions = vi.fn(async () => envelope({ video_id: "acc-a-video", items: [] }));
+    await renderScreen(
+      <YouTubeManagementScreen
+        accounts={ACCOUNTS}
+        accountsLoading={false}
+        gateway={captionsGateway({
+          manageCaptions: { state: "unavailable", reason: "missing_scope" },
+          listCaptions,
+        })}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: /Video of acc-a/ }));
+
+    expect(await screen.findByRole("button", { name: "Show caption tracks" })).toBeDisabled();
+    expect(
+      screen.getByText("Reconnect this channel and grant YouTube caption permissions (force-ssl) to manage captions."),
+    ).toBeInTheDocument();
+    expect(listCaptions).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,7 @@ export const YOUTUBE_RESOURCE_ERROR_STATUS = {
   invalid_request: 400,
   invalid_cursor: 400,
   media_not_usable: 400,
+  caption_invalid: 400,
   unauthorized: 401,
   missing_scope: 403,
   thumbnail_not_allowed: 403,
@@ -18,6 +19,7 @@ export const YOUTUBE_RESOURCE_ERROR_STATUS = {
   provider_unsupported: 409,
   write_not_enabled: 403,
   edit_conflict: 409,
+  caption_conflict: 409,
   outcome_unknown: 502,
   reconnect_required: 409,
   rate_limited: 429,
@@ -34,7 +36,14 @@ export function isYouTubeResourceErrorCode(value: unknown): value is YouTubeReso
 
 export const YOUTUBE_RESOURCE_QUOTA_POLICY = {
   provider_quota: "not_tracked",
-  unit_costs: { channel: 1, videos_page: 2, video: 1, playlists_page: 1 },
+  unit_costs: {
+    channel: 1,
+    videos_page: 2,
+    video: 1,
+    playlists_page: 1,
+    captions_list: 50,
+    caption_upload: 400,
+  },
   per_user_burst: { limit: 30, window_seconds: 600 },
   per_user_daily: { limit: 300, window_seconds: 86400 },
 } as const;
@@ -70,6 +79,8 @@ export interface YouTubeAccountCapabilities {
     edit_metadata?: YouTubeCapabilityState;
     /** Additive: an old server may omit it and an old client may ignore it. */
     manage_thumbnail?: YouTubeCapabilityState;
+    /** Additive: an old server may omit it and an old client may ignore it. */
+    manage_captions?: YouTubeCapabilityState;
   };
   quota: typeof YOUTUBE_RESOURCE_QUOTA_POLICY;
 }
@@ -77,6 +88,26 @@ export interface YouTubeAccountCapabilities {
 export interface YouTubeSetThumbnailResult {
   video_id: string;
   applied: true;
+}
+
+export interface YouTubeCaptionTrack {
+  id: string;
+  language: string;
+  name: string;
+  track_kind: string | null;
+  is_draft: boolean | null;
+  status: string | null;
+  last_updated: string | null;
+}
+
+export interface YouTubeCaptionsListData {
+  video_id: string;
+  items: YouTubeCaptionTrack[];
+}
+
+export interface YouTubeUploadCaptionData {
+  video_id: string;
+  track: YouTubeCaptionTrack;
 }
 
 export interface YouTubeResourceSuccess<T> {

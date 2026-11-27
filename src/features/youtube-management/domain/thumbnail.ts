@@ -6,6 +6,7 @@
  * `domain/types.ts`, so the picker and the server share one definition.
  */
 import { DIRECT_THUMBNAIL_MIMES } from "./types";
+import { isDefinitiveRefusalCode } from "./errors";
 
 /** One row of the creator's own media library, as the picker needs it. */
 export interface YouTubeThumbnailCandidate {
@@ -42,7 +43,8 @@ export type YouTubeThumbnailOutcome =
  * Only `"outcome_unknown"` (or an unrecognized code) reports that the upload
  * may already have reached YouTube; definite pre-write or provider refusals
  * (`reconnect_required`, `not_found`, `upstream_unavailable`, `missing_scope`,
- * `provider_unsupported`, `write_not_enabled`, `internal_error`) report `"refused"`.
+ * `provider_unsupported`, `write_not_enabled`, `internal_error`) report
+ * `"refused"`.
  */
 export function thumbnailOutcomeFromErrorCode(code: string | null | undefined): YouTubeThumbnailOutcome {
   switch (code) {
@@ -54,17 +56,11 @@ export function thumbnailOutcomeFromErrorCode(code: string | null | undefined): 
       return "rate_limited";
     case "quota_exceeded":
       return "quota_exceeded";
-    case "reconnect_required":
-    case "not_found":
-    case "upstream_unavailable":
-    case "missing_scope":
-    case "provider_unsupported":
-    case "write_not_enabled":
-    case "invalid_request":
-    case "internal_error":
-      return "refused";
     case "outcome_unknown":
-    default:
       return "outcome_unknown";
+    default:
+      return code !== null && code !== undefined && isDefinitiveRefusalCode(code)
+        ? "refused"
+        : "outcome_unknown";
   }
 }

@@ -70,7 +70,7 @@ Before submitting for verification, ensure all items are complete:
 const scopes = [
   "https://www.googleapis.com/auth/youtube.readonly",      // Read channel name, id, avatar (channels.list mine=true)
   "https://www.googleapis.com/auth/youtube.upload",        // Upload videos, set the thumbnail on the just-uploaded video
-  "https://www.googleapis.com/auth/youtube.force-ssl",     // Read, reply to, moderate and delete comments on the user's own videos
+  "https://www.googleapis.com/auth/youtube.force-ssl",     // Edit published metadata, add a playlist item, manage comments, and list/add caption tracks on the user's own videos
 ].join(" ");
 ```
 
@@ -84,7 +84,7 @@ For each scope, provide justification:
 |-------|---------|--------------|
 | `youtube.readonly` | Identify the connected channel and check connection health; browse owned uploads and full video details on `/youtube`; list the channel's own playlists (`playlists.list`) so a destination playlist can be chosen when publishing; read owner-accepted channel/video reports through YouTube Analytics API v2 on `/analytics/youtube` | See the correct channel, browse its content, pick one of its playlists for a new video, and view on-demand analytics without Postora storing the numbers |
 | `youtube.upload` | Upload new videos and Shorts with user-chosen metadata and set an optional custom thumbnail with `thumbnails.set`; replace the thumbnail of a video the owner already uploaded, from `/youtube`, with an owned JPEG or PNG image from the owner's own Postora media library, through the same `thumbnails.set` operation | Publish new content to the owner's channel, and correct the thumbnail of an existing video without ever replacing the video's media bytes |
-| `youtube.force-ssl` | Edit published metadata with `videos.update` (when published metadata editing is enabled; disabled at the current baseline via `PUBLISHED_EDIT_WRITE_ENABLED = false`); add a newly uploaded video to an existing playlist the owner selected in Create Post (`playlistItems.insert`) — never creating, renaming, reordering, or deleting playlists and never removing playlist items; read Published and Held for review comments and create top-level comments and replies (with optional creator-initiated AI reply drafting that sends the selected comment text and video title to the configured AI provider solely to populate the local reply draft without auto-sending); edit/delete the channel's own comments; publish or reject comments (moving a published comment to hold is disabled at the current baseline), with optional `banAuthor` on rejection | Correct published details, file a new video under the playlist of the owner's choice, and manage/moderate discussions on owned videos |
+| `youtube.force-ssl` | Edit published metadata with `videos.update` (when published metadata editing is enabled; disabled at the current baseline via `PUBLISHED_EDIT_WRITE_ENABLED = false`); add a newly uploaded video to an existing playlist the owner selected in Create Post (`playlistItems.insert`) — never creating, renaming, reordering, or deleting playlists and never removing playlist items; list the caption tracks of a video the owner already uploaded (`captions.list`) and add a new caption track from an owner-supplied `.srt` or `.vtt` file (`captions.insert`) — never modifying, replacing, or deleting an existing caption track and never downloading one; read Published and Held for review comments and create top-level comments and replies (with optional creator-initiated AI reply drafting that sends the selected comment text and video title to the configured AI provider solely to populate the local reply draft without auto-sending); edit/delete the channel's own comments; publish or reject comments (moving a published comment to hold is disabled at the current baseline), with optional `banAuthor` on rejection | Correct published details, file a new video under the playlist of the owner's choice, add a caption track the owner supplied, and manage/moderate discussions on owned videos |
 | `userinfo.profile` | Get user's display name during Google Sign-In only, not YouTube connection | Personalize the application experience |
 
 Postora does not replace existing video media bytes or delete videos. Published metadata editing is implemented in Stage 3 (`PUBLISHED_EDIT_WRITE_ENABLED = false` at the current baseline until enabled for the target release) and is covered by `youtube.force-ssl`; the disclosure must not claim otherwise.
@@ -92,6 +92,8 @@ Postora does not replace existing video media bytes or delete videos. Published 
 **Thumbnails.** Postora sets a custom thumbnail on a video at upload time, and it can also replace the thumbnail of a video the owner already uploaded. The replacement happens from `/youtube`: the owner opens the video, clicks **Change thumbnail**, picks a JPEG or PNG image from their own Postora media library, and confirms the change before anything is sent. Only JPEG and PNG are accepted — WebP, GIF and videos are refused — and only an image the owner owns can be used. Setting a thumbnail never replaces the video's media bytes and never deletes the video. The write goes through the `thumbnails.set` operation and is covered by `youtube.upload` (or `youtube.force-ssl` on a connection that holds it); it is gated by its own `manage_thumbnail` capability and is independent of the published-metadata editing gate.
 
 **Playlists.** Postora lists the playlists of the connected channel and, on the owner's instruction, adds a newly uploaded video to one of them. It never creates, renames, reorders, or deletes playlists, and never removes playlist items. Listing playlists is covered by `youtube.readonly`; the insert is covered by `youtube.force-ssl`. A playlist belongs to exactly one channel, so the selector in Create Post is disabled when more than one distinct native YouTube channel is selected for the post.
+
+**Captions.** Postora lists the caption tracks of a video the owner already uploaded and, on the owner's instruction, adds a new caption track from a `.srt` or `.vtt` file the owner supplies. Both operations are covered by `youtube.force-ssl` (`captions.list` and `captions.insert`). Listing is never automatic: every list costs 50 provider units, so the owner clicks **Show caption tracks** in the video drawer on `/youtube` and Postora reads the tracks only then. The upload is two steps — the owner picks the file, the language and the track name, then confirms — because the write costs 400 units and adds a public track to the video. The file is capped at 512 KB measured in UTF-8 bytes, in the browser before the request leaves the page and again on the server. Postora never modifies, replaces, or deletes an existing caption track, never downloads one, and never retries a lost answer: the owner is asked to refresh the track list instead. Downloading, replacing, deleting, and auto-translating caption tracks are out of scope.
 
 ### Connect and reconnect parameters
 
@@ -144,6 +146,7 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - YouTube channel information (name, ID, avatar)
 - Your uploaded videos and their full details when you browse your channel
 - The playlists of your channel (playlist ID, title, privacy status) when you choose a destination playlist
+- The caption tracks of a video you already uploaded when you ask Postora to list them, and the text of an .srt or .vtt caption file you choose when you upload a new caption track
 - Published video metadata when you instruct Postora to edit it
 - Ability to upload videos to your channel
 - The bytes of a JPEG or PNG image from your own Postora media library when you replace the thumbnail of a video you already uploaded
@@ -156,6 +159,7 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - Publish videos and Shorts to your channel on your behalf, with an optional custom thumbnail
 - Replace the thumbnail of a video you already uploaded from `/youtube`, with an owned JPEG or PNG image from your own media library, only after you pick the image and confirm the change; Postora never replaces the video's media bytes and never deletes the video
 - List your channel's playlists so you can pick a destination playlist, and add a newly uploaded video to the playlist you select; Postora never creates, renames, reorders, or deletes playlists and never removes playlist items
+- List the caption tracks of a video you already uploaded from `/youtube`, only when you ask for the list, and add a new caption track from an .srt or .vtt file you choose after you confirm the upload; Postora never modifies, replaces, or deletes existing caption tracks
 - Edit published video metadata on your instruction, without replacing video bytes or deleting videos
 - Read, create, reply to, edit, delete, and moderate comments on your own videos
 - Display your own channel and video analytics (summary, daily trend, top videos, viewer country, device type, traffic sources, and audience retention, with optional browser-local export to your own device) to you, the signed-in owner, only where enabled and after you accept Analytics Purpose Clause Version 2 (November 26, 2026) for the current connection; analytics numbers are read on demand and are not stored by Postora
@@ -196,7 +200,7 @@ Limited Use requirements.
 
 ### Step 4: Video Demonstration
 
-Create a masked screen recording of these eight journeys, using an owner-controlled test channel and synthetic identifiers wherever a denial is required:
+Create a masked screen recording of these nine journeys, using an owner-controlled test channel and synthetic identifiers wherever a denial is required:
 
 1. **Connect:** account chooser and permission dialog with all three scopes, followed by the Postora success state.
 2. **Channel and video browse:** `/youtube` channel summary, uploads paging, and full details for an owned video.
@@ -206,13 +210,14 @@ Create a masked screen recording of these eight journeys, using an owner-control
 6. **On-demand analytics:** accept Analytics Purpose Clause v1 at `/analytics/youtube`, show channel/video reports, withdraw, and prove no further report loads. Reconnect later to show fresh acceptance is required.
 7. **Denial:** use a synthetic foreign account/video ID and a connection with missing scope to show safe `not_found`/reconnect states with no data or write.
 8. **Disconnect and reconnect:** Profiles → Connected Accounts → Disconnect, immediate local removal and provider-revocation outcome, followed by the account chooser and permission prompt on reconnect.
+9. **Caption tracks:** from `/youtube`, open an owned video, click **Show caption tracks** and show that nothing was listed before the click, then upload an owner-supplied `.srt` or `.vtt` file with a language and a track name, show the explicit confirmation step before the write, and show the confirmed new track in the list; never show an existing track being edited, replaced, or deleted.
 
 The complete actions, expected results, masking rules, and capture checklist are in `docs/reports/2026-11-26-youtube-stage6-approval-package.md`.
 
 **Video Requirements:**
 - 720p or higher resolution
 - Clear narration or text overlays
-- Keep the recording as concise as the eight journeys permit
+- Keep the recording as concise as the nine journeys permit
 - Upload to YouTube as unlisted
 - Never expose tokens, cookies, client secrets, customer data, private channel identifiers, or unmasked personal information
 
@@ -418,6 +423,7 @@ Once verified:
 | 1.0 | 2025-02-02 | Postora Team | Initial document |
 | 1.1 | 2026-11-26 | Postora Team | Stage 6: complete three-scope Stage 1–5 justifications, exact OAuth prompt, revocation/fallback, analytics purpose acceptance, and eight-journey demo package |
 | 1.2 | 2026-11-27 | Postora Team | Stage 3B: playlist justifications (`playlists.list` under readonly, `playlistItems.insert` under force-ssl) and the single-channel playlist selector |
+| 1.3 | 2026-11-27 | Postora Team | Stage 6A: caption justifications (`captions.list` and `captions.insert` under force-ssl), the 512 KB UTF-8 file ceiling, the explicit-upload confirmation, the nine-journey demo package, and the "no modification or deletion of existing caption tracks" wording |
 
 ---
 

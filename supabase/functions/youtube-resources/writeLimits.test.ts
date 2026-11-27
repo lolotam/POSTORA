@@ -1,8 +1,12 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  checkCaptionListCounter,
+  checkCaptionUploadCounter,
   checkUserWriteCounters,
   debitWriteBudget,
   parseStrictRateLimitDecision,
+  YOUTUBE_CAPTION_LIST_DAILY_LIMIT,
+  YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT,
   YOUTUBE_EDIT_BURST_LIMIT,
   YOUTUBE_EDIT_DAILY_LIMIT,
   YOUTUBE_THUMBNAIL_SET_UNIT_COST,
@@ -138,4 +142,47 @@ Deno.test("debitWriteBudget wraps weighted budget debit and maps allowed/refused
     rpc: () => Promise.resolve({ data: null, error: { message: "db error" } }),
   });
   assertEquals(broken, { ok: false, code: "upstream_unavailable" });
+});
+
+Deno.test("checkCaptionListCounter and checkCaptionUploadCounter use the 4-param RPC contract and fail closed", async () => {
+  const calls: Array<{ fn: string; params: Record<string, unknown> }> = [];
+  const rpc = (fn: string, params: Record<string, unknown>) => {
+    calls.push({ fn, params });
+    return Promise.resolve({ data: { allowed: true, count: 1, retry_after: 0 }, error: null });
+  };
+
+  assertEquals(await checkCaptionListCounter({ userId: USER_ID, rpc }), { ok: true });
+  assertEquals(await checkCaptionUploadCounter({ userId: USER_ID, rpc }), { ok: true });
+  assertEquals(calls, [
+    {
+      fn: "check_rate_limit",
+      params: {
+        p_endpoint: YOUTUBE_CAPTION_LIST_DAILY_LIMIT.keyPrefix,
+        p_identifier: `user:${USER_ID}`,
+        p_max_requests: YOUTUBE_CAPTION_LIST_DAILY_LIMIT.limit,
+        p_window_seconds: YOUTUBE_CAPTION_LIST_DAILY_LIMIT.windowSeconds,
+      },
+    },
+    {
+      fn: "check_rate_limit",
+      params: {
+        p_endpoint: YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT.keyPrefix,
+        p_identifier: `user:${USER_ID}`,
+        p_max_requests: YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT.limit,
+        p_window_seconds: YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT.windowSeconds,
+      },
+    },
+  ]);
+
+  const refusedList = await checkCaptionListCounter({
+    userId: USER_ID,
+    rpc: () => Promise.resolve({ data: { allowed: false, count: 10, retry_after: 90 }, error: null }),
+  });
+  assertEquals(refusedList, { ok: false, code: "rate_limited", retryAfterSeconds: 90 });
+
+  const brokenUpload = await checkCaptionUploadCounter({
+    userId: USER_ID,
+    rpc: () => Promise.resolve({ data: { allowed: true, count: 9, retry_after: 0 }, error: null }),
+  });
+  assertEquals(brokenUpload, { ok: false, code: "upstream_unavailable" });
 });

@@ -25,7 +25,13 @@ import {
   isAdmissibleThumbnailStorageLocation,
   THUMBNAIL_MAX_BYTES,
 } from "./thumbnailMedia.ts";
-import { checkUserWriteCounters, debitWriteBudget } from "./writeLimits.ts";
+import { createYouTubeCaptionPort } from "./captionComposition.ts";
+import {
+  checkCaptionListCounter,
+  checkCaptionUploadCounter,
+  checkUserWriteCounters,
+  debitWriteBudget,
+} from "./writeLimits.ts";
 
 // A stalled PostgREST request must not hold the whole function: the account read and the
 // awaited refusal-log insert both fail at this deadline and the handler answers
@@ -299,6 +305,30 @@ ports.thumbnail = createYouTubeThumbnailPort({
   writeLimits: {
     checkUserWriteCounters: (userId) =>
       checkUserWriteCounters({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        userId,
+      }),
+    debitWriteBudget: (units) =>
+      debitWriteBudget({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        units,
+      }),
+  },
+  stillBound: (input) => verifyAccountStillBound({ loadAccount: ports.accounts.load, ...input }),
+  tokens: ports.tokens,
+  youtube: ports.youtube,
+  fetchImpl: fetch,
+});
+
+ports.captions = createYouTubeCaptionPort({
+  writeLimits: {
+    checkCaptionListCounter: (userId) =>
+      checkCaptionListCounter({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        userId,
+      }),
+    checkCaptionUploadCounter: (userId) =>
+      checkCaptionUploadCounter({
         rpc: async (fn, params) => await admin.rpc(fn, params),
         userId,
       }),
