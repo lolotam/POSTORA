@@ -309,10 +309,12 @@ export function YouTubeVideoPlayer({
 
   const handleStop = () => {
     sendCommand("stopVideo");
+    clearHandshakeTimer();
     // Unmounting the frame ends the connection to YouTube and returns the
     // poster, so nothing keeps playing out of sight.
     setPlaying(false);
     setHandshakeFailed(false);
+    setPlayerInfo(null);
   };
 
   const handleVolumeChange = (next: number) => {
@@ -347,12 +349,15 @@ export function YouTubeVideoPlayer({
     : null;
   const fullscreenAvailable = typeof document === "undefined" || document.fullscreenEnabled !== false;
 
+  const outerClass = activeSizeMode === "mini"
+    ? "space-y-2 sticky top-0 z-10 bg-background/95 backdrop-blur-sm pb-2"
+    : "space-y-2";
   const playerBoxClass = activeSizeMode === "mini"
-    ? "relative h-[200px] w-[356px] min-h-[200px] min-w-[200px] sticky top-0 z-10 overflow-hidden rounded-md border bg-muted"
-    : "relative aspect-video w-full overflow-hidden rounded-md border bg-muted";
+    ? "relative h-[200px] w-[356px] max-w-full min-h-[200px] min-w-[200px] sticky top-0 z-10 overflow-hidden rounded-md border bg-muted"
+    : "relative aspect-video w-full min-h-[200px] min-w-[200px] overflow-hidden rounded-md border bg-muted";
 
   return (
-    <div className="space-y-2">
+    <div className={outerClass}>
       <div ref={wrapperRef} className="space-y-2">
         <div className={playerBoxClass}>
           {playing && embedUrl ? (

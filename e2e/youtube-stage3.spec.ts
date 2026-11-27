@@ -22,16 +22,25 @@ async function openEditor(page: Page, locale: "en" | "ar" = "en") {
 
 test.describe("YouTube Stage 3 offline journeys", () => {
   test("the drawer shows a poster and mounts the player only after Play", async ({ page }) => {
+    const embedRequestsBeforePlay: string[] = [];
+    let playClicked = false;
+    page.on("request", (req) => {
+      if (!playClicked && req.url().includes("youtube-nocookie.com")) {
+        embedRequestsBeforePlay.push(req.url());
+      }
+    });
     await startStage3Journey(page, { edit: "available" });
     await page.goto("/youtube", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: new RegExp(VIDEO.title, "i") }).click();
     const drawer = page.getByRole("dialog");
     await expect(drawer).toBeVisible();
 
-    // Nothing is loaded from YouTube before the creator presses Play.
+    // Nothing is loaded from YouTube's embed host before the creator presses Play.
     await expect(drawer.getByRole("button", { name: /play video/i })).toBeVisible();
     await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(0);
+    expect(embedRequestsBeforePlay).toEqual([]);
 
+    playClicked = true;
     await drawer.getByRole("button", { name: /play video/i }).click();
 
     await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(1);

@@ -125,6 +125,7 @@ export function YouTubeVideoEditCard({
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<{ outcome: EditSaveOutcome; retryAfterSeconds: number | null } | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
+  const snapshotRequestIdRef = useRef(0);
   const dirtyFieldsRef = useRef<{ title: boolean; description: boolean; tags: boolean; category: boolean }>({
     title: false,
     description: false,
@@ -137,6 +138,7 @@ export function YouTubeVideoEditCard({
   // Another video is another edit: the editor closes and the outcome of the
   // previous one stops being shown.
   useEffect(() => {
+    snapshotRequestIdRef.current += 1;
     setEditing(false);
     setOutcome(null);
     setRevision(null);
@@ -156,15 +158,19 @@ export function YouTubeVideoEditCard({
   }, [editing, video.id, video.category_id, video.title, video.description, video.tags]);
 
   const openEditor = async () => {
+    snapshotRequestIdRef.current += 1;
+    const requestId = snapshotRequestIdRef.current;
     dirtyFieldsRef.current = { title: false, description: false, tags: false, category: false };
     setDraftCategory(video.category_id ?? "");
     setDraftTitle(video.title);
     setDraftDescription(video.description ?? "");
     setDraftTags(formatTags(video.tags ?? []));
+    setRevision(null);
     setEditing(true);
     setOutcome(null);
     if (!onSnapshot) return;
     const snap = await onSnapshot(video.id);
+    if (snapshotRequestIdRef.current !== requestId) return;
     if (snap === null) {
       setRevision(null);
       setOutcome({ outcome: "outcome_unknown", retryAfterSeconds: null });
@@ -202,7 +208,9 @@ export function YouTubeVideoEditCard({
   // request, and the next open starts from a fresh snapshot.
   const toggleEditor = () => {
     if (editing) {
+      snapshotRequestIdRef.current += 1;
       setEditing(false);
+      setRevision(null);
       return;
     }
     void openEditor();

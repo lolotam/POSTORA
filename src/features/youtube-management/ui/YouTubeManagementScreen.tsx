@@ -114,7 +114,8 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
 
   const generateThumbnailImage = useMemo(() => {
     if (!aiGateway) return undefined;
-    return (params: { prompt: string; referenceImage?: string }) => aiGateway.generate(params);
+    return (params: { prompt: string; referenceImage?: string; referenceImages?: readonly string[] }) =>
+      aiGateway.generate(params);
   }, [aiGateway]);
 
   const errorCode = (error: unknown): YouTubeResourceErrorCode =>

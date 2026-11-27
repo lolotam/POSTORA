@@ -44,7 +44,11 @@ export interface YouTubeThumbnailChangeProps {
     mimeType: "image/jpeg" | "image/png";
   }) => Promise<YouTubeThumbnailCandidate>;
   /** Generates an image with the app's own image generator. */
-  onGenerateAiImage?: (params: { prompt: string; referenceImage?: string }) => Promise<{ imageUrl: string }>;
+  onGenerateAiImage?: (params: {
+    prompt: string;
+    referenceImage?: string;
+    referenceImages?: readonly string[];
+  }) => Promise<{ imageUrl: string }>;
   /** Turns a generated image into a storable thumbnail. */
   prepareAiImageBlob?: (imageUrl: string) => Promise<{ blob: Blob; mimeType: "image/jpeg" | "image/png" }>;
   /** Configured image generation model tiers to display in the AI tab. */
@@ -263,6 +267,34 @@ function ThumbnailOutcomeMessage({ outcome }: { outcome: YouTubeThumbnailOutcome
   );
 }
 
+function decodeInlineImageDataUrl(dataUrl: string): Blob {
+  const commaIndex = dataUrl.indexOf(",");
+  if (commaIndex === -1) throw new Error("Invalid data URL");
+  const header = dataUrl.slice(5, commaIndex);
+  const payload = dataUrl.slice(commaIndex + 1);
+  const parts = header.split(";");
+  const mimeType = parts[0] || "image/png";
+  const isBase64 = parts.includes("base64");
+  if (isBase64) {
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mimeType });
+  }
+  return new Blob([decodeURIComponent(payload)], { type: mimeType });
+}
+
+async function loadGeneratedImageBlob(imageUrl: string): Promise<Blob> {
+  if (/^data:image\//i.test(imageUrl)) {
+    return decodeInlineImageDataUrl(imageUrl);
+  }
+  const response = await fetch(imageUrl);
+  if (!response.ok) throw new Error("The generated image could not be fetched");
+  return response.blob();
+}
+
 /**
  * Turns a generated image into a storable thumbnail.
  *
@@ -271,9 +303,8 @@ function ThumbnailOutcomeMessage({ outcome }: { outcome: YouTubeThumbnailOutcome
  * encoded as JPEG at a falling quality until it fits under 2 MB.
  */
 async function prepareGeneratedThumbnail(imageUrl: string): Promise<{ blob: Blob; mimeType: "image/jpeg" | "image/png" }> {
-  const response = await fetch(imageUrl);
-  if (!response.ok) throw new Error("The generated image could not be fetched");
-  const source = await createImageBitmap(await response.blob());
+  const sourceBlob = await loadGeneratedImageBlob(imageUrl);
+  const source = await createImageBitmap(sourceBlob);
   const canvas = document.createElement("canvas");
   canvas.width = 1280;
   canvas.height = 720;
@@ -538,6 +569,10 @@ export function YouTubeThumbnailChange({
         setAppliedCandidate(chosen);
         setDialogOpen(false);
         setChosen(null);
+      } else if (result === "outcome_unknown") {
+        // Clear pending confirmation on an unknown outcome so a second click
+        // cannot immediately re-send without selecting again.
+        setChosen(null);
       }
     } finally {
       setSubmitting(false);
@@ -545,18 +580,19 @@ export function YouTubeThumbnailChange({
   };
 
   const handleUpload = async (file: File | undefined) => {
-    if (!file || !onUploadImage) return;
+    if (!file || !onUploadImage || submitting) return;
     setUploadError(null);
-    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-    const check = checkThumbnailFile({ declaredType: file.type, size: file.size, head });
-    if (isThumbnailFileFailure(check)) {
-      // The file is refused before it leaves the page: nothing is stored and
-      // no request is made.
-      setUploadError(check.reason);
-      return;
-    }
+    setChosen(null);
     setSubmitting(true);
     try {
+      const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+      const check = checkThumbnailFile({ declaredType: file.type, size: file.size, head });
+      if (isThumbnailFileFailure(check)) {
+        // The file is refused before it leaves the page: nothing is stored and
+        // no request is made.
+        setUploadError(check.reason);
+        return;
+      }
       const candidate = await onUploadImage({ blob: file, fileName: file.name, mimeType: check.mimeType });
       setChosen(candidate);
     } catch {
@@ -567,13 +603,15 @@ export function YouTubeThumbnailChange({
   };
 
   const handleGenerate = async () => {
-    if (!onGenerateAiImage) return;
+    if (!onGenerateAiImage || submitting) return;
     setAiError(null);
+    setChosen(null);
     setSubmitting(true);
     try {
       const result = await onGenerateAiImage({
         prompt: aiPrompt,
         referenceImage: references[0],
+        ...(references.length > 0 ? { referenceImages: references } : {}),
       });
       setAiImageUrl(result.imageUrl);
     } catch (error) {
@@ -585,8 +623,9 @@ export function YouTubeThumbnailChange({
   };
 
   const handleUseGeneratedImage = async () => {
-    if (!aiImageUrl || !onUploadImage) return;
+    if (!aiImageUrl || !onUploadImage || submitting) return;
     setAiError(null);
+    setChosen(null);
     setSubmitting(true);
     try {
       const prepared = await prepareAiImageBlob(aiImageUrl);
@@ -609,11 +648,20 @@ export function YouTubeThumbnailChange({
   };
 
   const handleReferenceFiles = async (files: FileList | null) => {
-    if (!files) return;
+    if (!files || submitting) return;
+    setAiError(null);
     const room = 5 - references.length;
     const picked = Array.from(files).slice(0, Math.max(room, 0));
-    const dataUrls = await Promise.all(picked.map((file) => readAsDataUrl(file)));
-    setReferences((current) => [...current, ...dataUrls].slice(0, 5));
+    if (picked.some((file) => file.size > THUMBNAIL_MAX_BYTES)) {
+      setAiError("failed");
+      return;
+    }
+    try {
+      const dataUrls = await Promise.all(picked.map((file) => readAsDataUrl(file)));
+      setReferences((current) => [...current, ...dataUrls].slice(0, 5));
+    } catch {
+      setAiError("failed");
+    }
   };
 
   const uploadErrorMessage = uploadError === "too_large"
@@ -650,7 +698,7 @@ export function YouTubeThumbnailChange({
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent dir={i18n.language?.startsWith("ar") ? "rtl" : "ltr"} className="max-w-lg">
+        <DialogContent dir={i18n.language?.startsWith("ar") ? "rtl" : "ltr"} className="max-w-lg max-h-[85dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t("youtubeManagement.thumbnail.pickerTitle", "Choose a thumbnail image")}</DialogTitle>
             <DialogDescription>

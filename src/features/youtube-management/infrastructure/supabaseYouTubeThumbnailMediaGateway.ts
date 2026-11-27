@@ -81,6 +81,45 @@ async function toCandidate(row: OwnedImageRow): Promise<YouTubeThumbnailCandidat
   };
 }
 
+async function signStoragePreviewsBatch(
+  bucket: string,
+  paths: string[],
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (paths.length === 0) return result;
+  const bucketClient = supabase.storage.from(bucket) as {
+    createSignedUrls?: (
+      objectPaths: string[],
+      expiresIn: number,
+    ) => Promise<{ data?: Array<{ path?: string | null; signedUrl?: string | null }> | null; error?: unknown }>;
+    createSignedUrl?: (
+      objectPath: string,
+      expiresIn: number,
+    ) => Promise<{ data?: { signedUrl?: string | null } | null; error?: unknown }>;
+    getPublicUrl?: (objectPath: string) => { data: { publicUrl: string } };
+  };
+  if (typeof bucketClient.createSignedUrls === "function") {
+    try {
+      const { data, error } = await bucketClient.createSignedUrls(paths, PREVIEW_SIGNED_URL_TTL_SECONDS);
+      if (!error && Array.isArray(data)) {
+        for (const entry of data) {
+          if (typeof entry?.path === "string" && typeof entry?.signedUrl === "string" && entry.signedUrl.length > 0) {
+            result.set(entry.path, entry.signedUrl);
+          }
+        }
+        if (result.size > 0) return result;
+      }
+    } catch {
+      // Fall back to per-path or public URL below.
+    }
+  }
+  for (const path of paths) {
+    const signed = await signStoragePreview(bucket, path);
+    if (signed) result.set(path, signed);
+  }
+  return result;
+}
+
 /**
  * Reads and writes the creator's own media library for the thumbnail picker.
  *
@@ -100,7 +139,38 @@ export class SupabaseYouTubeThumbnailMediaGateway implements YouTubeThumbnailMed
       .order("created_at", { ascending: false })
       .limit(OWNED_IMAGE_LIMIT);
     if (error) throw error;
-    return Promise.all(((data ?? []) as OwnedImageRow[]).map(toCandidate));
+    const rows = (data ?? []) as OwnedImageRow[];
+    const pathsByBucket = new Map<string, string[]>();
+    for (const row of rows) {
+      const path = row.file_path ?? "";
+      if (path.length === 0 || /^https?:\/\//i.test(path)) continue;
+      const bucket = row.storage_bucket || MEDIA_BUCKET;
+      const list = pathsByBucket.get(bucket) ?? [];
+      list.push(path);
+      pathsByBucket.set(bucket, list);
+    }
+    const signedByBucket = new Map<string, Map<string, string>>();
+    for (const [bucket, paths] of pathsByBucket.entries()) {
+      signedByBucket.set(bucket, await signStoragePreviewsBatch(bucket, paths));
+    }
+    return Promise.all(
+      rows.map(async (row) => {
+        const path = row.file_path ?? "";
+        const bucket = row.storage_bucket || MEDIA_BUCKET;
+        const batchSigned = path.length > 0 ? signedByBucket.get(bucket)?.get(path) : undefined;
+        if (batchSigned) {
+          return {
+            id: row.id,
+            file_name: fileNameOf(row),
+            mime_type: row.mime_type ?? "",
+            file_type: row.file_type ?? "",
+            file_size: row.file_size,
+            preview_url: batchSigned,
+          };
+        }
+        return toCandidate(row);
+      }),
+    );
   }
 
   /**

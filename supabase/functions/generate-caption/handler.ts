@@ -308,35 +308,64 @@ function stripSuggestionControlChars(value: string, allowNewlines: boolean): str
   return out;
 }
 
+function parseJsonWithOptionalOuterFence(rawContent: string): unknown {
+  const trimmed = rawContent.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const fenceMatch = trimmed.match(/^```(?:json)?\r?\n([\s\S]*?)\r?\n?```$/i);
+    if (!fenceMatch) return null;
+    try {
+      return JSON.parse(fenceMatch[1].trim());
+    } catch {
+      return null;
+    }
+  }
+}
+
+function measureYoutubeTagSetLength(tagSet: string): number {
+  const tags = tagSet
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0);
+  if (tags.length === 0) return 0;
+  let total = 0;
+  for (let i = 0; i < tags.length; i += 1) {
+    const tag = tags[i];
+    const hasWhitespace = /\s/.test(tag);
+    total += tag.length + (hasWhitespace ? 2 : 0) + (i > 0 ? 1 : 0);
+  }
+  return total;
+}
+
 function parseYouTubeSuggestions(
   rawContent: unknown,
   feature: "youtube_title" | "youtube_description" | "youtube_tags",
 ): { suggestions: string[] } | null {
   if (typeof rawContent !== "string") return null;
-  const cleaned = rawContent
-    .replace(/```json\r?\n?/gi, "")
-    .replace(/```\r?\n?/g, "")
-    .trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+  const parsed = parseJsonWithOptionalOuterFence(rawContent);
   if (!parsed || typeof parsed !== "object") return null;
   const rawSuggestions = (parsed as { suggestions?: unknown }).suggestions;
   if (!Array.isArray(rawSuggestions)) return null;
 
-  const maxLen = feature === "youtube_title" ? 100 : feature === "youtube_description" ? 5000 : 500;
   const allowNewlines = feature === "youtube_description";
+  const encoder = new TextEncoder();
   const suggestions: string[] = [];
 
   for (const item of rawSuggestions) {
     if (typeof item !== "string") continue;
     if (item.includes("<") || item.includes(">")) continue;
     const sanitized = stripSuggestionControlChars(item, allowNewlines).trim();
-    if (sanitized.length >= 1 && sanitized.length <= maxLen) {
-      suggestions.push(sanitized);
+    if (sanitized.length < 1) continue;
+    if (feature === "youtube_title") {
+      if (sanitized.length <= 100) suggestions.push(sanitized);
+    } else if (feature === "youtube_description") {
+      if (encoder.encode(sanitized).byteLength <= 5000) suggestions.push(sanitized);
+    } else {
+      const measured = measureYoutubeTagSetLength(sanitized);
+      if (measured >= 1 && measured <= 500 && sanitized.length <= 500) {
+        suggestions.push(sanitized);
+      }
     }
   }
 

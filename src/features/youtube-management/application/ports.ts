@@ -113,6 +113,7 @@ export interface YouTubeThumbnailAiGateway {
   generate(params: {
     prompt: string;
     referenceImage?: string;
+    referenceImages?: readonly string[];
     signal?: AbortSignal;
   }): Promise<{ imageUrl: string }>;
 }

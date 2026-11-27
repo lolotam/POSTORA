@@ -137,7 +137,7 @@ async function runYouTubeAiRequest(requestType: TestedYouTubeAiFeature, body: Re
     if (url.hostname !== "fixture.invalid") {
       providerCalls.push(JSON.parse(String(init?.body)));
       if (fixture.providerThrowMessage) throw new Error(fixture.providerThrowMessage);
-      if (fixture.malformedProviderJson) return new Response("{not-json", { status: 200 });
+      if (fixture.malformedProviderJson) return new Response(`{not-json ${fixture.providerBody ?? ""}`, { status: 200 });
       const status = fixture.providerStatus ?? 200;
       if (status !== 200) return new Response(fixture.providerBody ?? "provider failure", { status });
       return Response.json({ choices: [{ message: { content: fixture.content ?? "Synthetic suggestion" } }] });
@@ -543,9 +543,9 @@ Deno.test("youtube_title, youtube_description, and youtube_tags filter invalid i
 });
 
 Deno.test("youtube_title, youtube_description, and youtube_tags never leak title, draft description, or provider failure markers across success, 422, 502, and thrown paths", async () => {
-  const titleSecret = "TITLE_SECRET_MARKER_701";
-  const draftSecret = "DRAFT_DESC_SECRET_MARKER_702";
-  const providerSecret = "PROVIDER_FAILURE_SECRET_703";
+  const titleSecret = "MARKER_TITLE_701";
+  const draftSecret = "MARKER_DRAFT_DESC_702";
+  const providerSecret = "MARKER_PROVIDER_FAIL_703";
 
   const scenarios: Array<{
     name: string;
@@ -578,7 +578,7 @@ Deno.test("youtube_title, youtube_description, and youtube_tags never leak title
     },
     {
       name: "thrown response.json SyntaxError",
-      fixture: { malformedProviderJson: true },
+      fixture: { malformedProviderJson: true, providerBody: providerSecret },
       expectedStatus: 422,
       expectedErrorClass: "SyntaxError",
     },

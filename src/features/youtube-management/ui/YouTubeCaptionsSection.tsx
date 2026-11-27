@@ -264,7 +264,7 @@ function CaptionListFailureNotice({
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">{message}</p>
+      <p role="status" className="text-xs text-muted-foreground">{message}</p>
       {reconnect ? (
         <Link to="/profiles" className="text-xs font-medium text-primary underline-offset-4 hover:underline">
           {t("youtubeManagement.captions.listError.reconnectLink", "Open Profiles")}

@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { upsertChaptersBlock } from "../../../../supabase/functions/_shared/youtubeChapters";
+import { buildYouTubeSuggestContext } from "./youtubeSuggestContext";
 
 interface YouTubeAISuggestionsProps {
   type: "title" | "description" | "tags" | "chapters";
@@ -24,24 +25,6 @@ interface YouTubeAISuggestionsProps {
   videoSourceUrl?: string | null;
   currentDescription?: string;
   onSelect: (value: string) => void;
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function buildYouTubeSuggestContext(
-  type: "title" | "description" | "tags",
-  title: string,
-  description?: string,
-): string {
-  if (type === "title") {
-    return title;
-  }
-  if (type === "description") {
-    if (!description?.trim()) {
-      return title;
-    }
-    return `Title: ${title}\nDraft Description / Notes: ${description}`;
-  }
-  return `Title: ${title}\nDescription: ${description || ""}`;
 }
 
 export function YouTubeAISuggestions(props: YouTubeAISuggestionsProps) {

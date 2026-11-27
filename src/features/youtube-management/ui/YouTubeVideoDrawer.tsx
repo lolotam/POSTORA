@@ -84,7 +84,11 @@ export function YouTubeVideoDrawer({
     mimeType: "image/jpeg" | "image/png";
   }) => Promise<YouTubeThumbnailCandidate>;
   /** Generates a thumbnail image with the app's own image generator. */
-  onGenerateThumbnailImage?: (params: { prompt: string; referenceImage?: string }) => Promise<{ imageUrl: string }>;
+  onGenerateThumbnailImage?: (params: {
+    prompt: string;
+    referenceImage?: string;
+    referenceImages?: readonly string[];
+  }) => Promise<{ imageUrl: string }>;
   /** Configured image generation model tiers to display in the AI tab. */
   resolvedImageTiers?: readonly ResolvedTier[];
   /** The server's derived caption capability; null until it is known. */

@@ -152,9 +152,9 @@ function readPlaybackRate(value: unknown): number | undefined {
 /** The rates this video can play at, when the player reported any. */
 function readAvailablePlaybackRates(value: unknown): number[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const rates = value.filter(
-    (rate): rate is number => isFiniteNumber(rate) && rate >= 0.25 && rate <= 2,
-  );
+  const rates = value
+    .slice(0, 32)
+    .filter((rate): rate is number => isFiniteNumber(rate) && rate >= 0.25 && rate <= 2);
   return rates.length > 0 ? rates : undefined;
 }
 

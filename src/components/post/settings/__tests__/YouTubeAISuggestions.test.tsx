@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildYouTubeSuggestContext, YouTubeAISuggestions } from "../YouTubeAISuggestions";
+import { YouTubeAISuggestions } from "../YouTubeAISuggestions";
+import { buildYouTubeSuggestContext } from "../youtubeSuggestContext";
 import i18n from "@/i18n";
 
 const { getSessionMock, invokeMock, toastMock } = vi.hoisted(() => ({
