@@ -55,16 +55,18 @@ Deno.test("checkUserWriteCounters checks burst then daily and passes on valid co
     {
       fn: "check_rate_limit",
       params: {
-        p_key: `${YOUTUBE_EDIT_BURST_LIMIT.keyPrefix}:${USER_ID}`,
-        p_max: YOUTUBE_EDIT_BURST_LIMIT.limit,
+        p_endpoint: YOUTUBE_EDIT_BURST_LIMIT.keyPrefix,
+        p_identifier: `user:${USER_ID}`,
+        p_max_requests: YOUTUBE_EDIT_BURST_LIMIT.limit,
         p_window_seconds: YOUTUBE_EDIT_BURST_LIMIT.windowSeconds,
       },
     },
     {
       fn: "check_rate_limit",
       params: {
-        p_key: `${YOUTUBE_EDIT_DAILY_LIMIT.keyPrefix}:${USER_ID}`,
-        p_max: YOUTUBE_EDIT_DAILY_LIMIT.limit,
+        p_endpoint: YOUTUBE_EDIT_DAILY_LIMIT.keyPrefix,
+        p_identifier: `user:${USER_ID}`,
+        p_max_requests: YOUTUBE_EDIT_DAILY_LIMIT.limit,
         p_window_seconds: YOUTUBE_EDIT_DAILY_LIMIT.windowSeconds,
       },
     },
@@ -76,13 +78,13 @@ Deno.test("checkUserWriteCounters refuses on burst without calling daily", async
   const result = await checkUserWriteCounters({
     userId: USER_ID,
     rpc: (_fn, params) => {
-      calls.push(String(params.p_key));
+      calls.push(`${String(params.p_endpoint)}:${String(params.p_identifier)}`);
       return Promise.resolve({ data: { allowed: false, count: 10, retry_after: 42 }, error: null });
     },
   });
 
   assertEquals(result, { ok: false, code: "rate_limited", retryAfterSeconds: 42 });
-  assertEquals(calls, [`${YOUTUBE_EDIT_BURST_LIMIT.keyPrefix}:${USER_ID}`]);
+  assertEquals(calls, [`${YOUTUBE_EDIT_BURST_LIMIT.keyPrefix}:user:${USER_ID}`]);
 });
 
 Deno.test("checkUserWriteCounters refuses on daily counter", async () => {

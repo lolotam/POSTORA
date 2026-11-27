@@ -16,6 +16,7 @@ export interface YouTubeThumbnailChangeProps {
   candidates: readonly YouTubeThumbnailCandidate[];
   candidatesLoading: boolean;
   candidatesError: unknown;
+  onRetryCandidates?: () => void;
   /** Injected write seam; the call is made once per confirmed choice. */
   onSetThumbnail?: (mediaFileId: string) => Promise<YouTubeThumbnailOutcome>;
 }
@@ -57,17 +58,19 @@ function ThumbnailUnavailableReason({ reason }: { reason: YouTubeCapabilityReaso
 function ThumbnailImageChoices({
   candidates,
   selectedId,
+  disabled,
   onSelect,
 }: {
   candidates: readonly YouTubeThumbnailCandidate[];
   selectedId: string;
+  disabled: boolean;
   onSelect: (id: string) => void;
 }): JSX.Element {
   return (
-    <RadioGroup value={selectedId} onValueChange={onSelect}>
+    <RadioGroup value={selectedId} onValueChange={onSelect} disabled={disabled}>
       {candidates.map((candidate) => (
         <div key={candidate.id} className="flex items-center gap-2">
-          <RadioGroupItem value={candidate.id} aria-label={candidate.file_name} />
+          <RadioGroupItem value={candidate.id} aria-label={candidate.file_name} disabled={disabled} />
           <span className="text-sm">{candidate.file_name}</span>
         </div>
       ))}
@@ -80,21 +83,32 @@ function ThumbnailPickerBody({
   candidates,
   loading,
   error,
+  onRetry,
   selectedId,
+  disabled,
   onSelect,
 }: {
   candidates: readonly YouTubeThumbnailCandidate[];
   loading: boolean;
   error: unknown;
+  onRetry?: () => void;
   selectedId: string;
+  disabled: boolean;
   onSelect: (id: string) => void;
 }): JSX.Element {
   const { t } = useTranslation("accounts");
   if (error !== null && error !== undefined) {
     return (
-      <p className="text-xs text-muted-foreground">
-        {t("youtubeManagement.thumbnail.libraryError", "Postora could not read your media library. Nothing was changed.")}
-      </p>
+      <div className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          {t("youtubeManagement.thumbnail.libraryError", "Postora could not read your media library. Nothing was changed.")}
+        </p>
+        {onRetry ? (
+          <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onRetry}>
+            {t("youtubeManagement.thumbnail.retryLibrary", "Retry loading images")}
+          </Button>
+        ) : null}
+      </div>
     );
   }
   if (loading) {
@@ -110,7 +124,7 @@ function ThumbnailPickerBody({
       </p>
     );
   }
-  return <ThumbnailImageChoices candidates={candidates} selectedId={selectedId} onSelect={onSelect} />;
+  return <ThumbnailImageChoices candidates={candidates} selectedId={selectedId} disabled={disabled} onSelect={onSelect} />;
 }
 
 /** The explicit confirmation: the thumbnail is what viewers see on YouTube. */
@@ -200,6 +214,7 @@ export function YouTubeThumbnailChange({
   candidates,
   candidatesLoading,
   candidatesError,
+  onRetryCandidates,
   onSetThumbnail,
 }: YouTubeThumbnailChangeProps): JSX.Element {
   const { t } = useTranslation("accounts");
@@ -216,12 +231,14 @@ export function YouTubeThumbnailChange({
   const unavailableReason = capability?.state === "unavailable" ? capability.reason : null;
 
   const openPicker = () => {
+    if (submitting) return;
     setPickerOpen(true);
     setChosen(null);
     setOutcome(null);
   };
 
   const selectImage = (id: string) => {
+    if (submitting) return;
     setChosen(eligible.find((candidate) => candidate.id === id) ?? null);
   };
 
@@ -243,7 +260,7 @@ export function YouTubeThumbnailChange({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={!available || !onSetThumbnail} onClick={openPicker}>
+        <Button type="button" size="sm" variant="outline" disabled={!available || !onSetThumbnail || submitting} onClick={openPicker}>
           {t("youtubeManagement.thumbnail.change", "Change thumbnail")}
         </Button>
         {!available || !onSetThumbnail ? <ThumbnailUnavailableReason reason={unavailableReason} /> : null}
@@ -259,7 +276,9 @@ export function YouTubeThumbnailChange({
             candidates={eligible}
             loading={candidatesLoading}
             error={candidatesError}
+            onRetry={onRetryCandidates}
             selectedId={chosen?.id ?? ""}
+            disabled={submitting}
             onSelect={selectImage}
           />
           {excludedCount > 0 ? (

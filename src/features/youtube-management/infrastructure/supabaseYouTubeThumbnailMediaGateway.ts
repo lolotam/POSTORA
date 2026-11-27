@@ -39,6 +39,7 @@ export class SupabaseYouTubeThumbnailMediaGateway implements YouTubeThumbnailMed
       .eq("user_id", params.userId)
       .eq("file_type", "image")
       .in("storage_bucket", ["media", "supabase"])
+      .in("mime_type", ["image/jpeg", "image/png"])
       .order("created_at", { ascending: false })
       .limit(OWNED_IMAGE_LIMIT);
     if (error) throw error;

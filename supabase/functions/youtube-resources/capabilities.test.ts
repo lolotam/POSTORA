@@ -41,14 +41,14 @@ Deno.test("native row with no recorded scopes is unknown for browse and upload, 
   assertEquals(result.capabilities.comments, { state: "unavailable", reason: "missing_scope" });
 });
 
-Deno.test("a recorded list without readonly blocks browse only", () => {
+Deno.test("a recorded list without readonly blocks browse and thumbnail replacement", () => {
   const result = deriveYouTubeCapabilities(
     account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.upload, YOUTUBE_SCOPE.force_ssl] } }),
   );
   assertEquals(result.scopes.readonly, "missing");
   assertEquals(result.capabilities.browse, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.upload, { state: "available" });
-  assertEquals(result.capabilities.manage_thumbnail, { state: "available" });
+  assertEquals(result.capabilities.manage_thumbnail, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.comments, { state: "available" });
 });
 
@@ -84,7 +84,7 @@ Deno.test("composio row: browse unsupported, upload unknown, comments by the exi
   assertEquals(result.capabilities.comments, { state: "available" });
 });
 
-Deno.test("manage_thumbnail derivation across readonly-only, upload-only, and force_ssl-only scopes", () => {
+Deno.test("manage_thumbnail derivation across readonly-only, upload-only, force_ssl-only, and readonly+upload/force_ssl scopes", () => {
   const readonlyOnly = deriveYouTubeCapabilities(
     account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly] } }),
   );
@@ -93,12 +93,22 @@ Deno.test("manage_thumbnail derivation across readonly-only, upload-only, and fo
   const uploadOnly = deriveYouTubeCapabilities(
     account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.upload] } }),
   );
-  assertEquals(uploadOnly.capabilities.manage_thumbnail, { state: "available" });
+  assertEquals(uploadOnly.capabilities.manage_thumbnail, { state: "unavailable", reason: "missing_scope" });
 
   const forceSslOnly = deriveYouTubeCapabilities(
     account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.force_ssl] } }),
   );
-  assertEquals(forceSslOnly.capabilities.manage_thumbnail, { state: "available" });
+  assertEquals(forceSslOnly.capabilities.manage_thumbnail, { state: "unavailable", reason: "missing_scope" });
+
+  const readonlyAndUpload = deriveYouTubeCapabilities(
+    account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly, YOUTUBE_SCOPE.upload] } }),
+  );
+  assertEquals(readonlyAndUpload.capabilities.manage_thumbnail, { state: "available" });
+
+  const readonlyAndForceSsl = deriveYouTubeCapabilities(
+    account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly, YOUTUBE_SCOPE.force_ssl] } }),
+  );
+  assertEquals(readonlyAndForceSsl.capabilities.manage_thumbnail, { state: "available" });
 });
 
 

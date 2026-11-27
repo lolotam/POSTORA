@@ -778,6 +778,7 @@
       "pickerHint": "YouTube بيقبل صور JPEG و PNG بس.",
       "loading": "جاري تحميل صورك…",
       "libraryError": "Postora معرفش يقرا مكتبة الوسائط بتاعتك. مفيش حاجة اتغيّرت.",
+      "retryLibrary": "إعادة تحميل الصور",
       "noEligible": "مكتبة الوسائط بتاعتك مفيهاش صورة JPEG أو PNG تنفع كصورة مصغّرة.",
       "excluded": "بعض الصور في مكتبتك اتستبعدت لأن YouTube بيقبل JPEG و PNG بس.",
       "chosen": "الصورة المصغّرة الجديدة: {{name}}",

@@ -61,14 +61,16 @@ export function parseStrictRateLimitDecision(
 
 async function checkSingleCounter(
   rpc: YouTubeWriteBudgetRpc,
-  key: string,
+  endpoint: string,
+  userId: string,
   limit: number,
   windowSeconds: number,
 ): Promise<WriteCounterResult> {
   try {
     const { data, error } = await rpc("check_rate_limit", {
-      p_key: key,
-      p_max: limit,
+      p_endpoint: endpoint,
+      p_identifier: `user:${userId}`,
+      p_max_requests: limit,
       p_window_seconds: windowSeconds,
     });
     if (error) return { ok: false, code: "upstream_unavailable" };
@@ -97,7 +99,8 @@ export async function checkUserWriteCounters(input: {
 }): Promise<WriteCounterResult> {
   const burst = await checkSingleCounter(
     input.rpc,
-    `${YOUTUBE_EDIT_BURST_LIMIT.keyPrefix}:${input.userId}`,
+    YOUTUBE_EDIT_BURST_LIMIT.keyPrefix,
+    input.userId,
     YOUTUBE_EDIT_BURST_LIMIT.limit,
     YOUTUBE_EDIT_BURST_LIMIT.windowSeconds,
   );
@@ -105,7 +108,8 @@ export async function checkUserWriteCounters(input: {
 
   return await checkSingleCounter(
     input.rpc,
-    `${YOUTUBE_EDIT_DAILY_LIMIT.keyPrefix}:${input.userId}`,
+    YOUTUBE_EDIT_DAILY_LIMIT.keyPrefix,
+    input.userId,
     YOUTUBE_EDIT_DAILY_LIMIT.limit,
     YOUTUBE_EDIT_DAILY_LIMIT.windowSeconds,
   );

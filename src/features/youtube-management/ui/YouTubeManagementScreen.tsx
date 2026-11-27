@@ -286,6 +286,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
         thumbnailCandidates={thumbnailMedia.data ?? []}
         thumbnailCandidatesLoading={thumbnailMedia.isPending}
         thumbnailCandidatesError={thumbnailMedia.error}
+        onRetryThumbnailCandidates={() => void thumbnailMedia.refetch()}
         onSetThumbnail={gateway.setThumbnail ? async (mediaFileId) => {
           if (!activeAccountId || !selectedVideoId) return "outcome_unknown";
           let result: YouTubeThumbnailOutcome;

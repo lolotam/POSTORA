@@ -84,7 +84,9 @@ function isVideoData(value: unknown): value is YouTubeVideoDetails {
 async function call<T>(
   body: Record<string, unknown>,
   isData: (value: unknown) => boolean,
+  options?: { unreadableFailureCode?: "upstream_unavailable" | "outcome_unknown" },
 ): Promise<YouTubeResourceSuccess<T>> {
+  const unreadableFailureCode = options?.unreadableFailureCode ?? "upstream_unavailable";
   let data: YouTubeResourceSuccess<T> | null = null;
   let error: { context?: unknown } | null = null;
   try {
@@ -96,7 +98,7 @@ async function call<T>(
     error = (result.error ?? null) as { context?: unknown } | null;
   } catch (thrown) {
     // A network failure or the timeout abort above rejects; both are
-    // upstream failures, never empty resources.
+    // upstream failures for reads and outcome_unknown for writes.
     error = thrown as { context?: unknown };
   }
   if (error) {
@@ -104,10 +106,13 @@ async function call<T>(
     const payload: unknown = context instanceof Response
       ? await context.clone().json().catch(() => null)
       : null;
+    if (payload === null && unreadableFailureCode === "outcome_unknown") {
+      throw new YouTubeResourceError("outcome_unknown");
+    }
     throw toYouTubeResourceError(payload);
   }
   if (data === null || !isEnvelopeFor<T>(data, isData)) {
-    throw new YouTubeResourceError("upstream_unavailable");
+    throw new YouTubeResourceError(unreadableFailureCode);
   }
   return data;
 }
@@ -210,6 +215,7 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
         typeof data === "object" && data !== null
         && (data as { video_id?: unknown }).video_id === params.videoId
         && (data as { applied?: unknown }).applied === true,
+      { unreadableFailureCode: "outcome_unknown" },
     );
   }
 }

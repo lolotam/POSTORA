@@ -220,13 +220,24 @@ describe("YouTube resources gateway", () => {
   it.each([
     ["an answer for another video", { video_id: "another-video", applied: true }],
     ["an answer that does not say the write was applied", { video_id: EXAMPLE_VIDEO_ID, applied: false }],
-  ])("rejects a thumbnail answer with %s", async (_scenario, data) => {
+  ])("rejects a thumbnail answer with %s as outcome_unknown", async (_scenario, data) => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({ data: envelope(data), error: null });
     await expect(new SupabaseYouTubeResourcesGateway().setThumbnail({
       accountId: "acc-1",
       videoId: EXAMPLE_VIDEO_ID,
       mediaFileId: "media-1",
-    })).rejects.toMatchObject({ code: "upstream_unavailable" });
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
+  });
+
+  it("maps a timed-out or unreadable set_thumbnail call to outcome_unknown", async () => {
+    vi.mocked(supabase.functions.invoke).mockRejectedValue(
+      Object.assign(new Error("The operation was aborted due to timeout"), { name: "FunctionsFetchError" }),
+    );
+    await expect(new SupabaseYouTubeResourcesGateway().setThumbnail({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      mediaFileId: "media-1",
+    })).rejects.toMatchObject({ code: "outcome_unknown" });
   });
 
   it("turns a thumbnail refusal into the server's stable code", async () => {

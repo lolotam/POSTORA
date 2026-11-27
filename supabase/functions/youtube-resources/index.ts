@@ -184,15 +184,12 @@ ports.edit = createConnectedEditPort({
 
 const STORAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
 
-async function readBoundedBlob(
-  blob: Blob,
+async function readBoundedStream(
+  stream: ReadableStream<Uint8Array>,
   maxBytes: number,
   timeoutMs = STORAGE_DOWNLOAD_TIMEOUT_MS,
 ): Promise<ThumbnailDownloadResult> {
-  if (typeof blob.size === "number" && blob.size > maxBytes) {
-    return { ok: false, reason: "too_large" };
-  }
-  const reader = blob.stream().getReader();
+  const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   let timedOut = false;
@@ -274,11 +271,29 @@ ports.thumbnail = createYouTubeThumbnailPort({
       ) {
         return { ok: false, reason: "not_usable" };
       }
-      const { data, error } = await admin.storage.from(row.storageBucket).download(row.filePath);
-      if (error || !data) {
+      const { data: signedUrlData, error: signedUrlError } = await admin.storage
+        .from(row.storageBucket)
+        .createSignedUrl(row.filePath, 60);
+      if (signedUrlError || !signedUrlData?.signedUrl) {
         return { ok: false, reason: "storage_error" };
       }
-      return await readBoundedBlob(data, THUMBNAIL_MAX_BYTES);
+      let response: Response;
+      try {
+        response = await fetch(signedUrlData.signedUrl, {
+          signal: AbortSignal.timeout(STORAGE_DOWNLOAD_TIMEOUT_MS),
+        });
+      } catch {
+        return { ok: false, reason: "storage_error" };
+      }
+      if (!response.ok || !response.body) {
+        return { ok: false, reason: "storage_error" };
+      }
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > THUMBNAIL_MAX_BYTES) {
+        await response.body.cancel().catch(() => undefined);
+        return { ok: false, reason: "too_large" };
+      }
+      return await readBoundedStream(response.body, THUMBNAIL_MAX_BYTES);
     },
   },
   writeLimits: {

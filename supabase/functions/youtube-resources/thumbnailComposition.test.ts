@@ -358,4 +358,16 @@ Deno.test("setThumbnail classifies 403, 401, 404, 429, 400, 5xx, and thrown fetc
   });
   assertEquals(lostResult, { ok: false, code: "outcome_unknown" });
   assertEquals(lostAnswer.counts.upload, 1);
+
+  const malformed200 = makeHarness({
+    uploadResponse: () => Promise.resolve(new Response(JSON.stringify({}), { status: 200 })),
+  });
+  const malformedResult = await malformed200.port.setThumbnail({
+    account: makeAccount(),
+    userId: USER_ID,
+    videoId: VIDEO_ID,
+    mediaFileId: MEDIA_ID,
+  });
+  assertEquals(malformedResult, { ok: false, code: "outcome_unknown" });
+  assertEquals(malformed200.counts.upload, 1);
 });

@@ -30,6 +30,7 @@ export function YouTubeVideoDrawer({
   thumbnailCandidates,
   thumbnailCandidatesLoading,
   thumbnailCandidatesError,
+  onRetryThumbnailCandidates,
   onSetThumbnail,
 }: {
   open: boolean;
@@ -48,6 +49,7 @@ export function YouTubeVideoDrawer({
   thumbnailCandidates?: readonly YouTubeThumbnailCandidate[];
   thumbnailCandidatesLoading?: boolean;
   thumbnailCandidatesError?: unknown;
+  onRetryThumbnailCandidates?: () => void;
   onSetThumbnail?: (mediaFileId: string) => Promise<YouTubeThumbnailOutcome>;
 }) {
   const { t, i18n } = useTranslation("accounts");
@@ -93,6 +95,7 @@ export function YouTubeVideoDrawer({
               candidates={thumbnailCandidates ?? []}
               candidatesLoading={thumbnailCandidatesLoading ?? false}
               candidatesError={thumbnailCandidatesError ?? null}
+              onRetryCandidates={onRetryThumbnailCandidates}
               onSetThumbnail={onSetThumbnail}
             />
             {updatedLabel ? <p className="text-xs text-muted-foreground">{t("youtubeManagement.fetchedAt", "Updated {{time}}", { time: updatedLabel })}</p> : null}

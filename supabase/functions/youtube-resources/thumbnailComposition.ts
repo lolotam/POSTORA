@@ -60,6 +60,15 @@ export interface YouTubeThumbnailCompositionDeps {
   uploadTimeoutMs?: number;
 }
 
+function isValidThumbnailSetResponse(body: unknown): boolean {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const record = body as Record<string, unknown>;
+  if (typeof record.kind === "string" && record.kind !== "youtube#thumbnailSetResponse") {
+    return false;
+  }
+  return Array.isArray(record.items);
+}
+
 function classifyUploadStatus(status: number): YouTubeResourceErrorCode {
   if (status === 403) return "thumbnail_not_allowed";
   if (status === 401) return "reconnect_required";
@@ -201,6 +210,15 @@ export function createYouTubeThumbnailPort(
           signal: AbortSignal.timeout(uploadTimeoutMs),
         });
         if (response.ok) {
+          let payload: unknown;
+          try {
+            payload = await response.json();
+          } catch {
+            return { ok: false, code: "outcome_unknown" };
+          }
+          if (!isValidThumbnailSetResponse(payload)) {
+            return { ok: false, code: "outcome_unknown" };
+          }
           return { ok: true, value: { video_id: videoId, applied: true } };
         }
         return { ok: false, code: classifyUploadStatus(response.status) };

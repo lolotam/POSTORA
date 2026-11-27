@@ -64,11 +64,15 @@ function commentsCapability({ needsReconnect, authProvider, accountMetadata }: {
 }
 
 // Spec section 8: thumbnail replacement is independent of PUBLISHED_EDIT_WRITE_ENABLED;
-// composio is unsupported, reconnect wins, and upload or force-ssl both cover thumbnails.set.
+// composio is unsupported, reconnect wins, readonly is required for admission and video
+// ownership pre-check, and upload or force-ssl both cover thumbnails.set.
 function manageThumbnailCapability({ composio, needsReconnect, scopes, hasRecordedList }: DerivationContext): YouTubeCapabilityState {
   if (composio) return { state: "unavailable", reason: "provider_unsupported" };
   if (needsReconnect) return RECONNECT;
-  if (scopes.upload === "granted" || scopes.force_ssl === "granted") return AVAILABLE;
+  if (scopes.readonly === "missing") return MISSING_SCOPE;
+  if (scopes.readonly === "granted" && (scopes.upload === "granted" || scopes.force_ssl === "granted")) {
+    return AVAILABLE;
+  }
   return hasRecordedList ? MISSING_SCOPE : UNKNOWN;
 }
 
