@@ -10083,7 +10083,10 @@ function youtubeFollowUpDeps(
     budgetMs: () => followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now()),
     debitWriteBudget: async () =>
       (await debitYouTubeWriteBudget({
-        rpc: async (fn, params) => await supabase.rpc(fn, params),
+        rpc: async (fn, params) =>
+          await supabase.rpc(fn, params).abortSignal(
+            AbortSignal.timeout(followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now())),
+          ),
         units: YOUTUBE_PLAYLIST_INSERT_UNIT_COST,
       })).allowed,
   };

@@ -254,14 +254,17 @@ export function YouTubeSettings({
     (composioManaged && nativeAccounts.length === 0) || multipleNativeChannels;
   const previousNativeChannelKeyRef = useRef<string | null>(singleNativeChannelKey);
   // A playlist chosen for a channel that is no longer the only one (or when the
-  // creator switches to a different single native channel) would point at
-  // another channel's playlist, so the choice is dropped with the channel.
+  // creator switches to a different single native channel, including across an
+  // intermediate empty selection) would point at another channel's playlist, so
+  // the choice is dropped with the channel.
   useEffect(() => {
     const channelChanged =
       previousNativeChannelKeyRef.current !== null &&
       singleNativeChannelKey !== null &&
       previousNativeChannelKeyRef.current !== singleNativeChannelKey;
-    previousNativeChannelKeyRef.current = singleNativeChannelKey;
+    if (singleNativeChannelKey !== null || !settings.playlist) {
+      previousNativeChannelKeyRef.current = singleNativeChannelKey;
+    }
     if ((multipleNativeChannels || channelChanged) && settings.playlist) {
       onSettingsChange({ playlist: "" });
     }

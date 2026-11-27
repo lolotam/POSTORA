@@ -129,7 +129,7 @@ describe("YouTube legal disclosures", () => {
 
     expect(text).toContain("Your uploaded videos and their details when you browse your channel in Postora");
     expect(text).toContain("Published video metadata when published metadata editing is enabled and you instruct Postora to edit details");
-    expect(text).toContain("The playlists of your channel (playlist ID, title, privacy status) when you choose a destination playlist for a video you publish");
+    expect(text).toContain("The playlists of your channel (playlist ID, title, privacy status) when you open YouTube publishing settings for a single connected channel or choose a destination playlist for a video you publish");
     expect(text).toContain("let you browse your uploaded videos and their full details");
     expect(text).toContain("Edit published video metadata only when that feature is enabled (currently disabled at the production baseline)");
     expect(text).toContain("List your channel's playlists so you can choose a destination playlist when publishing, and add a newly uploaded video to the playlist you select");

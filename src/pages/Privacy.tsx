@@ -49,7 +49,7 @@ const Privacy = () => {
               <li>Video upload permissions to post content on your behalf</li>
               <li>Your uploaded videos and their details when you browse your channel in Postora</li>
               <li>Published video metadata when published metadata editing is enabled and you instruct Postora to edit details such as title, description, tags, category, privacy, language, audience, or synthetic-media declaration (currently disabled at the production baseline)</li>
-              <li>The playlists of your channel (playlist ID, title, privacy status) when you choose a destination playlist for a video you publish</li>
+              <li>The playlists of your channel (playlist ID, title, privacy status) when you open YouTube publishing settings for a single connected channel or choose a destination playlist for a video you publish</li>
               <li>Comments on your own videos when you create, reply to, edit, delete, or moderate comments</li>
               <li>On-demand channel and video analytics numbers after your connection-scoped in-app acceptance; these numbers are displayed immediately and are not stored</li>
             </ul>

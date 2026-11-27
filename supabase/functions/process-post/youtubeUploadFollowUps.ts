@@ -244,7 +244,12 @@ async function addToYoutubePlaylist(
   }
   const precheckBudgetMs = deps.budgetMs();
   if (precheckBudgetMs <= 0) return { state: "skipped", reason: "no_time" };
-  if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
+  try {
+    if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
+  } catch (error) {
+    console.warn("Error checking write authority before YouTube playlist precheck:", redactProviderText(error));
+    return { state: "skipped", reason: "authority_lost" };
+  }
 
   const ownershipFailure = await verifyPlaylistOwnership(
     playlistId,
@@ -255,10 +260,20 @@ async function addToYoutubePlaylist(
   );
   if (ownershipFailure) return ownershipFailure;
 
-  if (!deps.debitWriteBudget || !await deps.debitWriteBudget()) {
+  try {
+    if (!deps.debitWriteBudget || !await deps.debitWriteBudget()) {
+      return { state: "skipped", reason: "quota_budget" };
+    }
+  } catch (error) {
+    console.warn("Error debiting YouTube write budget for playlist insert:", redactProviderText(error));
     return { state: "skipped", reason: "quota_budget" };
   }
-  if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
+  try {
+    if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
+  } catch (error) {
+    console.warn("Error checking write authority before YouTube playlist insert:", redactProviderText(error));
+    return { state: "skipped", reason: "authority_lost" };
+  }
   const insertBudgetMs = deps.budgetMs();
   if (insertBudgetMs <= 0) return { state: "skipped", reason: "no_time" };
 

@@ -296,4 +296,42 @@ describe("YouTubeSettings playlist selector", () => {
 
     expect(playlistSelect()).toBeDisabled();
   });
+
+  it("clears the chosen playlist when switching from channel A to channel B across an empty selection", () => {
+    const onSettingsChange = vi.fn();
+    function SwitchHarness({ accounts }: { accounts: TestAccount[] }) {
+      const [settings, setSettings] = useState<YouTubeSettingsState>({
+        ...BASE_SETTINGS,
+        playlist: "PL123",
+      });
+      return (
+        <YouTubeSettings
+          settings={settings}
+          onSettingsChange={(changes) => {
+            onSettingsChange(changes);
+            setSettings((current) => ({ ...current, ...changes }));
+          }}
+          hasVideo={false}
+          autoThumbnails={[]}
+          selectedAutoThumbnail={null}
+          onSelectAutoThumbnail={vi.fn()}
+          onGenerateAutoThumbnails={vi.fn()}
+          aiGeneratedThumbnails={[]}
+          onGenerateAiThumbnail={vi.fn()}
+          isGeneratingAiThumbnail={false}
+          onDownloadThumbnail={vi.fn()}
+          selectedAccounts={accounts}
+        />
+      );
+    }
+
+    const { rerender } = render(<SwitchHarness accounts={[nativeAccount("account-1", "UC_1")]} />);
+    expect(onSettingsChange).not.toHaveBeenCalled();
+
+    rerender(<SwitchHarness accounts={[]} />);
+    expect(onSettingsChange).not.toHaveBeenCalled();
+
+    rerender(<SwitchHarness accounts={[nativeAccount("account-2", "UC_2")]} />);
+    expect(onSettingsChange).toHaveBeenCalledWith({ playlist: "" });
+  });
 });

@@ -396,4 +396,13 @@ Deno.test("playlist follow-up handles budget refusal, authority loss, no_time, r
   }, timedOut.deps);
   assertEquals(r5.playlist, { state: "unknown", reason: "answer_lost" });
   assertEquals(timedOut.counts().insertCalls, 1);
+
+  const authThrow = playlistWorld({ canWrite: () => Promise.reject(new Error("effectAuthority failed")) });
+  const r6 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID, channelId: CHANNEL_ID, accessToken: "t",
+    thumbnailUrl: THUMBNAIL_URL, firstComment: null, playlistId: PLAYLIST_ID,
+  }, authThrow.deps);
+  assertEquals(r6.thumbnail, { state: "unknown", reason: "answer_lost" });
+  assertEquals(r6.playlist, { state: "skipped", reason: "authority_lost" });
+  assertEquals(authThrow.counts().insertCalls, 0);
 });
