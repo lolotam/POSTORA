@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQueryClient, type Query, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { isSettledBenchmarkChannel, normalizeBenchmarkChannelInput } from "../domain/benchmark";
 import { toYouTubeBenchmarkError, YouTubeBenchmarkError } from "../domain/errors";
@@ -148,11 +148,19 @@ export function useYouTubeChannelBenchmark(
   const { gateway, userId, accountId } = options;
   const queryClient = useQueryClient();
   const scope = `${userId ?? ""}:${accountId ?? ""}`;
+  const activeScopeRef = useRef(scope);
+  activeScopeRef.current = scope;
   const [submittedByScope, setSubmittedByScope] = useState<Record<string, readonly string[]>>({});
   const [pendingByScope, setPendingByScope] = useState<Record<string, readonly string[]>>({});
   const [failuresByScope, setFailuresByScope] = useState<
     Record<string, Record<string, YouTubeBenchmarkError>>
   >({});
+
+  useEffect(() => {
+    setSubmittedByScope({});
+    setPendingByScope({});
+    setFailuresByScope({});
+  }, [scope]);
 
   const submitted = submittedByScope[scope] ?? EMPTY_INPUTS;
   const pendingInputs = pendingByScope[scope] ?? EMPTY_INPUTS;
@@ -207,9 +215,10 @@ export function useYouTubeChannelBenchmark(
       });
       try {
         const results = await lookupChannelResults(gateway, accountId, inputs);
+        if (activeScopeRef.current !== callScope) return;
         for (const input of inputs) {
           const result = results.get(input);
-          if (result) {
+          if (result && activeScopeRef.current === callScope) {
             queryClient.setQueryData(
               youtubeBenchmarkChannelKey(userId, accountId, input),
               result,
@@ -228,6 +237,7 @@ export function useYouTubeChannelBenchmark(
           );
         }
       } catch (error) {
+        if (activeScopeRef.current !== callScope) return;
         recordFailuresForScope(callScope, inputs, toBenchmarkFailure(error));
       } finally {
         setPendingByScope((previous) => {
@@ -276,38 +286,41 @@ export function useYouTubeChannelBenchmark(
   );
 
   const columns = useMemo<YouTubeBenchmarkColumn[]>(() => {
-    return submitted.map((input, index) => {
+    const visible: YouTubeBenchmarkColumn[] = [];
+    submitted.forEach((input, index) => {
       const cached = queries[index]?.data ?? null;
       const failure = failures[input] ?? null;
       if (pendingInputs.includes(input)) {
-        return {
+        visible.push({
           input,
           state: "loading",
           channel: cached?.channel ?? null,
           error: null,
           fetchedAt: cached?.fetchedAt ?? null,
-        };
+        });
+        return;
       }
       if (failure) {
-        return {
+        visible.push({
           input,
           state: "failed",
           channel: cached?.channel ?? null,
           error: failure,
           fetchedAt: cached?.fetchedAt ?? null,
-        };
+        });
+        return;
       }
       if (cached) {
-        return {
+        visible.push({
           input,
           state: "ready",
           channel: cached.channel,
           error: null,
           fetchedAt: cached.fetchedAt,
-        };
+        });
       }
-      return { input, state: "loading", channel: null, error: null, fetchedAt: null };
     });
+    return visible;
   }, [failures, pendingInputs, queries, submitted]);
 
   return {
