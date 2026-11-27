@@ -4,7 +4,21 @@ import { SupabaseYouTubeAnalyticsGateway } from "../infrastructure/supabaseYouTu
 import { youtubeAnalyticsQueryKey } from "../application/queryKeys";
 import { YouTubeAnalyticsClientError } from "../domain/errors";
 import { YOUTUBE_ANALYTICS_ERRORS, type YouTubeAnalyticsErrorCode } from "../domain/types";
-import { ACCOUNT_ID, PERIOD, REVISION, statusData, success, topVideosData, USER_ID, VIDEO_ID, WINDOW_END } from "./fixtures";
+import {
+  ACCOUNT_ID,
+  devicesData,
+  geographyData,
+  PERIOD,
+  REVISION,
+  retentionData,
+  statusData,
+  success,
+  topVideosData,
+  trafficSourcesData,
+  USER_ID,
+  VIDEO_ID,
+  WINDOW_END,
+} from "./fixtures";
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
@@ -79,6 +93,43 @@ describe("Supabase gateway contract fixtures", () => {
     ]);
   });
 
+  it("sends the four new report operations with the shapes the function expects", async () => {
+    const params = { accountId: ACCOUNT_ID, periodDays: PERIOD, windowEnd: WINDOW_END };
+    fetchMock
+      .mockResolvedValueOnce(answer(success(trafficSourcesData())))
+      .mockResolvedValueOnce(answer(success(geographyData())))
+      .mockResolvedValueOnce(answer(success(devicesData())))
+      .mockResolvedValueOnce(answer(success(retentionData())));
+
+    await gateway.trafficSources(params);
+    await gateway.geography(params);
+    await gateway.devices(params);
+    await gateway.retention({ ...params, videoId: VIDEO_ID });
+
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(call[1].body))).toEqual([
+      { operation: "traffic_sources", account_id: ACCOUNT_ID, period_days: PERIOD, window_end: WINDOW_END },
+      { operation: "geography", account_id: ACCOUNT_ID, period_days: PERIOD, window_end: WINDOW_END },
+      { operation: "devices", account_id: ACCOUNT_ID, period_days: PERIOD, window_end: WINDOW_END },
+      { operation: "retention", account_id: ACCOUNT_ID, period_days: PERIOD, window_end: WINDOW_END, video_id: VIDEO_ID },
+    ]);
+    expect(fetchMock.mock.calls.every((call) => !("user_id" in JSON.parse(call[1].body)))).toBe(true);
+  });
+
+  it("refuses a breakdown without rows and a retention report without points", async () => {
+    const params = { accountId: ACCOUNT_ID, periodDays: PERIOD, windowEnd: WINDOW_END };
+    fetchMock.mockResolvedValueOnce(answer(success({ dimension: "country", has_data: false })));
+    await expect(gateway.geography(params)).rejects.toBeInstanceOf(YouTubeAnalyticsClientError);
+
+    fetchMock.mockResolvedValueOnce(answer(success({ dimension: "country", has_data: true, rows: [null] })));
+    await expect(gateway.geography(params)).rejects.toBeInstanceOf(YouTubeAnalyticsClientError);
+
+    fetchMock.mockResolvedValueOnce(answer(success({ has_data: true })));
+    await expect(gateway.retention({ ...params, videoId: VIDEO_ID })).rejects.toBeInstanceOf(YouTubeAnalyticsClientError);
+
+    fetchMock.mockResolvedValueOnce(answer(success({ has_data: true, points: [null] })));
+    await expect(gateway.retention({ ...params, videoId: VIDEO_ID })).rejects.toBeInstanceOf(YouTubeAnalyticsClientError);
+  });
+
   it("accepts negative net engagement metrics in a summary response", async () => {
     const metrics = [
       { key: "views", unit: "count", value: 59 },
@@ -146,5 +197,17 @@ describe("query keys", () => {
     expect(summary).toEqual(["youtube-analytics", USER_ID, ACCOUNT_ID, REVISION, "summary", WINDOW_END, PERIOD, null]);
     expect(video.at(-1)).toBe(VIDEO_ID);
     expect(youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "summary", WINDOW_END, PERIOD)).not.toEqual(summary);
+  });
+
+  it("keeps the retention video in its key and leaves channel-level breakdowns without one", () => {
+    const retention = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "retention", WINDOW_END, PERIOD, VIDEO_ID);
+    const traffic = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "traffic_sources", WINDOW_END, PERIOD, null);
+    const geography = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "geography", WINDOW_END, PERIOD, null);
+    const devices = youtubeAnalyticsQueryKey(USER_ID, ACCOUNT_ID, REVISION, "devices", WINDOW_END, PERIOD, null);
+    expect(retention.at(-1)).toBe(VIDEO_ID);
+    expect(traffic.at(-1)).toBeNull();
+    expect(geography.at(-1)).toBeNull();
+    expect(devices.at(-1)).toBeNull();
+    expect(new Set([retention, traffic, geography, devices].map((key) => JSON.stringify(key))).size).toBe(4);
   });
 });

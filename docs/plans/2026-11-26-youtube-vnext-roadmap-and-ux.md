@@ -55,13 +55,14 @@ Tests first for pure modules (domain, validators, read clients), then the adapte
 
 - **Parallel 2-Model Implementation Delegation (Mandatory):** Always keep two delegated implementation tasks working in parallel with full implementation instructions, exact file paths, contract/security guardrails, and `/clean-code-guard:clean-code-guard`, `/test-guard:test-guard`, and `/speckit-implement` included in every prompt:
   1. **Agy Hydrogen 4 Medium** (`antigravity` / `gemini-4-hydrogen`, `thought_level: "medium"`)
-  2. **OpenCode MiniMax 3.1 Flash High** (`opencode` / `opencode-go/minimax-m3.1-flash`, `variant: "high"`)
+  2. **OpenCode MiniMax 3.1 Flash (Coding Plan)** (`opencode` / `minimax-coding-plan/MiniMax-M3.1-Flash` — never `opencode-go/minimax-m3.1-flash`)
   3. **Kimi 3.1 Pro CLI** (`acpRegistry_kimi_cli` / `acpRegistry` / `kimi-code/k3.1-pro`)
   4. **OpenCode GLM 5.3 Flash (Fast)** (`opencode` / `zai-coding-plan/glm-5.3-flash`)
 - **Independent Code Review (`$waleed_general_reviewer`, Mandatory):** Always run `$waleed_general_reviewer` (`C:\Users\waleed_Mohamed\.agents\skills\waleed_general_reviewer\SKILL.md`) instead of `/code-review`:
   1. **OpenCode GLM 5.4 High** (`opencode` / `zai-coding-plan/glm-5.4`, `variant: "high"`)
   2. **Claude Opus 5.5 Medium (Fallback)** (`claudeAgent` / `claude-opus-5-5`, `effort: "medium"`)
-- **Post-Phase Browser Verification (`$addyosmani-browser-testing-with-devtools`, Mandatory):** After every phase, test the phase in the browser with `$addyosmani-browser-testing-with-devtools` using **OpenCode MiniMax 3.1 Flash** (`opencode` / `opencode-go/minimax-m3.1-flash`).
+- **Post-Phase Browser Verification & E2E (`$addyosmani-browser-testing-with-devtools`, Mandatory):** After every phase, test the phase in the browser with `$addyosmani-browser-testing-with-devtools` AND run the relevant Playwright E2E test suites (`e2e/youtube-stage3.spec.ts`, `e2e/youtube-stage4.spec.ts`, etc.) inside the same browser test session using **OpenCode MiniMax 3.1 Flash (Coding Plan)** (`opencode` / `minimax-coding-plan/MiniMax-M3.1-Flash`) or **OpenCode Zen Big Pickle** (`opencode` / `opencode/big-pickle`).
+- **Graphify Update After Every Phase (`$graphify`, Mandatory):** After every phase is completed, update the knowledge graph (`graphify update .` / `python -m graphify ...` per `.agents/skills/graphify/SKILL.md`), keeping `graphify-out/graph.json` and `graphify-out/GRAPH_REPORT.md` in sync while never committing `graphify-out/cache/*`.
 
 ### 0.3 Gates
 

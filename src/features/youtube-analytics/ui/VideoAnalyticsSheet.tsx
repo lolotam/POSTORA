@@ -10,12 +10,13 @@ import {
 import type {
   YouTubeAnalyticsDailyData,
   YouTubeAnalyticsRequestedWindow,
+  YouTubeAnalyticsRetentionData,
   YouTubeAnalyticsSuccess,
   YouTubeAnalyticsSummaryData,
 } from "../domain/types";
 import { VideoAnalyticsPanel } from "./VideoAnalyticsPanel";
 
-export function VideoAnalyticsSheet({ open, onOpenChange, locale, title, videoId, requestedWindow, summary, daily }: {
+export function VideoAnalyticsSheet({ open, onOpenChange, locale, title, videoId, requestedWindow, summary, daily, retention, retentionExpanded, onExpandRetention }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   locale: "en" | "ar";
@@ -24,6 +25,9 @@ export function VideoAnalyticsSheet({ open, onOpenChange, locale, title, videoId
   requestedWindow: YouTubeAnalyticsRequestedWindow;
   summary: UseQueryResult<YouTubeAnalyticsSuccess<YouTubeAnalyticsSummaryData>, Error>;
   daily: UseQueryResult<YouTubeAnalyticsSuccess<YouTubeAnalyticsDailyData>, Error>;
+  retention?: UseQueryResult<YouTubeAnalyticsSuccess<YouTubeAnalyticsRetentionData>, Error>;
+  retentionExpanded?: boolean;
+  onExpandRetention?: (expanded: boolean) => void;
 }) {
   const { t } = useTranslation("analytics");
   return (
@@ -37,7 +41,15 @@ export function VideoAnalyticsSheet({ open, onOpenChange, locale, title, videoId
           <SheetTitle>{title ?? `${t("youtube.videoAnalytics", "Video analytics")}: ${videoId}`}</SheetTitle>
           <SheetDescription className="sr-only">{t("youtube.videoDrawerDescription", "Detailed analytics for the selected video.")}</SheetDescription>
         </SheetHeader>
-        <VideoAnalyticsPanel videoId={videoId} requestedWindow={requestedWindow} summary={summary} daily={daily} />
+        <VideoAnalyticsPanel
+          videoId={videoId}
+          requestedWindow={requestedWindow}
+          summary={summary}
+          daily={daily}
+          retention={retention}
+          retentionExpanded={retentionExpanded}
+          onExpandRetention={onExpandRetention}
+        />
       </SheetContent>
     </Sheet>
   );

@@ -21,12 +21,47 @@ Deno.test("stale purpose version is refused before record_consent", async () => 
     ownerId: OWNER_ID,
     accountId: ACCOUNT_ID,
     event: "accepted",
-    purposeVersion: 2,
+    purposeVersion: 99,
     locale: "en",
     requestId: "request",
     expectedRevision: REVISION,
   }), { ok: false, code: "consent_version_stale" });
   assertEquals(calls.length, 0);
+});
+
+Deno.test("Stage A accepts both v1 and v2 while Stage B refuses v1 as consent_version_stale", async () => {
+  for (const version of [1, 2] as const) {
+    const { rpc, calls } = rpcFor({
+      ok: true,
+      recorded: true,
+      connection_revision: REVISION,
+      consent: { state: "accepted", version },
+    });
+    const res = await recordYouTubeAnalyticsConsent(rpc, {
+      ownerId: OWNER_ID,
+      accountId: ACCOUNT_ID,
+      event: "accepted",
+      purposeVersion: version,
+      locale: "en",
+      requestId: "request",
+      expectedRevision: REVISION,
+      acceptedVersions: [1, 2],
+    });
+    assertEquals(res.ok, true);
+    assertEquals(calls[0].args.p_purpose_version, version);
+  }
+  const { rpc: stageBRpc, calls: stageBCalls } = rpcFor(null);
+  assertEquals(await recordYouTubeAnalyticsConsent(stageBRpc, {
+    ownerId: OWNER_ID,
+    accountId: ACCOUNT_ID,
+    event: "accepted",
+    purposeVersion: 1,
+    locale: "en",
+    requestId: "request",
+    expectedRevision: REVISION,
+    acceptedVersions: [2],
+  }), { ok: false, code: "consent_version_stale" });
+  assertEquals(stageBCalls.length, 0);
 });
 
 Deno.test("accept forwards the displayed revision and idempotent recorded flag", async () => {
@@ -66,7 +101,7 @@ Deno.test("withdraw defaults locale to en and never sends an expected revision",
     ok: true,
     recorded: true,
     connection_revision: REVISION,
-    consent: { state: "withdrawn", version: 1 },
+    consent: { state: "withdrawn", version: 2 },
   });
   assertEquals((await recordYouTubeAnalyticsConsent(rpc, {
     ownerId: OWNER_ID,

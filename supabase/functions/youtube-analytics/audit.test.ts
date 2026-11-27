@@ -64,7 +64,20 @@ function entry(code: "invalid_request" | "rate_limited" = "invalid_request") {
 }
 
 Deno.test("operation audit labels are restricted to known names", () => {
-  assertEquals(sanitiseYouTubeAnalyticsOperation({ operation: "summary" }), "summary");
+  for (const op of [
+    "status",
+    "consent_accept",
+    "consent_withdraw",
+    "summary",
+    "daily",
+    "top_videos",
+    "traffic_sources",
+    "geography",
+    "devices",
+    "retention",
+  ] as const) {
+    assertEquals(sanitiseYouTubeAnalyticsOperation({ operation: op }), op);
+  }
   assertEquals(sanitiseYouTubeAnalyticsOperation({ operation: "provider text" }), "unknown");
   assertEquals(sanitiseYouTubeAnalyticsOperation(null), "unknown");
 });

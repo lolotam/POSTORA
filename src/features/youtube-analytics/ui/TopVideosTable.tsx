@@ -69,7 +69,7 @@ export function TopVideosTable({ data, onInspect, hasNextPage, isFetchingNextPag
     <section aria-label={t("youtube.topVideos", "Most viewed videos")} className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">{t("youtube.topVideos", "Most viewed videos")}</h2>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="no-print flex flex-wrap items-center gap-2">
           <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
             {t("youtube.loadedCount", "{{count}} loaded", { count: rows.length })}
           </span>
@@ -87,7 +87,7 @@ export function TopVideosTable({ data, onInspect, hasNextPage, isFetchingNextPag
       </div>
 
       {viewMode === "grid" ? (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="no-print flex flex-wrap items-center gap-2">
           <label className="text-sm text-muted-foreground" htmlFor="top-videos-sort">{t("youtube.sortBy", "Sort by")}</label>
           <select
             id="top-videos-sort"
@@ -130,7 +130,7 @@ export function TopVideosTable({ data, onInspect, hasNextPage, isFetchingNextPag
                   }}
                 />
               ))}
-              <th className="p-3 text-start">{t("youtube.actions", "Actions")}</th>
+              <th className="no-print p-3 text-start">{t("youtube.actions", "Actions")}</th>
             </tr></thead>
             <tbody>{sortedRows.map((row, index) => <tr key={row.video_id} className="border-t">
               <td className="p-3 tabular-nums">{index + 1}</td>
@@ -142,7 +142,7 @@ export function TopVideosTable({ data, onInspect, hasNextPage, isFetchingNextPag
               </td>
               <td className="p-3 whitespace-nowrap">{formatDate(row.published_at)}</td>
               {METRICS.map((key) => <td key={key} className="p-3 tabular-nums"><LtrValue>{formatMetric(row.metrics.find((metric) => metric.key === key), i18n.language)}</LtrValue></td>)}
-              <td className="p-3"><div className="flex gap-2">
+              <td className="no-print p-3"><div className="flex gap-2">
                 <Button type="button" size="sm" variant="outline" onClick={() => onInspect(row.video_id)}>{t("youtube.inspect", "Inspect")}</Button>
                 <a className="inline-flex h-9 items-center rounded-md px-2 text-primary underline" href={row.link} target="_blank" rel="noopener noreferrer">{t("youtube.open", "Open")}</a>
               </div></td>
@@ -153,7 +153,7 @@ export function TopVideosTable({ data, onInspect, hasNextPage, isFetchingNextPag
 
       {nextPageError ? <AnalyticsNotice error={nextPageError} onRetry={onRetryNextPage} /> : null}
       {hasNextPage ? (
-        <Button type="button" variant="outline" disabled={isFetchingNextPage} onClick={onLoadMore}>
+        <Button type="button" variant="outline" className="no-print" disabled={isFetchingNextPage} onClick={onLoadMore}>
           {isFetchingNextPage ? t("youtube.loadingMore", "Loading more…") : t("youtube.loadMore", "Load more")}
         </Button>
       ) : null}

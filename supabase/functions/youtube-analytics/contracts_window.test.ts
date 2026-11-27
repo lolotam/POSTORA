@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  ANALYTICS_PURPOSE_ACCEPTED_VERSIONS,
   ANALYTICS_PURPOSE_VERSION,
   YOUTUBE_ANALYTICS_DAILY_METRICS,
   YOUTUBE_ANALYTICS_ERRORS,
@@ -23,7 +24,8 @@ import {
 
 Deno.test("contracts pin the schema, purpose, operations, periods, scopes and metric order", () => {
   assertEquals(YOUTUBE_ANALYTICS_SCHEMA_VERSION, 1);
-  assertEquals(ANALYTICS_PURPOSE_VERSION, 1);
+  assertEquals(ANALYTICS_PURPOSE_VERSION, 2);
+  assertEquals(ANALYTICS_PURPOSE_ACCEPTED_VERSIONS, [1, 2]);
   assertEquals(YOUTUBE_ANALYTICS_OPERATIONS, [
     "status",
     "consent_accept",
@@ -31,6 +33,10 @@ Deno.test("contracts pin the schema, purpose, operations, periods, scopes and me
     "summary",
     "daily",
     "top_videos",
+    "traffic_sources",
+    "geography",
+    "devices",
+    "retention",
   ]);
   assertEquals(YOUTUBE_ANALYTICS_PERIOD_DAYS, [7, 14, 30, 90]);
   assertEquals(YOUTUBE_ANALYTICS_REQUIRED_SCOPES, [

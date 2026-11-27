@@ -1,13 +1,27 @@
 import { classifyGoogleError } from "../_shared/youtubeApiErrors.ts";
 import {
+  YOUTUBE_ANALYTICS_BREAKDOWN_METRICS,
+  YOUTUBE_ANALYTICS_COUNTRY_PATTERN,
   YOUTUBE_ANALYTICS_DAILY_METRICS,
+  YOUTUBE_ANALYTICS_DEVICE_PATTERN,
+  YOUTUBE_ANALYTICS_DEVICES_MAX_ROWS,
+  YOUTUBE_ANALYTICS_GEOGRAPHY_MAX_ROWS,
+  YOUTUBE_ANALYTICS_RETENTION_MAX_POINTS,
   YOUTUBE_ANALYTICS_SUMMARY_METRICS,
   YOUTUBE_ANALYTICS_TOP_VIDEOS_METRICS,
+  YOUTUBE_ANALYTICS_TRAFFIC_SOURCE_PATTERN,
+  YOUTUBE_ANALYTICS_TRAFFIC_SOURCES_MAX_ROWS,
   YOUTUBE_ANALYTICS_VIDEO_ID_PATTERN,
+  type YouTubeAnalyticsBreakdownData,
+  type YouTubeAnalyticsBreakdownDimension,
+  type YouTubeAnalyticsBreakdownOperation,
+  type YouTubeAnalyticsBreakdownRow,
   type YouTubeAnalyticsDailyData,
   type YouTubeAnalyticsErrorCode,
   type YouTubeAnalyticsMetric,
   type YouTubeAnalyticsRequestedWindow,
+  type YouTubeAnalyticsRetentionData,
+  type YouTubeAnalyticsRetentionPoint,
   type YouTubeAnalyticsSummaryData,
 } from "./contracts.ts";
 
@@ -59,6 +73,15 @@ export interface YouTubeAnalyticsReadClient {
     accessToken: string,
     input: YouTubeAnalyticsReportInput,
   ): Promise<YouTubeAnalyticsReadResult<YouTubeAnalyticsTopVideoReport>>;
+  readBreakdown(
+    accessToken: string,
+    kind: YouTubeAnalyticsBreakdownOperation,
+    input: YouTubeAnalyticsReportInput,
+  ): Promise<YouTubeAnalyticsReadResult<YouTubeAnalyticsBreakdownData>>;
+  readRetention(
+    accessToken: string,
+    input: YouTubeAnalyticsReportInput & { videoId: string },
+  ): Promise<YouTubeAnalyticsReadResult<YouTubeAnalyticsRetentionData>>;
   lookupVideoOwnership(
     accessToken: string,
     input: { channelId: string; videoId: string },
@@ -250,6 +273,47 @@ async function readItems(
   return { ok: true, items };
 }
 
+const BREAKDOWN_SPECS: Record<
+  YouTubeAnalyticsBreakdownOperation,
+  {
+    dimension: YouTubeAnalyticsBreakdownDimension;
+    googleDimension: string;
+    pattern: RegExp;
+    maxRows: number;
+    maxResults?: string;
+  }
+> = {
+  traffic_sources: {
+    dimension: "traffic_source",
+    googleDimension: "insightTrafficSourceType",
+    pattern: YOUTUBE_ANALYTICS_TRAFFIC_SOURCE_PATTERN,
+    maxRows: YOUTUBE_ANALYTICS_TRAFFIC_SOURCES_MAX_ROWS,
+  },
+  geography: {
+    dimension: "country",
+    googleDimension: "country",
+    pattern: YOUTUBE_ANALYTICS_COUNTRY_PATTERN,
+    maxRows: YOUTUBE_ANALYTICS_GEOGRAPHY_MAX_ROWS,
+    maxResults: String(YOUTUBE_ANALYTICS_GEOGRAPHY_MAX_ROWS),
+  },
+  devices: {
+    dimension: "device",
+    googleDimension: "deviceType",
+    pattern: YOUTUBE_ANALYTICS_DEVICE_PATTERN,
+    maxRows: YOUTUBE_ANALYTICS_DEVICES_MAX_ROWS,
+  },
+};
+
+const RETENTION_METRIC_NAMES = ["audienceWatchRatio", "relativeRetentionPerformance"] as const;
+const RETENTION_HEADERS = ["elapsedVideoTimeRatio", ...RETENTION_METRIC_NAMES] as const;
+
+function optionalBoundedNumber(value: unknown, min: number, max?: number): number | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min) return undefined;
+  if (max !== undefined && value > max) return undefined;
+  return value;
+}
+
 export function createYouTubeAnalyticsReadClient(options: {
   fetchImpl?: typeof fetch;
 } = {}): YouTubeAnalyticsReadClient {
@@ -347,6 +411,81 @@ export function createYouTubeAnalyticsReadClient(options: {
         validated.push({ videoId: row[0], metrics });
       }
       return { ok: true, value: { rows: validated } };
+    },
+
+    async readBreakdown(accessToken, kind, input) {
+      const spec = BREAKDOWN_SPECS[kind];
+      const metricNames = googleMetricNames(YOUTUBE_ANALYTICS_BREAKDOWN_METRICS);
+      const names = [spec.googleDimension, ...metricNames];
+      const url = analyticsUrl(input, metricNames);
+      url.searchParams.set("dimensions", spec.googleDimension);
+      url.searchParams.set("sort", "-views");
+      if (spec.maxResults !== undefined) url.searchParams.set("maxResults", spec.maxResults);
+      const result = await fetchGoogle(fetchImpl, url, accessToken);
+      if (!result.ok) return result;
+      if (!exactHeaders(result.body, names)) return { ok: false, code: "upstream_unavailable" };
+      const rows = record(result.body)?.rows;
+      if (rows === undefined || rows === null || (Array.isArray(rows) && rows.length === 0)) {
+        return { ok: true, value: { dimension: spec.dimension, rows: [], has_data: false } };
+      }
+      if (!Array.isArray(rows) || rows.length > spec.maxRows) {
+        return { ok: false, code: "upstream_unavailable" };
+      }
+      const seen = new Set<string>();
+      const validated: YouTubeAnalyticsBreakdownRow[] = [];
+      for (const row of rows) {
+        if (!Array.isArray(row) || typeof row[0] !== "string" ||
+          !spec.pattern.test(row[0]) || seen.has(row[0])) {
+          return { ok: false, code: "upstream_unavailable" };
+        }
+        const metrics = metricsFromRow(row, YOUTUBE_ANALYTICS_BREAKDOWN_METRICS, 1);
+        if (metrics === null) return { ok: false, code: "upstream_unavailable" };
+        seen.add(row[0]);
+        validated.push({ key: row[0], metrics });
+      }
+      return { ok: true, value: { dimension: spec.dimension, rows: validated, has_data: true } };
+    },
+
+    async readRetention(accessToken, input) {
+      const url = analyticsUrl(input, RETENTION_METRIC_NAMES);
+      url.searchParams.set("dimensions", "elapsedVideoTimeRatio");
+      url.searchParams.set("sort", "elapsedVideoTimeRatio");
+      const result = await fetchGoogle(fetchImpl, url, accessToken);
+      if (!result.ok) return result;
+      if (!exactHeaders(result.body, RETENTION_HEADERS)) {
+        return { ok: false, code: "upstream_unavailable" };
+      }
+      const rows = record(result.body)?.rows;
+      if (rows === undefined || rows === null || (Array.isArray(rows) && rows.length === 0)) {
+        return { ok: true, value: { points: [], has_data: false } };
+      }
+      if (!Array.isArray(rows) || rows.length > YOUTUBE_ANALYTICS_RETENTION_MAX_POINTS) {
+        return { ok: false, code: "upstream_unavailable" };
+      }
+      const points: YouTubeAnalyticsRetentionPoint[] = [];
+      let previousRatio = 0;
+      for (const row of rows) {
+        if (!Array.isArray(row) || row.length !== 3) {
+          return { ok: false, code: "upstream_unavailable" };
+        }
+        const ratio = row[0];
+        if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio <= 0 || ratio > 1 ||
+          ratio <= previousRatio) {
+          return { ok: false, code: "upstream_unavailable" };
+        }
+        const watchRatio = optionalBoundedNumber(row[1], 0);
+        const relativePerformance = optionalBoundedNumber(row[2], 0, 1);
+        if (watchRatio === undefined || relativePerformance === undefined) {
+          return { ok: false, code: "upstream_unavailable" };
+        }
+        previousRatio = ratio;
+        points.push({
+          ratio,
+          watch_ratio: watchRatio,
+          relative_performance: relativePerformance,
+        });
+      }
+      return { ok: true, value: { points, has_data: true } };
     },
 
     async lookupVideoOwnership(accessToken, input) {

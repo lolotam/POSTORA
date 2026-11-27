@@ -48,7 +48,9 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("/youtube");
     expect(text).toContain("/analytics/youtube");
     expect(text).toContain("YouTube Analytics API v2");
-    expect(text).toContain("Analytics Purpose Clause, Version 1, dated November 26, 2026");
+    expect(text).toContain("Analytics Purpose Clause, Version 2, dated November 26, 2026");
+    expect(text).toContain("insightTrafficSourceType");
+    expect(text).toContain("audienceWatchRatio");
     expect(text).toContain("read on demand");
     expect(text).toContain("never stored by Postora");
   });
@@ -118,7 +120,8 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("Edit published video metadata only when that feature is enabled (currently disabled at the production baseline)");
     expect(text).toContain("Read, create, reply to, edit, delete, and moderate comments");
     expect(text).toContain("send that comment's text and the video title to the configured AI provider solely to draft a reply");
-    expect(text).toContain("Analytics Purpose Clause, Version 1, dated November 26, 2026");
+    expect(text).toContain("Analytics Purpose Clause, Version 2, dated November 26, 2026");
+    expect(text).toContain("viewer country, device type, traffic sources, and audience retention");
     expect(text).toContain("Postora clears its stored OAuth credentials immediately");
     expect(text).toContain("revokes the Google grant when no other active connection of yours shares it");
     expect(text).toContain("On-demand YouTube Analytics numbers are never stored");

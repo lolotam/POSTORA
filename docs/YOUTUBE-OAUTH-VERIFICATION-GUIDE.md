@@ -100,7 +100,7 @@ prompt=consent select_account
 
 It does **not** send `include_granted_scopes`, so an earlier unrequested grant is not silently merged into a new authorization. The account chooser and permission prompt therefore appear on connection and reconnection. Google's returned scope string is recorded in `account_metadata.granted_scopes`; missing capabilities require an explicit reconnect rather than an automatic permission expansion.
 
-Analytics uses the existing three scopes and does not currently request `yt-analytics.readonly`. Google's OAuth permission is separate from Postora's in-app **Analytics Purpose Clause, Version 1, dated November 26, 2026**. An owner must accept that clause for the current `connection_revision` before any analytics read. Withdrawal stops subsequent reads without changing Google permissions, publishing, or comments. Disconnecting or reconnecting ends acceptance for the old connection; a trusted token refresh preserves it.
+Analytics uses the existing three scopes and does not currently request `yt-analytics.readonly`. Google's OAuth permission is separate from Postora's in-app **Analytics Purpose Clause, Version 2, dated November 26, 2026**. An owner must accept that clause for the current `connection_revision` before any analytics read. Withdrawal stops subsequent reads without changing Google permissions, publishing, or comments. Disconnecting or reconnecting ends acceptance for the old connection; a trusted token refresh preserves it.
 
 ### Disconnect and revocation
 
@@ -150,7 +150,7 @@ Postora uses Google APIs to provide YouTube publishing functionality.
 - Publish videos and Shorts to your channel on your behalf, with an optional custom thumbnail
 - Edit published video metadata on your instruction, without replacing video bytes or deleting videos
 - Read, create, reply to, edit, delete, and moderate comments on your own videos
-- Display your own channel and video analytics to you, the signed-in owner, only where enabled and after you accept Analytics Purpose Clause Version 1 (November 26, 2026) for the current connection; analytics numbers are read on demand and are not stored by Postora
+- Display your own channel and video analytics (summary, daily trend, top videos, viewer country, device type, traffic sources, and audience retention, with optional browser-local export to your own device) to you, the signed-in owner, only where enabled and after you accept Analytics Purpose Clause Version 2 (November 26, 2026) for the current connection; analytics numbers are read on demand and are not stored by Postora
 
 ### Data Storage
 - OAuth tokens are stored securely in our database

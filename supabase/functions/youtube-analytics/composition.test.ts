@@ -33,4 +33,9 @@ Deno.test("all Google sends follow a debit and bound decision, and success audit
   assert(decideIdx >= 0 && decideIdx < sendIdx);
   assert(handler.includes("scheduleBackground("));
   assert(handler.includes("const finalDecision = await ports.decide"));
+  for (const op of ["traffic_sources", "geography", "devices", "retention"]) {
+    assert(handler.includes(`z.literal("${op}")`));
+  }
+  assert(handler.includes("ports.reader.readBreakdown("));
+  assert(handler.includes("ports.reader.readRetention("));
 });

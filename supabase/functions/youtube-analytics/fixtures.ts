@@ -1,4 +1,5 @@
 import {
+  YOUTUBE_ANALYTICS_BREAKDOWN_METRICS,
   YOUTUBE_ANALYTICS_DAILY_METRICS,
   YOUTUBE_ANALYTICS_SUMMARY_METRICS,
   YOUTUBE_ANALYTICS_TIME_ZONE,
@@ -29,6 +30,11 @@ const headers = (names: readonly string[]) => names.map((name) => ({ name, colum
 const summaryNames = YOUTUBE_ANALYTICS_SUMMARY_METRICS.map((metric) => metric.googleMetric);
 const dailyNames = ["day", ...YOUTUBE_ANALYTICS_DAILY_METRICS.map((metric) => metric.googleMetric)];
 const topNames = ["video", ...YOUTUBE_ANALYTICS_TOP_VIDEOS_METRICS.map((metric) => metric.googleMetric)];
+const breakdownMetricNames = YOUTUBE_ANALYTICS_BREAKDOWN_METRICS.map((metric) => metric.googleMetric);
+const trafficSourcesNames = ["insightTrafficSourceType", ...breakdownMetricNames];
+const geographyNames = ["country", ...breakdownMetricNames];
+const devicesNames = ["deviceType", ...breakdownMetricNames];
+const retentionNames = ["elapsedVideoTimeRatio", "audienceWatchRatio", "relativeRetentionPerformance"];
 
 export const TOTALS = {
   columnHeaders: headers(summaryNames),
@@ -55,6 +61,39 @@ export const TOP_VIDEOS = {
   rows: [
     [FIXTURE_VIDEO_ID, 20, 10, 4, 2],
     [FIXTURE_OTHER_VIDEO_ID, 12, 8, 3, 1],
+  ],
+};
+
+export const TRAFFIC_SOURCES = {
+  columnHeaders: headers(trafficSourcesNames),
+  rows: [
+    ["YT_SEARCH", 120, 45],
+    ["RELATED_VIDEO", 80, 30],
+  ],
+};
+
+export const GEOGRAPHY = {
+  columnHeaders: headers(geographyNames),
+  rows: [
+    ["EG", 140, 50],
+    ["SA", 60, 25],
+  ],
+};
+
+export const DEVICES = {
+  columnHeaders: headers(devicesNames),
+  rows: [
+    ["MOBILE", 150, 55],
+    ["DESKTOP", 50, 20],
+  ],
+};
+
+export const RETENTION = {
+  columnHeaders: headers(retentionNames),
+  rows: [
+    [0.01, 1.0, 0.5],
+    [0.5, 0.72, 0.61],
+    [1.0, 0.41, 0.55],
   ],
 };
 

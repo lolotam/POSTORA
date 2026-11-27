@@ -2,9 +2,11 @@ import { vi } from "vitest";
 import type { YouTubeAnalyticsGateway } from "../application/ports";
 import { YouTubeAnalyticsClientError } from "../domain/errors";
 import type {
+  YouTubeAnalyticsBreakdownData,
   YouTubeAnalyticsDailyData,
   YouTubeAnalyticsErrorCode,
   YouTubeAnalyticsPeriodDays,
+  YouTubeAnalyticsRetentionData,
   YouTubeAnalyticsStatusData,
   YouTubeAnalyticsSuccess,
   YouTubeAnalyticsSummaryData,
@@ -105,6 +107,55 @@ export function topVideosData(title = "Fixture video"): YouTubeAnalyticsTopVideo
   };
 }
 
+export function breakdownData(
+  dimension: YouTubeAnalyticsBreakdownData["dimension"],
+  rows: { key: string; views: number; watchTime: number }[],
+): YouTubeAnalyticsBreakdownData {
+  return {
+    dimension,
+    has_data: rows.length > 0,
+    rows: rows.map((row) => ({
+      key: row.key,
+      metrics: [
+        { key: "views", unit: "count", value: row.views },
+        { key: "watch_time", unit: "minutes", value: row.watchTime },
+      ],
+    })),
+  };
+}
+
+export function trafficSourcesData(): YouTubeAnalyticsBreakdownData {
+  return breakdownData("traffic_source", [
+    { key: "YT_SEARCH", views: 300, watchTime: 120 },
+    { key: "RELATED_VIDEO", views: 90, watchTime: 30 },
+  ]);
+}
+
+export function geographyData(): YouTubeAnalyticsBreakdownData {
+  return breakdownData("country", [
+    { key: "EG", views: 250, watchTime: 90 },
+    { key: "US", views: 140, watchTime: 60 },
+  ]);
+}
+
+export function devicesData(): YouTubeAnalyticsBreakdownData {
+  return breakdownData("device", [
+    { key: "MOBILE", views: 200, watchTime: 80 },
+    { key: "DESKTOP", views: 190, watchTime: 70 },
+  ]);
+}
+
+export function retentionData(): YouTubeAnalyticsRetentionData {
+  return {
+    has_data: true,
+    points: [
+      { ratio: 0.25, watch_ratio: 0.8, relative_performance: 0.95 },
+      { ratio: 0.5, watch_ratio: 0.6, relative_performance: 0.9 },
+      { ratio: 0.75, watch_ratio: 0.45, relative_performance: 0.8 },
+    ],
+  };
+}
+
 export function makeGateway(overrides: Partial<YouTubeAnalyticsGateway> = {}): YouTubeAnalyticsGateway {
   return {
     status: vi.fn(async () => success(statusData(), REVISION, false)),
@@ -113,6 +164,10 @@ export function makeGateway(overrides: Partial<YouTubeAnalyticsGateway> = {}): Y
     summary: vi.fn(async () => success(summaryData())),
     daily: vi.fn(async () => success(dailyData())),
     topVideos: vi.fn(async () => success(topVideosData())),
+    trafficSources: vi.fn(async () => success(trafficSourcesData())),
+    geography: vi.fn(async () => success(geographyData())),
+    devices: vi.fn(async () => success(devicesData())),
+    retention: vi.fn(async () => success(retentionData())),
     ...overrides,
   };
 }

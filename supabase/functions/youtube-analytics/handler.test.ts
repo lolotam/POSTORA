@@ -1,7 +1,12 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { refreshYouTubeAccountToken, type YouTubeRefreshOutcome } from "../_shared/youtubeTokenRefresh.ts";
 import type { YouTubeAnalyticsReadResult } from "./analyticsReadClient.ts";
-import { YOUTUBE_ANALYTICS_REQUIRED_SCOPES, type YouTubeAnalyticsErrorCode } from "./contracts.ts";
+import {
+  YOUTUBE_ANALYTICS_REQUIRED_SCOPES,
+  type YouTubeAnalyticsBreakdownData,
+  type YouTubeAnalyticsErrorCode,
+  type YouTubeAnalyticsRetentionData,
+} from "./contracts.ts";
 import { createBoundYouTubeAnalyticsRefreshStore } from "./credentials.ts";
 import type {
   YouTubeAnalyticsBinding,
@@ -34,6 +39,11 @@ const BINDING: YouTubeAnalyticsBinding = {
   provider: "native",
   needsReauth: false,
   grantedScopes: [...YOUTUBE_ANALYTICS_REQUIRED_SCOPES],
+  consent: { state: "accepted", version: 2 },
+};
+
+const BINDING_V1: YouTubeAnalyticsBinding = {
+  ...BINDING,
   consent: { state: "accepted", version: 1 },
 };
 
@@ -97,6 +107,8 @@ interface FixtureOptions {
   summaries?: YouTubeAnalyticsReadResult<{ metrics: []; has_data: boolean }>[];
   dailies?: YouTubeAnalyticsReadResult<{ rows: []; coverage: { first_day: null; last_day: null; days_returned: 0; days_missing: 7 } }>[];
   topVideos?: YouTubeAnalyticsReadResult<{ rows: Array<{ videoId: string; metrics: [] }> }>[];
+  breakdowns?: YouTubeAnalyticsReadResult<YouTubeAnalyticsBreakdownData>[];
+  retentions?: YouTubeAnalyticsReadResult<YouTubeAnalyticsRetentionData>[];
   ownerships?: YouTubeAnalyticsReadResult<{ owned: true }>[];
   titles?: YouTubeAnalyticsReadResult<{
     titles: Record<string, string>;
@@ -115,6 +127,8 @@ function fixture(options: FixtureOptions = {}) {
   const summaries = [...(options.summaries ?? [])];
   const dailies = [...(options.dailies ?? [])];
   const topVideos = [...(options.topVideos ?? [])];
+  const breakdowns = [...(options.breakdowns ?? [])];
+  const retentions = [...(options.retentions ?? [])];
   const ownerships = [...(options.ownerships ?? [])];
   const titles = [...(options.titles ?? [])];
   const calls = {
@@ -211,6 +225,25 @@ function fixture(options: FixtureOptions = {}) {
         return Promise.resolve(topVideos.shift() ?? {
           ok: true,
           value: { rows: [{ videoId: FIXTURE_VIDEO_ID, metrics: [] }] },
+        });
+      },
+      readBreakdown: (_accessToken, kind) => {
+        calls.analytics += 1;
+        const dimension = kind === "traffic_sources"
+          ? "traffic_source"
+          : kind === "geography"
+          ? "country"
+          : "device";
+        return Promise.resolve(breakdowns.shift() ?? {
+          ok: true,
+          value: { dimension, rows: [], has_data: false },
+        });
+      },
+      readRetention: () => {
+        calls.analytics += 1;
+        return Promise.resolve(retentions.shift() ?? {
+          ok: true,
+          value: { points: [], has_data: false },
         });
       },
       lookupVideoOwnership: () => {
@@ -388,7 +421,7 @@ Deno.test("status success and refusal carry revision, reporting window, consent 
   const availableBody = await json(available);
   assertEquals(availableBody.connection_revision, REVISION);
   assertEquals((availableBody.data as Record<string, unknown>).reporting_end_date, "2026-11-17");
-  assertEquals((availableBody.data as Record<string, unknown>).purpose_version, 1);
+  assertEquals((availableBody.data as Record<string, unknown>).purpose_version, 2);
   assertCounts(ok.calls, { token: 0, data: 0, analytics: 0 });
 
   const refused = fixture({ decisions: [deny("consent_required")] });
@@ -399,7 +432,7 @@ Deno.test("status success and refusal carry revision, reporting window, consent 
   assertEquals(error.connection_revision, REVISION);
   assertEquals(error.reporting_end_date, "2026-11-17");
   assertEquals(error.consent, { state: "none", version: 1 });
-  assertEquals(error.purpose_version, 1);
+  assertEquals(error.purpose_version, 2);
 });
 
 Deno.test("consent accept and withdraw never read credentials or call Google and each audit once", async () => {
@@ -901,6 +934,8 @@ Deno.test("real refresh helper forced refresh after reused token exchanges a new
       },
       readDaily: () => Promise.resolve({ ok: false, code: "upstream_unavailable" }),
       readTopVideos: () => Promise.resolve({ ok: false, code: "upstream_unavailable" }),
+      readBreakdown: () => Promise.resolve({ ok: false, code: "upstream_unavailable" }),
+      readRetention: () => Promise.resolve({ ok: false, code: "upstream_unavailable" }),
       lookupVideoOwnership: () => Promise.resolve({ ok: true, value: { owned: true } }),
       lookupVideoTitles: () => Promise.resolve({ ok: true, value: { titles: {}, details: {} } }),
     },
@@ -937,4 +972,110 @@ Deno.test("no_refresh_token maps to reconnect_required (409) instead of upstream
   const response = await f.handler(request(body()));
   assertEquals(response.status, 409);
   assertEquals((await json(response)).error, "reconnect_required");
+});
+
+for (const op of ["traffic_sources", "geography", "devices", "retention"] as const) {
+  const extra = op === "retention" ? { video_id: FIXTURE_VIDEO_ID } : {};
+
+  Deno.test(`${op} succeeds with no-store and records audit operation`, async () => {
+    const f = fixture();
+    const response = await f.handler(request(body(op, extra)));
+    assertEquals(response.status, 200);
+    assertEquals(response.headers.get("Cache-Control"), "no-store");
+    const payload = await json(response);
+    if (op === "traffic_sources") {
+      assertEquals((payload.data as { dimension: string }).dimension, "traffic_source");
+    } else if (op === "geography") {
+      assertEquals((payload.data as { dimension: string }).dimension, "country");
+    } else if (op === "devices") {
+      assertEquals((payload.data as { dimension: string }).dimension, "device");
+    } else {
+      assertEquals(Array.isArray((payload.data as { points: unknown[] }).points), true);
+    }
+    assertCounts(f.calls, {
+      token: 0,
+      data: op === "retention" ? 1 : 0,
+      analytics: 1,
+      dataDebits: op === "retention" ? 1 : 0,
+      analyticsDebits: 1,
+    });
+    assertEquals(f.calls.auditSuccess, [{ operation: op, accountId: ACCOUNT_ID }]);
+  });
+
+  for (const [code, status] of [
+    ["consent_required", 403],
+    ["missing_scope", 403],
+  ] as const) {
+    Deno.test(`${op} refuses ${code} without Google calls`, async () => {
+      const f = fixture({ decisions: [deny(code)] });
+      const response = await f.handler(request(body(op, extra)));
+      assertEquals(response.status, status);
+      assertEquals((await json(response)).error, code);
+      assertCounts(f.calls, { token: 0, data: 0, analytics: 0 });
+    });
+  }
+
+  Deno.test(`${op} refuses withdrawn consent without Google calls`, async () => {
+    const f = fixture({
+      decisions: [{
+        ok: false,
+        code: "consent_required",
+        binding: { ...BINDING, consent: { state: "withdrawn", version: 1 } },
+        consent: { state: "withdrawn", version: 1 },
+      }],
+    });
+    const response = await f.handler(request(body(op, extra)));
+    assertEquals(response.status, 403);
+    assertEquals((await json(response)).error, "consent_required");
+    assertCounts(f.calls, { token: 0, data: 0, analytics: 0 });
+  });
+
+  Deno.test(`${op} refuses stale window without Google calls`, async () => {
+    const f = fixture();
+    const response = await f.handler(request(body(op, { ...extra, window_end: "2026-11-15" })));
+    assertEquals(response.status, 409);
+    assertEquals((await json(response)).error, "window_stale");
+    assertCounts(f.calls, { token: 0, data: 0, analytics: 0 });
+  });
+
+  Deno.test(`${op} refuses a v1-only consent acceptance during Stage A without Google calls`, async () => {
+    const f = fixture({
+      decisions: [{
+        ok: true,
+        binding: BINDING_V1,
+      }],
+    });
+    const response = await f.handler(request(body(op, extra)));
+    assertEquals(response.status, 403);
+    const payload = await json(response);
+    assertEquals(payload.error, "consent_required");
+    assertEquals(payload.consent, { state: "outdated", version: 2 });
+    assertEquals(payload.purpose_version, 2);
+    assertCounts(f.calls, { token: 0, data: 0, analytics: 0, dataDebits: 0, analyticsDebits: 0 });
+  });
+
+  Deno.test(`${op} refuses budget exhaustion cleanly`, async () => {
+    const f = fixture({ debits: [CAPACITY] });
+    const response = await f.handler(request(body(op, extra)));
+    assertEquals(response.status, 429);
+    assertEquals((await json(response)).error, "capacity_reached");
+    assertCounts(f.calls, { token: 0, data: 0, analytics: 0 });
+  });
+}
+
+Deno.test("retention without video_id is invalid_request (400)", async () => {
+  const f = fixture();
+  const response = await f.handler(request(body("retention")));
+  assertEquals(response.status, 400);
+  assertEquals((await json(response)).error, "invalid_request");
+  assertEquals(f.calls.decide, 0);
+  assertCounts(f.calls, { token: 0, data: 0, analytics: 0 });
+});
+
+Deno.test("retention with foreign video_id is video_not_found (404) without calling readRetention", async () => {
+  const f = fixture({ ownerships: [{ ok: false, code: "video_not_found" }] });
+  const response = await f.handler(request(body("retention", { video_id: FIXTURE_VIDEO_ID })));
+  assertEquals(response.status, 404);
+  assertEquals((await json(response)).error, "video_not_found");
+  assertCounts(f.calls, { token: 0, data: 1, analytics: 0, dataDebits: 1, analyticsDebits: 0 });
 });

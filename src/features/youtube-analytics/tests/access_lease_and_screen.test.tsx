@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { YouTubeAnalyticsScreen } from "../ui/YouTubeAnalyticsScreen";
 import { useAccessLease } from "../application/useAccessLease";
 import { trimTopVideosToFirstPage } from "../application/useYouTubeTopVideos";
@@ -12,14 +12,16 @@ import { youtubeAnalyticsQueryKey } from "../application/queryKeys";
 import type { YouTubeAnalyticsGateway } from "../application/ports";
 import type { YouTubeAnalyticsStatusData, YouTubeAnalyticsSuccess } from "../domain/types";
 import {
-  ACCOUNT_ID, dailyData, makeGateway, NEW_REVISION, OTHER_ACCOUNT_ID, refusal,
+  ACCOUNT_ID, dailyData, devicesData, geographyData, makeGateway, NEW_REVISION, OTHER_ACCOUNT_ID, refusal,
   REVISION, statusData, success, summaryData, topVideosData, USER_ID, VIDEO_ID,
 } from "./fixtures";
 
 vi.mock("recharts", () => ({
   ResponsiveContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   LineChart: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  Line: (props: { connectNulls?: boolean }) => <div data-testid="trend-line" data-connect-nulls={String(props.connectNulls)} />,
+  Line: (props: { connectNulls?: boolean; dataKey?: string }) => (
+    <div data-testid={`chart-line-${props.dataKey ?? "line"}`} data-connect-nulls={String(props.connectNulls)} />
+  ),
   XAxis: () => null,
   YAxis: () => null,
   Tooltip: () => null,
@@ -379,14 +381,14 @@ describe("purpose acceptance and withdrawal", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Allow analytics for this channel" }));
     await screen.findByText("Fixture video");
-    expect(gateway.acceptConsent).toHaveBeenCalledWith({ accountId: ACCOUNT_ID, purposeVersion: 1, locale: "en", connectionRevision: REVISION });
+    expect(gateway.acceptConsent).toHaveBeenCalledWith({ accountId: ACCOUNT_ID, purposeVersion: 2, locale: "en", connectionRevision: REVISION });
     expect(gateway.summary).toHaveBeenCalledTimes(1);
   });
 
   it("renders the eight Arabic elements and records the displayed locale", async () => {
     const gateway = makeGateway({
       status: vi.fn()
-        .mockRejectedValueOnce(refusal("consent_required", { consent: { state: "outdated", version: 0 }, purposeVersion: 1 }))
+        .mockRejectedValueOnce(refusal("consent_required", { consent: { state: "outdated", version: 0 }, purposeVersion: 2 }))
         .mockImplementation(async () => success(statusData(), REVISION, false)),
     });
     await renderScreen(gateway, { locale: "ar" });
@@ -396,7 +398,7 @@ describe("purpose acceptance and withdrawal", () => {
     expect(section.querySelectorAll("[data-purpose-element]")).toHaveLength(8);
     fireEvent.click(screen.getByRole("button", { name: "السماح بالتحليلات لهذه القناة" }));
     await screen.findByText("Fixture video");
-    expect(gateway.acceptConsent).toHaveBeenCalledWith(expect.objectContaining({ locale: "ar", purposeVersion: 1 }));
+    expect(gateway.acceptConsent).toHaveBeenCalledWith(expect.objectContaining({ locale: "ar", purposeVersion: 2 }));
   });
 
   it("withdraws after confirmation, purges cache, and shows the panel again", async () => {
@@ -423,7 +425,7 @@ describe("purpose acceptance and withdrawal", () => {
     const gateway = makeGateway();
     await renderScreen(gateway);
     await screen.findByText("Fixture video");
-    expect(screen.getByTestId("trend-line")).toHaveAttribute("data-connect-nulls", "false");
+    expect(screen.getByTestId("chart-line-views")).toHaveAttribute("data-connect-nulls", "false");
     expect(screen.getByText("YouTube did not return daily numbers for 6 day(s) of this period.")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Daily values"));
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
@@ -720,5 +722,244 @@ describe("top videos same-window refresh", () => {
     secondStatus.resolve(success(statusData(), REVISION, false));
     await flush();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});
+
+describe("lazy report tabs, the retention curve and the export", () => {
+  const originalUrlDescriptors = {
+    createObjectURL: Object.getOwnPropertyDescriptor(URL, "createObjectURL"),
+    revokeObjectURL: Object.getOwnPropertyDescriptor(URL, "revokeObjectURL"),
+  };
+  let createObjectURL: ReturnType<typeof vi.fn>;
+  let revokeObjectURL: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    createObjectURL = vi.fn(() => "blob:fixture");
+    revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, writable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, writable: true, value: revokeObjectURL });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    for (const key of ["createObjectURL", "revokeObjectURL"] as const) {
+      const descriptor = originalUrlDescriptors[key];
+      if (descriptor) Object.defineProperty(URL, key, descriptor);
+      else Reflect.deleteProperty(URL, key);
+    }
+  });
+
+  it("opens the screen without asking for a breakdown or a retention curve", async () => {
+    const gateway = makeGateway();
+    await renderScreen(gateway);
+    await screen.findByText("Fixture video");
+
+    expect(gateway.summary).toHaveBeenCalledTimes(1);
+    expect(gateway.daily).toHaveBeenCalledTimes(1);
+    expect(gateway.topVideos).toHaveBeenCalledTimes(1);
+    expect(gateway.trafficSources).not.toHaveBeenCalled();
+    expect(gateway.geography).not.toHaveBeenCalled();
+    expect(gateway.devices).not.toHaveBeenCalled();
+    expect(gateway.retention).not.toHaveBeenCalled();
+  });
+
+  it("fetches a breakdown only when its tab is opened", async () => {
+    const gateway = makeGateway();
+    await renderScreen(gateway);
+    await screen.findByText("Fixture video");
+    expect(gateway.geography).not.toHaveBeenCalled();
+    expect(gateway.devices).not.toHaveBeenCalled();
+    expect(gateway.trafficSources).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Audience" }));
+    await waitFor(() => expect(gateway.geography).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(gateway.devices).toHaveBeenCalledTimes(1));
+    expect(gateway.trafficSources).not.toHaveBeenCalled();
+    expect(await screen.findByText("Where your viewers are")).toBeInTheDocument();
+    expect(screen.getByText("Egypt")).toBeInTheDocument();
+    expect(screen.getByText("Mobile")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Traffic" }));
+    await waitFor(() => expect(gateway.trafficSources).toHaveBeenCalledTimes(1));
+    expect(gateway.geography).toHaveBeenCalledTimes(1);
+    expect(gateway.devices).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Traffic sources")).toBeInTheDocument();
+  });
+
+  it("keeps the retention curve behind the drawer's own disclosure", async () => {
+    const gateway = makeGateway();
+    await renderScreen(gateway, { initialVideoId: VIDEO_ID });
+    await screen.findByRole("dialog");
+    expect(gateway.retention).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show audience retention" }));
+    await waitFor(() => expect(gateway.retention).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(gateway.retention).mock.calls[0][0].videoId).toBe(VIDEO_ID);
+    expect(await screen.findByText("Retention values")).toBeInTheDocument();
+  });
+
+  it("purges the breakdown and retention reports when consent is withdrawn", async () => {
+    const queryClient = client();
+    const gateway = makeGateway();
+    await renderScreen(gateway, { queryClient, initialVideoId: VIDEO_ID });
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Show audience retention" }));
+    await waitFor(() => expect(gateway.retention).toHaveBeenCalledTimes(1));
+
+    // The drawer is modal, so it has to be closed before the page behind it
+    // can be operated again.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Audience" }));
+    await waitFor(() => expect(gateway.geography).toHaveBeenCalledTimes(1));
+
+    const breakdownQueries = () => queryClient.getQueryCache().getAll().filter((query) => query.queryKey[0] === "youtube-analytics"
+      && ["geography", "devices", "traffic_sources", "retention"].includes(query.queryKey[4] as string));
+    expect(breakdownQueries().some((query) => query.state.data !== undefined)).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop using analytics for this channel" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop analytics" }));
+
+    await screen.findByRole("heading", { name: "Allow YouTube Analytics for Fixture channel?" });
+    await waitFor(() => {
+      expect(breakdownQueries().every((query) => query.state.data === undefined)).toBe(true);
+    });
+  });
+
+  it("downloads the loaded report from the browser without asking the server again", async () => {
+    const gateway = makeGateway();
+    await renderScreen(gateway);
+    await screen.findByText("Fixture video");
+
+    fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    expect(blob.type).toBe("text/csv;charset=utf-8;");
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:fixture"));
+    expect(gateway.summary).toHaveBeenCalledTimes(1);
+    expect(gateway.daily).toHaveBeenCalledTimes(1);
+    expect(gateway.topVideos).toHaveBeenCalledTimes(1);
+    expect(gateway.trafficSources).not.toHaveBeenCalled();
+    expect(gateway.geography).not.toHaveBeenCalled();
+    expect(gateway.devices).not.toHaveBeenCalled();
+    expect(gateway.retention).not.toHaveBeenCalled();
+  });
+
+  it("prints the report through the browser without a request and expands collapsed details on beforeprint while keeping top video titles print-visible", async () => {
+    const print = vi.spyOn(window, "print").mockImplementation(() => {});
+    const gateway = makeGateway();
+    const view = await renderScreen(gateway);
+    const titleNode = await screen.findByText("Fixture video");
+    expect(titleNode.closest(".no-print")).toBeNull();
+    const channelLabelNode = screen.getByText("Channel: Fixture channel");
+    expect(channelLabelNode.closest(".no-print")).toBeNull();
+
+    const details = view.container.querySelector("details")!;
+    expect(details.open).toBe(false);
+    fireEvent(window, new Event("beforeprint"));
+    expect(details.open).toBe(true);
+    fireEvent(window, new Event("afterprint"));
+    expect(details.open).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Print / save as PDF" }));
+
+    expect(print).toHaveBeenCalledTimes(1);
+    expect(gateway.summary).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the export while the active tab has no loaded report", async () => {
+    const gateway = makeGateway({
+      trafficSources: vi.fn(async () => { throw refusal("upstream_unavailable"); }),
+    });
+    await renderScreen(gateway);
+    await screen.findByText("Fixture video");
+    expect(screen.getByRole("button", { name: "Download CSV" })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Traffic" }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "Download CSV" })).toBeDisabled();
+  });
+
+  it("does not refetch inactive Audience breakdowns when period changes after returning to Overview", async () => {
+    const gateway = makeGateway({
+      geography: vi.fn(async (params) => {
+        const res = success(geographyData());
+        res.requested_window = { ...res.requested_window!, days: params.periodDays };
+        return res;
+      }),
+      devices: vi.fn(async (params) => {
+        const res = success(devicesData());
+        res.requested_window = { ...res.requested_window!, days: params.periodDays };
+        return res;
+      }),
+      summary: vi.fn(async (params) => {
+        const res = success(summaryData());
+        res.requested_window = { ...res.requested_window!, days: params.periodDays };
+        return res;
+      }),
+      daily: vi.fn(async (params) => {
+        const res = success(dailyData());
+        res.requested_window = { ...res.requested_window!, days: params.periodDays };
+        return res;
+      }),
+      topVideos: vi.fn(async (params) => {
+        const res = success(topVideosData());
+        res.requested_window = { ...res.requested_window!, days: params.periodDays };
+        return res;
+      }),
+    });
+    await renderScreen(gateway);
+    await screen.findByText("Fixture video");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Audience" }));
+    await waitFor(() => expect(gateway.geography).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(gateway.devices).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    fireEvent.change(screen.getByLabelText("Period"), { target: { value: "14" } });
+    await waitFor(() => expect(gateway.summary).toHaveBeenCalledTimes(2));
+
+    expect(gateway.geography).toHaveBeenCalledTimes(1);
+    expect(gateway.devices).toHaveBeenCalledTimes(1);
+    expect(gateway.trafficSources).not.toHaveBeenCalled();
+  });
+
+  it("refetches an expanded retention curve from inside the video drawer", async () => {
+    const gateway = makeGateway();
+    await renderScreen(gateway, { initialVideoId: VIDEO_ID });
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Show audience retention" }));
+    await waitFor(() => expect(gateway.retention).toHaveBeenCalledTimes(1));
+    await within(dialog).findByText("Retention values");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Refresh retention" }));
+    await waitFor(() => expect(gateway.retention).toHaveBeenCalledTimes(2));
+  });
+
+  it("renders Audience tab in RTL with roving tabIndex, arrow key navigation, and LtrValue numbers", async () => {
+    const gateway = makeGateway();
+    const view = await renderScreen(gateway, { locale: "ar" });
+    await screen.findByText("Fixture video");
+
+    const reportRoot = view.container.querySelector(".youtube-analytics-report");
+    expect(reportRoot).toHaveAttribute("dir", "rtl");
+
+    const overviewTab = screen.getByRole("tab", { name: "Overview" });
+    const audienceTab = screen.getByRole("tab", { name: "Audience" });
+    expect(overviewTab).toHaveAttribute("tabindex", "0");
+    expect(audienceTab).toHaveAttribute("tabindex", "-1");
+    expect(overviewTab).toHaveAttribute("aria-controls", "youtube-analytics-panel-overview");
+    expect(audienceTab).not.toHaveAttribute("aria-controls");
+
+    // In RTL, ArrowLeft advances to the next tab (Audience).
+    fireEvent.keyDown(overviewTab, { key: "ArrowLeft" });
+    await waitFor(() => expect(gateway.geography).toHaveBeenCalledTimes(1));
+    expect(audienceTab).toHaveAttribute("tabindex", "0");
+    expect(audienceTab).toHaveAttribute("aria-controls", "youtube-analytics-panel-audience");
+
+    const numberNode = await screen.findByText("250");
+    expect(numberNode.closest("[dir='ltr']")).not.toBeNull();
   });
 });

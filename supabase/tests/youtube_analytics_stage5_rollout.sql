@@ -1650,6 +1650,20 @@ BEGIN
         format('%s cannot %s rate_limit_buckets', v_role, v_privilege);
     END LOOP;
   END LOOP;
+  -- Purpose Clause v2 Stage A & Stage B rollout proof:
+  -- 1. With only a v1 acceptance recorded, decide(p_version := 1) is ok (Stage A fallback),
+  --    while decide(p_version := 2) is consent_required with consent.state = 'outdated' (Stage B / Phase 5A gate).
+  -- 2. After recording a v2 acceptance on the same connection revision, decide(p_version := 2) is ok.
+  PERFORM pg_temp.s5_restore_main();
+  ASSERT (pg_temp.s5_decide(p_version := 1) ->> 'ok')::boolean,
+    'Stage A honours an existing v1 acceptance when queried at version 1';
+  ASSERT (pg_temp.s5_decide(p_version := 2) ->> 'reason') = 'consent_required'
+     AND (pg_temp.s5_decide(p_version := 2) #>> '{consent,state}') = 'outdated',
+    'Stage B / Phase 5A requires version 2 and reports a v1-only acceptance as outdated';
+  PERFORM pg_temp.s5_accept(p_version := 2);
+  ASSERT (pg_temp.s5_decide(p_version := 2) ->> 'ok')::boolean
+     AND (pg_temp.s5_decide(p_version := 2) #>> '{consent,version}')::integer = 2,
+    'accepting version 2 satisfies decide at version 2';
 END
 $budget_browser_privileges$;
 

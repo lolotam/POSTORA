@@ -5,6 +5,7 @@ import {
   DAILY,
   DAILY_MISSING_LAST_TWO,
   DAILY_MISSING_MIDDLE,
+  DEVICES,
   DUPLICATE_VIDEO_ID,
   ERROR_400_UNSUPPORTED_QUERY,
   ERROR_401_AUTH,
@@ -17,6 +18,7 @@ import {
   EXPLICIT_NULL,
   FIXTURE_OTHER_VIDEO_ID,
   FIXTURE_VIDEO_ID,
+  GEOGRAPHY,
   HEADER_MISMATCH,
   NEGATIVE_METRIC,
   NEGATIVE_NET_TOP_VIDEOS,
@@ -24,8 +26,10 @@ import {
   NO_ROWS,
   OUT_OF_WINDOW_DAY,
   reportInput,
+  RETENTION,
   TOP_VIDEOS,
   TOTALS,
+  TRAFFIC_SOURCES,
   WRONG_WIDTH,
 } from "./fixtures.ts";
 
@@ -438,3 +442,182 @@ Deno.test("network failures and malformed JSON are upstream_unavailable, while e
     code: "unauthorized",
   });
 });
+
+for (const spec of [
+  {
+    kind: "traffic_sources" as const,
+    dimension: "traffic_source" as const,
+    googleDimension: "insightTrafficSourceType",
+    fixture: TRAFFIC_SOURCES,
+    expectedMaxResults: null,
+    badKey: "yt-search",
+    duplicateKey: "YT_SEARCH",
+    maxRows: 40,
+    makeKey: (i: number) => `SOURCE_${i}`,
+  },
+  {
+    kind: "geography" as const,
+    dimension: "country" as const,
+    googleDimension: "country",
+    fixture: GEOGRAPHY,
+    expectedMaxResults: "25",
+    badKey: "EGY",
+    duplicateKey: "EG",
+    maxRows: 25,
+    makeKey: (i: number) => `${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + (i % 26))}`,
+  },
+  {
+    kind: "devices" as const,
+    dimension: "device" as const,
+    googleDimension: "deviceType",
+    fixture: DEVICES,
+    expectedMaxResults: null,
+    badKey: "mobile",
+    duplicateKey: "MOBILE",
+    maxRows: 20,
+    makeKey: (i: number) => `DEVICE_${i}`,
+  },
+]) {
+  Deno.test(`breakdown ${spec.kind} builds the exact query and maps rows`, async () => {
+    const { fetchImpl, requests } = fakeFetch({ status: 200, body: spec.fixture });
+    const result = await createYouTubeAnalyticsReadClient({ fetchImpl }).readBreakdown("t", spec.kind, reportInput());
+    assertEquals(result.ok, true);
+    if (result.ok) {
+      assertEquals(result.value.dimension, spec.dimension);
+      assertEquals(result.value.has_data, true);
+      assertEquals(result.value.rows.length, 2);
+      assertEquals(result.value.rows[0].key, spec.fixture.rows[0][0]);
+      assertEquals(result.value.rows[0].metrics.map((metric) => [metric.key, metric.value]), [
+        ["views", spec.fixture.rows[0][1] as number],
+        ["watch_time", spec.fixture.rows[0][2] as number],
+      ]);
+    }
+    const params = requests[0].url.searchParams;
+    assertEquals(params.get("dimensions"), spec.googleDimension);
+    assertEquals(params.get("metrics"), "views,estimatedMinutesWatched");
+    assertEquals(params.get("sort"), "-views");
+    assertEquals(params.get("maxResults"), spec.expectedMaxResults);
+  });
+
+  Deno.test(`breakdown ${spec.kind} treats omitted, null and empty rows as has_data: false`, async () => {
+    for (const body of [
+      { columnHeaders: spec.fixture.columnHeaders },
+      { columnHeaders: spec.fixture.columnHeaders, rows: null },
+      { columnHeaders: spec.fixture.columnHeaders, rows: [] },
+    ]) {
+      const { fetchImpl } = fakeFetch({ status: 200, body });
+      const result = await createYouTubeAnalyticsReadClient({ fetchImpl }).readBreakdown("t", spec.kind, reportInput());
+      assertEquals(result, {
+        ok: true,
+        value: { dimension: spec.dimension, rows: [], has_data: false },
+      });
+    }
+  });
+
+  for (const [name, body] of [
+    ["header mismatch", { columnHeaders: [{ name: "wrong" }, ...spec.fixture.columnHeaders.slice(1)], rows: spec.fixture.rows }],
+    ["bad key", { ...spec.fixture, rows: [[spec.badKey, 10, 5]] }],
+    ["duplicate key", { ...spec.fixture, rows: [[spec.duplicateKey, 10, 5], [spec.duplicateKey, 5, 2]] }],
+    ["negative metric", { ...spec.fixture, rows: [[spec.duplicateKey, -1, 5]] }],
+    ["too many rows", {
+      ...spec.fixture,
+      rows: Array.from({ length: spec.maxRows + 1 }, (_, i) => [spec.makeKey(i), 10, 5]),
+    }],
+  ] as const) {
+    Deno.test(`breakdown ${spec.kind} rejects ${name}`, async () => {
+      const { fetchImpl } = fakeFetch({ status: 200, body });
+      assertEquals(await createYouTubeAnalyticsReadClient({ fetchImpl }).readBreakdown("t", spec.kind, reportInput()), {
+        ok: false,
+        code: "upstream_unavailable",
+      });
+    });
+  }
+}
+
+Deno.test("retention builds the exact query and maps points", async () => {
+  const { fetchImpl, requests } = fakeFetch({ status: 200, body: RETENTION });
+  const result = await createYouTubeAnalyticsReadClient({ fetchImpl }).readRetention("t", {
+    ...reportInput(),
+    videoId: FIXTURE_VIDEO_ID,
+  });
+  assertEquals(result, {
+    ok: true,
+    value: {
+      has_data: true,
+      points: [
+        { ratio: 0.01, watch_ratio: 1.0, relative_performance: 0.5 },
+        { ratio: 0.5, watch_ratio: 0.72, relative_performance: 0.61 },
+        { ratio: 1.0, watch_ratio: 0.41, relative_performance: 0.55 },
+      ],
+    },
+  });
+  const params = requests[0].url.searchParams;
+  assertEquals(params.get("dimensions"), "elapsedVideoTimeRatio");
+  assertEquals(params.get("metrics"), "audienceWatchRatio,relativeRetentionPerformance");
+  assertEquals(params.get("filters"), `video==${FIXTURE_VIDEO_ID}`);
+  assertEquals(params.get("sort"), "elapsedVideoTimeRatio");
+});
+
+Deno.test("retention treats omitted, null and empty rows as has_data: false", async () => {
+  for (const body of [
+    { columnHeaders: RETENTION.columnHeaders },
+    { columnHeaders: RETENTION.columnHeaders, rows: null },
+    { columnHeaders: RETENTION.columnHeaders, rows: [] },
+  ]) {
+    const { fetchImpl } = fakeFetch({ status: 200, body });
+    assertEquals(
+      await createYouTubeAnalyticsReadClient({ fetchImpl }).readRetention("t", {
+        ...reportInput(),
+        videoId: FIXTURE_VIDEO_ID,
+      }),
+      { ok: true, value: { points: [], has_data: false } },
+    );
+  }
+});
+
+Deno.test("retention accepts null watch_ratio and relative_performance", async () => {
+  const { fetchImpl } = fakeFetch({
+    status: 200,
+    body: { columnHeaders: RETENTION.columnHeaders, rows: [[0.5, null, null]] },
+  });
+  assertEquals(
+    await createYouTubeAnalyticsReadClient({ fetchImpl }).readRetention("t", {
+      ...reportInput(),
+      videoId: FIXTURE_VIDEO_ID,
+    }),
+    {
+      ok: true,
+      value: {
+        has_data: true,
+        points: [{ ratio: 0.5, watch_ratio: null, relative_performance: null }],
+      },
+    },
+  );
+});
+
+for (const [name, body] of [
+  ["header mismatch", { columnHeaders: [{ name: "wrong" }, ...RETENTION.columnHeaders.slice(1)], rows: RETENTION.rows }],
+  ["ratio zero", { ...RETENTION, rows: [[0, 1.0, 0.5]] }],
+  ["ratio above 1", { ...RETENTION, rows: [[1.01, 1.0, 0.5]] }],
+  ["non-ascending ratio", { ...RETENTION, rows: [[0.5, 0.8, 0.5], [0.5, 0.7, 0.5]] }],
+  ["descending ratio", { ...RETENTION, rows: [[0.6, 0.8, 0.5], [0.4, 0.7, 0.5]] }],
+  ["negative watch_ratio", { ...RETENTION, rows: [[0.5, -0.1, 0.5]] }],
+  ["relative_performance above 1", { ...RETENTION, rows: [[0.5, 0.8, 1.1]] }],
+  ["negative relative_performance", { ...RETENTION, rows: [[0.5, 0.8, -0.1]] }],
+  ["wrong row width", { ...RETENTION, rows: [[0.5, 0.8]] }],
+  ["too many points", {
+    ...RETENTION,
+    rows: Array.from({ length: 101 }, (_, i) => [(i + 1) / 101, 0.5, 0.5]),
+  }],
+] as const) {
+  Deno.test(`retention rejects ${name}`, async () => {
+    const { fetchImpl } = fakeFetch({ status: 200, body });
+    assertEquals(
+      await createYouTubeAnalyticsReadClient({ fetchImpl }).readRetention("t", {
+        ...reportInput(),
+        videoId: FIXTURE_VIDEO_ID,
+      }),
+      { ok: false, code: "upstream_unavailable" },
+    );
+  });
+}

@@ -275,15 +275,19 @@ const GoogleApiDisclosure = () => {
                   comments on your own videos when you use those features
                 </li>
                 <li>
-                  <strong>YouTube Analytics — Analytics Purpose Clause, Version 1, dated November 26, 2026:</strong>
+                  <strong>YouTube Analytics — Analytics Purpose Clause, Version 2, dated November 26, 2026:</strong>
                   After you explicitly accept this purpose for a channel inside Postora, and only where analytics is enabled,
                   Postora uses read-only access to your own channel and video metrics through the YouTube Analytics API:
                   <code className="bg-muted px-1 rounded">views</code>, <code className="bg-muted px-1 rounded">estimatedMinutesWatched</code>,{" "}
                   <code className="bg-muted px-1 rounded">averageViewDuration</code>, <code className="bg-muted px-1 rounded">subscribersGained</code>,{" "}
                   <code className="bg-muted px-1 rounded">subscribersLost</code>, <code className="bg-muted px-1 rounded">likes</code>,{" "}
-                  <code className="bg-muted px-1 rounded">comments</code>, and <code className="bg-muted px-1 rounded">shares</code>.
-                  These numbers are displayed solely to you as the signed-in channel owner, read on demand when you open the
-                  analytics page, and are never stored by Postora. You can stop this use immediately from the analytics page;
+                  <code className="bg-muted px-1 rounded">comments</code>, and <code className="bg-muted px-1 rounded">shares</code>,
+                  plus viewer country (<code className="bg-muted px-1 rounded">country</code>), device type (<code className="bg-muted px-1 rounded">deviceType</code>),
+                  traffic sources (<code className="bg-muted px-1 rounded">insightTrafficSourceType</code>), and per-video audience retention
+                  (<code className="bg-muted px-1 rounded">elapsedVideoTimeRatio</code>, <code className="bg-muted px-1 rounded">audienceWatchRatio</code>,{" "}
+                  <code className="bg-muted px-1 rounded">relativeRetentionPerformance</code>).
+                  These numbers are displayed solely to you as the signed-in channel owner (and may be exported by you from your browser to your own device as CSV or print),
+                  read on demand when you open the analytics page, and are never stored by Postora. You can stop this use immediately from the analytics page;
                   doing so does not change your Google permissions, publishing, or comments.
                 </li>
               </ul>

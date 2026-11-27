@@ -2,10 +2,12 @@ import { supabase } from "@/integrations/supabase/client";
 import type { YouTubeAnalyticsGateway, YouTubeAnalyticsDataParams } from "../application/ports";
 import { YouTubeAnalyticsClientError, isYouTubeAnalyticsErrorCode } from "../domain/errors";
 import type {
+  YouTubeAnalyticsBreakdownData,
   YouTubeAnalyticsConsentData,
   YouTubeAnalyticsDailyData,
   YouTubeAnalyticsErrorResponse,
   YouTubeAnalyticsRequest,
+  YouTubeAnalyticsRetentionData,
   YouTubeAnalyticsStatusData,
   YouTubeAnalyticsSuccess,
   YouTubeAnalyticsSummaryData,
@@ -16,6 +18,28 @@ const GATEWAY_TIMEOUT_MS = 20_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBreakdownMetricValid(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.key === "string"
+    && typeof value.unit === "string"
+    && (value.value === null || (typeof value.value === "number" && Number.isFinite(value.value)));
+}
+
+function isBreakdownRowValid(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.key === "string"
+    && Array.isArray(value.metrics)
+    && value.metrics.every(isBreakdownMetricValid);
+}
+
+function isRetentionPointValid(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.ratio === "number"
+    && Number.isFinite(value.ratio)
+    && (value.watch_ratio === null || (typeof value.watch_ratio === "number" && Number.isFinite(value.watch_ratio)))
+    && (value.relative_performance === null || (typeof value.relative_performance === "number" && Number.isFinite(value.relative_performance)));
 }
 
 function isOperationDataValid(operation: YouTubeAnalyticsRequest["operation"], data: Record<string, unknown>): boolean {
@@ -46,6 +70,17 @@ function isOperationDataValid(operation: YouTubeAnalyticsRequest["operation"], d
         && typeof data.titles === "string"
         && typeof data.has_more === "boolean"
         && (data.next_start_index === null || typeof data.next_start_index === "number");
+    case "traffic_sources":
+    case "geography":
+    case "devices":
+      return typeof data.dimension === "string"
+        && Array.isArray(data.rows)
+        && data.rows.every(isBreakdownRowValid)
+        && typeof data.has_data === "boolean";
+    case "retention":
+      return Array.isArray(data.points)
+        && data.points.every(isRetentionPointValid)
+        && typeof data.has_data === "boolean";
   }
 }
 
@@ -171,6 +206,28 @@ export class SupabaseYouTubeAnalyticsGateway implements YouTubeAnalyticsGateway 
       operation: "top_videos",
       ...dataBody(params),
       ...(params.startIndex !== undefined && params.startIndex > 1 ? { start_index: params.startIndex } : {}),
+    }, params.signal);
+  }
+
+  trafficSources(params: Omit<YouTubeAnalyticsDataParams, "videoId">) {
+    return call<YouTubeAnalyticsBreakdownData>({ operation: "traffic_sources", ...dataBody(params) }, params.signal);
+  }
+
+  geography(params: Omit<YouTubeAnalyticsDataParams, "videoId">) {
+    return call<YouTubeAnalyticsBreakdownData>({ operation: "geography", ...dataBody(params) }, params.signal);
+  }
+
+  devices(params: Omit<YouTubeAnalyticsDataParams, "videoId">) {
+    return call<YouTubeAnalyticsBreakdownData>({ operation: "devices", ...dataBody(params) }, params.signal);
+  }
+
+  retention(params: YouTubeAnalyticsDataParams & { videoId: string }) {
+    return call<YouTubeAnalyticsRetentionData>({
+      operation: "retention",
+      account_id: params.accountId,
+      period_days: params.periodDays,
+      window_end: params.windowEnd,
+      video_id: params.videoId,
     }, params.signal);
   }
 }

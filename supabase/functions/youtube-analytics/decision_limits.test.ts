@@ -270,3 +270,40 @@ Deno.test("connection_changed after row deletion keeps its typed reason without 
     consent: { state: "none", version: 1 },
   });
 });
+
+Deno.test("Stage A decision honours an existing v1 acceptance when v2 reads as outdated, while Stage B refuses v1", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const rpc: YouTubeAnalyticsRpcRunner = (_fn, args) => {
+    calls.push(args);
+    const requestedVersion = Number(args.p_purpose_version);
+    const isV1 = requestedVersion === 1;
+    return Promise.resolve({
+      data: {
+        ...decisionPayload(isV1 ? "ok" : "consent_required"),
+        consent: { state: isV1 ? "accepted" : "outdated", version: requestedVersion },
+      },
+      error: null,
+    });
+  };
+  const stageA = await decideYouTubeAnalytics(rpc, {
+    ownerId: OWNER_ID,
+    accountId: ACCOUNT_ID,
+    acceptedVersions: [1, 2],
+  });
+  assertEquals(stageA.ok, true);
+  if (stageA.ok) {
+    assertEquals(stageA.binding.consent, { state: "accepted", version: 1 });
+  }
+  assertEquals(calls.map((args) => args.p_purpose_version), [2, 1]);
+
+  const stageB = await decideYouTubeAnalytics(rpc, {
+    ownerId: OWNER_ID,
+    accountId: ACCOUNT_ID,
+    acceptedVersions: [2],
+  });
+  assertEquals(stageB.ok, false);
+  if (!stageB.ok) {
+    assertEquals(stageB.code, "consent_required");
+    assertEquals(stageB.consent, { state: "outdated", version: 2 });
+  }
+});
