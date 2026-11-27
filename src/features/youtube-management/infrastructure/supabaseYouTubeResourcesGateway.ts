@@ -6,6 +6,7 @@ import type {
   YouTubeChannelDetails,
   YouTubePlaylistsPage,
   YouTubeResourceSuccess,
+  YouTubeSetThumbnailResult,
   YouTubeVideoDetails,
   YouTubeVideosPage,
 } from "../domain/types";
@@ -189,6 +190,27 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
 
   getVideo(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<YouTubeVideoDetails>> {
     return call({ operation: "video", account_id: params.accountId, video_id: params.videoId }, isVideoData);
+  }
+
+  // The media id is the only thing the client sends: the server resolves the
+  // file by id and owner, so a URL or a foreign file never crosses the wire.
+  setThumbnail(params: {
+    accountId: string;
+    videoId: string;
+    mediaFileId: string;
+  }): Promise<YouTubeResourceSuccess<YouTubeSetThumbnailResult>> {
+    return call(
+      {
+        operation: "set_thumbnail",
+        account_id: params.accountId,
+        video_id: params.videoId,
+        media_file_id: params.mediaFileId,
+      },
+      (data): data is YouTubeSetThumbnailResult =>
+        typeof data === "object" && data !== null
+        && (data as { video_id?: unknown }).video_id === params.videoId
+        && (data as { applied?: unknown }).applied === true,
+    );
   }
 }
 

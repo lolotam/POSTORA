@@ -1,0 +1,139 @@
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  checkUserWriteCounters,
+  debitWriteBudget,
+  parseStrictRateLimitDecision,
+  YOUTUBE_EDIT_BURST_LIMIT,
+  YOUTUBE_EDIT_DAILY_LIMIT,
+  YOUTUBE_THUMBNAIL_SET_UNIT_COST,
+} from "./writeLimits.ts";
+
+const USER_ID = "0ee00001-0000-4000-8000-000000000001";
+
+Deno.test("parseStrictRateLimitDecision accepts valid snake_case and camelCase payloads and rejects malformed ones", () => {
+  assertEquals(parseStrictRateLimitDecision({ allowed: true, count: 1, retry_after: 0 }, 10), {
+    allowed: true,
+    count: 1,
+    retryAfterSeconds: 0,
+  });
+  assertEquals(parseStrictRateLimitDecision({ allowed: false, count: 10, retryAfter: 120 }, 10), {
+    allowed: false,
+    count: 10,
+    retryAfterSeconds: 120,
+  });
+
+  const malformed: unknown[] = [
+    null,
+    undefined,
+    [],
+    "ok",
+    { allowed: "true", count: 1, retry_after: 0 },
+    { allowed: true, count: 0, retry_after: 0 },
+    { allowed: true, count: 11, retry_after: 0 },
+    { allowed: true, count: 1.5, retry_after: 0 },
+    { allowed: false, count: -1, retry_after: 0 },
+    { allowed: true, count: 1, retry_after: -1 },
+    { allowed: true, count: 1 },
+  ];
+  for (const item of malformed) {
+    assertEquals(parseStrictRateLimitDecision(item, 10), null);
+  }
+});
+
+Deno.test("checkUserWriteCounters checks burst then daily and passes on valid counts", async () => {
+  const calls: Array<{ fn: string; params: Record<string, unknown> }> = [];
+  const result = await checkUserWriteCounters({
+    userId: USER_ID,
+    rpc: (fn, params) => {
+      calls.push({ fn, params });
+      return Promise.resolve({ data: { allowed: true, count: 1, retry_after: 0 }, error: null });
+    },
+  });
+
+  assertEquals(result, { ok: true });
+  assertEquals(calls, [
+    {
+      fn: "check_rate_limit",
+      params: {
+        p_key: `${YOUTUBE_EDIT_BURST_LIMIT.keyPrefix}:${USER_ID}`,
+        p_max: YOUTUBE_EDIT_BURST_LIMIT.limit,
+        p_window_seconds: YOUTUBE_EDIT_BURST_LIMIT.windowSeconds,
+      },
+    },
+    {
+      fn: "check_rate_limit",
+      params: {
+        p_key: `${YOUTUBE_EDIT_DAILY_LIMIT.keyPrefix}:${USER_ID}`,
+        p_max: YOUTUBE_EDIT_DAILY_LIMIT.limit,
+        p_window_seconds: YOUTUBE_EDIT_DAILY_LIMIT.windowSeconds,
+      },
+    },
+  ]);
+});
+
+Deno.test("checkUserWriteCounters refuses on burst without calling daily", async () => {
+  const calls: string[] = [];
+  const result = await checkUserWriteCounters({
+    userId: USER_ID,
+    rpc: (_fn, params) => {
+      calls.push(String(params.p_key));
+      return Promise.resolve({ data: { allowed: false, count: 10, retry_after: 42 }, error: null });
+    },
+  });
+
+  assertEquals(result, { ok: false, code: "rate_limited", retryAfterSeconds: 42 });
+  assertEquals(calls, [`${YOUTUBE_EDIT_BURST_LIMIT.keyPrefix}:${USER_ID}`]);
+});
+
+Deno.test("checkUserWriteCounters refuses on daily counter", async () => {
+  let step = 0;
+  const result = await checkUserWriteCounters({
+    userId: USER_ID,
+    rpc: () => {
+      step += 1;
+      if (step === 1) {
+        return Promise.resolve({ data: { allowed: true, count: 2, retry_after: 0 }, error: null });
+      }
+      return Promise.resolve({ data: { allowed: false, count: 50, retry_after: 0 }, error: null });
+    },
+  });
+
+  assertEquals(result, { ok: false, code: "rate_limited", retryAfterSeconds: 1 });
+});
+
+Deno.test("checkUserWriteCounters fails closed as upstream_unavailable on RPC error, throw, or malformed payload", async () => {
+  const badRpcs = [
+    () => Promise.resolve({ data: null, error: { message: "down" } }),
+    () => Promise.reject(new Error("timeout")),
+    () => Promise.resolve({ data: null, error: null }),
+    () => Promise.resolve({ data: { allowed: true, count: 99, retry_after: 0 }, error: null }),
+  ];
+
+  for (const rpc of badRpcs) {
+    const result = await checkUserWriteCounters({ userId: USER_ID, rpc });
+    assertEquals(result, { ok: false, code: "upstream_unavailable" });
+  }
+});
+
+Deno.test("debitWriteBudget wraps weighted budget debit and maps allowed/refused/error", async () => {
+  const ok = await debitWriteBudget({
+    units: YOUTUBE_THUMBNAIL_SET_UNIT_COST,
+    now: new Date("2026-11-27T12:00:00Z"),
+    rpc: () => Promise.resolve({ data: { allowed: true, count: 50, retry_after: 0 }, error: null }),
+  });
+  assertEquals(ok, { ok: true, count: 50 });
+
+  const refused = await debitWriteBudget({
+    units: YOUTUBE_THUMBNAIL_SET_UNIT_COST,
+    now: new Date("2026-11-27T12:00:00Z"),
+    rpc: () => Promise.resolve({ data: { allowed: false, count: 3980, retry_after: 300 }, error: null }),
+  });
+  assertEquals(refused, { ok: false, code: "quota_exceeded", retryAfterSeconds: 300 });
+
+  const broken = await debitWriteBudget({
+    units: YOUTUBE_THUMBNAIL_SET_UNIT_COST,
+    now: new Date("2026-11-27T12:00:00Z"),
+    rpc: () => Promise.resolve({ data: null, error: { message: "db error" } }),
+  });
+  assertEquals(broken, { ok: false, code: "upstream_unavailable" });
+});

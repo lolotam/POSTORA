@@ -192,4 +192,54 @@ describe("YouTube resources gateway", () => {
     await expect(new SupabaseYouTubeResourcesGateway().getCapabilities("acc-1"))
       .rejects.toMatchObject({ code: "upstream_unavailable" });
   });
+
+  it("sends the set_thumbnail operation with the account, the video and the media id, and no user id", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ video_id: EXAMPLE_VIDEO_ID, applied: true }),
+      error: null,
+    });
+
+    const received = await new SupabaseYouTubeResourcesGateway().setThumbnail({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      mediaFileId: "media-1",
+    });
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("youtube-resources", {
+      body: {
+        operation: "set_thumbnail",
+        account_id: "acc-1",
+        video_id: EXAMPLE_VIDEO_ID,
+        media_file_id: "media-1",
+      },
+      timeout: 15000,
+    });
+    expect(received.data).toEqual({ video_id: EXAMPLE_VIDEO_ID, applied: true });
+  });
+
+  it.each([
+    ["an answer for another video", { video_id: "another-video", applied: true }],
+    ["an answer that does not say the write was applied", { video_id: EXAMPLE_VIDEO_ID, applied: false }],
+  ])("rejects a thumbnail answer with %s", async (_scenario, data) => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({ data: envelope(data), error: null });
+    await expect(new SupabaseYouTubeResourcesGateway().setThumbnail({
+      accountId: "acc-1",
+      videoId: EXAMPLE_VIDEO_ID,
+      mediaFileId: "media-1",
+    })).rejects.toMatchObject({ code: "upstream_unavailable" });
+  });
+
+  it("turns a thumbnail refusal into the server's stable code", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ error: "thumbnail_not_allowed", request_id: "req-3" }, { status: 403 }),
+      }),
+    });
+    const failure = await new SupabaseYouTubeResourcesGateway()
+      .setThumbnail({ accountId: "acc-1", videoId: EXAMPLE_VIDEO_ID, mediaFileId: "media-1" })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(YouTubeResourceError);
+    expect((failure as YouTubeResourceError).code).toBe("thumbnail_not_allowed");
+  });
 });

@@ -74,6 +74,19 @@ describe("YouTube legal disclosures", () => {
     expect(text).not.toContain("This scope does not allow us to edit or delete your existing videos.");
   });
 
+  it("discloses replacing the thumbnail of a video that was already uploaded", () => {
+    const { container } = renderPage(<GoogleApiDisclosure />);
+    const text = pageText(container);
+
+    expect(text).toContain("Replace the thumbnail of a video you already uploaded");
+    expect(text).toContain("thumbnails.set");
+    expect(text).toContain("using a JPEG or PNG image from your own Postora media library");
+    expect(text).toContain("Only an image you own is sent");
+    expect(text).toContain("Postora never replaces the video's media bytes, and Postora never deletes the video.");
+    expect(text).toContain("Setting a thumbnail is not a media-byte replacement");
+    expect(text).toContain("/youtube");
+  });
+
   it("discloses reading the channel's playlists and adding a new video to a chosen one", () => {
     const { container } = renderPage(<GoogleApiDisclosure />);
     const text = pageText(container);
@@ -132,6 +145,8 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("The playlists of your channel (playlist ID, title, privacy status) when you open YouTube publishing settings for a single connected channel or choose a destination playlist for a video you publish");
     expect(text).toContain("let you browse your uploaded videos and their full details");
     expect(text).toContain("Edit published video metadata only when that feature is enabled (currently disabled at the production baseline)");
+    expect(text).toContain("Replace the thumbnail of a video you already uploaded with a JPEG or PNG image from your own media library, only when you pick the image and confirm the change");
+    expect(text).toContain("The bytes of a JPEG or PNG image from your own Postora media library when you replace the thumbnail of a video you already uploaded");
     expect(text).toContain("List your channel's playlists so you can choose a destination playlist when publishing, and add a newly uploaded video to the playlist you select");
     expect(text).toContain("Postora never creates, renames, reorders, or deletes playlists and never removes playlist items");
     expect(text).toContain("Read, create, reply to, edit, delete, and moderate comments");

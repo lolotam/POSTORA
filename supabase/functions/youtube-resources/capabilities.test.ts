@@ -27,6 +27,7 @@ Deno.test("native row with all scopes recorded can browse, upload and comment", 
     browse: { state: "available" },
     upload: { state: "available" },
     edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
+    manage_thumbnail: { state: "available" },
     comments: { state: "available" },
   });
 });
@@ -36,6 +37,7 @@ Deno.test("native row with no recorded scopes is unknown for browse and upload, 
   assertEquals(result.scopes, { readonly: "unknown", upload: "unknown", force_ssl: "unknown" });
   assertEquals(result.capabilities.browse, { state: "unknown" });
   assertEquals(result.capabilities.upload, { state: "unknown" });
+  assertEquals(result.capabilities.manage_thumbnail, { state: "unknown" });
   assertEquals(result.capabilities.comments, { state: "unavailable", reason: "missing_scope" });
 });
 
@@ -46,6 +48,7 @@ Deno.test("a recorded list without readonly blocks browse only", () => {
   assertEquals(result.scopes.readonly, "missing");
   assertEquals(result.capabilities.browse, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.upload, { state: "available" });
+  assertEquals(result.capabilities.manage_thumbnail, { state: "available" });
   assertEquals(result.capabilities.comments, { state: "available" });
 });
 
@@ -57,6 +60,7 @@ Deno.test("needs_reauth makes every capability reconnect_required", () => {
     browse: expected,
     upload: expected,
     edit_metadata: { state: "unavailable", reason: "provider_unsupported" },
+    manage_thumbnail: expected,
     comments: expected,
   });
 });
@@ -64,6 +68,7 @@ Deno.test("needs_reauth makes every capability reconnect_required", () => {
 Deno.test("a native row with no token at all needs a reconnect", () => {
   const result = deriveYouTubeCapabilities(account({ hasAccessToken: false, hasRefreshToken: false }));
   assertEquals(result.connection, "reconnect_required");
+  assertEquals(result.capabilities.manage_thumbnail, { state: "unavailable", reason: "reconnect_required" });
 });
 
 Deno.test("composio row: browse unsupported, upload unknown, comments by the existing rule", () => {
@@ -75,7 +80,25 @@ Deno.test("composio row: browse unsupported, upload unknown, comments by the exi
   assertEquals(result.scopes, { readonly: "unknown", upload: "unknown", force_ssl: "unknown" });
   assertEquals(result.capabilities.browse, { state: "unavailable", reason: "provider_unsupported" });
   assertEquals(result.capabilities.upload, { state: "unknown" });
+  assertEquals(result.capabilities.manage_thumbnail, { state: "unavailable", reason: "provider_unsupported" });
   assertEquals(result.capabilities.comments, { state: "available" });
+});
+
+Deno.test("manage_thumbnail derivation across readonly-only, upload-only, and force_ssl-only scopes", () => {
+  const readonlyOnly = deriveYouTubeCapabilities(
+    account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly] } }),
+  );
+  assertEquals(readonlyOnly.capabilities.manage_thumbnail, { state: "unavailable", reason: "missing_scope" });
+
+  const uploadOnly = deriveYouTubeCapabilities(
+    account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.upload] } }),
+  );
+  assertEquals(uploadOnly.capabilities.manage_thumbnail, { state: "available" });
+
+  const forceSslOnly = deriveYouTubeCapabilities(
+    account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.force_ssl] } }),
+  );
+  assertEquals(forceSslOnly.capabilities.manage_thumbnail, { state: "available" });
 });
 
 

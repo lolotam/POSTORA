@@ -98,7 +98,8 @@ const GoogleApiDisclosure = () => {
                   than Postora needs. Postora edits published video metadata and can add a newly uploaded video to
                   an existing playlist you choose through the narrower force-ssl scope, but does not create, rename,
                   reorder, or delete playlists or remove playlist items, change channel settings, replace existing
-                  video media bytes, or delete videos.
+                  video media bytes, or delete videos. Setting a thumbnail is not a media-byte replacement: only the
+                  thumbnail image of your own video changes.
                 </li>
                 <li>
                   <strong>No monetization or membership data:</strong> We do not request scopes for channel memberships
@@ -149,6 +150,13 @@ const GoogleApiDisclosure = () => {
                         <li>
                           <strong>Set a custom thumbnail</strong> on the video you just uploaded
                           (<code className="bg-muted px-1 rounded">thumbnails.set</code>), when you provide one.
+                        </li>
+                        <li>
+                          <strong>Replace the thumbnail of a video you already uploaded</strong> from the YouTube
+                          Channel page (<code className="bg-muted px-1 rounded">/youtube</code>) through the same{" "}
+                          <code className="bg-muted px-1 rounded">thumbnails.set</code> call, using a JPEG or PNG
+                          image from your own Postora media library. Only an image you own is sent, Postora never
+                          replaces the video&apos;s media bytes, and Postora never deletes the video.
                         </li>
                       </ul>
                       <p className="text-muted-foreground text-sm mt-2">
@@ -281,6 +289,12 @@ const GoogleApiDisclosure = () => {
                   <strong>Published Video Editing:</strong> When published metadata editing is enabled (currently
                   disabled at the production baseline), to update metadata on your existing videos only when you ask,
                   without replacing their media bytes or deleting videos
+                </li>
+                <li>
+                  <strong>Thumbnail Replacement:</strong> To replace the thumbnail of a video you already uploaded,
+                  only when you choose a JPEG or PNG image from your own Postora media library on the YouTube Channel
+                  page (<code className="bg-muted px-1 rounded">/youtube</code>) and confirm the change; the video's
+                  media bytes are never replaced and the video is never deleted
                 </li>
                 <li>
                   <strong>Playlist Selection:</strong> To list the playlists of your channel so you can choose a

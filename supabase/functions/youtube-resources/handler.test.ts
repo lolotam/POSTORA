@@ -5,6 +5,7 @@ import {
   type YouTubeResourceRefusal,
   type YouTubeEditPort,
   type YouTubeResourcesPorts,
+  type YouTubeThumbnailPort,
   type YouTubeTokenResult,
 } from "./handler.ts";
 import {
@@ -107,6 +108,7 @@ function fixture(overrides: {
   tokenError?: boolean;
   rateLimitError?: boolean;
   edit?: YouTubeEditPort;
+  thumbnail?: YouTubeThumbnailPort;
   categories?: YouTubeCategoryClient;
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
@@ -183,6 +185,7 @@ function fixture(overrides: {
       },
     },
     edit: overrides.edit,
+    thumbnail: overrides.thumbnail,
     categories: overrides.categories ?? {
       list: (_token, input): Promise<CategoryListResult> => {
         const arabic = typeof input.locale === "string" && input.locale.startsWith("ar");
@@ -1009,4 +1012,148 @@ Deno.test("playlists operation pages through admit and providerRead, and shares 
   assertEquals(composioResp.status, 409);
   assertEquals((await composioResp.json()).error, "provider_unsupported");
   assertEquals(composio.playlistInputs.length, 0);
+});
+
+const MEDIA_FILE_ID = "0ee30001-0000-4000-8000-000000000031";
+
+Deno.test("set_thumbnail validates request shape and refuses when port is disabled", async () => {
+  const { handler, logs } = fixture();
+  const badMedia = await handler(request({
+    operation: "set_thumbnail",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    media_file_id: "not-a-uuid",
+  }));
+  assertEquals(badMedia.status, 400);
+  assertEquals((await badMedia.json()).error, "invalid_request");
+  assertEquals(logs[0].operation, "set_thumbnail");
+
+  const badVideo = await handler(request({
+    operation: "set_thumbnail",
+    account_id: ACCOUNT_ID,
+    video_id: "../etc",
+    media_file_id: MEDIA_FILE_ID,
+  }));
+  assertEquals(badVideo.status, 400);
+
+  const extraKey = await handler(request({
+    operation: "set_thumbnail",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    media_file_id: MEDIA_FILE_ID,
+    extra: true,
+  }));
+  assertEquals(extraKey.status, 400);
+
+  const disabled = await handler(request({
+    operation: "set_thumbnail",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    media_file_id: MEDIA_FILE_ID,
+  }));
+  assertEquals(disabled.status, 403);
+  assertEquals((await disabled.json()).error, "write_not_enabled");
+});
+
+Deno.test("set_thumbnail runs admit() before calling the thumbnail port", async () => {
+  let portCalls = 0;
+  const thumbnail: YouTubeThumbnailPort = {
+    setThumbnail: () => {
+      portCalls += 1;
+      return Promise.resolve({ ok: true, value: { video_id: "videoAAAAAAA", applied: true } });
+    },
+  };
+
+  const composio = fixture({ account: { authProvider: "composio" }, thumbnail });
+  const composioResp = await composio.handler(request({
+    operation: "set_thumbnail",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    media_file_id: MEDIA_FILE_ID,
+  }));
+  assertEquals(composioResp.status, 409);
+  assertEquals((await composioResp.json()).error, "provider_unsupported");
+  assertEquals(portCalls, 0);
+
+  const rateLimited = fixture({ rateLimit: { allowed: false, retryAfterSeconds: 45 }, thumbnail });
+  const limitedResp = await rateLimited.handler(request({
+    operation: "set_thumbnail",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    media_file_id: MEDIA_FILE_ID,
+  }));
+  assertEquals(limitedResp.status, 429);
+  assertEquals(await limitedResp.json(), {
+    error: "rate_limited",
+    request_id: REQUEST_ID,
+    retry_after_seconds: 45,
+  });
+  assertEquals(portCalls, 0);
+});
+
+Deno.test("set_thumbnail returns success envelope and maps port error codes", async () => {
+  const okFixture = fixture({
+    thumbnail: {
+      setThumbnail: ({ videoId }) => Promise.resolve({ ok: true, value: { video_id: videoId, applied: true } }),
+    },
+  });
+  const okResp = await okFixture.handler(request({
+    operation: "set_thumbnail",
+    account_id: ACCOUNT_ID,
+    video_id: "videoAAAAAAA",
+    media_file_id: MEDIA_FILE_ID,
+  }));
+  assertEquals(okResp.status, 200);
+  assertEquals(await okResp.json(), {
+    schema_version: 1,
+    request_id: REQUEST_ID,
+    freshness: { fetched_at: "2026-11-20T10:00:00.000Z", source: "provider" },
+    data: { video_id: "videoAAAAAAA", applied: true },
+  });
+
+  const errorCases: Array<{
+    result: Awaited<ReturnType<YouTubeThumbnailPort["setThumbnail"]>>;
+    status: number;
+    body: Record<string, unknown>;
+  }> = [
+    {
+      result: { ok: false, code: "media_not_usable" },
+      status: 400,
+      body: { error: "media_not_usable", request_id: REQUEST_ID },
+    },
+    {
+      result: { ok: false, code: "thumbnail_not_allowed" },
+      status: 403,
+      body: { error: "thumbnail_not_allowed", request_id: REQUEST_ID },
+    },
+    {
+      result: { ok: false, code: "outcome_unknown" },
+      status: 502,
+      body: { error: "outcome_unknown", request_id: REQUEST_ID },
+    },
+    {
+      result: { ok: false, code: "rate_limited", retryAfterSeconds: 90 },
+      status: 429,
+      body: { error: "rate_limited", request_id: REQUEST_ID, retry_after_seconds: 90 },
+    },
+    {
+      result: { ok: false, code: "quota_exceeded" },
+      status: 429,
+      body: { error: "quota_exceeded", request_id: REQUEST_ID },
+    },
+  ];
+
+  for (const testCase of errorCases) {
+    const errFixture = fixture({
+      thumbnail: { setThumbnail: () => Promise.resolve(testCase.result) },
+    });
+    const resp = await errFixture.handler(request({
+      operation: "set_thumbnail",
+      account_id: ACCOUNT_ID,
+      video_id: "videoAAAAAAA",
+      media_file_id: MEDIA_FILE_ID,
+    }));
+    assertEquals(resp.status, testCase.status);
+    assertEquals(await resp.json(), testCase.body);
+  }
 });

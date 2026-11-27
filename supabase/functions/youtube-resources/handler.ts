@@ -9,6 +9,7 @@ import {
   type YouTubeAccountCapabilities,
   type YouTubeResourceErrorCode,
   type YouTubeResourceSuccess,
+  type YouTubeSetThumbnailResult,
 } from "./contracts.ts";
 import type { YouTubeReadClient, YouTubeReadResult } from "./youtubeReadClient.ts";
 import type { EditChanges, EditFailureCode, EditSnapshot } from "./editLifecycle.ts";
@@ -19,6 +20,18 @@ import type { CategoryListResult, YouTubeCategoryClient } from "./categoryClient
  * refused before any provider call. Tests inject a fake provider-backed port
  * to exercise the real snapshot/plan/verify lifecycle offline.
  */
+export interface YouTubeThumbnailPort {
+  setThumbnail(input: {
+    account: YouTubeResourceAccount;
+    userId: string;
+    videoId: string;
+    mediaFileId: string;
+  }): Promise<
+    | { ok: true; value: YouTubeSetThumbnailResult }
+    | { ok: false; code: YouTubeResourceErrorCode; retryAfterSeconds?: number }
+  >;
+}
+
 export interface YouTubeEditPort {
   snapshot(input: { accountId: string; videoId: string; ownerId: string; channelId: string }): Promise<EditSnapshot>;
   update(input: {
@@ -72,6 +85,7 @@ export interface YouTubeResourcesPorts {
   youtube: YouTubeReadClient;
   categories: YouTubeCategoryClient;
   edit?: YouTubeEditPort;
+  thumbnail?: YouTubeThumbnailPort;
   rateLimit: { check(userId: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> };
 }
 
@@ -130,6 +144,12 @@ const UpdateVideoRequest = z.object({
   }),
   privacy_confirmation: z.object({ to: z.enum(["private", "unlisted", "public"]) }).strict().optional(),
 }).strict();
+const SetThumbnailRequest = z.object({
+  operation: z.literal("set_thumbnail"),
+  account_id: AccountId,
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{6,64}$/),
+  media_file_id: z.string().uuid(),
+}).strict();
 const RequestSchema = z.discriminatedUnion("operation", [
   CapabilitiesRequest,
   CategoriesRequest,
@@ -139,6 +159,7 @@ const RequestSchema = z.discriminatedUnion("operation", [
   PlaylistsRequest,
   EditSnapshotRequest,
   UpdateVideoRequest,
+  SetThumbnailRequest,
 ]);
 
 // The audit label for a refusal: the requested operation when the body names one of
@@ -149,7 +170,7 @@ function requestedOperationOf(body: unknown): string {
   const requested = (body as Record<string, unknown>).operation;
   return requested === "capabilities" || requested === "categories" || requested === "channel" ||
       requested === "videos" || requested === "video" || requested === "playlists" ||
-      requested === "edit_snapshot" || requested === "update_video"
+      requested === "edit_snapshot" || requested === "update_video" || requested === "set_thumbnail"
     ? requested
     : "unknown";
 }
@@ -472,6 +493,66 @@ export function createYouTubeResourcesHandler(
           console.error("[youtube-resources] edit failed:", error instanceof Error ? error.name : "unknown");
         }
         return await refuse(req, { operation: parsed.data.operation, code, userId, accountId, requestId });
+      }
+    }
+    if (parsed.data.operation === "set_thumbnail") {
+      if (!ports.thumbnail) {
+        return await refuse(req, {
+          operation: "set_thumbnail",
+          code: "write_not_enabled",
+          userId,
+          accountId,
+          requestId,
+        });
+      }
+      try {
+        const admission = await admit(account, userId);
+        if (admission !== null) {
+          return await refuse(req, {
+            operation: "set_thumbnail",
+            code: admission.code,
+            userId,
+            accountId,
+            requestId,
+          }, admission.retryAfterSeconds !== undefined
+            ? { retry_after_seconds: admission.retryAfterSeconds }
+            : undefined);
+        }
+        const result = await ports.thumbnail.setThumbnail({
+          account,
+          userId,
+          videoId: parsed.data.video_id,
+          mediaFileId: parsed.data.media_file_id,
+        });
+        if (!result.ok) {
+          return await refuse(req, {
+            operation: "set_thumbnail",
+            code: result.code,
+            userId,
+            accountId,
+            requestId,
+          }, result.retryAfterSeconds !== undefined
+            ? { retry_after_seconds: result.retryAfterSeconds }
+            : undefined);
+        }
+        const envelope: YouTubeResourceSuccess<YouTubeSetThumbnailResult> = {
+          schema_version: YOUTUBE_RESOURCES_SCHEMA_VERSION,
+          request_id: requestId,
+          freshness: { fetched_at: ports.clock.now().toISOString(), source: "provider" },
+          data: result.value,
+        };
+        return new Response(JSON.stringify(envelope), {
+          status: 200,
+          headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
+        });
+      } catch {
+        return await refuse(req, {
+          operation: "set_thumbnail",
+          code: "internal_error",
+          userId,
+          accountId,
+          requestId,
+        });
       }
     }
     if (parsed.data.operation === "capabilities") {

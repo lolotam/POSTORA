@@ -15,6 +15,17 @@ import { createYouTubeReadClient } from "./youtubeReadClient.ts";
 import { createYouTubeCategoryClient } from "./categoryClient.ts";
 import { createConnectedEditPort, PUBLISHED_EDIT_WRITE_ENABLED } from "./editComposition.ts";
 import { createYouTubeEditProvider } from "./editProvider.ts";
+import { verifyAccountStillBound } from "./accountBinding.ts";
+import {
+  createYouTubeThumbnailPort,
+  type OwnedThumbnailMediaRow,
+  type ThumbnailDownloadResult,
+} from "./thumbnailComposition.ts";
+import {
+  isAdmissibleThumbnailStorageLocation,
+  THUMBNAIL_MAX_BYTES,
+} from "./thumbnailMedia.ts";
+import { checkUserWriteCounters, debitWriteBudget } from "./writeLimits.ts";
 
 // A stalled PostgREST request must not hold the whole function: the account read and the
 // awaited refusal-log insert both fail at this deadline and the handler answers
@@ -169,6 +180,123 @@ ports.edit = createConnectedEditPort({
     authorizeWrite: () => Promise.resolve(false),
     stillBound: () => Promise.resolve(false),
   },
+});
+
+const STORAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
+
+async function readBoundedBlob(
+  blob: Blob,
+  maxBytes: number,
+  timeoutMs = STORAGE_DOWNLOAD_TIMEOUT_MS,
+): Promise<ThumbnailDownloadResult> {
+  if (typeof blob.size === "number" && blob.size > maxBytes) {
+    return { ok: false, reason: "too_large" };
+  }
+  const reader = blob.stream().getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    void reader.cancel().catch(() => undefined);
+  }, timeoutMs);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (timedOut) return { ok: false, reason: "storage_error" };
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return { ok: false, reason: "too_large" };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, reason: "storage_error" };
+  } finally {
+    clearTimeout(timer);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, bytes };
+}
+
+function toOwnedMediaRow(row: unknown): OwnedThumbnailMediaRow | null {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const r = row as Record<string, unknown>;
+  const id = text(r.id);
+  const userId = text(r.user_id);
+  const filePath = text(r.file_path);
+  const fileType = text(r.file_type);
+  if (!id || !userId || !filePath || !fileType) return null;
+  return {
+    id,
+    userId,
+    filePath,
+    fileType,
+    fileSize: typeof r.file_size === "number" ? r.file_size : null,
+    mimeType: text(r.mime_type),
+    storageBucket: text(r.storage_bucket),
+    scanState: text(r.scan_state),
+  };
+}
+
+ports.thumbnail = createYouTubeThumbnailPort({
+  media: {
+    loadOwned: async ({ mediaFileId, userId }) => {
+      const { data, error } = await admin
+        .from("media_files")
+        .select("id, user_id, file_path, file_type, file_size, mime_type, storage_bucket, scan_state")
+        .eq("id", mediaFileId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) {
+        console.error({
+          event: "youtube_resources_db_error",
+          op: "thumbnail_media_load",
+          code: typeof error.code === "string" ? error.code : "unknown",
+        });
+        return { ok: false, reason: "read_error" };
+      }
+      return { ok: true, row: toOwnedMediaRow(data) };
+    },
+    downloadBytes: async (row) => {
+      if (
+        !row.storageBucket ||
+        !row.filePath ||
+        !isAdmissibleThumbnailStorageLocation(row.storageBucket, row.filePath, row.userId)
+      ) {
+        return { ok: false, reason: "not_usable" };
+      }
+      const { data, error } = await admin.storage.from(row.storageBucket).download(row.filePath);
+      if (error || !data) {
+        return { ok: false, reason: "storage_error" };
+      }
+      return await readBoundedBlob(data, THUMBNAIL_MAX_BYTES);
+    },
+  },
+  writeLimits: {
+    checkUserWriteCounters: (userId) =>
+      checkUserWriteCounters({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        userId,
+      }),
+    debitWriteBudget: (units) =>
+      debitWriteBudget({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        units,
+      }),
+  },
+  stillBound: (input) => verifyAccountStillBound({ loadAccount: ports.accounts.load, ...input }),
+  tokens: ports.tokens,
+  youtube: ports.youtube,
+  fetchImpl: fetch,
 });
 
 Deno.serve(createYouTubeResourcesHandler(ports));
