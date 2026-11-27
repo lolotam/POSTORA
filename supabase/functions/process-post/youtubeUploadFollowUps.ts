@@ -1,23 +1,31 @@
 /**
- * The things that happen AFTER the video exists: the thumbnail and the first
- * comment.
+ * The things that happen AFTER the video exists: the thumbnail, the first
+ * comment, the playlist insert, and the caption track upload.
  *
  * They belong to the run that CREATED the video. Two runs can reach a video:
  * the one that uploaded it, and the one that inherited its receipt after an
  * interruption. Only the first one does the follow-ups, because a first
  * comment posted twice is a duplicate on the customer's channel.
  *
- * Neither follow-up is allowed to fail the publish. The video is already
+ * No follow-up is allowed to fail the publish. The video is already
  * live, and the public row has to be settled either way, so a failure is
  * logged and the publish carries on.
  *
- * Both follow-ups are best-effort requests, so both are bounded by what is
+ * All follow-ups are best-effort requests, so all are bounded by what is
  * left of the worker: a follow-up that runs out of time is skipped, and the
  * video is still recorded. A follow-up that never ends would take the worker
  * with it, and the outcome would never be written at all.
  */
 
+import { validateCaptionUploadInput } from "../_shared/captionFile.ts";
 import { redactProviderText } from "./youtubeUploadPolicy.ts";
+
+export interface YoutubeCaptionFollowUpInput {
+  language: string;
+  name: string;
+  format: "srt" | "vtt";
+  content: string;
+}
 
 /** What the follow-ups need to know about the video. */
 export interface YoutubeFollowUpRequest {
@@ -31,6 +39,8 @@ export interface YoutubeFollowUpRequest {
   firstComment: string | null;
   /** The playlist the customer asked to add the video to, if any. */
   playlistId?: string | null;
+  /** The caption track the customer asked to attach after upload, if any. */
+  caption?: YoutubeCaptionFollowUpInput | null;
 }
 
 /** The bytes of a file the follow-ups send. */
@@ -62,15 +72,30 @@ export interface YoutubeFollowUpDeps {
    * Zero means there is no time for it, so it is skipped.
    */
   budgetMs(): number;
-  /** Debits the project-wide write budget before a playlist insert. */
-  debitWriteBudget?: () => Promise<boolean>;
+  /** Debits the project-wide write budget before a playlist or caption insert. */
+  debitWriteBudget?: (units?: number) => Promise<boolean>;
+  /**
+   * Whether the account's granted_scopes explicitly includes
+   * `https://www.googleapis.com/auth/youtube.force-ssl` (`D-P7-4`).
+   */
+  hasCaptionScope?: () => boolean;
+  /**
+   * Checks the per-user daily caption upload allowance
+   * (`youtube-resources:caption-upload:day`, 2 per 24 h).
+   */
+  checkCaptionUploadAllowance?: () => Promise<boolean>;
 }
 
 const THUMBNAIL_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set";
 const COMMENT_ENDPOINT = "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet";
 const PLAYLISTS_PRECHECK_ENDPOINT = "https://www.googleapis.com/youtube/v3/playlists";
 const PLAYLIST_ITEMS_ENDPOINT = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet";
+const CAPTIONS_UPLOAD_ENDPOINT =
+  "https://www.googleapis.com/upload/youtube/v3/captions?part=snippet&uploadType=multipart";
 const PLAYLIST_ID_PATTERN = /^[A-Za-z0-9_-]{10,64}$/;
+const PLAYLIST_INSERT_UNIT_COST = 50;
+const CAPTION_INSERT_UNIT_COST = 400;
+const CAPTION_MAX_TIMEOUT_MS = 60_000;
 
 export interface YoutubeFollowUpOutcome {
   state: "not_requested" | "applied" | "skipped" | "failed" | "unknown";
@@ -81,6 +106,7 @@ export interface YoutubeFollowUpResults {
   thumbnail: YoutubeFollowUpOutcome;
   first_comment: YoutubeFollowUpOutcome;
   playlist: YoutubeFollowUpOutcome;
+  caption: YoutubeFollowUpOutcome;
 }
 
 const NOT_REQUESTED: YoutubeFollowUpOutcome = { state: "not_requested", reason: null };
@@ -88,7 +114,7 @@ const NOT_REQUESTED: YoutubeFollowUpOutcome = { state: "not_requested", reason: 
 /**
  * The follow-ups of one video.
  *
- * Each follow-up asks for the time that is left for itself, so the second one
+ * Each follow-up asks for the time that is left for itself, so the next one
  * is skipped rather than started when the worker has already run out of time.
  * The observed outcome is returned so the settlement can record what actually
  * happened instead of guessing from the request.
@@ -106,7 +132,10 @@ export async function runYoutubeFollowUps(
   const playlist = request.playlistId
     ? await addToYoutubePlaylist(request.videoId, request.channelId, request.accessToken, request.playlistId, deps)
     : NOT_REQUESTED;
-  return { thumbnail, first_comment, playlist };
+  const caption = request.caption !== undefined && request.caption !== null
+    ? await uploadYoutubeCaption(request.videoId, request.accessToken, request.caption, deps)
+    : NOT_REQUESTED;
+  return { thumbnail, first_comment, playlist, caption };
 }
 
 async function setYoutubeThumbnail(
@@ -261,7 +290,7 @@ async function addToYoutubePlaylist(
   if (ownershipFailure) return ownershipFailure;
 
   try {
-    if (!deps.debitWriteBudget || !await deps.debitWriteBudget()) {
+    if (!deps.debitWriteBudget || !await deps.debitWriteBudget(PLAYLIST_INSERT_UNIT_COST)) {
       return { state: "skipped", reason: "quota_budget" };
     }
   } catch (error) {
@@ -301,6 +330,130 @@ async function addToYoutubePlaylist(
   } catch (error) {
     // Never retry playlistItems.insert: a second call adds the video twice.
     console.warn("Error adding video to playlist:", redactProviderText(error));
+    return { state: "unknown", reason: "answer_lost" };
+  }
+}
+
+function isCaptionInputCandidate(value: unknown): value is YoutubeCaptionFollowUpInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.language === "string" &&
+    typeof record.name === "string" &&
+    (record.format === "srt" || record.format === "vtt") &&
+    typeof record.content === "string"
+  );
+}
+
+async function uploadYoutubeCaption(
+  videoId: string,
+  accessToken: string,
+  caption: unknown,
+  deps: YoutubeFollowUpDeps,
+): Promise<YoutubeFollowUpOutcome> {
+  // 1. Validate caption input — free.
+  if (!isCaptionInputCandidate(caption) || !validateCaptionUploadInput(caption).ok) {
+    return { state: "skipped", reason: "invalid_caption" };
+  }
+
+  // 1a. Scope (`D-P7-4`) — free. Requires youtube.force-ssl in granted_scopes.
+  if (!deps.hasCaptionScope || !deps.hasCaptionScope()) {
+    return { state: "skipped", reason: "missing_scope" };
+  }
+
+  // 2. Time budget check.
+  const initialBudgetMs = deps.budgetMs();
+  if (initialBudgetMs <= 0) {
+    return { state: "skipped", reason: "no_time" };
+  }
+
+  // 3. Authority check.
+  try {
+    if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
+  } catch {
+    return { state: "skipped", reason: "authority_lost" };
+  }
+
+  // 4. Per-user daily caption upload allowance (2 / 24 h).
+  try {
+    if (!deps.checkCaptionUploadAllowance || !await deps.checkCaptionUploadAllowance()) {
+      return { state: "skipped", reason: "rate_limited" };
+    }
+  } catch {
+    return { state: "skipped", reason: "rate_limited" };
+  }
+
+  // 5. Project write budget (400 units).
+  try {
+    if (!deps.debitWriteBudget || !await deps.debitWriteBudget(CAPTION_INSERT_UNIT_COST)) {
+      return { state: "skipped", reason: "quota_budget" };
+    }
+  } catch {
+    return { state: "skipped", reason: "quota_budget" };
+  }
+
+  // 6. Re-check write authority and remaining time before sending the provider write.
+  try {
+    if (!await deps.canWrite()) return { state: "skipped", reason: "authority_lost" };
+  } catch {
+    return { state: "skipped", reason: "authority_lost" };
+  }
+  const uploadBudgetMs = deps.budgetMs();
+  if (uploadBudgetMs <= 0) {
+    return { state: "skipped", reason: "no_time" };
+  }
+
+  // 7. Build multipart body with explicit boundary and send one POST.
+  const boundary = `---postora-caption-${crypto.randomUUID()}`;
+  const snippetJson = JSON.stringify({
+    snippet: {
+      videoId,
+      language: caption.language,
+      name: caption.name,
+      isDraft: false,
+    },
+  });
+  const trackContentType = caption.format === "srt" ? "application/x-subrip" : "text/vtt";
+  const multipartBody = [
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    snippetJson,
+    `--${boundary}`,
+    `Content-Type: ${trackContentType}; charset=UTF-8`,
+    "",
+    caption.content,
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+
+  try {
+    const response = await deps.fetchImpl(CAPTIONS_UPLOAD_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartBody,
+      signal: AbortSignal.timeout(Math.min(uploadBudgetMs, CAPTION_MAX_TIMEOUT_MS)),
+    });
+
+    if (response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return { state: "applied", reason: null };
+    }
+
+    await response.body?.cancel().catch(() => {});
+    if (response.status === 409) {
+      console.warn("YouTube caption upload failed: status=409 code=conflict");
+      return { state: "failed", reason: "conflict" };
+    }
+
+    console.warn(`YouTube caption upload failed: status=${response.status} code=refused`);
+    return { state: "failed", reason: "refused" };
+  } catch {
+    // Sent once and never retried; never log caption content or raw error bodies (`D-P7-4`).
+    console.warn("YouTube caption upload error: code=answer_lost");
     return { state: "unknown", reason: "answer_lost" };
   }
 }

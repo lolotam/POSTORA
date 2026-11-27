@@ -16,6 +16,7 @@ Deno.test("an unverified publish keeps requested and effective privacy apart", (
   assertEquals(evidence.effective_privacy, "unknown");
   assertEquals(evidence.thumbnail, { state: "unknown", reason: null });
   assertEquals(evidence.first_comment, { state: "not_requested", reason: null });
+  assertEquals(evidence.caption, { state: "not_requested", reason: null });
 });
 
 Deno.test("thumbnail and first-comment outcomes stay independent and reasons are sanitized", () => {
@@ -127,4 +128,49 @@ Deno.test("playlist evidence records not_requested when omitted and preserves no
     { playlistState: "skipped", playlistReason: "quota_budget" },
   );
   assertEquals(quotaBudget.playlist, { state: "skipped", reason: "quota_budget" });
+});
+
+Deno.test("caption evidence records not_requested when absent, extracts language/format/byte_length without content, and sanitizes new negative reasons", () => {
+  const withoutCaption = youtubeEvidenceFromMetadata({ youtube_visibility: "public" });
+  assertEquals(withoutCaption.caption, { state: "not_requested", reason: null });
+
+  const vttContent = "WEBVTT\n\n00:00.000 --> 00:02.000\nمرحبا\n";
+  const expectedBytes = new TextEncoder().encode(vttContent).byteLength;
+
+  const applied = youtubeEvidenceFromMetadata(
+    {
+      youtube_visibility: "public",
+      youtube_caption: {
+        language: "ar",
+        name: "Arabic Subtitles",
+        format: "vtt",
+        content: vttContent,
+      },
+    },
+    { captionState: "applied", captionReason: null },
+  );
+  assertEquals(applied.caption, {
+    state: "applied",
+    reason: null,
+    language: "ar",
+    format: "vtt",
+    byte_length: expectedBytes,
+  });
+  assertEquals(JSON.stringify(applied).includes("مرحبا"), false);
+
+  for (const reason of ["invalid_caption", "missing_scope", "rate_limited", "quota_budget", "conflict"] as const) {
+    const failedOrSkipped = youtubeEvidenceFromMetadata(
+      {
+        youtube_visibility: "public",
+        youtube_caption: {
+          language: "en-US",
+          name: "English",
+          format: "srt",
+          content: "1\n00:00:00,000 --> 00:00:01,000\nHi\n",
+        },
+      },
+      { captionState: reason === "conflict" ? "failed" : "skipped", captionReason: reason },
+    );
+    assertEquals(failedOrSkipped.caption.reason, reason);
+  }
 });

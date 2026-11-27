@@ -6,27 +6,39 @@
  *
  *   * every request is bounded by what is left of the worker, because a
  *     follow-up that never ends would take the outcome with it;
- *   * the budget is asked for EVERY follow-up, so the second one is skipped
+ *   * the budget is asked for EVERY follow-up, so the next one is skipped
  *     when the worker has already run out of time;
- *   * the first comment is posted once and never retried: a first comment
- *     posted twice is a duplicate on the customer's channel;
- *   * neither follow-up can fail the publish.
+ *   * the first comment and caption upload are posted once and never retried:
+ *     posting twice creates a duplicate on the customer's channel;
+ *   * no follow-up can fail the publish.
  */
 
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   runYoutubeFollowUps,
+  type YoutubeCaptionFollowUpInput,
   type YoutubeFollowUpDeps,
 } from "./youtubeUploadFollowUps.ts";
 
 const VIDEO_ID = "abcdefghijk";
 const THUMBNAIL_URL = "https://cdn.example.com/thumbnail.jpg";
+const PLAYLIST_ID = "PLfixtureplaylist001";
+const CHANNEL_ID = "UCfixturechannel000000001";
+
+const VALID_VTT_CAPTION: YoutubeCaptionFollowUpInput = {
+  language: "en",
+  name: "English CC",
+  format: "vtt",
+  content: "WEBVTT\n\n00:00.000 --> 00:02.000\nHello world\n",
+};
 
 interface Call {
   url: string;
   method: string;
   /** Whether the request carried a deadline. */
   bounded: boolean;
+  headers?: Record<string, string>;
+  rawBody?: string;
   body?: Record<string, unknown>;
 }
 
@@ -228,6 +240,7 @@ Deno.test("follow-up outcomes are returned as observed, never inferred from the 
   }, w.deps);
   assertEquals(results.thumbnail.state, "applied");
   assertEquals(results.first_comment.state, "applied");
+  assertEquals(results.caption, { state: "not_requested", reason: null });
 
   const skipped = await runYoutubeFollowUps({
     videoId: VIDEO_ID, channelId: "UCfixturechannel000000001", accessToken: "token-1",
@@ -235,6 +248,7 @@ Deno.test("follow-up outcomes are returned as observed, never inferred from the 
   }, world({ budgetMs: 0 }).deps);
   assertEquals(skipped.thumbnail, { state: "skipped", reason: "no_time" });
   assertEquals(skipped.first_comment, { state: "not_requested", reason: null });
+  assertEquals(skipped.caption, { state: "not_requested", reason: null });
 });
 
 Deno.test("authority lost during a thumbnail download prevents both provider writes", async () => {
@@ -251,17 +265,15 @@ Deno.test("authority lost during a thumbnail download prevents both provider wri
 // The playlist insert
 // ───────────────────────────────────────────────────────────────────────────
 
-const PLAYLIST_ID = "PLfixtureplaylist001";
-const CHANNEL_ID = "UCfixturechannel000000001";
-
 function playlistWorld(options: {
   budgetMs?: number | (() => number);
   canWrite?: () => Promise<boolean>;
-  debitWriteBudget?: () => Promise<boolean>;
+  debitWriteBudget?: (units?: number) => Promise<boolean>;
   precheck?: { status: number; body: unknown } | "throw";
   insert?: { status: number; body?: unknown } | "throw";
 } = {}) {
   const calls: Call[] = [];
+  const debitedUnits: Array<number | undefined> = [];
   let budgetDebits = 0;
   let precheckCalls = 0;
   let insertCalls = 0;
@@ -272,9 +284,10 @@ function playlistWorld(options: {
     budgetMs: () => (typeof options.budgetMs === "function"
       ? options.budgetMs()
       : options.budgetMs ?? 5_000),
-    debitWriteBudget: async () => {
+    debitWriteBudget: async (units) => {
       budgetDebits += 1;
-      return options.debitWriteBudget ? await options.debitWriteBudget() : true;
+      debitedUnits.push(units);
+      return options.debitWriteBudget ? await options.debitWriteBudget(units) : true;
     },
     fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -304,10 +317,10 @@ function playlistWorld(options: {
     },
   };
 
-  return { calls, deps, counts: () => ({ budgetDebits, precheckCalls, insertCalls }) };
+  return { calls, deps, debitedUnits, counts: () => ({ budgetDebits, precheckCalls, insertCalls }) };
 }
 
-Deno.test("playlist follow-up runs after thumbnail and first_comment, verifies ownership, debits budget, and inserts once", async () => {
+Deno.test("playlist follow-up runs after thumbnail and first_comment, verifies ownership, debits 50 units, and inserts once", async () => {
   const w = playlistWorld();
   const results = await runYoutubeFollowUps({
     videoId: VIDEO_ID,
@@ -321,7 +334,9 @@ Deno.test("playlist follow-up runs after thumbnail and first_comment, verifies o
   assertEquals(results.thumbnail, { state: "applied", reason: null });
   assertEquals(results.first_comment, { state: "applied", reason: null });
   assertEquals(results.playlist, { state: "applied", reason: null });
+  assertEquals(results.caption, { state: "not_requested", reason: null });
   assertEquals(w.counts(), { budgetDebits: 1, precheckCalls: 1, insertCalls: 1 });
+  assertEquals(w.debitedUnits, [50]);
   assertEquals(w.calls.map((c) => c.method), ["POST", "POST", "GET", "POST"]);
   assertEquals(w.calls[3].body, {
     snippet: { playlistId: PLAYLIST_ID, resourceId: { kind: "youtube#video", videoId: VIDEO_ID } },
@@ -405,4 +420,384 @@ Deno.test("playlist follow-up handles budget refusal, authority loss, no_time, r
   assertEquals(r6.thumbnail, { state: "unknown", reason: "answer_lost" });
   assertEquals(r6.playlist, { state: "skipped", reason: "authority_lost" });
   assertEquals(authThrow.counts().insertCalls, 0);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The caption upload (Spec §14.3 & D-P7-4)
+// ───────────────────────────────────────────────────────────────────────────
+
+function captionWorld(options: {
+  budgetMs?: number | (() => number);
+  canWrite?: () => Promise<boolean>;
+  hasCaptionScope?: () => boolean;
+  checkCaptionUploadAllowance?: () => Promise<boolean>;
+  debitWriteBudget?: (units?: number) => Promise<boolean>;
+  captionResponse?: { status: number; bodyText?: string } | "throw";
+} = {}) {
+  const calls: Call[] = [];
+  const debitedUnits: Array<number | undefined> = [];
+  let scopeChecks = 0;
+  let allowanceChecks = 0;
+  let budgetDebits = 0;
+  let captionUploadCalls = 0;
+
+  const deps: YoutubeFollowUpDeps = {
+    canWrite: options.canWrite ?? (() => Promise.resolve(true)),
+    downloadThumbnail: () => Promise.resolve({ blob: new Blob(["bytes"]), mimeType: "image/jpeg" }),
+    budgetMs: () => (typeof options.budgetMs === "function"
+      ? options.budgetMs()
+      : options.budgetMs ?? 5_000),
+    hasCaptionScope: () => {
+      scopeChecks += 1;
+      return options.hasCaptionScope ? options.hasCaptionScope() : true;
+    },
+    checkCaptionUploadAllowance: async () => {
+      allowanceChecks += 1;
+      return options.checkCaptionUploadAllowance ? await options.checkCaptionUploadAllowance() : true;
+    },
+    debitWriteBudget: async (units) => {
+      budgetDebits += 1;
+      debitedUnits.push(units);
+      return options.debitWriteBudget ? await options.debitWriteBudget(units) : true;
+    },
+    fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? "GET";
+      const headersRecord: Record<string, string> = {};
+      if (init?.headers) {
+        const headers = new Headers(init.headers);
+        headers.forEach((v, k) => {
+          headersRecord[k.toLowerCase()] = v;
+        });
+      }
+      const rawBody = typeof init?.body === "string" ? init.body : undefined;
+      let parsedJson: Record<string, unknown> | undefined;
+      if (rawBody && !url.includes("/captions?")) {
+        try {
+          parsedJson = JSON.parse(rawBody) as Record<string, unknown>;
+        } catch {
+          parsedJson = undefined;
+        }
+      }
+      calls.push({
+        url,
+        method,
+        bounded: init?.signal instanceof AbortSignal,
+        headers: headersRecord,
+        rawBody,
+        ...(parsedJson ? { body: parsedJson } : {}),
+      });
+      if (url.includes("/playlists?")) {
+        return Promise.resolve(Response.json({
+          items: [{ id: PLAYLIST_ID, snippet: { channelId: CHANNEL_ID } }],
+        }, { status: 200 }));
+      }
+      if (url.includes("/playlistItems?")) {
+        return Promise.resolve(Response.json({ id: "PLI_1" }, { status: 200 }));
+      }
+      if (url.includes("/captions?")) {
+        captionUploadCalls += 1;
+        if (options.captionResponse === "throw") {
+          return Promise.reject(new Error("caption upload timed out"));
+        }
+        const resp = options.captionResponse ?? { status: 200, bodyText: '{"id":"CAP_1"}' };
+        return Promise.resolve(new Response(resp.bodyText ?? "{}", { status: resp.status }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    },
+  };
+
+  return {
+    calls,
+    deps,
+    debitedUnits,
+    counts: () => ({ scopeChecks, allowanceChecks, budgetDebits, captionUploadCalls }),
+  };
+}
+
+Deno.test("caption follow-up step 1: invalid caption returns skipped / invalid_caption with zero scope, counter, budget, or provider calls", async () => {
+  const w = captionWorld();
+  const invalidCaption: YoutubeCaptionFollowUpInput = {
+    language: "en",
+    name: "Broken VTT",
+    format: "vtt",
+    content: "not a valid vtt file",
+  };
+  const results = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: invalidCaption,
+  }, w.deps);
+
+  assertEquals(results.caption, { state: "skipped", reason: "invalid_caption" });
+  assertEquals(w.counts(), {
+    scopeChecks: 0,
+    allowanceChecks: 0,
+    budgetDebits: 0,
+    captionUploadCalls: 0,
+  });
+});
+
+Deno.test("caption follow-up step 1a: missing youtube.force-ssl scope returns skipped / missing_scope with zero counter, budget, or provider calls", async () => {
+  const w = captionWorld({ hasCaptionScope: () => false });
+  const results = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, w.deps);
+
+  assertEquals(results.caption, { state: "skipped", reason: "missing_scope" });
+  assertEquals(w.counts(), {
+    scopeChecks: 1,
+    allowanceChecks: 0,
+    budgetDebits: 0,
+    captionUploadCalls: 0,
+  });
+});
+
+Deno.test("caption follow-up steps 2 & 3: budgetMs <= 0 returns skipped / no_time and canWrite === false returns skipped / authority_lost", async () => {
+  const noTime = captionWorld({ budgetMs: 0 });
+  const r1 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, noTime.deps);
+  assertEquals(r1.caption, { state: "skipped", reason: "no_time" });
+  assertEquals(noTime.counts().allowanceChecks, 0);
+  assertEquals(noTime.counts().budgetDebits, 0);
+  assertEquals(noTime.counts().captionUploadCalls, 0);
+
+  const authLost = captionWorld({ canWrite: () => Promise.resolve(false) });
+  const r2 = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, authLost.deps);
+  assertEquals(r2.caption, { state: "skipped", reason: "authority_lost" });
+  assertEquals(authLost.counts().allowanceChecks, 0);
+  assertEquals(authLost.counts().budgetDebits, 0);
+  assertEquals(authLost.counts().captionUploadCalls, 0);
+});
+
+Deno.test("caption follow-up step 4: refused per-user allowance returns skipped / rate_limited with zero budget debit or provider calls", async () => {
+  const w = captionWorld({ checkCaptionUploadAllowance: () => Promise.resolve(false) });
+  const results = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, w.deps);
+
+  assertEquals(results.caption, { state: "skipped", reason: "rate_limited" });
+  assertEquals(w.counts(), {
+    scopeChecks: 1,
+    allowanceChecks: 1,
+    budgetDebits: 0,
+    captionUploadCalls: 0,
+  });
+});
+
+Deno.test("caption follow-up step 5: refused project write budget (400 units) returns skipped / quota_budget with zero provider calls", async () => {
+  const w = captionWorld({ debitWriteBudget: () => Promise.resolve(false) });
+  const results = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, w.deps);
+
+  assertEquals(results.caption, { state: "skipped", reason: "quota_budget" });
+  assertEquals(w.debitedUnits, [400]);
+  assertEquals(w.counts(), {
+    scopeChecks: 1,
+    allowanceChecks: 1,
+    budgetDebits: 1,
+    captionUploadCalls: 0,
+  });
+});
+
+Deno.test("caption follow-up step 6 & 7: 2xx applied, 409 conflict, 500/400 refused, timeout/throw answer_lost with single request and zero retries", async () => {
+  const okWorld = captionWorld({ captionResponse: { status: 200 } });
+  const okResult = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, okWorld.deps);
+  assertEquals(okResult.caption, { state: "applied", reason: null });
+  assertEquals(okWorld.debitedUnits, [400]);
+  assertEquals(okWorld.counts().captionUploadCalls, 1);
+  const sentCall = okWorld.calls[0];
+  assertEquals(
+    sentCall.url,
+    "https://www.googleapis.com/upload/youtube/v3/captions?part=snippet&uploadType=multipart",
+  );
+  assertEquals(sentCall.bounded, true);
+  assertEquals(
+    sentCall.headers?.["content-type"]?.startsWith("multipart/related; boundary=---postora-caption-"),
+    true,
+  );
+  assertEquals(
+    sentCall.rawBody?.includes(
+      JSON.stringify({ snippet: { videoId: VIDEO_ID, language: "en", name: "English CC", isDraft: false } }),
+    ),
+    true,
+  );
+  assertEquals(sentCall.rawBody?.includes("Content-Type: text/vtt; charset=UTF-8"), true);
+
+  const conflictWorld = captionWorld({ captionResponse: { status: 409 } });
+  const conflictResult = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, conflictWorld.deps);
+  assertEquals(conflictResult.caption, { state: "failed", reason: "conflict" });
+  assertEquals(conflictWorld.counts().captionUploadCalls, 1);
+
+  const refused400World = captionWorld({ captionResponse: { status: 400 } });
+  const refused400Result = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, refused400World.deps);
+  assertEquals(refused400Result.caption, { state: "failed", reason: "refused" });
+  assertEquals(refused400World.counts().captionUploadCalls, 1);
+
+  const refused500World = captionWorld({ captionResponse: { status: 500 } });
+  const refused500Result = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, refused500World.deps);
+  assertEquals(refused500Result.caption, { state: "failed", reason: "refused" });
+  assertEquals(refused500World.counts().captionUploadCalls, 1);
+
+  const timeoutWorld = captionWorld({ captionResponse: "throw" });
+  const timeoutResult = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: null,
+    firstComment: null,
+    caption: VALID_VTT_CAPTION,
+  }, timeoutWorld.deps);
+  assertEquals(timeoutResult.caption, { state: "unknown", reason: "answer_lost" });
+  assertEquals(timeoutWorld.counts().captionUploadCalls, 1);
+});
+
+Deno.test("follow-up order is thumbnail -> first_comment -> playlist -> caption, and a caption failure leaves earlier outcomes intact", async () => {
+  const w = captionWorld({ captionResponse: { status: 409 } });
+  const results = await runYoutubeFollowUps({
+    videoId: VIDEO_ID,
+    channelId: CHANNEL_ID,
+    accessToken: "token-1",
+    thumbnailUrl: THUMBNAIL_URL,
+    firstComment: "First!",
+    playlistId: PLAYLIST_ID,
+    caption: VALID_VTT_CAPTION,
+  }, w.deps);
+
+  assertEquals(results.thumbnail, { state: "applied", reason: null });
+  assertEquals(results.first_comment, { state: "applied", reason: null });
+  assertEquals(results.playlist, { state: "applied", reason: null });
+  assertEquals(results.caption, { state: "failed", reason: "conflict" });
+  assertEquals(w.debitedUnits, [50, 400]);
+  assertEquals(
+    w.calls.map((c) => {
+      if (c.url.includes("/thumbnails/set")) return "thumbnail";
+      if (c.url.includes("/commentThreads")) return "first_comment";
+      if (c.url.includes("/playlists?")) return "playlist_precheck";
+      if (c.url.includes("/playlistItems?")) return "playlist_insert";
+      if (c.url.includes("/captions?")) return "caption";
+      return "other";
+    }),
+    ["thumbnail", "first_comment", "playlist_precheck", "playlist_insert", "caption"],
+  );
+});
+
+Deno.test("caption log-capture test (D-P7-4): neither caption content nor provider error body ever appears in console logs", async () => {
+  const CAPTION_MARKER = "CAPTION_SECRET_MARKER_991";
+  const PROVIDER_MARKER = "PROVIDER_ECHO_MARKER_882";
+  const secretCaption: YoutubeCaptionFollowUpInput = {
+    language: "en",
+    name: "Track",
+    format: "srt",
+    content: `1\n00:00:00,000 --> 00:00:02,000\n${CAPTION_MARKER}\n`,
+  };
+
+  const capturedLogs: string[] = [];
+  const origLog = console.log;
+  const origWarn = console.warn;
+  const origError = console.error;
+  const recordArgs = (...args: unknown[]) => {
+    capturedLogs.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+  };
+  console.log = recordArgs;
+  console.warn = recordArgs;
+  console.error = recordArgs;
+
+  try {
+    for (const scenario of [
+      { status: 200, bodyText: `{"id":"1","echo":"${PROVIDER_MARKER}"}` },
+      { status: 409, bodyText: `{"error":{"message":"${PROVIDER_MARKER} ${CAPTION_MARKER}"}}` },
+      { status: 400, bodyText: `{"error":{"message":"${PROVIDER_MARKER} ${CAPTION_MARKER}"}}` },
+      "throw" as const,
+    ]) {
+      const w = captionWorld({
+        captionResponse: scenario === "throw"
+          ? (() => {
+            throw new Error(`network failure: ${PROVIDER_MARKER} ${CAPTION_MARKER}`);
+          }) as unknown as "throw"
+          : scenario,
+      });
+      if (scenario === "throw") {
+        w.deps.fetchImpl = () =>
+          Promise.reject(new Error(`network failure: ${PROVIDER_MARKER} ${CAPTION_MARKER}`));
+      }
+      await runYoutubeFollowUps({
+        videoId: VIDEO_ID,
+        channelId: CHANNEL_ID,
+        accessToken: "token-1",
+        thumbnailUrl: null,
+        firstComment: null,
+        caption: secretCaption,
+      }, w.deps);
+    }
+  } finally {
+    console.log = origLog;
+    console.warn = origWarn;
+    console.error = origError;
+  }
+
+  for (const line of capturedLogs) {
+    assertEquals(line.includes(CAPTION_MARKER), false, `Caption marker leaked in log: ${line}`);
+    assertEquals(line.includes(PROVIDER_MARKER), false, `Provider marker leaked in log: ${line}`);
+  }
 });

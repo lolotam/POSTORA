@@ -144,6 +144,12 @@ import {
   debitYouTubeWriteBudget,
   YOUTUBE_PLAYLIST_INSERT_UNIT_COST,
 } from "../_shared/youtubeWriteBudget.ts";
+import { checkCaptionUploadCounter } from "../_shared/youtubeWriteCounters.ts";
+import {
+  hasUnscrubbedYoutubeCaptionContent,
+  scrubSettledPostCaptionInDb,
+  scrubSettledYoutubeCaptionMetadata,
+} from "./youtubeCaptionSettlement.ts";
 import { resolveYouTubeVideoTitle } from "../_shared/youtubeVideoTitle.ts";
 import { resolveYoutubeThumbnail } from "./youtubeThumbnailIntake.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
@@ -230,6 +236,7 @@ import {
 } from "./youtubeUploadOutcome.ts";
 import {
   runYoutubeFollowUps,
+  type YoutubeCaptionFollowUpInput,
   type YoutubeFollowUpDeps,
   type YoutubeFollowUpResults,
 } from "./youtubeUploadFollowUps.ts";
@@ -585,6 +592,7 @@ interface PlatformMetadata
   youtube_first_comment?: string | null;
   youtube_thumbnail_url?: string | null;
   youtube_playlist_id?: string | null;
+  youtube_caption?: { language: string; name: string; format: "srt" | "vtt"; content?: string } | null;
 }
 
 /**
@@ -1835,6 +1843,28 @@ async function dispatchFinalNotifications(
  * a given-up account) goes through here: the claim is atomic, so two runs that settle the last
  * rows at the same moment cannot both send. Returns whether this run sent.
  */
+async function scrubSettledPostCaptionForPost(
+  supabase: SupabaseClient,
+  postId: string,
+): Promise<boolean> {
+  return await scrubSettledPostCaptionInDb(
+    {
+      readPostRow: async (id) =>
+        await supabase
+          .from("posts")
+          .select("status, metadata")
+          .eq("id", id)
+          .maybeSingle(),
+      updatePostMetadata: async (id, metadata) =>
+        await supabase
+          .from("posts")
+          .update({ metadata })
+          .eq("id", id),
+    },
+    postId,
+  );
+}
+
 async function announceFinalPost(
   supabase: SupabaseClient,
   post: PostData,
@@ -1915,6 +1945,7 @@ async function announceFinalPost(
         });
         return false;
       }
+      await scrubSettledPostCaptionForPost(supabase, post.id);
       return true;
     } catch (err) {
       const deliveryError = (err instanceof Error ? err.message : "Unknown notification delivery failure")
@@ -1959,8 +1990,10 @@ async function announceFinalPost(
     });
   } else if (!claim.claimed) {
     console.log(`[process-post] post ${post.id} was already announced; not sending again`);
+    await scrubSettledPostCaptionForPost(supabase, post.id);
     return false;
   }
+  await scrubSettledPostCaptionForPost(supabase, post.id);
   sendFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed);
   return true;
 }
@@ -2222,6 +2255,7 @@ async function handleNotificationOnly(
     return createErrorResponse("Notification claim snapshot invalid", 503);
   }
   const finalStatus = outcome.status;
+  await scrubSettledPostCaptionForPost(supabase, post.id);
   sendFinalNotifications(supabase, post as PostData, finalStatus, outcome.results, outcome.hasFailed);
 
   return createJsonResponse({
@@ -2797,7 +2831,12 @@ Deno.serve(async (req) => {
     if (!Array.isArray(platformsToPost) || platformsToPost.length === 0) {
       const msg = "No platforms selected for this post";
       console.error(msg, { postId: post_id, overridePlatforms });
-      await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+      await supabase.from("posts").update({
+        status: "failed",
+        ...(hasUnscrubbedYoutubeCaptionContent(post.metadata as Record<string, unknown> | null | undefined)
+          ? { metadata: scrubSettledYoutubeCaptionMetadata(post.metadata as Record<string, unknown> | null | undefined) }
+          : {}),
+      }).eq("id", post_id);
       return createErrorResponse(msg, 400);
     }
 
@@ -2853,7 +2892,12 @@ Deno.serve(async (req) => {
         if (logError) console.error("Deferred account refusal log failed:", logError);
         return createErrorResponse("The deferred account is no longer active or owned by this post owner. Retry reconciliation after restoring access.", 503);
       }
-      await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+      await supabase.from("posts").update({
+        status: "failed",
+        ...(hasUnscrubbedYoutubeCaptionContent(post.metadata as Record<string, unknown> | null | undefined)
+          ? { metadata: scrubSettledYoutubeCaptionMetadata(post.metadata as Record<string, unknown> | null | undefined) }
+          : {}),
+      }).eq("id", post_id);
       return createErrorResponse(msg, 400);
     }
 
@@ -2997,7 +3041,10 @@ Deno.serve(async (req) => {
             p_retained_platform_post_ids: retainedPlatformPostIds,
           });
           if (closeError || closed?.closed !== true) resultWriteError = "Media failure completion could not be confirmed";
-          else if (closed.ready === true) await announceFinalPost(supabase, post, closed.status, [], true);
+          else {
+            if (closed.ready === true) await announceFinalPost(supabase, post, closed.status, [], true);
+            await scrubSettledPostCaptionForPost(supabase, post_id);
+          }
         }
       }
       // The settlement seam owns final rollup; incomplete target recording must remain sweepable.
@@ -3989,12 +4036,10 @@ Deno.serve(async (req) => {
           .from("posts")
           .update({
             status: finalStatus,
-            posted_at: hasSuccess ? new Date().toISOString() : null
+            posted_at: hasSuccess ? new Date().toISOString() : null,
           })
           .eq("id", post_id);
       }
-
-
     }
 
     console.log("Post processing complete:", finalStatus);
@@ -4008,6 +4053,7 @@ Deno.serve(async (req) => {
     if (notify) {
       await announceFinalPost(supabase, post, finalStatus, platformResults, hasFailed);
     }
+    await scrubSettledPostCaptionForPost(supabase, post_id);
 
     // ─────────────────────────────────────────────────────────────────────
     // Step 7: Log to system_logs and return response
@@ -10056,11 +10102,54 @@ const THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024;
  * second one is skipped rather than started when the worker has already run
  * out of time.
  */
+const YOUTUBE_FORCE_SSL_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
+
+function accountHasYoutubeCaptionScope(accountMetadata: unknown): boolean {
+  if (!accountMetadata || typeof accountMetadata !== "object" || Array.isArray(accountMetadata)) {
+    return false;
+  }
+  const scopes = (accountMetadata as Record<string, unknown>).granted_scopes;
+  return Array.isArray(scopes) && scopes.some((scope) => scope === YOUTUBE_FORCE_SSL_SCOPE);
+}
+
+function extractYoutubeCaptionFollowUp(
+  metadata: Record<string, unknown> | PlatformMetadata | null | undefined,
+): YoutubeCaptionFollowUpInput | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  const raw = (metadata as Record<string, unknown>).youtube_caption;
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    const record = raw as Record<string, unknown>;
+    return {
+      language: typeof record.language === "string" ? record.language : "",
+      name: typeof record.name === "string" ? record.name : "",
+      format: (record.format === "srt" || record.format === "vtt" ? record.format : "") as "srt" | "vtt",
+      content: typeof record.content === "string" ? record.content : "",
+    };
+  }
+  return {
+    language: "",
+    name: "",
+    format: "" as "srt" | "vtt",
+    content: "",
+  };
+}
+
 function youtubeFollowUpDeps(
   mediaHosts: Set<string>,
   canWrite: () => Promise<boolean>,
   supabase: SupabaseClient,
+  options?: {
+    userId?: string;
+    hasCaptionScope?: () => boolean;
+  },
 ): YoutubeFollowUpDeps {
+  const rpcWithTimeout = async (fn: string, params: Record<string, unknown>) =>
+    await supabase.rpc(fn, params).abortSignal(
+      AbortSignal.timeout(followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now())),
+    );
   return {
     fetchImpl: fetch,
     canWrite,
@@ -10081,14 +10170,20 @@ function youtubeFollowUpDeps(
       return { blob: new Blob([bytes], { type: mimeType }), mimeType };
     },
     budgetMs: () => followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now()),
-    debitWriteBudget: async () =>
+    debitWriteBudget: async (units = YOUTUBE_PLAYLIST_INSERT_UNIT_COST) =>
       (await debitYouTubeWriteBudget({
-        rpc: async (fn, params) =>
-          await supabase.rpc(fn, params).abortSignal(
-            AbortSignal.timeout(followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now())),
-          ),
-        units: YOUTUBE_PLAYLIST_INSERT_UNIT_COST,
+        rpc: rpcWithTimeout,
+        units,
       })).allowed,
+    hasCaptionScope: options?.hasCaptionScope ?? (() => false),
+    checkCaptionUploadAllowance: async () => {
+      if (!options?.userId) return false;
+      const res = await checkCaptionUploadCounter({
+        rpc: rpcWithTimeout,
+        userId: options.userId,
+      });
+      return res.ok;
+    },
   };
 }
 
@@ -10185,6 +10280,7 @@ function buildYoutubeContinuationPorts(
         playlistId: typeof metadata.youtube_playlist_id === "string" && metadata.youtube_playlist_id.trim().length > 0
           ? metadata.youtube_playlist_id.trim()
           : null,
+        caption: extractYoutubeCaptionFollowUp(metadata),
         metadata,
       };
     },
@@ -10228,6 +10324,7 @@ function buildYoutubeContinuationPorts(
         accessToken: usableToken,
         tokenRefreshPending: usableToken === null && token.reason !== null && !needsReauth,
         needsReauth,
+        hasCaptionScope: accountHasYoutubeCaptionScope(metadata),
       };
     },
 
@@ -10355,6 +10452,8 @@ function buildYoutubeContinuationPorts(
         console.error(
           `[youtube] the upload outcome was not recorded: ${settled.refused ?? "unknown"}`,
         );
+      } else {
+        await scrubSettledPostCaptionForPost(supabase, postId);
       }
       return settled;
     },
@@ -10408,7 +10507,11 @@ function buildYoutubeContinuationPorts(
       // resumed receipt no follow-up outcome was observed by this worker, so
       // absent evidence renders as honest unknown rather than a fabricated
       // success or a stale overwrite.
-      return await store.projectReceipt({ sessionId: args.sessionId });
+      const projected = await store.projectReceipt({ sessionId: args.sessionId });
+      if (projected.settled) {
+        await scrubSettledPostCaptionForPost(supabase, postId);
+      }
+      return projected;
     },
 
     async followUps(args) {
@@ -10423,10 +10526,20 @@ function buildYoutubeContinuationPorts(
           thumbnailUrl: args.post.thumbnailUrl,
           firstComment: args.post.firstComment,
           playlistId: args.post.playlistId ?? null,
+          caption: args.post.caption ?? extractYoutubeCaptionFollowUp(args.post.metadata),
         },
-        youtubeFollowUpDeps(mediaHosts, async () => (await store.effectAuthority({
-          sessionId: args.sessionId, leaseToken: args.leaseToken,
-        })).authorized, supabase),
+        youtubeFollowUpDeps(
+          mediaHosts,
+          async () => (await store.effectAuthority({
+            sessionId: args.sessionId,
+            leaseToken: args.leaseToken,
+          })).authorized,
+          supabase,
+          {
+            userId: args.post.userId,
+            hasCaptionScope: () => args.hasCaptionScope === true,
+          },
+        ),
       );
     },
 
@@ -10891,10 +11004,20 @@ async function postToYouTube(
         playlistId: typeof metadata?.youtube_playlist_id === "string" && metadata.youtube_playlist_id.trim().length > 0
           ? metadata.youtube_playlist_id.trim()
           : null,
+        caption: extractYoutubeCaptionFollowUp(metadata),
       },
-      youtubeFollowUpDeps(mediaHosts, async () => (await store.effectAuthority({
-        sessionId: uploadSessionId, leaseToken,
-      })).authorized, supabase),
+      youtubeFollowUpDeps(
+        mediaHosts,
+        async () => (await store.effectAuthority({
+          sessionId: uploadSessionId,
+          leaseToken,
+        })).authorized,
+        supabase,
+        {
+          userId: post.user_id,
+          hasCaptionScope: () => accountHasYoutubeCaptionScope(account.account_metadata),
+        },
+      ),
     );
   } else {
     if (thumbnailUrl) console.log("YouTube thumbnail skipped: the video was uploaded by an earlier attempt");
@@ -10942,6 +11065,8 @@ async function postToYouTube(
         commentReason: followUpResults?.first_comment.reason,
         playlistState: followUpResults?.playlist.state,
         playlistReason: followUpResults?.playlist.reason,
+        captionState: followUpResults?.caption.state,
+        captionReason: followUpResults?.caption.reason,
         scheduleWarning,
         scheduled,
       }),
