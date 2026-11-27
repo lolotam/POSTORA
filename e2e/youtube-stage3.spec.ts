@@ -17,14 +17,14 @@ async function openEditor(page: Page, locale: "en" | "ar" = "en") {
   const editName = locale === "ar" ? /تعديل تفاصيل الفيديو/ : /edit video details/i;
   await expect(drawer.getByRole("button", { name: editName })).toBeVisible();
   await drawer.getByRole("button", { name: editName }).click();
-  await expect(drawer.getByLabel(locale === "ar" ? "العنوان" : "Title")).toBeVisible();
+  await expect(drawer.getByLabel(locale === "ar" ? "العنوان" : "Title", { exact: true })).toBeVisible();
 }
 
 test.describe("YouTube Stage 3 offline journeys", () => {
   test("EN edit success: snapshot, privacy confirmation, title change and verified save", async ({ page }) => {
     await startStage3Journey(page, { edit: "available" });
     await openEditor(page);
-    await page.getByLabel("Title").fill("Renamed in the offline journey");
+    await page.getByLabel("Title", { exact: true }).fill("Renamed in the offline journey");
     await page.getByRole("checkbox", { name: /changes who can see the video/i }).check();
     await expect(page.getByRole("checkbox", { name: /changes who can see the video/i })).toBeChecked();
     await page.getByRole("button", { name: /^save$/i }).click();

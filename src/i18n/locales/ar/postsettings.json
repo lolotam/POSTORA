@@ -103,7 +103,22 @@
     "videoTypeTooltip": "اختار بين فيديو عادي أو YouTube Shorts (حتى 3 دقائق)",
     "visibilityPrivate": "خاص (Private)",
     "visibilityPublic": "عام (Public)",
-    "visibilityUnlisted": "غير مدرج (Unlisted)"
+    "visibilityUnlisted": "غير مدرج (Unlisted)",
+    "publishTimingLabel": "توقيت النشر على YouTube",
+    "publishTimingTooltip": "اختار هل الفيديو يتنشر بالخصوصية المختارة فوق على طول، ولا يتجدول على YouTube كمرفوع خاص لحد ميعاد النشر.",
+    "publishUsePrivacyAbove": "استخدم الخصوصية المختارة أعلاه",
+    "publishScheduleOnYouTube": "جدولة النشر على YouTube",
+    "publishPrivateUntilScheduled": "خاص لحد الميعاد ده. YouTube هيخليه عام تلقائياً في الوقت المحدد.",
+    "publishScheduleDateTimeLabel": "وقت النشر على YouTube",
+    "publishScheduleDifferenceHelp": "جدولة Postora بتحدد امتى يبدأ رفع الفيديو؛ أما جدولة YouTube فبتحدد امتى الفيديو المرفوع يبقى عام.",
+    "publishScheduleMinMaxHelp": "لازم يكون الميعاد بعد 15 دقيقة على الأقل وبحد أقصى سنتين من دلوقتي.",
+    "publishScheduleRequired": "اختار تاريخ ووقت النشر على YouTube.",
+    "publishScheduleInvalidTimestamp": "اختار تاريخ ووقت صحيحين للنشر على YouTube.",
+    "publishScheduleTooSoon": "وقت النشر على YouTube لازم يكون بعد 15 دقيقة على الأقل من دلوقتي.",
+    "publishScheduleTooSoonAfterPostora": "وقت النشر على YouTube لازم يكون بعد 15 دقيقة على الأقل من ميعاد رفع المنشور في Postora.",
+    "publishScheduleTooFar": "وقت النشر على YouTube مينفعش يكون بعد أكتر من سنتين من دلوقتي.",
+    "publishScheduleComposioUnsupported": "جدولة YouTube الأصلية مش متاحة للقنوات المدارة عبر هذا المزوّد. استخدم قناة مربوطة مباشرة.",
+    "previewScheduledOnYouTube": "مجدول على YouTube: {{time}}"
   },
   "tiktok": {
     "accountFallback": "حساب TikTok",

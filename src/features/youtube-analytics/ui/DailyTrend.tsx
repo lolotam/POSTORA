@@ -8,16 +8,23 @@ import type { YouTubeAnalyticsDailyData, YouTubeAnalyticsRequestedWindow } from 
 import { useYouTubeMetricLabels } from "./useYouTubeMetricLabels";
 
 const METRICS = ["views", "watch_time", "subscribers_gained", "subscribers_lost"] as const;
-type TrendMetric = (typeof METRICS)[number];
+export type TrendMetric = (typeof METRICS)[number];
 
-export function DailyTrend({ data, requestedWindow, forVideo = false }: {
+export function DailyTrend({ data, requestedWindow, forVideo = false, metric: controlledMetric, onMetricChange }: {
   data: YouTubeAnalyticsDailyData;
   requestedWindow: YouTubeAnalyticsRequestedWindow;
   forVideo?: boolean;
+  metric?: TrendMetric;
+  onMetricChange?: (metric: TrendMetric) => void;
 }) {
   const { t, i18n } = useTranslation("analytics");
   const labels = useYouTubeMetricLabels();
-  const [metric, setMetric] = useState<TrendMetric>("views");
+  const [internalMetric, setInternalMetric] = useState<TrendMetric>("views");
+  const metric = controlledMetric ?? internalMetric;
+  const setMetric = (next: TrendMetric) => {
+    if (controlledMetric === undefined) setInternalMetric(next);
+    onMetricChange?.(next);
+  };
   const points = buildTrendSeries(requestedWindow, data.rows);
   const format = (value: number | null) => metric === "watch_time" ? formatMinutes(value, i18n.language) : formatCount(value, i18n.language);
 

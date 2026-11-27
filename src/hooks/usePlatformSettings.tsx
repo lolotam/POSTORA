@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Platform } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { buildYoutubeDeclarationProof } from "@/lib/youtubePublishSafety";
+import { resolveYoutubePublishAt } from "../../supabase/functions/_shared/youtubePublishOptions";
 
 export type LocationSource = "threads" | "facebook" | "nominatim" | "meta";
 
@@ -50,6 +52,7 @@ export interface PinterestBoard {
 
 export function usePlatformSettings(userId: string | undefined, selectedAccountIds: string[], selectedPlatforms: Platform[]) {
   const { toast } = useToast();
+  const { t } = useTranslation("postsettings");
 
   // TikTok settings
   const [tiktokPrivacyLevel, setTiktokPrivacyLevel] = useState<string>("");
@@ -188,6 +191,8 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
   const [youtubeBlockedCountries, setYoutubeBlockedCountries] = useState("");
   const [youtubeFirstComment, setYoutubeFirstComment] = useState("");
   const [youtubeEnableFirstComment, setYoutubeEnableFirstComment] = useState(false);
+  const [youtubePublishAt, setYoutubePublishAt] = useState<string>("");
+  const [youtubeScheduleRequested, setYoutubeScheduleRequested] = useState(false);
 
   // Facebook Reel settings
   const [facebookReelDescription, setFacebookReelDescription] = useState("");
@@ -536,7 +541,11 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       youtube_video_type: selectedPlatforms.includes("youtube") ? youtubeVideoType : null,
       youtube_title: youtubeTitle || null,
       youtube_description: youtubeDescription || null,
-      youtube_visibility: selectedPlatforms.includes("youtube") ? youtubeVisibility : null,
+      // When native scheduling is active (or requested), never serialize a wider
+      // privacy than private even if the creator had chosen public before switching.
+      youtube_visibility: selectedPlatforms.includes("youtube")
+        ? (youtubeScheduleRequested || youtubePublishAt.trim().length > 0 ? "private" : youtubeVisibility)
+        : null,
       youtube_tags: youtubeTags ? youtubeTags.split(",").map(t => t.trim()).filter(Boolean) : null,
       youtube_category: youtubeCategory || null,
       youtube_made_for_kids: selectedPlatforms.includes("youtube") ? youtubeMadeForKids ?? null : null,
@@ -569,6 +578,9 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       youtube_first_comment: youtubeEnableFirstComment && youtubeFirstComment ? youtubeFirstComment : null,
       youtube_thumbnail_url: youtubeThumbnailUrl || null,
       youtube_thumbnail_media_id: youtubeThumbnailMediaId,
+      ...(selectedPlatforms.includes("youtube") && youtubePublishAt.trim().length > 0
+        ? { youtube_publish_at: youtubePublishAt.trim() }
+        : {}),
       // Facebook Reel description
       facebook_reel_description: facebookReelDescription || null,
       // Threads settings
@@ -661,6 +673,53 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     }
     if (!selectedPinterestBoard) {
       return "Please select a Pinterest board to save your pin to.";
+    }
+    return null;
+  };
+
+  // Validate YouTube native scheduling bounds (mirrors server resolveYoutubePublishAt)
+  const validateYoutubeSettings = (
+    now: Date = new Date(),
+    postoraScheduledAt: Date | null = null,
+  ): string | null => {
+    const trimmed = youtubePublishAt.trim();
+    if (!trimmed) {
+      return youtubeScheduleRequested
+        ? t("youtube.publishScheduleRequired", "Choose a YouTube scheduled publish date and time.")
+        : null;
+    }
+    const afterPostoraSchedule =
+      postoraScheduledAt instanceof Date &&
+      !Number.isNaN(postoraScheduledAt.getTime()) &&
+      postoraScheduledAt.getTime() > now.getTime();
+    const effectiveNow = afterPostoraSchedule ? postoraScheduledAt : now;
+    const schedule = resolveYoutubePublishAt(trimmed, effectiveNow);
+    if (schedule.ok === false) {
+      switch (schedule.reason) {
+        case "too_soon":
+        case "expired":
+          return afterPostoraSchedule
+            ? t(
+                "youtube.publishScheduleTooSoonAfterPostora",
+                "YouTube scheduled publish time must be at least 15 minutes after the Postora upload schedule.",
+              )
+            : t(
+                "youtube.publishScheduleTooSoon",
+                "YouTube scheduled publish time must be at least 15 minutes in the future.",
+              );
+        case "too_far":
+          return t(
+            "youtube.publishScheduleTooFar",
+            "YouTube scheduled publish time cannot be more than 2 years in the future.",
+          );
+        case "malformed":
+        case "wrong_type":
+        default:
+          return t(
+            "youtube.publishScheduleInvalidTimestamp",
+            "Choose a valid YouTube scheduled publish date and time.",
+          );
+      }
     }
     return null;
   };
@@ -807,6 +866,9 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     youtubeBlockedCountries, setYoutubeBlockedCountries,
     youtubeFirstComment, setYoutubeFirstComment,
     youtubeEnableFirstComment, setYoutubeEnableFirstComment,
+    youtubePublishAt, setYoutubePublishAt,
+    youtubeScheduleRequested, setYoutubeScheduleRequested,
+    validateYoutubeSettings,
 
     // Facebook Reel
     facebookReelDescription, setFacebookReelDescription,

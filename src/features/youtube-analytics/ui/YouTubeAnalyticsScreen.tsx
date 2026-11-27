@@ -42,8 +42,10 @@ import { BreakdownTable, type YouTubeBreakdownLabels } from "./BreakdownTable";
 import { ExportMenu } from "./ExportMenu";
 import { PurposeAcceptancePanel } from "./PurposeAcceptancePanel";
 import { OverviewCards } from "./OverviewCards";
-import { DailyTrend } from "./DailyTrend";
+import { DailyTrend, type TrendMetric } from "./DailyTrend";
 import { TopVideosTable } from "./TopVideosTable";
+import type { TopVideosColumn } from "../domain/topVideosView";
+import type { DataViewSortDirection } from "@/components/data-view/sortRows";
 import { VideoAnalyticsSheet } from "./VideoAnalyticsSheet";
 
 export interface YouTubeAnalyticsAccount {
@@ -147,6 +149,9 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
   const [pickedVideo, setPickedVideo] = useState<{ accountId: string; videoId: string } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<YouTubeAnalyticsTab>("overview");
+  const [trendMetric, setTrendMetric] = useState<TrendMetric>("views");
+  const [topVideosSortColumn, setTopVideosSortColumn] = useState<TopVideosColumn | null>(null);
+  const [topVideosSortDirection, setTopVideosSortDirection] = useState<DataViewSortDirection>("descending");
   const [visitedByContext, setVisitedByContext] = useState<{
     contextKey: string;
     tabs: ReadonlySet<YouTubeAnalyticsTab>;
@@ -519,29 +524,38 @@ export function YouTubeAnalyticsScreen(props: YouTubeAnalyticsScreenProps): JSX.
             aria-labelledby={`youtube-analytics-tab-${activeTab}`}
             className="space-y-4"
           >
-            <div
-              hidden={activeTab !== "overview"}
-              className={activeTab === "overview" ? "space-y-4" : "no-print hidden"}
-            >
-              {summary.isError ? <AnalyticsNotice error={summary.error} onRetry={() => void summary.refetch()} />
-                : summary.data ? <OverviewCards data={summary.data.data} />
-                  : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
-              {daily.isError ? <AnalyticsNotice error={daily.error} onRetry={() => void daily.refetch()} />
-                : daily.data ? <DailyTrend data={daily.data.data} requestedWindow={requestedWindow} />
-                  : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
-              {topVideos.isError && !topVideos.data ? <AnalyticsNotice error={topVideos.error} onRetry={() => void topVideos.refetch()} />
-                : topVideos.data ? (
-                  <TopVideosTable
-                    data={topVideos.data}
-                    onInspect={inspectVideo}
-                    hasNextPage={topVideos.hasNextPage}
-                    isFetchingNextPage={topVideos.isFetchingNextPage || isRefreshing}
-                    onLoadMore={loadNextTopVideosPage}
-                    nextPageError={topVideos.error}
-                    onRetryNextPage={retryNextTopVideosPage}
-                  />
-                ) : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
-            </div>
+            {activeTab === "overview" ? (
+              <div className="space-y-4">
+                {summary.isError ? <AnalyticsNotice error={summary.error} onRetry={() => void summary.refetch()} />
+                  : summary.data ? <OverviewCards data={summary.data.data} />
+                    : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
+                {daily.isError ? <AnalyticsNotice error={daily.error} onRetry={() => void daily.refetch()} />
+                  : daily.data ? (
+                    <DailyTrend
+                      data={daily.data.data}
+                      requestedWindow={requestedWindow}
+                      metric={trendMetric}
+                      onMetricChange={setTrendMetric}
+                    />
+                  ) : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
+                {topVideos.isError && !topVideos.data ? <AnalyticsNotice error={topVideos.error} onRetry={() => void topVideos.refetch()} />
+                  : topVideos.data ? (
+                    <TopVideosTable
+                      data={topVideos.data}
+                      onInspect={inspectVideo}
+                      hasNextPage={topVideos.hasNextPage}
+                      isFetchingNextPage={topVideos.isFetchingNextPage || isRefreshing}
+                      onLoadMore={loadNextTopVideosPage}
+                      nextPageError={topVideos.error}
+                      onRetryNextPage={retryNextTopVideosPage}
+                      sortColumn={topVideosSortColumn}
+                      onSortColumnChange={setTopVideosSortColumn}
+                      sortDirection={topVideosSortDirection}
+                      onSortDirectionChange={setTopVideosSortDirection}
+                    />
+                  ) : <p role="status" className="text-sm text-muted-foreground">{t("youtube.loading", "Loading…")}</p>}
+              </div>
+            ) : null}
             {activeTab === "audience" ? (
               <>
                 {geography.isError ? <AnalyticsNotice error={geography.error} onRetry={() => void geography.refetch()} />

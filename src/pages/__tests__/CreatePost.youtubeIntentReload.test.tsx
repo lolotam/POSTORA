@@ -21,6 +21,7 @@ const fixture = vi.hoisted(() => ({
   enqueue: vi.fn(),
   stored: null as Record<string, unknown> | null,
   toasts: [] as string[],
+  scheduledIso: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -72,19 +73,26 @@ vi.mock("@/components/post/PlatformSettingsSection", () => ({
     youtubeSettingsState: {
       visibility: string; madeForKids: boolean | null;
       containsSyntheticMedia: boolean | null; thumbnailMediaId: string | null;
+      publishAt?: string; scheduleRequested?: boolean;
     };
     onYoutubeSettingsChange: (changes: Record<string, unknown>) => void;
   }) => (
     <div>
       <button type="button" onClick={() => onYoutubeSettingsChange({ visibility: "unlisted" })}>Set unlisted</button>
+      <button type="button" onClick={() => onYoutubeSettingsChange({ visibility: "public" })}>Set public</button>
       <button type="button" onClick={() => onYoutubeSettingsChange({ madeForKids: false })}>Audience No</button>
       <button type="button" onClick={() => onYoutubeSettingsChange({ containsSyntheticMedia: true })}>Synthetic Yes</button>
       <button type="button" onClick={() => onYoutubeSettingsChange({ thumbnailMediaId: "owned-thumb-1" })}>Owned thumbnail</button>
+      <button type="button" onClick={() => onYoutubeSettingsChange({ publishAt: fixture.scheduledIso, scheduleRequested: true })}>Schedule on YouTube</button>
+      <button type="button" onClick={() => onYoutubeSettingsChange({ publishAt: "", scheduleRequested: true })}>Request schedule without time</button>
+      <button type="button" onClick={() => onYoutubeSettingsChange({ publishAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(), scheduleRequested: true })}>Schedule too soon</button>
       <span data-testid="youtube-values">{JSON.stringify({
         visibility: youtubeSettingsState.visibility,
         madeForKids: youtubeSettingsState.madeForKids,
         containsSyntheticMedia: youtubeSettingsState.containsSyntheticMedia,
         thumbnailMediaId: youtubeSettingsState.thumbnailMediaId,
+        publishAt: youtubeSettingsState.publishAt,
+        scheduleRequested: youtubeSettingsState.scheduleRequested,
       })}</span>
     </div>
   ),
@@ -180,6 +188,7 @@ describe("CreatePost YouTube customized lost-ACK reload", () => {
     const first = render(<CreatePost />, { wrapper: wrapper() });
     await submit(user);
     await waitFor(() => expect(fixture.stored).toBeTruthy());
+    expect("youtube_publish_at" in (fixture.stored!.metadata as Record<string, unknown>)).toBe(false);
     first.unmount();
     // Only the composer draft is cleared; the stable submit id and the source
     // intent snapshot survive, just as after a browser reload.
@@ -202,5 +211,75 @@ describe("CreatePost YouTube customized lost-ACK reload", () => {
     expect(fixture.toasts.join(" ")).not.toMatch(/Submission changed/i);
     expect(fixture.enqueue).not.toHaveBeenCalled();
     second.unmount();
+  });
+
+  it("serializes youtube_publish_at when scheduled and restores publishAt across a lost-ACK reload", async () => {
+    const user = userEvent.setup();
+    const first = render(<CreatePost />, { wrapper: wrapper() });
+    await user.type(screen.getByLabelText("Caption"), "YouTube scheduled");
+    await user.click(screen.getByRole("button", { name: "Next: Select Platforms" }));
+    await user.click(screen.getByRole("button", { name: "Choose account" }));
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Schedule on YouTube" }));
+    await user.click(screen.getByRole("button", { name: "Next: Review & Schedule" }));
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+    await waitFor(() => expect(fixture.stored).toBeTruthy());
+    expect((fixture.stored!.metadata as Record<string, unknown>).youtube_publish_at).toBe(fixture.scheduledIso);
+    expect((fixture.stored!.metadata as Record<string, unknown>).youtube_visibility).toBe("private");
+    first.unmount();
+
+    sessionStorage.removeItem("postora_post_draft");
+
+    const second = render(<CreatePost />, { wrapper: wrapper() });
+    await user.type(screen.getByLabelText("Caption"), "YouTube scheduled");
+    await user.click(screen.getByRole("button", { name: "Next: Select Platforms" }));
+    await user.click(screen.getByRole("button", { name: "Choose account" }));
+    await waitFor(() => expect(screen.getByTestId("youtube-values")).toHaveTextContent(fixture.scheduledIso));
+
+    await user.click(screen.getByRole("button", { name: "Next: Review & Schedule" }));
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+    await waitFor(() => expect(fixture.toasts.join(" ")).toMatch(/Already submitted/i));
+    expect(fixture.toasts.join(" ")).not.toMatch(/Submission changed/i);
+    expect(fixture.enqueue).not.toHaveBeenCalled();
+    second.unmount();
+  });
+
+  it("blocks submit when Schedule on YouTube is chosen without a time, never publishing public early", async () => {
+    const user = userEvent.setup();
+    const view = render(<CreatePost />, { wrapper: wrapper() });
+    await user.type(screen.getByLabelText("Caption"), "YouTube schedule missing time");
+    await user.click(screen.getByRole("button", { name: "Next: Select Platforms" }));
+    await user.click(screen.getByRole("button", { name: "Choose account" }));
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Set public" }));
+    await user.click(screen.getByRole("button", { name: "Request schedule without time" }));
+    await user.click(screen.getByRole("button", { name: "Next: Review & Schedule" }));
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+
+    await waitFor(() =>
+      expect(fixture.toasts.join(" ")).toMatch(/Choose a YouTube scheduled publish date and time/i),
+    );
+    expect(fixture.stored).toBeNull();
+    expect(fixture.enqueue).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("blocks submit when the YouTube publish time is inside the 15-minute lead window", async () => {
+    const user = userEvent.setup();
+    const view = render(<CreatePost />, { wrapper: wrapper() });
+    await user.type(screen.getByLabelText("Caption"), "YouTube schedule too soon");
+    await user.click(screen.getByRole("button", { name: "Next: Select Platforms" }));
+    await user.click(screen.getByRole("button", { name: "Choose account" }));
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Schedule too soon" }));
+    await user.click(screen.getByRole("button", { name: "Next: Review & Schedule" }));
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+
+    await waitFor(() =>
+      expect(fixture.toasts.join(" ")).toMatch(/at least 15 minutes in the future/i),
+    );
+    expect(fixture.stored).toBeNull();
+    expect(fixture.enqueue).not.toHaveBeenCalled();
+    view.unmount();
   });
 });
