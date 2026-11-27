@@ -403,11 +403,11 @@ Deno.test("D-P7-3 log-capture: signed mediaUrl, transcript, segment text, and pr
   const logger: TranscribeMediaLogger = {
     info: async (message, metadata, userId) => {
       capturedLoggerCalls.push({ level: "info", message, metadata });
-      await supabaseAdmin.from("system_logs").insert({ level: "info", message, metadata, user_id: userId });
+      await supabaseAdmin.from("system_logs").insert?.({ level: "info", message, metadata, user_id: userId });
     },
     error: async (message, metadata, userId) => {
       capturedLoggerCalls.push({ level: "error", message, metadata });
-      await supabaseAdmin.from("system_logs").insert({ level: "error", message, metadata, user_id: userId });
+      await supabaseAdmin.from("system_logs").insert?.({ level: "error", message, metadata, user_id: userId });
     },
   };
 
