@@ -879,6 +879,63 @@
       "internal_error": "تعذر على Postora تحميل هذا الجزء من التحليلات. حاول مرة أخرى.",
       "grant_not_effective": "لم يحتفظ Google بهذا الإذن. افصل القناة من الملفات الشخصية ثم اربطها مرة أخرى.",
       "consent_record_failed": "تعذر تسجيل الإذن. حاول مرة أخرى."
+    },
+    "tabs": {
+      "label": "تقارير تحليلات YouTube",
+      "overview": "نظرة عامة",
+      "audience": "الجمهور",
+      "traffic": "الزيارات"
+    },
+    "traffic": {
+      "title": "مصادر الزيارات",
+      "column": "مصدر الزيارة",
+      "sources": {
+        "YT_SEARCH": "بحث YouTube",
+        "RELATED_VIDEO": "فيديوهات مقترحة",
+        "SUBSCRIBER": "مشتركو القناة",
+        "EXT_URL": "مواقع خارجية",
+        "YT_CHANNEL": "قنوات YouTube أخرى",
+        "PLAYLIST": "قوائم التشغيل",
+        "NOTIFICATION": "الإشعارات",
+        "SHORTS": "Shorts على YouTube",
+        "END_SCREEN": "شاشات النهاية",
+        "ADVERTISING": "الإعلانات",
+        "NO_LINK_OTHER": "أخرى",
+        "OTHER": "أخرى"
+      }
+    },
+    "geography": {
+      "title": "من أين يأتي المشاهدون",
+      "column": "الدولة",
+      "other": "أخرى"
+    },
+    "devices": {
+      "title": "الأجهزة التي يُشاهَد منها",
+      "column": "الجهاز",
+      "types": {
+        "MOBILE": "الهاتف",
+        "DESKTOP": "الكمبيوتر",
+        "TV": "التلفزيون",
+        "TABLET": "التابلت",
+        "GAME_CONSOLE": "جهاز الألعاب",
+        "UNKNOWN_PLATFORM": "منصة غير معروفة",
+        "OTHER": "أخرى"
+      }
+    },
+    "retention": {
+      "title": "احتفاظ الجمهور",
+      "load": "اعرض احتفاظ الجمهور",
+      "hide": "أخفِ احتفاظ الجمهور",
+      "refresh": "تحديث الاحتفاظ",
+      "description": "نسبة الجمهور الذي ما زال يشاهد عند كل نقطة في الفيديو.",
+      "tableValues": "قيم الاحتفاظ",
+      "watchRatio": "الجمهور الذي ما زال يشاهد",
+      "relativePerformance": "الأداء النسبي",
+      "elapsed": "نسبة الفيديو المشاهدة"
+    },
+    "export": {
+      "csv": "تنزيل CSV",
+      "print": "طباعة / حفظ كـ PDF"
     }
   }
 }

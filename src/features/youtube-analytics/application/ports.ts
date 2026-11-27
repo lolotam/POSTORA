@@ -1,7 +1,9 @@
 import type {
+  YouTubeAnalyticsBreakdownData,
   YouTubeAnalyticsConsentData,
   YouTubeAnalyticsDailyData,
   YouTubeAnalyticsPeriodDays,
+  YouTubeAnalyticsRetentionData,
   YouTubeAnalyticsStatusData,
   YouTubeAnalyticsSuccess,
   YouTubeAnalyticsSummaryData,
@@ -33,4 +35,8 @@ export interface YouTubeAnalyticsGateway {
   summary(params: YouTubeAnalyticsDataParams): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsSummaryData>>;
   daily(params: YouTubeAnalyticsDataParams): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsDailyData>>;
   topVideos(params: YouTubeAnalyticsDataParams & { startIndex?: number }): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsTopVideosData>>;
+  trafficSources(params: Omit<YouTubeAnalyticsDataParams, "videoId">): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsBreakdownData>>;
+  geography(params: Omit<YouTubeAnalyticsDataParams, "videoId">): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsBreakdownData>>;
+  devices(params: Omit<YouTubeAnalyticsDataParams, "videoId">): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsBreakdownData>>;
+  retention(params: YouTubeAnalyticsDataParams & { videoId: string }): Promise<YouTubeAnalyticsSuccess<YouTubeAnalyticsRetentionData>>;
 }

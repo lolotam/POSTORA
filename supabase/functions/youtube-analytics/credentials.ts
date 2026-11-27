@@ -101,7 +101,7 @@ export function createBoundYouTubeAnalyticsRefreshStore(options: {
           p_expected_generation: binding.bindingGeneration,
           p_expected_incarnation: binding.bindingIncarnation,
           p_required_scopes: [...YOUTUBE_ANALYTICS_REQUIRED_SCOPES],
-          p_purpose_version: ANALYTICS_PURPOSE_VERSION,
+          p_purpose_version: binding.consent.version,
           p_ttl_seconds: ttlSeconds,
         });
         const data = record(raw);

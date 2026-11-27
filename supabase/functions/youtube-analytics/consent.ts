@@ -1,4 +1,5 @@
 import {
+  ANALYTICS_PURPOSE_ACCEPTED_VERSIONS,
   ANALYTICS_PURPOSE_VERSION,
   YOUTUBE_ANALYTICS_REVISION_PATTERN,
   type YouTubeAnalyticsConsent,
@@ -40,15 +41,18 @@ export async function recordYouTubeAnalyticsConsent(
     locale?: "en" | "ar";
     requestId: string;
     expectedRevision?: string;
+    acceptedVersions?: readonly number[];
   },
 ): Promise<YouTubeAnalyticsConsentResult> {
   const purposeVersion = input.purposeVersion ?? ANALYTICS_PURPOSE_VERSION;
+  const acceptedVersions = input.acceptedVersions ?? ANALYTICS_PURPOSE_ACCEPTED_VERSIONS;
   const locale = input.locale ?? "en";
+  const isAcceptedVersion = acceptedVersions.includes(purposeVersion);
   if (!UUID_PATTERN.test(input.ownerId) || !UUID_PATTERN.test(input.accountId) ||
-    (input.event === "accepted" && purposeVersion !== ANALYTICS_PURPOSE_VERSION)) {
+    (input.event === "accepted" && !isAcceptedVersion)) {
     return {
       ok: false,
-      code: input.event === "accepted" && purposeVersion !== ANALYTICS_PURPOSE_VERSION
+      code: input.event === "accepted" && !isAcceptedVersion
         ? "consent_version_stale"
         : "invalid_request",
     };

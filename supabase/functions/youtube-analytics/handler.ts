@@ -82,6 +82,31 @@ const TopVideosRequest = z.object({
   window_end: WindowEnd,
   start_index: z.number().int().min(1).max(YOUTUBE_ANALYTICS_TOP_VIDEOS_MAX_START_INDEX).optional(),
 }).strict();
+const TrafficSourcesRequest = z.object({
+  operation: z.literal("traffic_sources"),
+  account_id: AccountId,
+  period_days: PeriodDays,
+  window_end: WindowEnd,
+}).strict();
+const GeographyRequest = z.object({
+  operation: z.literal("geography"),
+  account_id: AccountId,
+  period_days: PeriodDays,
+  window_end: WindowEnd,
+}).strict();
+const DevicesRequest = z.object({
+  operation: z.literal("devices"),
+  account_id: AccountId,
+  period_days: PeriodDays,
+  window_end: WindowEnd,
+}).strict();
+const RetentionRequest = z.object({
+  operation: z.literal("retention"),
+  account_id: AccountId,
+  period_days: PeriodDays,
+  window_end: WindowEnd,
+  video_id: VideoId,
+}).strict();
 const RequestSchema = z.discriminatedUnion("operation", [
   StatusRequest,
   ConsentAcceptRequest,
@@ -89,6 +114,10 @@ const RequestSchema = z.discriminatedUnion("operation", [
   SummaryRequest,
   DailyRequest,
   TopVideosRequest,
+  TrafficSourcesRequest,
+  GeographyRequest,
+  DevicesRequest,
+  RetentionRequest,
 ]);
 
 const USER_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -536,7 +565,8 @@ export function createYouTubeAnalyticsHandler(
         });
       };
 
-      if ((input.operation === "summary" || input.operation === "daily") && input.video_id !== undefined) {
+      if (((input.operation === "summary" || input.operation === "daily") && input.video_id !== undefined) ||
+        input.operation === "retention") {
         const ownership = await runAttemptWithRefresh(
           "data",
           (accessToken) => ports.reader.lookupVideoOwnership(accessToken, {
@@ -569,6 +599,32 @@ export function createYouTubeAnalyticsHandler(
             window: resolved.window,
             days: resolved.days,
             ...(input.video_id ? { videoId: input.video_id } : {}),
+          }),
+        );
+        if (!report.ok) return await refuseAttempt(report);
+        reportData = report.value;
+      } else if (input.operation === "traffic_sources" || input.operation === "geography" ||
+        input.operation === "devices") {
+        const kind = input.operation;
+        const report = await runAttemptWithRefresh(
+          "analytics",
+          (accessToken) => ports.reader.readBreakdown(accessToken, kind, {
+            channelId: binding.channelId,
+            window: resolved.window,
+            days: resolved.days,
+          }),
+        );
+        if (!report.ok) return await refuseAttempt(report);
+        reportData = report.value;
+      } else if (input.operation === "retention") {
+        const videoId = input.video_id;
+        const report = await runAttemptWithRefresh(
+          "analytics",
+          (accessToken) => ports.reader.readRetention(accessToken, {
+            channelId: binding.channelId,
+            window: resolved.window,
+            days: resolved.days,
+            videoId,
           }),
         );
         if (!report.ok) return await refuseAttempt(report);

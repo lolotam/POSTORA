@@ -1,5 +1,6 @@
 export const YOUTUBE_ANALYTICS_SCHEMA_VERSION = 1;
-export const ANALYTICS_PURPOSE_VERSION = 1;
+export const ANALYTICS_PURPOSE_VERSION = 2;
+export const ANALYTICS_PURPOSE_ACCEPTED_VERSIONS = [1, 2] as const;
 
 export const YOUTUBE_ANALYTICS_OPERATIONS = [
   "status",
@@ -8,10 +9,21 @@ export const YOUTUBE_ANALYTICS_OPERATIONS = [
   "summary",
   "daily",
   "top_videos",
+  "traffic_sources",
+  "geography",
+  "devices",
+  "retention",
 ] as const;
 
 export type YouTubeAnalyticsOperation = (typeof YOUTUBE_ANALYTICS_OPERATIONS)[number];
-export type YouTubeAnalyticsDataOperation = "summary" | "daily" | "top_videos";
+export type YouTubeAnalyticsDataOperation =
+  | "summary"
+  | "daily"
+  | "top_videos"
+  | "traffic_sources"
+  | "geography"
+  | "devices"
+  | "retention";
 
 export const YOUTUBE_ANALYTICS_PERIOD_DAYS = [7, 14, 30, 90] as const;
 export type YouTubeAnalyticsPeriodDays = 7 | 14 | 30 | 90;
@@ -55,6 +67,19 @@ export const YOUTUBE_ANALYTICS_TOP_VIDEOS_METRICS = [
   { key: "likes", googleMetric: "likes", unit: "count" },
   { key: "subscribers_gained", googleMetric: "subscribersGained", unit: "count" },
 ] as const;
+
+export const YOUTUBE_ANALYTICS_BREAKDOWN_METRICS = [
+  { key: "views", googleMetric: "views", unit: "count" },
+  { key: "watch_time", googleMetric: "estimatedMinutesWatched", unit: "minutes" },
+] as const;
+
+export const YOUTUBE_ANALYTICS_TRAFFIC_SOURCE_PATTERN = /^[A-Z_]{1,40}$/;
+export const YOUTUBE_ANALYTICS_COUNTRY_PATTERN = /^[A-Z]{2}$/;
+export const YOUTUBE_ANALYTICS_DEVICE_PATTERN = /^[A-Z_]{1,40}$/;
+export const YOUTUBE_ANALYTICS_TRAFFIC_SOURCES_MAX_ROWS = 40;
+export const YOUTUBE_ANALYTICS_GEOGRAPHY_MAX_ROWS = 25;
+export const YOUTUBE_ANALYTICS_DEVICES_MAX_ROWS = 20;
+export const YOUTUBE_ANALYTICS_RETENTION_MAX_POINTS = 100;
 
 export const YOUTUBE_ANALYTICS_LIMITS = {
   admission: { max: 120, windowSeconds: 60 },
@@ -177,6 +202,31 @@ export interface YouTubeAnalyticsTopVideosData {
   next_start_index: number | null;
 }
 
+export type YouTubeAnalyticsBreakdownDimension = "traffic_source" | "country" | "device";
+export type YouTubeAnalyticsBreakdownOperation = "traffic_sources" | "geography" | "devices";
+
+export interface YouTubeAnalyticsBreakdownRow {
+  key: string;
+  metrics: YouTubeAnalyticsMetric[];
+}
+
+export interface YouTubeAnalyticsBreakdownData {
+  dimension: YouTubeAnalyticsBreakdownDimension;
+  rows: YouTubeAnalyticsBreakdownRow[];
+  has_data: boolean;
+}
+
+export interface YouTubeAnalyticsRetentionPoint {
+  ratio: number;
+  watch_ratio: number | null;
+  relative_performance: number | null;
+}
+
+export interface YouTubeAnalyticsRetentionData {
+  points: YouTubeAnalyticsRetentionPoint[];
+  has_data: boolean;
+}
+
 export interface YouTubeAnalyticsStatusData {
   available: true;
   reason: "ok";
@@ -199,6 +249,10 @@ export type YouTubeAnalyticsDataForOperation = {
   summary: YouTubeAnalyticsSummaryData;
   daily: YouTubeAnalyticsDailyData;
   top_videos: YouTubeAnalyticsTopVideosData;
+  traffic_sources: YouTubeAnalyticsBreakdownData;
+  geography: YouTubeAnalyticsBreakdownData;
+  devices: YouTubeAnalyticsBreakdownData;
+  retention: YouTubeAnalyticsRetentionData;
 };
 
 export interface YouTubeAnalyticsStatusRequest {
@@ -241,10 +295,31 @@ export interface YouTubeAnalyticsTopVideosRequest extends YouTubeAnalyticsDataRe
   start_index?: number;
 }
 
+export interface YouTubeAnalyticsTrafficSourcesRequest extends YouTubeAnalyticsDataRequestBase {
+  operation: "traffic_sources";
+}
+
+export interface YouTubeAnalyticsGeographyRequest extends YouTubeAnalyticsDataRequestBase {
+  operation: "geography";
+}
+
+export interface YouTubeAnalyticsDevicesRequest extends YouTubeAnalyticsDataRequestBase {
+  operation: "devices";
+}
+
+export interface YouTubeAnalyticsRetentionRequest extends YouTubeAnalyticsDataRequestBase {
+  operation: "retention";
+  video_id: string;
+}
+
 export type YouTubeAnalyticsRequest =
   | YouTubeAnalyticsStatusRequest
   | YouTubeAnalyticsConsentAcceptRequest
   | YouTubeAnalyticsConsentWithdrawRequest
   | YouTubeAnalyticsSummaryRequest
   | YouTubeAnalyticsDailyRequest
-  | YouTubeAnalyticsTopVideosRequest;
+  | YouTubeAnalyticsTopVideosRequest
+  | YouTubeAnalyticsTrafficSourcesRequest
+  | YouTubeAnalyticsGeographyRequest
+  | YouTubeAnalyticsDevicesRequest
+  | YouTubeAnalyticsRetentionRequest;

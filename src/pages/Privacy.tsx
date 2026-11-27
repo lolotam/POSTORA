@@ -53,12 +53,13 @@ const Privacy = () => {
               <li>On-demand channel and video analytics numbers after your connection-scoped in-app acceptance; these numbers are displayed immediately and are not stored</li>
             </ul>
             <p className="text-muted-foreground leading-relaxed mt-4">
-              <strong>Analytics Purpose Clause, Version 1, dated November 26, 2026:</strong> After you explicitly accept
+              <strong>Analytics Purpose Clause, Version 2, dated November 26, 2026:</strong> After you explicitly accept
               this purpose for a channel inside Postora, and only where analytics is enabled, Postora reads your own
               channel and video metrics from the YouTube Analytics API on demand: views, estimated minutes watched,
-              average view duration, subscribers gained and lost, likes, comments, and shares. They are shown solely
-              to you as the signed-in channel owner and are not stored by Postora. You can stop this use immediately
-              from the analytics page without changing your Google permissions, publishing, or comments.
+              average view duration, subscribers gained and lost, likes, comments, shares, viewer country, device type,
+              traffic sources, and audience retention. They are shown solely to you as the signed-in channel owner (and
+              may be exported by you from your browser to your own device) and are not stored by Postora. You can stop
+              this use immediately from the analytics page without changing your Google permissions, publishing, or comments.
             </p>
             <p className="text-muted-foreground leading-relaxed mt-4">
               Postora's use of information received from Google APIs will adhere to the{" "}
@@ -111,7 +112,7 @@ const Privacy = () => {
               <li>Edit published video metadata only when that feature is enabled (currently disabled at the production baseline) and you instruct Postora to make that change; Postora never replaces existing video media bytes or deletes videos</li>
               <li>Authenticate your identity and maintain your connected account session</li>
               <li>Read, create, reply to, edit, delete, and moderate comments on your own videos when you use comment management (and, when you explicitly request an AI reply suggestion on a comment, send that comment's text and the video title to the configured AI provider solely to draft a reply in your composer without auto-sending it)</li>
-              <li>After your connection-scoped in-app acceptance of Analytics Purpose Clause Version 1 (November 26, 2026), display your own channel and video analytics to you alone, on demand and without storing the numbers</li>
+              <li>After your connection-scoped in-app acceptance of Analytics Purpose Clause Version 2 (November 26, 2026), display your own channel and video analytics (including viewer country, device type, traffic sources, and audience retention) to you alone, on demand and without storing the numbers, and let you export loaded reports from your browser to your own device</li>
             </ul>
 
             <h3 className="text-xl font-semibold mt-6 mb-3">3.2 Prohibited Uses of Google User Data</h3>
@@ -183,7 +184,7 @@ const Privacy = () => {
 
             <h4 className="text-lg font-semibold mt-4 mb-2">Data We Collect from YouTube</h4>
             <p className="text-muted-foreground leading-relaxed mb-4">
-              With your authorization through Google OAuth 2.0 we read your channel name, ID and avatar; let you browse your uploaded videos and their full details; upload the videos you create in Postora; and, when published metadata editing is enabled (currently disabled at the production baseline), edit published video metadata only on your instruction, without replacing existing video media bytes or deleting videos. We also read, create, reply to, edit, delete, and moderate comments on your own videos when you use the Comment Manager, auto-reply rules or the AI agent. Comments are read on demand and by a scheduled check; each comment we act on is kept as YouTube returned it (its ID, text, and the commenter's public display name, channel ID and avatar URL) so the same comment is never answered twice. Under Analytics Purpose Clause Version 1, dated November 26, 2026, and only after your in-app acceptance for the current connection of a channel where analytics is enabled, we also read your own channel and video analytics on demand (views, estimated minutes watched, average view duration, subscribers gained and lost, likes, comments, and shares), display them solely to you as the signed-in owner, and do not store them. Postora's use of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.
+              With your authorization through Google OAuth 2.0 we read your channel name, ID and avatar; let you browse your uploaded videos and their full details; upload the videos you create in Postora; and, when published metadata editing is enabled (currently disabled at the production baseline), edit published video metadata only on your instruction, without replacing existing video media bytes or deleting videos. We also read, create, reply to, edit, delete, and moderate comments on your own videos when you use the Comment Manager, auto-reply rules or the AI agent. Comments are read on demand and by a scheduled check; each comment we act on is kept as YouTube returned it (its ID, text, and the commenter's public display name, channel ID and avatar URL) so the same comment is never answered twice. Under Analytics Purpose Clause Version 2, dated November 26, 2026, and only after your in-app acceptance for the current connection of a channel where analytics is enabled, we also read your own channel and video analytics on demand (views, estimated minutes watched, average view duration, subscribers gained and lost, likes, comments, shares, viewer country, device type, traffic sources, and audience retention), display them solely to you as the signed-in owner (with optional browser-local export to your own device), and do not store them. Postora's use of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.
             </p>
 
             <h4 className="text-lg font-semibold mt-4 mb-2">Data We Collect from LinkedIn</h4>

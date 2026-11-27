@@ -489,3 +489,44 @@
 .animation-delay-300 { animation-delay: 300ms; }
 .animation-delay-400 { animation-delay: 400ms; }
 .animation-delay-500 { animation-delay: 500ms; }
+
+/*
+ * Print stylesheet for the YouTube analytics report (spec section 9.2).
+ *
+ * The printed page is a report, not the app: navigation and controls marked
+ * `.no-print` disappear, while top-video title buttons and expanded table
+ * alternatives remain visible on paper.
+ */
+@media print {
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+
+  body:has(.youtube-analytics-report) nav,
+  body:has(.youtube-analytics-report) aside {
+    display: none !important;
+  }
+
+  .youtube-analytics-report [role="tablist"] {
+    display: none !important;
+  }
+
+  /* Expand every collapsed table alternative. */
+  .youtube-analytics-report details::details-content {
+    content-visibility: visible !important;
+    block-size: auto !important;
+  }
+
+  .youtube-analytics-report details > *:not(summary) {
+    display: revert !important;
+  }
+
+  .youtube-analytics-report details > summary {
+    list-style: none;
+  }
+
+  .youtube-analytics-report section {
+    break-inside: avoid;
+  }
+}

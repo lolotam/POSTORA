@@ -1,4 +1,5 @@
 import {
+  ANALYTICS_PURPOSE_ACCEPTED_VERSIONS,
   ANALYTICS_PURPOSE_VERSION,
   YOUTUBE_ANALYTICS_REQUIRED_SCOPES,
   YOUTUBE_ANALYTICS_REVISION_PATTERN,
@@ -56,6 +57,7 @@ export interface YouTubeAnalyticsDecisionInput {
   expected?: YouTubeAnalyticsBinding;
   requiredScopes?: readonly string[];
   purposeVersion?: number;
+  acceptedVersions?: readonly number[];
   withCredentials?: boolean;
 }
 
@@ -153,53 +155,69 @@ export async function decideYouTubeAnalytics(
   input: YouTubeAnalyticsDecisionInput,
 ): Promise<YouTubeAnalyticsDecision> {
   const expected = input.expected;
-  try {
-    const { data: raw, error } = await rpc("youtube_analytics_stage5_decide", {
-      p_owner_id: input.ownerId,
-      p_account_id: input.accountId,
-      p_expected_channel: expected?.channelId ?? null,
-      p_expected_generation: expected?.bindingGeneration ?? null,
-      p_expected_incarnation: expected?.bindingIncarnation ?? null,
-      p_required_scopes: [...(input.requiredScopes ?? YOUTUBE_ANALYTICS_REQUIRED_SCOPES)],
-      p_purpose_version: input.purposeVersion ?? ANALYTICS_PURPOSE_VERSION,
-      p_with_credentials: input.withCredentials === true,
-    });
-    if (error) return settingsUnavailable();
-    const data = record(raw);
-    if (!data || typeof data.ok !== "boolean") return settingsUnavailable();
-    const binding = parseBinding(data, input);
-    if (data.ok === true) {
-      if (data.reason !== "ok" || binding === null) return settingsUnavailable();
-      if (expected && (binding.channelId !== expected.channelId ||
-        binding.bindingGeneration !== expected.bindingGeneration ||
-        binding.bindingIncarnation !== expected.bindingIncarnation ||
-        binding.connectionRevision !== expected.connectionRevision)) {
+  const candidateVersions = input.purposeVersion !== undefined
+    ? [input.purposeVersion]
+    : [...(input.acceptedVersions ?? ANALYTICS_PURPOSE_ACCEPTED_VERSIONS)].sort((a, b) => b - a);
+  if (candidateVersions.length === 0) return settingsUnavailable();
+
+  let firstOutdatedDenial: YouTubeAnalyticsDecision | null = null;
+  for (let index = 0; index < candidateVersions.length; index += 1) {
+    const candidateVersion = candidateVersions[index];
+    try {
+      const { data: raw, error } = await rpc("youtube_analytics_stage5_decide", {
+        p_owner_id: input.ownerId,
+        p_account_id: input.accountId,
+        p_expected_channel: expected?.channelId ?? null,
+        p_expected_generation: expected?.bindingGeneration ?? null,
+        p_expected_incarnation: expected?.bindingIncarnation ?? null,
+        p_required_scopes: [...(input.requiredScopes ?? YOUTUBE_ANALYTICS_REQUIRED_SCOPES)],
+        p_purpose_version: candidateVersion,
+        p_with_credentials: input.withCredentials === true,
+      });
+      if (error) return settingsUnavailable();
+      const data = record(raw);
+      if (!data || typeof data.ok !== "boolean") return settingsUnavailable();
+      const binding = parseBinding(data, input);
+      if (data.ok === true) {
+        if (data.reason !== "ok" || binding === null) return settingsUnavailable();
+        if (expected && (binding.channelId !== expected.channelId ||
+          binding.bindingGeneration !== expected.bindingGeneration ||
+          binding.bindingIncarnation !== expected.bindingIncarnation ||
+          binding.connectionRevision !== expected.connectionRevision)) {
+          return settingsUnavailable();
+        }
+        if (input.withCredentials === true) {
+          const credentials = parseCredentials(data.credentials);
+          if (credentials === null) return settingsUnavailable();
+          return { ok: true, binding, credentials };
+        }
+        return { ok: true, binding };
+      }
+      if (typeof data.reason !== "string" ||
+        !DECISION_REASONS.has(data.reason as YouTubeAnalyticsErrorCode)) {
         return settingsUnavailable();
       }
-      if (input.withCredentials === true) {
-        const credentials = parseCredentials(data.credentials);
-        if (credentials === null) return settingsUnavailable();
-        return { ok: true, binding, credentials };
+      const code = data.reason as YouTubeAnalyticsErrorCode;
+      const bindingExpected = code !== "invalid_request" && code !== "not_found" && code !== "connection_changed";
+      if (bindingExpected && binding === null) {
+        return settingsUnavailable();
       }
-      return { ok: true, binding };
-    }
-    if (typeof data.reason !== "string" ||
-      !DECISION_REASONS.has(data.reason as YouTubeAnalyticsErrorCode)) {
+      const consent = parseConsent(data.consent);
+      const denial: YouTubeAnalyticsDecision = {
+        ok: false,
+        code,
+        ...(binding ? { binding } : {}),
+        ...(consent ? { consent } : {}),
+      };
+      const effectiveConsentState = consent?.state ?? binding?.consent.state;
+      if (code === "consent_required" && effectiveConsentState === "outdated" && index + 1 < candidateVersions.length) {
+        if (firstOutdatedDenial === null) firstOutdatedDenial = denial;
+        continue;
+      }
+      return firstOutdatedDenial ?? denial;
+    } catch {
       return settingsUnavailable();
     }
-    const code = data.reason as YouTubeAnalyticsErrorCode;
-    const bindingExpected = code !== "invalid_request" && code !== "not_found" && code !== "connection_changed";
-    if (bindingExpected && binding === null) {
-      return settingsUnavailable();
-    }
-    const consent = parseConsent(data.consent);
-    return {
-      ok: false,
-      code,
-      ...(binding ? { binding } : {}),
-      ...(consent ? { consent } : {}),
-    };
-  } catch {
-    return settingsUnavailable();
   }
+  return firstOutdatedDenial ?? settingsUnavailable();
 }

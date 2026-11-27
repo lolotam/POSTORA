@@ -2,10 +2,12 @@ import { supabase } from "@/integrations/supabase/client";
 import type { YouTubeAnalyticsGateway, YouTubeAnalyticsDataParams } from "../application/ports";
 import { YouTubeAnalyticsClientError, isYouTubeAnalyticsErrorCode } from "../domain/errors";
 import type {
+  YouTubeAnalyticsBreakdownData,
   YouTubeAnalyticsConsentData,
   YouTubeAnalyticsDailyData,
   YouTubeAnalyticsErrorResponse,
   YouTubeAnalyticsRequest,
+  YouTubeAnalyticsRetentionData,
   YouTubeAnalyticsStatusData,
   YouTubeAnalyticsSuccess,
   YouTubeAnalyticsSummaryData,
@@ -46,6 +48,14 @@ function isOperationDataValid(operation: YouTubeAnalyticsRequest["operation"], d
         && typeof data.titles === "string"
         && typeof data.has_more === "boolean"
         && (data.next_start_index === null || typeof data.next_start_index === "number");
+    case "traffic_sources":
+    case "geography":
+    case "devices":
+      return typeof data.dimension === "string"
+        && Array.isArray(data.rows)
+        && typeof data.has_data === "boolean";
+    case "retention":
+      return Array.isArray(data.points) && typeof data.has_data === "boolean";
   }
 }
 
@@ -171,6 +181,28 @@ export class SupabaseYouTubeAnalyticsGateway implements YouTubeAnalyticsGateway 
       operation: "top_videos",
       ...dataBody(params),
       ...(params.startIndex !== undefined && params.startIndex > 1 ? { start_index: params.startIndex } : {}),
+    }, params.signal);
+  }
+
+  trafficSources(params: Omit<YouTubeAnalyticsDataParams, "videoId">) {
+    return call<YouTubeAnalyticsBreakdownData>({ operation: "traffic_sources", ...dataBody(params) }, params.signal);
+  }
+
+  geography(params: Omit<YouTubeAnalyticsDataParams, "videoId">) {
+    return call<YouTubeAnalyticsBreakdownData>({ operation: "geography", ...dataBody(params) }, params.signal);
+  }
+
+  devices(params: Omit<YouTubeAnalyticsDataParams, "videoId">) {
+    return call<YouTubeAnalyticsBreakdownData>({ operation: "devices", ...dataBody(params) }, params.signal);
+  }
+
+  retention(params: YouTubeAnalyticsDataParams & { videoId: string }) {
+    return call<YouTubeAnalyticsRetentionData>({
+      operation: "retention",
+      account_id: params.accountId,
+      period_days: params.periodDays,
+      window_end: params.windowEnd,
+      video_id: params.videoId,
     }, params.signal);
   }
 }
