@@ -48,6 +48,24 @@ const SAMPLE_PLAN = {
   expectedPrivacy: "private",
 };
 
+Deno.test("updateVideo accepts a snippet-only 200 response that omits status", async () => {
+  const snippetOnlyResponse = {
+    kind: "youtube#video",
+    etag: '"fixture-etag-v2"',
+    id: VIDEO,
+    snippet: {
+      channelId: CHANNEL,
+      title: "Updated",
+      description: "Description",
+      tags: ["a"],
+      categoryId: "22",
+    },
+  };
+  const provider = createYouTubeEditProvider({ fetchImpl: fetchReturning(snippetOnlyResponse) });
+  const result = await provider.updateVideo("bound-fixture-123", { videoId: VIDEO, plan: SAMPLE_PLAN });
+  assertEquals(result, { ok: true, id: VIDEO });
+});
+
 Deno.test("updateVideo sends If-Match and makes exactly one PUT on lost answers (outcome_unknown)", async () => {
   const cases: Array<{ name: string; fetchImpl: typeof fetch }> = [
     {

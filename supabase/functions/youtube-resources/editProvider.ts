@@ -68,6 +68,21 @@ function parseVideo(body: unknown): ProviderVideo | null {
   };
 }
 
+function parseUpdatedVideoId(body: unknown, parts: readonly string[]): string | null {
+  if (!body || typeof body !== "object") return null;
+  const item = body as Record<string, unknown>;
+  if (typeof item.id !== "string" || item.id.length === 0) return null;
+  if (parts.includes("snippet")) {
+    const snippet = item.snippet as Record<string, unknown> | undefined;
+    if (!snippet || typeof snippet.channelId !== "string" || typeof snippet.title !== "string") return null;
+  }
+  if (parts.includes("status")) {
+    const status = item.status as Record<string, unknown> | undefined;
+    if (!status || typeof status.privacyStatus !== "string") return null;
+  }
+  return item.id;
+}
+
 function readFailure(status: number): EditReadResult {
   if (status === 401 || status === 403) return { ok: false, code: "reconnect_required" };
   if (status === 404) return { ok: false, code: "not_found" };
@@ -127,9 +142,9 @@ export function createYouTubeEditProvider(args: {
       if (!response.ok) return writeFailure(response.status);
       let body: unknown;
       try { body = await response.json(); } catch { return { ok: false, code: "outcome_unknown" }; }
-      const parsed = parseVideo(body);
-      if (!parsed || parsed.id !== input.videoId) return { ok: false, code: "outcome_unknown" };
-      return { ok: true, id: parsed.id };
+      const updatedId = parseUpdatedVideoId(body, input.plan.parts);
+      if (!updatedId || updatedId !== input.videoId) return { ok: false, code: "outcome_unknown" };
+      return { ok: true, id: updatedId };
     },
   };
 }
