@@ -237,7 +237,7 @@ Deno.test("tags validation accepts valid tags and refuses empty, angle-bracket, 
   });
   assertEquals((validPlan.body.snippet as Record<string, unknown>).tags, ["postora", "youtube"]);
 
-  for (const badTags of [[""], ["   "], ["bad<tag>"], ["a".repeat(250), "b".repeat(251)]]) {
+  for (const badTags of [[""], ["   "], ["bad<tag>"], ["a".repeat(250), "b".repeat(250)], [" ".padStart(249, "a") + " b", "c".repeat(249)]]) {
     await assertRejects(
       () => planEditUpdate({
         snapshot,
@@ -251,4 +251,16 @@ Deno.test("tags validation accepts valid tags and refuses empty, angle-bracket, 
       "Invalid tags",
     );
   }
+  await assertRejects(
+    () => planEditUpdate({
+      snapshot,
+      changes: { description: "ش".repeat(2501) },
+      freshVideo: video(),
+      ownerId: OWNER,
+      accountId: ACCOUNT,
+      privacyConfirmation: null,
+    }),
+    EditFailure,
+    "Invalid description",
+  );
 });

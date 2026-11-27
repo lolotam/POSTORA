@@ -272,6 +272,38 @@ describe("YouTubeVideoEditCard", () => {
     })));
   });
 
+  it("preserves escaped commas inside individual tags across hydration and save", async () => {
+    const onSave = vi.fn().mockResolvedValue("saved");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={{ ...video, tags: ["science, technology", "ai"] }}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={vi.fn().mockResolvedValue({
+          revision: "rev-comma-1",
+          values: {
+            title: "First video",
+            description: "Body text",
+            tags: ["science, technology", "ai"],
+            categoryId: "998",
+          },
+        })}
+        onSave={onSave}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    await waitFor(() => expect(screen.getByLabelText("Tags (comma-separated)")).toHaveValue("science\\, technology, ai"));
+
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ["science, technology", "ai"],
+    })));
+  });
+
   it("shows Arabic number-first labels in the edit dropdown", async () => {
     await renderUi(
       <YouTubeVideoEditCard

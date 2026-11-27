@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,10 +54,33 @@ export interface YouTubeVideoEditCardProps {
 }
 
 // The comma-separated tag field is one text control; a tag is a trimmed,
-// non-empty piece of it.
+// non-empty piece of it. Escaped commas (\,) and backslashes (\\) preserve
+// literal commas inside individual tags across round-trip hydration.
+function formatTags(tags: readonly string[]): string {
+  return tags
+    .map((tag) => tag.replace(/\\/g, "\\\\").replace(/,/g, "\\,"))
+    .join(", ");
+}
+
 function parseTags(value: string): string[] {
-  return value
-    .split(",")
+  const parts: string[] = [];
+  let current = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "\\" && index + 1 < value.length && (value[index + 1] === "," || value[index + 1] === "\\")) {
+      current += value[index + 1];
+      index += 1;
+      continue;
+    }
+    if (char === ",") {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts
     .map((tag) => tag.trim())
     .filter((tag) => tag.length > 0);
 }
@@ -92,10 +115,16 @@ export function YouTubeVideoEditCard({
   const [draftCategory, setDraftCategory] = useState(video.category_id ?? "");
   const [draftTitle, setDraftTitle] = useState(video.title);
   const [draftDescription, setDraftDescription] = useState(video.description ?? "");
-  const [draftTags, setDraftTags] = useState((video.tags ?? []).join(", "));
+  const [draftTags, setDraftTags] = useState(formatTags(video.tags ?? []));
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<{ outcome: EditSaveOutcome; retryAfterSeconds: number | null } | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
+  const dirtyFieldsRef = useRef<{ title: boolean; description: boolean; tags: boolean; category: boolean }>({
+    title: false,
+    description: false,
+    tags: false,
+    category: false,
+  });
   const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
   const categoryCatalog = useYouTubeCategories(locale, accountId, region);
 
@@ -104,18 +133,28 @@ export function YouTubeVideoEditCard({
   useEffect(() => {
     setEditing(false);
     setOutcome(null);
+    setRevision(null);
+    dirtyFieldsRef.current = { title: false, description: false, tags: false, category: false };
   }, [video.id]);
 
-  // The draft follows the video the server last confirmed, so a save that was
-  // verified on YouTube leaves the verified values in the editor.
+  // While the editor is closed, keep the preview draft in sync with the latest
+  // details read. Once opened, the draft and its baseRevision advance together
+  // from snapshot/save only so a background details refresh never mixes fields
+  // from a different server read into an active baseRevision.
   useEffect(() => {
+    if (editing) return;
     setDraftCategory(video.category_id ?? "");
     setDraftTitle(video.title);
     setDraftDescription(video.description ?? "");
-    setDraftTags((video.tags ?? []).join(", "));
-  }, [video.id, video.category_id, video.title, video.description, video.tags]);
+    setDraftTags(formatTags(video.tags ?? []));
+  }, [editing, video.id, video.category_id, video.title, video.description, video.tags]);
 
   const openEditor = async () => {
+    dirtyFieldsRef.current = { title: false, description: false, tags: false, category: false };
+    setDraftCategory(video.category_id ?? "");
+    setDraftTitle(video.title);
+    setDraftDescription(video.description ?? "");
+    setDraftTags(formatTags(video.tags ?? []));
     setEditing(true);
     setOutcome(null);
     if (!onSnapshot) return;
@@ -131,10 +170,18 @@ export function YouTubeVideoEditCard({
     }
     setRevision(snap.revision);
     if (snap.values) {
-      if (typeof snap.values.title === "string") setDraftTitle(snap.values.title);
-      if (typeof snap.values.description === "string") setDraftDescription(snap.values.description);
-      if (Array.isArray(snap.values.tags)) setDraftTags(snap.values.tags.join(", "));
-      if (snap.values.categoryId !== undefined) setDraftCategory(snap.values.categoryId ?? "");
+      if (typeof snap.values.title === "string" && !dirtyFieldsRef.current.title) {
+        setDraftTitle(snap.values.title);
+      }
+      if (typeof snap.values.description === "string" && !dirtyFieldsRef.current.description) {
+        setDraftDescription(snap.values.description);
+      }
+      if (Array.isArray(snap.values.tags) && !dirtyFieldsRef.current.tags) {
+        setDraftTags(formatTags(snap.values.tags));
+      }
+      if (snap.values.categoryId !== undefined && !dirtyFieldsRef.current.category) {
+        setDraftCategory(snap.values.categoryId ?? "");
+      }
     }
   };
 
@@ -225,7 +272,10 @@ export function YouTubeVideoEditCard({
             <Input
               id="edit-video-title"
               value={draftTitle}
-              onChange={(event) => setDraftTitle(event.target.value)}
+              onChange={(event) => {
+                dirtyFieldsRef.current.title = true;
+                setDraftTitle(event.target.value);
+              }}
               maxLength={100}
             />
           </div>
@@ -236,7 +286,10 @@ export function YouTubeVideoEditCard({
             <Textarea
               id="edit-video-description"
               value={draftDescription}
-              onChange={(event) => setDraftDescription(event.target.value)}
+              onChange={(event) => {
+                dirtyFieldsRef.current.description = true;
+                setDraftDescription(event.target.value);
+              }}
               maxLength={5000}
             />
           </div>
@@ -247,13 +300,19 @@ export function YouTubeVideoEditCard({
             <Input
               id="edit-video-tags"
               value={draftTags}
-              onChange={(event) => setDraftTags(event.target.value)}
+              onChange={(event) => {
+                dirtyFieldsRef.current.tags = true;
+                setDraftTags(event.target.value);
+              }}
             />
           </div>
           <YouTubeCategorySelect
             id="edit-video-category"
             value={draftCategory}
-            onValueChange={setDraftCategory}
+            onValueChange={(nextCategory) => {
+              dirtyFieldsRef.current.category = true;
+              setDraftCategory(nextCategory);
+            }}
             locale={locale}
             options={categoryCatalog.categories}
             catalogUnavailable={categoryCatalog.unavailable}
