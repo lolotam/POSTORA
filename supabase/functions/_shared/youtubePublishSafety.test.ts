@@ -63,6 +63,21 @@ Deno.test("uploads without visibility are private on both providers", () => {
   }
 });
 
+Deno.test("scheduled uploads force private even when youtube_visibility is public", () => {
+  for (const publishAt of [
+    "2026-12-01T12:00:00Z",
+    "2020-01-01T00:00:00Z",
+    "not-a-timestamp",
+    "   ",
+    1700000000,
+  ]) {
+    assertEquals(
+      youtubeUploadPrivacy({ youtube_visibility: "public", youtube_publish_at: publishAt }),
+      "private",
+    );
+  }
+});
+
 Deno.test("native dispatch refuses legacy defaults and accepts proven explicit No", () => {
   assertThrows(
     () => assertNativeYoutubeDeclarations({}),

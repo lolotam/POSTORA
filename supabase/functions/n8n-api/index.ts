@@ -242,6 +242,7 @@ interface PlatformMetadata {
   youtube_first_comment?: string;
   youtube_thumbnail?: string;
   youtube_recording_date?: string;
+  youtube_publish_at?: string | null;
   // Legacy YouTube field names, still accepted. The canonical names above win
   // when both are present.
   youtube_category_id?: string;

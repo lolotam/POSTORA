@@ -1,3 +1,5 @@
+import { hasYoutubeScheduleRequest } from "./youtubePublishOptions.ts";
+
 /**
  * The subset of PlatformMetadata needed to decide whether Composio can
  * faithfully represent a YouTube upload. Kept structural so callers do not
@@ -20,6 +22,7 @@ export const YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS = [
   "youtube_allowed_countries",
   "youtube_blocked_countries",
   "youtube_first_comment",
+  "youtube_publish_at",
 ] as const;
 
 function nonEmptyString(value: unknown): boolean {
@@ -57,6 +60,8 @@ export function youtubeOptionsUnsupportedOnComposio(
       case "youtube_allowed_countries":
       case "youtube_blocked_countries":
         return nonEmptyArray(value);
+      case "youtube_publish_at":
+        return hasYoutubeScheduleRequest(metadata);
       default:
         return nonEmptyString(value);
     }

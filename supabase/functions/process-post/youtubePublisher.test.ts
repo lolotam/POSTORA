@@ -12,7 +12,10 @@ import {
   type YoutubeUploadRequest,
 } from "./youtubePublisher.ts";
 import { createYoutubeResumableSession } from "./youtubeResumableUpload.ts";
-import { YOUTUBE_DEFAULT_CATEGORY_ID } from "../_shared/youtubePublishOptions.ts";
+import {
+  YOUTUBE_DEFAULT_CATEGORY_ID,
+  YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE,
+} from "../_shared/youtubePublishOptions.ts";
 
 function snippetOf(request: YoutubeUploadRequest): Record<string, unknown> {
   return request.body.snippet as Record<string, unknown>;
@@ -178,6 +181,249 @@ Deno.test("upload request keeps the title and description within the provider li
   assertEquals(String(snippetOf(request).title).length, 100);
   assertEquals(String(snippetOf(request).description).length, 5000);
   assert(Array.isArray(snippetOf(request).tags));
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Native scheduling
+//
+// A post that asks for no schedule has to keep producing EXACTLY the request
+// it produced before native scheduling existed. `undefined`, `null` and `""`
+// all mean "no schedule", and not one of them may change a byte of it.
+//
+// The baselines below were recorded from the publisher before this feature
+// existed. They are the contract, not a description of the current behaviour.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** The clock the schedule is judged against. */
+const SCHEDULE_NOW = new Date("2026-11-27T00:00:00.000Z");
+/** A time the provider can be given: far enough ahead, and not too far. */
+const SCHEDULED_PUBLISH_AT = "2026-12-01T10:00:00.000Z";
+
+interface BaselineCase {
+  /** What the case is, so a failure says which request changed. */
+  name: string;
+  metadata: Record<string, unknown>;
+  request: {
+    url: string;
+    part: string;
+    body: Record<string, unknown>;
+    notifySubscribers: boolean;
+    warnings: string[];
+  };
+}
+
+const BASELINE_CASES: BaselineCase[] = [
+  {
+    name: "a post that names no YouTube option",
+    metadata: {},
+    request: {
+      url: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+      part: "snippet,status",
+      body: {
+        snippet: {
+          title: "A video",
+          description: "A description",
+          tags: ["one"],
+          categoryId: "22",
+        },
+        status: {
+          privacyStatus: "private",
+          embeddable: true,
+          publicStatsViewable: true,
+          license: "youtube",
+        },
+      },
+      notifySubscribers: true,
+      warnings: [],
+    },
+  },
+  {
+    name: "a post that names the documented options",
+    metadata: {
+      youtube_visibility: "public",
+      youtube_category: "10",
+      youtube_video_language: "en",
+      youtube_allow_embedding: false,
+      youtube_public_stats_viewable: false,
+      youtube_license: "creativeCommon",
+    },
+    request: {
+      url: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+      part: "snippet,status",
+      body: {
+        snippet: {
+          title: "A video",
+          description: "A description",
+          tags: ["one"],
+          categoryId: "10",
+          defaultLanguage: "en",
+        },
+        status: {
+          privacyStatus: "public",
+          embeddable: false,
+          publicStatsViewable: false,
+          license: "creativeCommon",
+        },
+      },
+      notifySubscribers: true,
+      warnings: [],
+    },
+  },
+  {
+    name: "a post that declares and adds the extras",
+    metadata: {
+      youtube_visibility: "unlisted",
+      youtube_made_for_kids: false,
+      youtube_contains_synthetic_media: true,
+      youtube_notify_subscribers: false,
+      youtube_recording_date: "2026-11-16",
+      youtube_has_paid_product_placement: true,
+    },
+    request: {
+      url: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status,recordingDetails,paidProductPlacementDetails&notifySubscribers=false",
+      part: "snippet,status,recordingDetails,paidProductPlacementDetails",
+      body: {
+        snippet: {
+          title: "A video",
+          description: "A description",
+          tags: ["one"],
+          categoryId: "22",
+        },
+        status: {
+          privacyStatus: "unlisted",
+          embeddable: true,
+          publicStatsViewable: true,
+          license: "youtube",
+          selfDeclaredMadeForKids: false,
+          containsSyntheticMedia: true,
+        },
+        recordingDetails: { recordingDate: "2026-11-16" },
+        paidProductPlacementDetails: { hasPaidProductPlacement: true },
+      },
+      notifySubscribers: false,
+      warnings: [],
+    },
+  },
+  {
+    name: "a post that names the options YouTube does not document",
+    metadata: {
+      youtube_audio_language: "en",
+      youtube_allowed_countries: ["US"],
+      youtube_blocked_countries: ["DE"],
+    },
+    request: {
+      url: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status,contentDetails",
+      part: "snippet,status,contentDetails",
+      body: {
+        snippet: {
+          title: "A video",
+          description: "A description",
+          tags: ["one"],
+          categoryId: "22",
+          defaultAudioLanguage: "en",
+        },
+        status: {
+          privacyStatus: "private",
+          embeddable: true,
+          publicStatsViewable: true,
+          license: "youtube",
+        },
+        contentDetails: {
+          regionRestriction: {
+            allowed: ["US"],
+            blocked: ["DE"],
+          },
+        },
+      },
+      notifySubscribers: true,
+      warnings: [
+        "YouTube does not document youtube_default_audio_language as settable at upload time. It was sent on a best-effort basis and may not have been applied.",
+        "YouTube does not document youtube_allowed_countries as settable at upload time. It was sent on a best-effort basis and may not have been applied.",
+        "YouTube does not document youtube_blocked_countries as settable at upload time. It was sent on a best-effort basis and may not have been applied.",
+      ],
+    },
+  },
+];
+
+Deno.test("a post that asks for no schedule keeps the recorded request", () => {
+  for (const baseline of BASELINE_CASES) {
+    // The key omitted, the key present and empty, and the key present and
+    // null all mean the same thing: no schedule.
+    const requests = [
+      buildYoutubeUploadRequest({ metadata: baseline.metadata, ...baseInput }),
+      buildYoutubeUploadRequest({
+        metadata: { ...baseline.metadata, youtube_publish_at: undefined },
+        ...baseInput,
+      }),
+      buildYoutubeUploadRequest({
+        metadata: { ...baseline.metadata, youtube_publish_at: null },
+        ...baseInput,
+      }),
+      buildYoutubeUploadRequest({
+        metadata: { ...baseline.metadata, youtube_publish_at: "" },
+        ...baseInput,
+      }),
+    ];
+
+    for (const request of requests) {
+      assertEquals(
+        {
+          url: request.url,
+          part: request.part,
+          body: request.body,
+          notifySubscribers: request.notifySubscribers,
+          warnings: request.warnings,
+        },
+        baseline.request,
+        baseline.name,
+      );
+    }
+  }
+});
+
+Deno.test("a scheduled upload is private and carries the publish time", () => {
+  const request = buildYoutubeUploadRequest({
+    metadata: { youtube_visibility: "public", youtube_publish_at: SCHEDULED_PUBLISH_AT },
+    ...baseInput,
+    now: SCHEDULE_NOW,
+  });
+
+  // YouTube only accepts a publish time on a private video, and it makes the
+  // video public at that time.
+  assertEquals(statusOf(request).privacyStatus, "private");
+  assertEquals(statusOf(request).publishAt, SCHEDULED_PUBLISH_AT);
+  assertEquals(request.scheduleWarning, undefined);
+  assertEquals(request.warnings, []);
+});
+
+Deno.test("a schedule that cannot be honoured ends private and unscheduled", () => {
+  const unusable: Array<{ name: string; value: unknown }> = [
+    { name: "a value that is not a date", value: "not-a-date" },
+    { name: "a time that is too soon", value: new Date(SCHEDULE_NOW.getTime() + 5 * 60_000).toISOString() },
+    { name: "a time that has passed", value: new Date(SCHEDULE_NOW.getTime() - 60 * 60_000).toISOString() },
+    {
+      name: "a time that is too far ahead",
+      value: new Date(SCHEDULE_NOW.getTime() + 3 * 365 * 24 * 60 * 60_000).toISOString(),
+    },
+    { name: "a value that is not a string", value: 12345 },
+  ];
+
+  for (const schedule of unusable) {
+    const request = buildYoutubeUploadRequest({
+      metadata: { youtube_visibility: "public", youtube_publish_at: schedule.value },
+      ...baseInput,
+      now: SCHEDULE_NOW,
+    });
+
+    // The video is never published earlier or wider than the post asked for.
+    assertEquals(statusOf(request).privacyStatus, "private", schedule.name);
+    assertEquals(statusOf(request).publishAt, undefined, schedule.name);
+    assertEquals(request.scheduleWarning, "stale_schedule", schedule.name);
+    assert(
+      request.warnings.includes(YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE),
+      `${schedule.name}: ${request.warnings.join(" ")}`,
+    );
+  }
 });
 
 // ───────────────────────────────────────────────────────────────────────────

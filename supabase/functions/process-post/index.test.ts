@@ -278,3 +278,19 @@ Deno.test("a claim that throws before any row exists carries no row id", async (
   assertEquals((thrown as Error).message, "transport lost the claim answer");
   assertEquals((thrown as { platformPostId?: string | null }).platformPostId, undefined);
 });
+
+Deno.test("a scheduled YouTube post settles as private and carries its schedule", async () => {
+  const { youtubeSettlementEvidence } = await loadProcessPost();
+  const publishAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  const evidence = youtubeSettlementEvidence({
+    youtube_visibility: "public",
+    youtube_publish_at: publishAt,
+  });
+
+  // The post asked for public, and the video was uploaded private: YouTube
+  // makes it public at the scheduled time.
+  assertEquals(evidence.requested_privacy, "private");
+  assertEquals(evidence.scheduled, true);
+  assertEquals(evidence.schedule_warning, null);
+  assertEquals(evidence.requested_publish_at, publishAt);
+});

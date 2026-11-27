@@ -24,6 +24,29 @@ export const YOUTUBE_PRIVACY_VALUES = ["public", "unlisted", "private"] as const
 
 export type YoutubePrivacyStatus = (typeof YOUTUBE_PRIVACY_VALUES)[number];
 
+/** Minimum lead time YouTube requires before a scheduled `status.publishAt` timestamp. */
+export const YOUTUBE_PUBLISH_AT_MIN_LEAD_MS = 15 * 60 * 1000;
+
+/** Nominal 2-year upper bound (in ms) for `status.publishAt` validation. */
+export const YOUTUBE_PUBLISH_AT_MAX_AHEAD_MS = 2 * 365 * 24 * 60 * 60 * 1000;
+
+export const YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE =
+  "The YouTube schedule time could not be used, so the video was uploaded as private and not scheduled.";
+
+export type YoutubePublishAtInvalidReason =
+  | "malformed"
+  | "too_soon"
+  | "expired"
+  | "too_far"
+  | "wrong_type";
+
+export type YoutubePublishAtResolution =
+  | { ok: true; publishAt: string }
+  | { ok: false; reason: YoutubePublishAtInvalidReason };
+
+const RFC3339_TIMESTAMP_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/;
+
 /**
  * Postora publishes as `private` when the caller does not choose a privacy
  * status.
@@ -146,4 +169,105 @@ export function youtubePrivacyOrDefault(value: unknown): YoutubePrivacyStatus {
   return YOUTUBE_PRIVACY_VALUES.includes(value as YoutubePrivacyStatus)
     ? (value as YoutubePrivacyStatus)
     : YOUTUBE_DEFAULT_PRIVACY;
+}
+
+/**
+ * Returns `true` whenever `metadata.youtube_publish_at` is anything other than
+ * `undefined`, `null`, or `""` — including whitespace-only strings and
+ * wrong-typed values, so any unusable schedule request still forces `private`.
+ */
+export function hasYoutubeScheduleRequest(
+  metadata: object | null | undefined,
+): boolean {
+  const value = (metadata as Record<string, unknown> | null | undefined)?.youtube_publish_at;
+  return value !== undefined && value !== null && value !== "";
+}
+
+function parseStrictRfc3339Ms(raw: string): number | null {
+  const trimmed = raw.trim();
+  const match = RFC3339_TIMESTAMP_RE.exec(trimmed);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+
+  if (match[7] !== undefined) {
+    const offsetHour = Number(match[8]);
+    const offsetMinute = Number(match[9]);
+    if (offsetHour > 23 || offsetMinute > 59) return null;
+  }
+
+  // Reject calendar rollovers such as 2026-02-30 or non-leap 2026-02-29.
+  const calendarCheck = new Date(Date.UTC(year, month - 1, day));
+  if (
+    calendarCheck.getUTCFullYear() !== year ||
+    calendarCheck.getUTCMonth() !== month - 1 ||
+    calendarCheck.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  const parsedMs = Date.parse(trimmed);
+  return Number.isNaN(parsedMs) ? null : parsedMs;
+}
+
+/**
+ * Validates and normalises a `youtube_publish_at` value against `now`.
+ *
+ * Boundary cases:
+ * - non-string -> `wrong_type`
+ * - non-RFC3339 or impossible calendar date -> `malformed`
+ * - <= now -> `expired`
+ * - > now and < now + 15m -> `too_soon`
+ * - > now + 2 calendar years (UTC) -> `too_far`
+ */
+export function resolveYoutubePublishAt(
+  value: unknown,
+  now: Date = new Date(),
+): YoutubePublishAtResolution {
+  if (typeof value !== "string") {
+    return { ok: false, reason: "wrong_type" };
+  }
+
+  const parsedMs = parseStrictRfc3339Ms(value);
+  if (parsedMs === null) {
+    return { ok: false, reason: "malformed" };
+  }
+
+  const nowMs = now.getTime();
+  if (parsedMs <= nowMs) {
+    return { ok: false, reason: "expired" };
+  }
+  if (parsedMs < nowMs + YOUTUBE_PUBLISH_AT_MIN_LEAD_MS) {
+    return { ok: false, reason: "too_soon" };
+  }
+
+  const maxDate = new Date(nowMs);
+  maxDate.setUTCFullYear(maxDate.getUTCFullYear() + 2);
+  if (parsedMs > maxDate.getTime()) {
+    return { ok: false, reason: "too_far" };
+  }
+
+  return { ok: true, publishAt: new Date(parsedMs).toISOString() };
+}
+
+/**
+ * Returns `"private"` whenever a schedule request is present (valid or not),
+ * and the normalised `youtube_visibility` otherwise.
+ */
+export function effectiveYoutubePrivacy(
+  metadata: object | null | undefined,
+): YoutubePrivacyStatus {
+  if (hasYoutubeScheduleRequest(metadata)) {
+    return "private";
+  }
+  return youtubePrivacyOrDefault(
+    (metadata as Record<string, unknown> | null | undefined)?.youtube_visibility,
+  );
 }

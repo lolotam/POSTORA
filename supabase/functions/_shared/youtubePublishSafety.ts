@@ -8,8 +8,7 @@
  */
 
 import {
-  YOUTUBE_DEFAULT_PRIVACY,
-  YOUTUBE_PRIVACY_VALUES,
+  effectiveYoutubePrivacy,
   type YoutubePrivacyStatus,
 } from "./youtubePublishOptions.ts";
 
@@ -87,10 +86,7 @@ export function buildYoutubeDeclarationProof(
 export function youtubeUploadPrivacy(
   metadata: object | null | undefined,
 ): YoutubePrivacyStatus {
-  const value = (metadata as Record<string, unknown> | null | undefined)?.youtube_visibility;
-  return YOUTUBE_PRIVACY_VALUES.includes(value as YoutubePrivacyStatus)
-    ? (value as YoutubePrivacyStatus)
-    : YOUTUBE_DEFAULT_PRIVACY;
+  return effectiveYoutubePrivacy(metadata);
 }
 
 export class YoutubeDeclarationRequiredError extends Error {

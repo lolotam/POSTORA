@@ -13,6 +13,7 @@ export const YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS = [
   "youtube_allowed_countries",
   "youtube_blocked_countries",
   "youtube_first_comment",
+  "youtube_publish_at",
 ] as const;
 
 export function youtubeOptionsUnsupportedOnComposio(
@@ -46,6 +47,9 @@ export function youtubeOptionsUnsupportedOnComposio(
       key === "youtube_blocked_countries"
     )
       return Array.isArray(value) && value.length > 0;
+    if (key === "youtube_publish_at") {
+      return value !== undefined && value !== null && value !== "";
+    }
     return typeof value === "string" && value.trim().length > 0;
   });
 }

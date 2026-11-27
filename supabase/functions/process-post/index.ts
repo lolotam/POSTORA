@@ -130,9 +130,14 @@ import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { assertNativeYoutubeDeclarations } from "../_shared/youtubePublishSafety.ts";
 import {
+  effectiveYoutubePrivacy,
+  YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE,
+} from "../_shared/youtubePublishOptions.ts";
+import {
   withYoutubePublishEvidence,
   youtubeEvidenceFromMetadata,
-  youtubePublishEvidence,
+  type YoutubeEvidenceInput,
+  type YoutubePublishEvidence,
 } from "./youtubePublishEvidence.ts";
 import { resolveYouTubeVideoTitle } from "../_shared/youtubeVideoTitle.ts";
 import { resolveYoutubeThumbnail } from "./youtubeThumbnailIntake.ts";
@@ -551,6 +556,13 @@ interface PlatformMetadata
   youtube_title?: string | null;
   youtube_description?: string | null;
   youtube_visibility?: "public" | "unlisted" | "private" | null;
+  /**
+   * The time YouTube should make the video public.
+   *
+   * It is an RFC 3339 UTC string. `undefined`, `null` and an empty string all
+   * mean the post asked for no native schedule.
+   */
+  youtube_publish_at?: string | null;
   youtube_tags?: string[] | null;
   youtube_category?: string | null;
   youtube_made_for_kids?: boolean;
@@ -620,6 +632,23 @@ export function threadsImageContentFence(post: PostData): Record<string, unknown
     publish_requested_at: post.publish_requested_at ?? null,
     source: post.source ?? null,
   };
+}
+
+/**
+ * The evidence a YouTube settlement records.
+ *
+ * Both settlement paths use it, so the row says the same thing whichever path
+ * wrote it: the privacy that was asked for, the schedule that was honoured,
+ * and the follow-ups that were observed.
+ *
+ * The privacy that is recorded is the privacy that was really asked for: a
+ * scheduled upload is private, whatever the post's privacy field says.
+ */
+export function youtubeSettlementEvidence(
+  metadata: object | null | undefined,
+  overrides: Partial<YoutubeEvidenceInput> = {},
+): YoutubePublishEvidence {
+  return youtubeEvidenceFromMetadata(metadata, overrides);
 }
 
 interface SocialAccount {
@@ -3503,13 +3532,7 @@ Deno.serve(async (req) => {
           ...(unrecordedStoryRef ? { [UNRECORDED_STORY_KEY]: unrecordedStoryRef } : {}),
         };
         const responseData = account.platform === "youtube"
-          ? withYoutubePublishEvidence(baseResponseData, youtubePublishEvidence({
-            requestedPrivacy: post.metadata?.youtube_visibility ?? "private",
-            thumbnailRequested: typeof post.metadata?.youtube_thumbnail_url === "string" &&
-              post.metadata.youtube_thumbnail_url.length > 0,
-            commentRequested: typeof post.metadata?.youtube_first_comment === "string" &&
-              post.metadata.youtube_first_comment.length > 0,
-          }))
+          ? withYoutubePublishEvidence(baseResponseData, youtubeSettlementEvidence(post.metadata))
           : baseResponseData;
 
         // The one writer of the five that can produce a NON-terminal row:
@@ -10568,7 +10591,7 @@ async function postToYouTube(
 
   const description = metadata?.youtube_description || post.caption || "";
   const tags = metadata?.youtube_tags || [];
-  const privacyStatus = metadata?.youtube_visibility || "private";
+  const privacyStatus = effectiveYoutubePrivacy(metadata);
 
   // DEBUG: Log tags to verify they are being received correctly
   console.log(`[YouTube Debug] Raw metadata.youtube_tags:`, JSON.stringify(metadata?.youtube_tags));
@@ -10859,20 +10882,40 @@ async function postToYouTube(
   // The receipt is stored and the public row is settled in one fenced step,
   // so the row and the receipt cannot disagree.
   // ─────────────────────────────────────────────────────────────────────
+  // The schedule the post asked for, and whether the provider took it.
+  //
+  // The publisher refuses a schedule that cannot be honoured, and the upload
+  // refuses one whose time has gone by before the provider session is opened.
+  // Either way the video was uploaded as private and not scheduled, and the
+  // customer is told so.
+  const savedPublishAt = (uploadRecord.uploadBody?.status as Record<string, unknown> | undefined)?.publishAt;
+  const wasStrippedAtOpen =
+    outcome.scheduleWarning === "stale_schedule" || uploadRecord.lastOutcome === "stale_schedule";
+  const scheduled = Boolean(savedPublishAt) && !wasStrippedAtOpen;
+  const scheduleWarning = wasStrippedAtOpen
+    ? "stale_schedule"
+    : uploadRequest.scheduleWarning ?? null;
+  const settledWarnings = scheduleWarning === "stale_schedule" &&
+    !uploadRequest.warnings.includes(YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE)
+    ? [...uploadRequest.warnings, YOUTUBE_STALE_SCHEDULE_WARNING_MESSAGE]
+    : uploadRequest.warnings;
+
   const settlement = await settleYoutubeUpload(store, opened.record.id, leaseToken, {
     status: "success",
     videoId,
     responseData: {
       youtube_video_id: videoId,
       youtube_upload_source: "publish",
-      youtube_publish_evidence: youtubeEvidenceFromMetadata(metadata, {
+      youtube_publish_evidence: youtubeSettlementEvidence(metadata, {
         effectivePrivacy: "unknown",
         thumbnailState: followUpResults?.thumbnail.state,
         thumbnailReason: followUpResults?.thumbnail.reason,
         commentState: followUpResults?.first_comment.state,
         commentReason: followUpResults?.first_comment.reason,
+        scheduleWarning,
+        scheduled,
       }),
-      ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
+      ...(settledWarnings.length > 0 ? { warnings: settledWarnings } : {}),
     },
   });
   const handoff = youtubeUploadHandoff(settlement, pendingPlatformPostId);
@@ -10902,7 +10945,7 @@ async function postToYouTube(
     url: `https://www.youtube.com/watch?v=${videoId}`,
     pendingPlatformPostId: pendingPlatformPostId ?? undefined,
     settledByUpload: true,
-    ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
+    ...(settledWarnings.length > 0 ? { warnings: settledWarnings } : {}),
   };
 }
 

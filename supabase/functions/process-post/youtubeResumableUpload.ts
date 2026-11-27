@@ -64,6 +64,7 @@
 
 import { uploadFailureMessage, youtubeUploadErrorReason } from "./youtubePublisher.ts";
 import type { YoutubeUploadRequestSettings } from "./youtubePublisher.ts";
+import { resolveYoutubePublishAt } from "../_shared/youtubePublishOptions.ts";
 import {
   redactProviderText,
   YOUTUBE_UPLOAD_REASON,
@@ -160,8 +161,14 @@ export type ProviderUploadStatus =
 
 /** What the whole upload attempt ended as. */
 export type ResumableUploadOutcome =
-  /** The video exists and this is its id. */
-  | { kind: "completed"; videoId: string }
+  /**
+   * The video exists and this is its id.
+   *
+   * `scheduleWarning` is set when the session was opened without the schedule
+   * the post asked for, because the time had gone by before the provider was
+   * asked for a session.
+   */
+  | { kind: "completed"; videoId: string; scheduleWarning?: "stale_schedule" }
   /**
    * The upload can continue later, in this session, from `confirmedBytes`.
    *
@@ -995,6 +1002,14 @@ interface UploadContext {
   deadlineMs: number;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  /**
+   * Set when the provider session was opened without the schedule the post
+   * asked for, because the time had gone by before the session was opened.
+   *
+   * It travels with the upload so the settlement can say that the video was
+   * uploaded as private and not scheduled.
+   */
+  scheduleWarning?: "stale_schedule";
 }
 
 /**
@@ -1066,7 +1081,9 @@ async function scheduleAnotherLook(
     bytesSent,
     videoMayExist,
     nextCheckAt: new Date(nextCheckAtMs).toISOString(),
-    lastOutcome: YOUTUBE_UPLOAD_REASON.resumable,
+    lastOutcome: context.scheduleWarning === "stale_schedule"
+      ? "stale_schedule"
+      : YOUTUBE_UPLOAD_REASON.resumable,
   });
   if (!scheduled) return { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
   return {
@@ -1099,7 +1116,11 @@ async function keepReceipt(
       detail: "The receipt could not be stored.",
     };
   }
-  return { kind: "completed", videoId };
+  // The schedule warning belongs to the outcome, so the settlement can say
+  // that the video was uploaded as private and not scheduled.
+  return context.scheduleWarning
+    ? { kind: "completed", videoId, scheduleWarning: context.scheduleWarning }
+    : { kind: "completed", videoId };
 }
 
 /**
@@ -1313,6 +1334,13 @@ async function uploadWithSession(deps: ResumableUploadDeps): Promise<ResumableUp
   let confirmedBytes = Math.min(session.confirmedBytes, totalBytes);
   let bytesSent = Math.min(session.bytesSent, totalBytes);
   let videoMayExist = session.videoMayExist;
+  /**
+   * Set when the provider session was opened without the schedule the post
+   * asked for. An inherited session restores it from `lastOutcome` if the
+   * worker that opened the session recorded it there.
+   */
+  let scheduleWarning: "stale_schedule" | undefined =
+    session.lastOutcome === "stale_schedule" ? "stale_schedule" : undefined;
 
   if (sessionUri && !isAllowedProviderUploadUri(sessionUri, allowedHosts)) {
     // The session URI is not one this worker may write to. Writing anyway
@@ -1349,6 +1377,7 @@ async function uploadWithSession(deps: ResumableUploadDeps): Promise<ResumableUp
     const opened = await openProviderSession(deps, totalBytes, mimeType, allowedHosts);
     if (opened.kind === "outcome") return opened.outcome;
     sessionUri = opened.sessionUri;
+    scheduleWarning = opened.scheduleWarning ?? scheduleWarning;
   } else {
     // An inherited session is probed BEFORE any data write.
     //
@@ -1359,6 +1388,7 @@ async function uploadWithSession(deps: ResumableUploadDeps): Promise<ResumableUp
     // provider has already accepted, which it refuses, and would risk a
     // second write over a video that already exists.
     const inherited = buildContext(deps, session.id, sessionUri, totalBytes, mimeType, deadlineMs, now, sleep);
+    if (scheduleWarning) inherited.scheduleWarning = scheduleWarning;
     const probed = await probeStatus(inherited, confirmedBytes, bytesSent);
 
     if (probed.kind === "accepted") {
@@ -1429,6 +1459,7 @@ async function uploadWithSession(deps: ResumableUploadDeps): Promise<ResumableUp
   }
 
   const context = buildContext(deps, session.id, sessionUri, totalBytes, mimeType, deadlineMs, now, sleep);
+  if (scheduleWarning) context.scheduleWarning = scheduleWarning;
 
   /** The offset the next write starts at, taken from the provider's own answer. */
   let offset = confirmedBytes;
@@ -1632,6 +1663,40 @@ async function checkEffectAuthority(
 }
 
 /**
+ * The body the provider session is opened with.
+ *
+ * Time passes between the request being built and the provider being asked
+ * for a session: a stored upload session can be picked up by a later worker,
+ * after the time the post asked for has gone by. A schedule that no longer
+ * qualifies is removed here, and the upload is reported as unscheduled, so a
+ * video is never published earlier than the post asked for.
+ *
+ * A session whose provider session URI already exists is never rewritten:
+ * Google fixed that session's metadata when it was opened, and a resumed byte
+ * upload sends no metadata at all.
+ */
+function uploadBodyForSession(
+  body: Record<string, unknown>,
+  now: Date,
+): { body: Record<string, unknown>; scheduleWarning?: "stale_schedule" } {
+  const status = body.status;
+  if (typeof status !== "object" || status === null || Array.isArray(status)) return { body };
+  const statusValues = status as Record<string, unknown>;
+  const rawPublishAt = statusValues.publishAt;
+  if (rawPublishAt === undefined) return { body };
+
+  const resolved = resolveYoutubePublishAt(rawPublishAt, now);
+  if (resolved.ok) return { body };
+
+  const { publishAt: _publishAt, ...keptStatus } = statusValues;
+  const { status: _status, ...rest } = body;
+  return {
+    body: { ...rest, status: { ...keptStatus, privacyStatus: "private" } },
+    scheduleWarning: "stale_schedule",
+  };
+}
+
+/**
  * Asks the provider for a session and keeps it in the session row.
  *
  * The provider names the session URI, so it is an input: it is checked
@@ -1643,7 +1708,10 @@ async function openProviderSession(
   totalBytes: number,
   mimeType: string,
   allowedHosts: readonly string[],
-): Promise<{ kind: "sessionUri"; sessionUri: string } | { kind: "outcome"; outcome: ResumableUploadOutcome }> {
+): Promise<
+  | { kind: "sessionUri"; sessionUri: string; scheduleWarning?: "stale_schedule" }
+  | { kind: "outcome"; outcome: ResumableUploadOutcome }
+> {
   const remainingMs = deps.deadlineMs - deps.now();
   const deferInitialization = async (retryAfterMs?: number) => {
     const delay = continuationDelayMs(deps.session.continuationCount + 1, retryAfterMs);
@@ -1653,13 +1721,16 @@ async function openProviderSession(
   if (remainingMs <= 0) {
     return { kind: "outcome", outcome: await deferInitialization() };
   }
+  // The schedule is judged against the time the session is opened at, not
+  // against the time the request was built at.
+  const prepared = uploadBodyForSession(deps.uploadBody, new Date(deps.now()));
   let sessionUri: string;
   try {
     sessionUri = await createYoutubeResumableSession({
       fetchImpl: deps.fetchImpl,
       accessToken: deps.accessToken,
       url: deps.uploadUrl,
-      body: deps.uploadBody,
+      body: prepared.body,
       totalBytes,
       mimeType,
       allowedHosts,
@@ -1706,6 +1777,7 @@ async function openProviderSession(
     confirmedBytes: 0,
     bytesSent: 0,
     sessionUri,
+    ...(prepared.scheduleWarning ? { lastOutcome: prepared.scheduleWarning } : {}),
   });
   if (!stored) {
     // Another worker owns the session, so this worker must not write to it.
@@ -1714,7 +1786,11 @@ async function openProviderSession(
       outcome: { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict },
     };
   }
-  return { kind: "sessionUri", sessionUri };
+  return {
+    kind: "sessionUri",
+    sessionUri,
+    ...(prepared.scheduleWarning ? { scheduleWarning: prepared.scheduleWarning } : {}),
+  };
 }
 
 /**
