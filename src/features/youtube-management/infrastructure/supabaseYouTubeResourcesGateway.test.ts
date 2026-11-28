@@ -558,3 +558,109 @@ describe("YouTube resources gateway — caption tracks", () => {
     })).rejects.toMatchObject({ code: "outcome_unknown" });
   });
 });
+
+describe("YouTube resources gateway — createPlaylist", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  const validPlaylist = {
+    id: "PL1234567890",
+    title: "New Playlist",
+    privacy_status: "private",
+    thumbnail_url: null,
+  };
+
+  it("sends create_playlist with account, title, description and privacy_status, and omits description when undefined", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ playlist: validPlaylist }),
+      error: null,
+    });
+
+    const received = await new SupabaseYouTubeResourcesGateway().createPlaylist({
+      accountId: "acc-1",
+      title: "New Playlist",
+      description: "Notes",
+      privacyStatus: "private",
+    });
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("youtube-resources", {
+      body: {
+        operation: "create_playlist",
+        account_id: "acc-1",
+        title: "New Playlist",
+        description: "Notes",
+        privacy_status: "private",
+      },
+      timeout: 15000,
+    });
+    expect(received.data.playlist).toEqual(validPlaylist);
+
+    await new SupabaseYouTubeResourcesGateway().createPlaylist({
+      accountId: "acc-1",
+      title: "New Playlist",
+      privacyStatus: "unlisted",
+    });
+
+    expect(supabase.functions.invoke).toHaveBeenLastCalledWith("youtube-resources", {
+      body: {
+        operation: "create_playlist",
+        account_id: "acc-1",
+        title: "New Playlist",
+        privacy_status: "unlisted",
+      },
+      timeout: 15000,
+    });
+  });
+
+  it.each([
+    ["missing playlist object", {}],
+    ["short playlist id (< 10 chars)", { playlist: { ...validPlaylist, id: "PL123" } }],
+    ["invalid characters in playlist id", { playlist: { ...validPlaylist, id: "PL1234567890/bad" } }],
+    ["missing title string", { playlist: { id: "PL1234567890", title: null } }],
+  ])("rejects a create_playlist response with %s as outcome_unknown", async (_scenario, data) => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope(data),
+      error: null,
+    });
+
+    await expect(
+      new SupabaseYouTubeResourcesGateway().createPlaylist({
+        accountId: "acc-1",
+        title: "New Playlist",
+        privacyStatus: "private",
+      }),
+    ).rejects.toMatchObject({ code: "outcome_unknown" });
+  });
+
+  it("maps a timed-out or unreadable create_playlist call to outcome_unknown and preserves server refusal codes", async () => {
+    vi.mocked(supabase.functions.invoke).mockRejectedValue(
+      Object.assign(new Error("The operation was aborted due to timeout"), { name: "FunctionsFetchError" }),
+    );
+
+    await expect(
+      new SupabaseYouTubeResourcesGateway().createPlaylist({
+        accountId: "acc-1",
+        title: "New Playlist",
+        privacyStatus: "private",
+      }),
+    ).rejects.toMatchObject({ code: "outcome_unknown" });
+
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: Response.json({ error: "rate_limited", retry_after_seconds: 3600, request_id: "req-9" }, { status: 429 }),
+      }),
+    });
+
+    const failure = await new SupabaseYouTubeResourcesGateway()
+      .createPlaylist({
+        accountId: "acc-1",
+        title: "New Playlist",
+        privacyStatus: "private",
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(YouTubeResourceError);
+    expect((failure as YouTubeResourceError).code).toBe("rate_limited");
+    expect((failure as YouTubeResourceError).retryAfterSeconds).toBe(3600);
+  });
+});

@@ -4,6 +4,7 @@ import type {
   YouTubeChannelDetails,
   YouTubeCaptionFormat,
   YouTubeCaptionsListData,
+  YouTubeCreatePlaylistData,
   YouTubePlaylistsPage,
   YouTubeResourceSuccess,
   YouTubeSetThumbnailResult,
@@ -49,6 +50,16 @@ export interface YouTubeResourcesGateway {
   listVideos(params: { accountId: string; pageToken?: string | null }): Promise<YouTubeResourceSuccess<YouTubeVideosPage>>;
   /** The playlists of the account's own channel, one page at a time. */
   listPlaylists?(params: { accountId: string; pageToken?: string | null }): Promise<YouTubeResourceSuccess<YouTubePlaylistsPage>>;
+  /**
+   * Creates one playlist on the account's own channel (`playlists.insert`).
+   * Requires `youtube.force-ssl` and costs 50 provider units.
+   */
+  createPlaylist?(params: {
+    accountId: string;
+    title: string;
+    description?: string;
+    privacyStatus: "public" | "unlisted" | "private";
+  }): Promise<YouTubeResourceSuccess<YouTubeCreatePlaylistData>>;
   getVideo(params: { accountId: string; videoId: string }): Promise<YouTubeResourceSuccess<YouTubeVideoDetails>>;
   /**
    * Replaces the thumbnail of an already published video with an image the

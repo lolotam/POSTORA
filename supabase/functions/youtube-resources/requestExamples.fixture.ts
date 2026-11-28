@@ -10,4 +10,11 @@ export const YOUTUBE_RESOURCE_REQUEST_EXAMPLES = {
   videosFirstPage: { operation: "videos", account_id: EXAMPLE_ACCOUNT_ID },
   videosNextPage: { operation: "videos", account_id: EXAMPLE_ACCOUNT_ID, page_token: EXAMPLE_PAGE_TOKEN },
   video: { operation: "video", account_id: EXAMPLE_ACCOUNT_ID, video_id: EXAMPLE_VIDEO_ID },
+  createPlaylist: {
+    operation: "create_playlist",
+    account_id: EXAMPLE_ACCOUNT_ID,
+    title: "Product Launches",
+    description: "Official release videos",
+    privacy_status: "unlisted",
+  },
 } as const;

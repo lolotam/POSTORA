@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 
 import { useYouTubePlaylists } from "../useYouTubePlaylists";
+import { YouTubeResourceError } from "@/features/youtube-management/domain/errors";
 import type {
   YouTubeAccountCapabilities,
   YouTubePlaylistListItem,
@@ -10,15 +11,17 @@ import type {
 // The hook's only outward dependency is the resources gateway, which is the
 // seam to the provider read. Everything below it is the hook's own logic:
 // the cursor, the deduplication and the retry rules.
-const { listPlaylistsMock, getCapabilitiesMock } = vi.hoisted(() => ({
+const { listPlaylistsMock, getCapabilitiesMock, createPlaylistMock } = vi.hoisted(() => ({
   listPlaylistsMock: vi.fn(),
   getCapabilitiesMock: vi.fn(),
+  createPlaylistMock: vi.fn(),
 }));
 
 vi.mock("@/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway", () => ({
   SupabaseYouTubeResourcesGateway: class {
     listPlaylists = listPlaylistsMock;
     getCapabilities = getCapabilitiesMock;
+    createPlaylist = createPlaylistMock;
   },
 }));
 
@@ -63,6 +66,7 @@ function deferred() {
 beforeEach(() => {
   listPlaylistsMock.mockReset();
   getCapabilitiesMock.mockReset();
+  createPlaylistMock.mockReset();
   getCapabilitiesMock.mockRejectedValue(new Error("unconfigured"));
 });
 
@@ -233,5 +237,83 @@ describe("useYouTubePlaylists", () => {
     expect(result.current.capabilities).toBeNull();
     expect(result.current.capabilitiesLoading).toBe(false);
     expect(result.current.capabilitiesUnavailable).toBe(false);
+  });
+
+  it("creates a playlist, refetches the playlist list, and returns the created playlist", async () => {
+    const createdPlaylist = playlist("PL_NEW_12345");
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], null))
+      .mockResolvedValueOnce(page([createdPlaylist, playlist("PL1")], null));
+    createPlaylistMock.mockResolvedValueOnce({
+      schema_version: 1 as const,
+      request_id: "req-create-1",
+      freshness: { fetched_at: "2026-11-27T10:00:00.000Z", source: "provider" as const },
+      data: { playlist: createdPlaylist },
+    });
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+
+    let outcome: Awaited<ReturnType<typeof result.current.createPlaylist>> | undefined;
+    await act(async () => {
+      outcome = await result.current.createPlaylist({
+        title: "Playlist PL_NEW_12345",
+        description: "Created inline",
+        privacyStatus: "private",
+      });
+    });
+
+    expect(createPlaylistMock).toHaveBeenCalledWith({
+      accountId: "acc-1",
+      title: "Playlist PL_NEW_12345",
+      description: "Created inline",
+      privacyStatus: "private",
+    });
+    expect(outcome).toEqual({ outcome: "created", playlist: createdPlaylist });
+    expect(listPlaylistsMock).toHaveBeenCalledTimes(2);
+    expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_NEW_12345", "PL1"]);
+    expect(result.current.creating).toBe(false);
+  });
+
+  it("refetches the playlist list and returns outcome_unknown when createPlaylist loses the provider answer", async () => {
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], null))
+      .mockResolvedValueOnce(page([playlist("PL_MAYBE"), playlist("PL1")], null));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("outcome_unknown"));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+
+    let outcome: Awaited<ReturnType<typeof result.current.createPlaylist>> | undefined;
+    await act(async () => {
+      outcome = await result.current.createPlaylist({
+        title: "Playlist PL_MAYBE",
+        privacyStatus: "unlisted",
+      });
+    });
+
+    expect(outcome).toEqual({ outcome: "outcome_unknown" });
+    expect(createPlaylistMock).toHaveBeenCalledTimes(1);
+    expect(listPlaylistsMock).toHaveBeenCalledTimes(2);
+    expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_MAYBE", "PL1"]);
+  });
+
+  it("returns rate_limited with retryAfterSeconds without refetching when the daily cap is reached", async () => {
+    listPlaylistsMock.mockResolvedValueOnce(page([playlist("PL1")], null));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("rate_limited", 1800));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+
+    let outcome: Awaited<ReturnType<typeof result.current.createPlaylist>> | undefined;
+    await act(async () => {
+      outcome = await result.current.createPlaylist({
+        title: "Sixth playlist",
+        privacyStatus: "public",
+      });
+    });
+
+    expect(outcome).toEqual({ outcome: "rate_limited", retryAfterSeconds: 1800 });
+    expect(listPlaylistsMock).toHaveBeenCalledTimes(1);
   });
 });

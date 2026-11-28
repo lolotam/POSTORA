@@ -20,6 +20,7 @@ export type {
   YouTubeCapabilityReason,
   YouTubeCapabilityState,
   YouTubeChannelDetails,
+  YouTubeCreatePlaylistData,
   YouTubePlaylistListItem,
   YouTubePlaylistsPage,
   YouTubeResourceErrorCode,

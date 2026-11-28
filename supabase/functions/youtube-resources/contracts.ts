@@ -41,6 +41,7 @@ export const YOUTUBE_RESOURCE_QUOTA_POLICY = {
     videos_page: 2,
     video: 1,
     playlists_page: 1,
+    playlist_create: 50,
     captions_list: 50,
     caption_upload: 400,
   },
@@ -81,6 +82,8 @@ export interface YouTubeAccountCapabilities {
     manage_thumbnail?: YouTubeCapabilityState;
     /** Additive: an old server may omit it and an old client may ignore it. */
     manage_captions?: YouTubeCapabilityState;
+    /** Additive: an old server may omit it and an old client may ignore it. */
+    manage_playlists?: YouTubeCapabilityState;
   };
   quota: typeof YOUTUBE_RESOURCE_QUOTA_POLICY;
 }
@@ -139,6 +142,10 @@ export interface YouTubePlaylistListItem {
 export interface YouTubePlaylistsPage {
   items: YouTubePlaylistListItem[];
   next_page_token: string | null;
+}
+
+export interface YouTubeCreatePlaylistData {
+  playlist: YouTubePlaylistListItem;
 }
 
 export interface YouTubeChannelDetails {

@@ -84,8 +84,10 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("title, description, tags");
     expect(text).toContain("and category");
     expect(text).toContain("Postora does not replace existing video media bytes or delete your videos.");
+    expect(text).toContain("can create a new playlist on your channel when you explicitly ask (playlists.insert)");
     expect(text).toContain("can add a newly uploaded video to an existing playlist you choose through the narrower force-ssl scope");
-    expect(text).toContain("does not create, rename, reorder, or delete playlists or remove playlist items, change channel settings, replace existing video media bytes, or delete videos");
+    expect(text).toContain("does not rename, reorder, or delete playlists or remove playlist items, change channel settings, replace existing video media bytes, or delete videos");
+    expect(text).not.toContain("does not create, rename, reorder, or delete playlists");
     expect(text).not.toContain("does not manage playlists or channel settings");
     expect(text).not.toContain("(managing playlists, editing or deleting existing videos, channel settings)");
     expect(text).not.toContain("This scope does not allow us to edit or delete your existing videos.");
@@ -122,15 +124,17 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("/youtube");
   });
 
-  it("discloses reading the channel's playlists and adding a new video to a chosen one", () => {
+  it("discloses reading the channel's playlists, creating a playlist on explicit instruction, and adding a new video to a chosen one", () => {
     const { container } = renderPage(<GoogleApiDisclosure />);
     const text = pageText(container);
 
     expect(text).toContain("List your channel's playlists");
     expect(text).toContain("playlists.list");
-    expect(text).toContain("Add a newly uploaded video to an existing playlist");
+    expect(text).toContain("Create a new playlist on your channel when you explicitly ask");
+    expect(text).toContain("playlists.insert");
+    expect(text).toContain("add a newly uploaded video to an existing playlist");
     expect(text).toContain("playlistItems.insert");
-    expect(text).toContain("Postora does not create, rename, reorder, or delete playlists, and does not remove items from a playlist.");
+    expect(text).toContain("Postora does not rename, reorder, or delete playlists, and does not remove items from a playlist.");
   });
 
   it("discloses listing a video's caption tracks and adding a new one, without touching the existing ones", () => {
@@ -240,8 +244,8 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("Edit published video metadata (title, description, tags and category) only when you instruct Postora to make that change");
     expect(text).toContain("Replace the thumbnail of a video you already uploaded with a JPEG or PNG image from your own media library, only when you pick the image and confirm the change");
     expect(text).toContain("The bytes of a JPEG or PNG image from your own Postora media library when you replace the thumbnail of a video you already uploaded");
-    expect(text).toContain("List your channel's playlists so you can choose a destination playlist when publishing, and add a newly uploaded video to the playlist you select");
-    expect(text).toContain("Postora never creates, renames, reorders, or deletes playlists and never removes playlist items");
+    expect(text).toContain("List your channel's playlists so you can choose a destination playlist when publishing, create a new playlist on your channel when you explicitly instruct Postora in Create Post (playlists.insert), and add a newly uploaded video to the playlist you select");
+    expect(text).toContain("Postora does not rename, reorder, or delete playlists and never removes playlist items");
     expect(text).toContain("The caption tracks of your videos (track ID, language, name, kind, status and draft flag) when you ask Postora to list them");
     expect(text).toContain("the text of an .srt or .vtt caption file you choose when you upload a new caption track");
     expect(text).toContain("List the caption tracks of a video you already uploaded and add a new caption track from an .srt or .vtt file you choose");

@@ -1,9 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { YouTubeResourceError } from "@/features/youtube-management/domain/errors";
 import { SupabaseYouTubeResourcesGateway } from "@/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway";
 import type {
   YouTubeAccountCapabilities,
   YouTubePlaylistListItem,
 } from "@/features/youtube-management/domain/types";
+
+export type YouTubeCreatePlaylistOutcome =
+  | { outcome: "created"; playlist: YouTubePlaylistListItem }
+  | {
+      outcome:
+        | "outcome_unknown"
+        | "rate_limited"
+        | "quota_exceeded"
+        | "invalid_request"
+        | "missing_scope"
+        | "reconnect_required"
+        | "failed";
+      retryAfterSeconds?: number;
+    };
 
 export interface YouTubePlaylistsState {
   playlists: YouTubePlaylistListItem[];
@@ -12,6 +27,7 @@ export interface YouTubePlaylistsState {
   capabilitiesUnavailable: boolean;
   loading: boolean;
   loadingMore: boolean;
+  creating: boolean;
   /** The list could not be read; the creator can retry without losing the choice. */
   unavailable: boolean;
   /** Another page of playlists exists behind a cursor. */
@@ -19,6 +35,11 @@ export interface YouTubePlaylistsState {
   loadMore: () => void;
   retry: () => void;
   retryCapabilities?: () => void;
+  createPlaylist: (input: {
+    title: string;
+    description?: string;
+    privacyStatus: "public" | "unlisted" | "private";
+  }) => Promise<YouTubeCreatePlaylistOutcome>;
 }
 
 const gateway = new SupabaseYouTubeResourcesGateway();
@@ -47,6 +68,7 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [capabilitiesAttempt, setCapabilitiesAttempt] = useState(0);
@@ -56,6 +78,7 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   // the one captured when the callback was created.
   const cursorRef = useRef<string | null>(null);
   const loadingMoreRef = useRef(false);
+  const creatingRef = useRef(false);
   // Every read belongs to a generation. A page that arrives after the account
   // changed belongs to an older generation and may not write into the list
   // the newer generation owns.
@@ -199,6 +222,89 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
     setCapabilitiesAttempt((value) => value + 1);
   }, []);
 
+  const refreshPlaylistsInPlace = useCallback(
+    async (targetAccountId: string, generation: number, mustInclude?: YouTubePlaylistListItem) => {
+      try {
+        const result = await gateway.listPlaylists({ accountId: targetAccountId });
+        if (generationRef.current !== generation) return;
+        const items = result.data.items;
+        const merged =
+          mustInclude && !items.some((item) => item.id === mustInclude.id)
+            ? [mustInclude, ...items]
+            : items;
+        setPlaylists(merged);
+        cursorRef.current = result.data.next_page_token;
+        setNextPageToken(result.data.next_page_token);
+        setUnavailable(false);
+      } catch {
+        // Keep existing playlists if the post-create refresh fails.
+      }
+    },
+    [],
+  );
+
+  const createPlaylist = useCallback(
+    async (input: {
+      title: string;
+      description?: string;
+      privacyStatus: "public" | "unlisted" | "private";
+    }): Promise<YouTubeCreatePlaylistOutcome> => {
+      if (!accountId || typeof gateway.createPlaylist !== "function" || creatingRef.current) {
+        return { outcome: "failed" };
+      }
+      const generation = generationRef.current;
+      creatingRef.current = true;
+      setCreating(true);
+      try {
+        const result = await gateway.createPlaylist({
+          accountId,
+          title: input.title,
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          privacyStatus: input.privacyStatus,
+        });
+        const created = result.data.playlist;
+        if (generationRef.current === generation) {
+          setPlaylists((current) =>
+            current.some((item) => item.id === created.id) ? current : [created, ...current],
+          );
+          await refreshPlaylistsInPlace(accountId, generation, created);
+        }
+        return { outcome: "created", playlist: created };
+      } catch (error) {
+        const code = error instanceof YouTubeResourceError ? error.code : null;
+        const retryAfterSeconds =
+          error instanceof YouTubeResourceError && error.retryAfterSeconds !== null
+            ? error.retryAfterSeconds
+            : undefined;
+        if (code === "outcome_unknown") {
+          if (generationRef.current === generation) {
+            await refreshPlaylistsInPlace(accountId, generation);
+          }
+          return { outcome: "outcome_unknown" };
+        }
+        if (
+          code === "rate_limited" ||
+          code === "quota_exceeded" ||
+          code === "invalid_request" ||
+          code === "missing_scope" ||
+          code === "reconnect_required"
+        ) {
+          return {
+            outcome: code,
+            ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+          };
+        }
+        return { outcome: "failed" };
+      } finally {
+        creatingRef.current = false;
+        if (generationRef.current === generation) {
+          setCreating(false);
+        }
+      }
+    },
+    [accountId, refreshPlaylistsInPlace],
+  );
+
   const activeAccountMatch = Boolean(accountId) && capabilitiesState.accountId === accountId;
   const capabilities = activeAccountMatch ? capabilitiesState.capabilities : null;
   const capabilitiesLoading = Boolean(accountId) && (!activeAccountMatch || capabilitiesState.loading);
@@ -211,10 +317,12 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
     capabilitiesUnavailable,
     loading,
     loadingMore,
+    creating,
     unavailable,
     hasMore: nextPageToken !== null,
     loadMore,
     retry,
     retryCapabilities,
+    createPlaylist,
   };
 }

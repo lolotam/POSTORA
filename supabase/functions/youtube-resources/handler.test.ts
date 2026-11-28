@@ -3,6 +3,7 @@ import {
   createYouTubeResourcesHandler,
   YOUTUBE_RESOURCES_MAX_BODY_BYTES,
   type YouTubeCaptionPort,
+  type YouTubePlaylistWritePort,
   type YouTubeResourceAccount,
   type YouTubeResourceRefusal,
   type YouTubeEditPort,
@@ -113,6 +114,7 @@ function fixture(overrides: {
   edit?: YouTubeEditPort;
   thumbnail?: YouTubeThumbnailPort;
   captions?: YouTubeCaptionPort;
+  playlists?: YouTubePlaylistWritePort;
   categories?: YouTubeCategoryClient;
 } = {}) {
   const accessToken = crypto.randomUUID() + crypto.randomUUID();
@@ -191,6 +193,7 @@ function fixture(overrides: {
     edit: overrides.edit,
     thumbnail: overrides.thumbnail,
     captions: overrides.captions,
+    playlists: overrides.playlists,
     categories: overrides.categories ?? {
       list: (_token, input): Promise<CategoryListResult> => {
         const arabic = typeof input.locale === "string" && input.locale.startsWith("ar");
@@ -1047,7 +1050,22 @@ Deno.test("a malformed video id is refused before any account read", async () =>
 
 for (const [name, body] of Object.entries(YOUTUBE_RESOURCE_REQUEST_EXAMPLES)) {
   Deno.test(`the handler accepts the shared ${name} request example`, async () => {
-    const { handler } = fixture();
+    const { handler } = fixture({
+      playlists: {
+        createPlaylist: ({ title, privacyStatus }) =>
+          Promise.resolve({
+            ok: true,
+            value: {
+              playlist: {
+                id: "PLfixtureplaylist001",
+                title,
+                privacy_status: privacyStatus,
+                thumbnail_url: null,
+              },
+            },
+          }),
+      },
+    });
     const response = await handler(request(body));
     assertEquals(response.status, 200);
   });
@@ -1450,4 +1468,113 @@ Deno.test("captions and upload_caption gate on admit() before calling port and m
     assertEquals(resp.status, testCase.status);
     assertEquals(await resp.json(), testCase.body);
   }
+});
+
+Deno.test("create_playlist enforces strict schema, refuses when port is missing, shares admit(), and maps success and error codes", async () => {
+  const noPort = fixture();
+  const extraKeyResp = await noPort.handler(request({
+    operation: "create_playlist",
+    account_id: ACCOUNT_ID,
+    title: "My Playlist",
+    privacy_status: "private",
+    unknown_field: true,
+  }));
+  assertEquals(extraKeyResp.status, 400);
+  assertEquals((await extraKeyResp.json()).error, "invalid_request");
+  assertEquals(noPort.logs[0].operation, "create_playlist");
+
+  const disabledResp = await noPort.handler(request({
+    operation: "create_playlist",
+    account_id: ACCOUNT_ID,
+    title: "My Playlist",
+    privacy_status: "private",
+  }));
+  assertEquals(disabledResp.status, 403);
+  assertEquals(await disabledResp.json(), { error: "write_not_enabled", request_id: `${REQUEST_ID}-2` });
+
+  let portCalls = 0;
+  const playlists: YouTubePlaylistWritePort = {
+    createPlaylist: ({ title, privacyStatus }) => {
+      portCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        value: {
+          playlist: {
+            id: "PLfixtureplaylist001",
+            title,
+            privacy_status: privacyStatus,
+            thumbnail_url: null,
+          },
+        },
+      });
+    },
+  };
+
+  const composio = fixture({ account: { authProvider: "composio" }, playlists });
+  const composioResp = await composio.handler(request({
+    operation: "create_playlist",
+    account_id: ACCOUNT_ID,
+    title: "My Playlist",
+    privacy_status: "private",
+  }));
+  assertEquals(composioResp.status, 409);
+  assertEquals(await composioResp.json(), { error: "provider_unsupported", request_id: REQUEST_ID });
+  assertEquals(portCalls, 0);
+
+  const admitLimited = fixture({ rateLimit: { allowed: false, retryAfterSeconds: 30 }, playlists });
+  const admitResp = await admitLimited.handler(request({
+    operation: "create_playlist",
+    account_id: ACCOUNT_ID,
+    title: "My Playlist",
+    privacy_status: "private",
+  }));
+  assertEquals(admitResp.status, 429);
+  assertEquals(await admitResp.json(), {
+    error: "rate_limited",
+    request_id: REQUEST_ID,
+    retry_after_seconds: 30,
+  });
+  assertEquals(portCalls, 0);
+
+  const okFixture = fixture({ playlists });
+  const okResp = await okFixture.handler(request({
+    operation: "create_playlist",
+    account_id: ACCOUNT_ID,
+    title: "My Playlist",
+    description: "Desc",
+    privacy_status: "unlisted",
+  }));
+  assertEquals(okResp.status, 200);
+  assertEquals(await okResp.json(), {
+    schema_version: 1,
+    request_id: REQUEST_ID,
+    freshness: { fetched_at: "2026-11-20T10:00:00.000Z", source: "provider" },
+    data: {
+      playlist: {
+        id: "PLfixtureplaylist001",
+        title: "My Playlist",
+        privacy_status: "unlisted",
+        thumbnail_url: null,
+      },
+    },
+  });
+  assertEquals(portCalls, 1);
+
+  const rateLimitedPort = fixture({
+    playlists: {
+      createPlaylist: () => Promise.resolve({ ok: false, code: "rate_limited", retryAfterSeconds: 1200 }),
+    },
+  });
+  const rlResp = await rateLimitedPort.handler(request({
+    operation: "create_playlist",
+    account_id: ACCOUNT_ID,
+    title: "My Playlist",
+    privacy_status: "private",
+  }));
+  assertEquals(rlResp.status, 429);
+  assertEquals(await rlResp.json(), {
+    error: "rate_limited",
+    request_id: REQUEST_ID,
+    retry_after_seconds: 1200,
+  });
 });

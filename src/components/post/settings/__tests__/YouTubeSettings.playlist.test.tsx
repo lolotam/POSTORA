@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { YouTubeSettings, type YouTubeSettingsState } from "../YouTubeSettings";
+import type { YouTubeAccountCapabilities } from "@/features/youtube-management/domain/types";
 
 // The component reads its copy from the postsettings namespace; the mock keeps
 // the English defaults so the assertions can read the sentences a creator
@@ -46,12 +47,17 @@ const playlistCatalog = vi.hoisted(() => ({
     privacy_status: string | null;
     thumbnail_url: string | null;
   }>,
+  capabilities: null as YouTubeAccountCapabilities["capabilities"] | null,
+  capabilitiesLoading: false,
+  capabilitiesUnavailable: false,
   loading: false,
   loadingMore: false,
+  creating: false,
   unavailable: false,
   hasMore: false,
   loadMore: vi.fn(),
   retry: vi.fn(),
+  createPlaylist: vi.fn(),
 }));
 
 vi.mock("@/hooks/useYouTubePlaylists", () => ({
@@ -65,12 +71,22 @@ vi.mock("@/components/ai/ResolvedModelCards", () => ({ ResolvedModelCards: () =>
 
 beforeEach(() => {
   playlistCatalog.playlists = [];
+  playlistCatalog.capabilities = {
+    browse: { state: "available" },
+    upload: { state: "available" },
+    comments: { state: "available" },
+    manage_playlists: { state: "available" },
+  };
+  playlistCatalog.capabilitiesLoading = false;
+  playlistCatalog.capabilitiesUnavailable = false;
   playlistCatalog.loading = false;
   playlistCatalog.loadingMore = false;
+  playlistCatalog.creating = false;
   playlistCatalog.unavailable = false;
   playlistCatalog.hasMore = false;
   playlistCatalog.loadMore.mockClear();
   playlistCatalog.retry.mockClear();
+  playlistCatalog.createPlaylist.mockReset();
 });
 
 afterEach(cleanup);
@@ -333,5 +349,171 @@ describe("YouTubeSettings playlist selector", () => {
 
     rerender(<SwitchHarness accounts={[nativeAccount("account-2", "UC_2")]} />);
     expect(onSettingsChange).toHaveBeenCalledWith({ playlist: "" });
+  });
+
+  it("hides '+ New playlist' when a Composio-managed account or multiple distinct native channels are selected", () => {
+    renderSettings({}, [
+      {
+        id: "account-1",
+        platform_username: "managed",
+        avatar_url: null,
+        auth_provider: "composio",
+        platform_user_id: "UC_1",
+      },
+    ]);
+    expect(screen.queryByTestId("youtube-new-playlist-button")).toBeNull();
+    cleanup();
+
+    renderSettings({}, [
+      nativeAccount("account-1", "UC_1"),
+      nativeAccount("account-2", "UC_2"),
+    ]);
+    expect(screen.queryByTestId("youtube-new-playlist-button")).toBeNull();
+  });
+
+  it.each([
+    {
+      scenario: "manage_playlists is absent on an older backend response",
+      capabilities: {
+        browse: { state: "available" },
+        upload: { state: "available" },
+        comments: { state: "available" },
+      } as YouTubeAccountCapabilities["capabilities"],
+      expectedReason:
+        "Reconnect this channel and allow Postora to manage your YouTube account (force-ssl) to create playlists.",
+    },
+    {
+      scenario: "manage_playlists is unknown",
+      capabilities: {
+        browse: { state: "available" },
+        upload: { state: "available" },
+        comments: { state: "available" },
+        manage_playlists: { state: "unknown" },
+      } as YouTubeAccountCapabilities["capabilities"],
+      expectedReason:
+        "Reconnect this channel and allow Postora to manage your YouTube account (force-ssl) to create playlists.",
+    },
+    {
+      scenario: "manage_playlists is missing_scope (upload only without force-ssl)",
+      capabilities: {
+        browse: { state: "available" },
+        upload: { state: "available" },
+        comments: { state: "unavailable", reason: "missing_scope" },
+        manage_playlists: { state: "unavailable", reason: "missing_scope" },
+      } as YouTubeAccountCapabilities["capabilities"],
+      expectedReason:
+        "Reconnect this channel and allow Postora to manage your YouTube account (force-ssl) to create playlists.",
+    },
+    {
+      scenario: "manage_playlists is reconnect_required",
+      capabilities: {
+        browse: { state: "unavailable", reason: "reconnect_required" },
+        upload: { state: "unavailable", reason: "reconnect_required" },
+        comments: { state: "unavailable", reason: "reconnect_required" },
+        manage_playlists: { state: "unavailable", reason: "reconnect_required" },
+      } as YouTubeAccountCapabilities["capabilities"],
+      expectedReason: "This channel needs to be reconnected before playlists can be created.",
+    },
+  ])("disables '+ New playlist' with its reason when $scenario", ({ capabilities, expectedReason }) => {
+    playlistCatalog.capabilities = capabilities;
+    renderSettings({}, [nativeAccount("account-1", "UC_1")]);
+
+    const newBtn = screen.getByTestId("youtube-new-playlist-button");
+    expect(newBtn).toBeDisabled();
+    expect(screen.getByTestId("youtube-playlist-create-disabled-note")).toHaveTextContent(expectedReason);
+  });
+
+  it("opens the dialog with no default privacy selected, validates title and description limits, and creates + selects the new playlist", async () => {
+    playlistCatalog.createPlaylist.mockResolvedValueOnce({
+      outcome: "created",
+      playlist: {
+        id: "PL_CREATED_99",
+        title: "Course Videos",
+        privacy_status: "unlisted",
+        thumbnail_url: null,
+      },
+    });
+
+    const { onSettingsChange } = renderSettings({}, [nativeAccount("account-1", "UC_1")]);
+
+    const newBtn = screen.getByTestId("youtube-new-playlist-button");
+    expect(newBtn).not.toBeDisabled();
+    fireEvent.click(newBtn);
+
+    const dialog = screen.getByTestId("youtube-new-playlist-dialog");
+    const titleInput = within(dialog).getByLabelText("Playlist title");
+    const descInput = within(dialog).getByLabelText("Description (optional)");
+    const privacySelect = within(dialog).getByLabelText("Playlist privacy") as HTMLSelectElement;
+    const submitBtn = within(dialog).getByTestId("youtube-new-playlist-submit");
+
+    // No default privacy selected initially; submit disabled
+    expect(privacySelect.value).toBe("");
+    expect(submitBtn).toBeDisabled();
+
+    // Title alone without privacy keeps submit disabled
+    fireEvent.change(titleInput, { target: { value: "Course Videos" } });
+    expect(submitBtn).toBeDisabled();
+
+    // Select privacy -> submit enabled
+    fireEvent.change(privacySelect, { target: { value: "unlisted" } });
+    expect(submitBtn).not.toBeDisabled();
+
+    // Rejects `<` or `>` in title without calling createPlaylist
+    fireEvent.change(titleInput, { target: { value: "Bad <title>" } });
+    fireEvent.click(submitBtn);
+    expect(within(dialog).getByTestId("youtube-new-playlist-error")).toHaveTextContent(
+      "Enter a playlist title (1–150 characters, single line, without < or >).",
+    );
+    expect(playlistCatalog.createPlaylist).not.toHaveBeenCalled();
+
+    // Rejects > 5000 UTF-8 bytes in description (2600 Arabic letters = 5200 UTF-8 bytes)
+    fireEvent.change(titleInput, { target: { value: "Course Videos" } });
+    fireEvent.change(descInput, { target: { value: "ش".repeat(2600) } });
+    fireEvent.click(submitBtn);
+    expect(within(dialog).getByTestId("youtube-new-playlist-error")).toHaveTextContent(
+      "Playlist description must be at most 5,000 UTF-8 bytes and cannot contain < or >.",
+    );
+    expect(playlistCatalog.createPlaylist).not.toHaveBeenCalled();
+
+    // Valid submission creates playlist, closes dialog, and selects new playlist ID
+    fireEvent.change(descInput, { target: { value: "All episodes" } });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() =>
+      expect(playlistCatalog.createPlaylist).toHaveBeenCalledWith({
+        title: "Course Videos",
+        description: "All episodes",
+        privacyStatus: "unlisted",
+      }),
+    );
+    await waitFor(() => expect(onSettingsChange).toHaveBeenCalledWith({ playlist: "PL_CREATED_99" }));
+    expect(screen.queryByTestId("youtube-new-playlist-dialog")).toBeNull();
+  });
+
+  it("closes the dialog, shows the check-the-list notice, selects nothing, and makes only one create call on outcome_unknown", async () => {
+    playlistCatalog.createPlaylist.mockResolvedValueOnce({
+      outcome: "outcome_unknown",
+    });
+
+    const { onSettingsChange } = renderSettings({}, [nativeAccount("account-1", "UC_1")]);
+
+    fireEvent.click(screen.getByTestId("youtube-new-playlist-button"));
+    const dialog = screen.getByTestId("youtube-new-playlist-dialog");
+    fireEvent.change(within(dialog).getByLabelText("Playlist title"), {
+      target: { value: "Uncertain Playlist" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Playlist privacy"), {
+      target: { value: "private" },
+    });
+    fireEvent.click(within(dialog).getByTestId("youtube-new-playlist-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("youtube-playlist-outcome-unknown")).toHaveTextContent(
+        "YouTube may have created the playlist. Check the list before trying again.",
+      ),
+    );
+    expect(screen.queryByTestId("youtube-new-playlist-dialog")).toBeNull();
+    expect(playlistCatalog.createPlaylist).toHaveBeenCalledTimes(1);
+    expect(onSettingsChange).not.toHaveBeenCalled();
   });
 });

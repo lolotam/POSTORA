@@ -10,6 +10,7 @@ import type {
   YouTubeChannelDetails,
   YouTubeCaptionFormat,
   YouTubeCaptionsListData,
+  YouTubeCreatePlaylistData,
   YouTubePlaylistsPage,
   YouTubeResourceSuccess,
   YouTubeSetThumbnailResult,
@@ -70,6 +71,16 @@ function isVideosData(value: unknown): value is YouTubeVideosPage {
 function isPlaylistsData(value: unknown): value is YouTubePlaylistsPage {
   if (!isRecord(value) || !Array.isArray(value.items)) return false;
   return value.next_page_token === null || typeof value.next_page_token === "string";
+}
+
+function isCreatePlaylistData(value: unknown): value is YouTubeCreatePlaylistData {
+  if (!isRecord(value) || !isRecord(value.playlist)) return false;
+  const playlist = value.playlist;
+  return (
+    typeof playlist.id === "string" &&
+    /^[A-Za-z0-9_-]{10,64}$/.test(playlist.id) &&
+    typeof playlist.title === "string"
+  );
 }
 
 function isVideoData(value: unknown): value is YouTubeVideoDetails {
@@ -218,6 +229,25 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
         ...(params.pageToken ? { page_token: params.pageToken } : {}),
       },
       isPlaylistsData,
+    );
+  }
+
+  createPlaylist(params: {
+    accountId: string;
+    title: string;
+    description?: string;
+    privacyStatus: "public" | "unlisted" | "private";
+  }): Promise<YouTubeResourceSuccess<YouTubeCreatePlaylistData>> {
+    return call(
+      {
+        operation: "create_playlist",
+        account_id: params.accountId,
+        title: params.title,
+        ...(params.description !== undefined ? { description: params.description } : {}),
+        privacy_status: params.privacyStatus,
+      },
+      isCreatePlaylistData,
+      { unreadableFailureCode: "outcome_unknown" },
     );
   }
 

@@ -44,6 +44,14 @@ export const YOUTUBE_CAPTION_LIST_DAILY_LIMIT = {
 
 export const YOUTUBE_CAPTION_LIST_UNIT_COST = 50;
 
+export const YOUTUBE_PLAYLIST_CREATE_DAILY_LIMIT = {
+  keyPrefix: "youtube-resources:playlist-create:day",
+  limit: 5,
+  windowSeconds: 86400,
+} as const;
+
+export const YOUTUBE_PLAYLIST_CREATE_UNIT_COST = 50;
+
 export type WriteBudgetDebitResult =
   | { ok: true; count: number }
   | { ok: false; code: "quota_exceeded" | "upstream_unavailable"; retryAfterSeconds?: number };
@@ -85,6 +93,20 @@ export async function checkCaptionListCounter(input: {
     input.userId,
     YOUTUBE_CAPTION_LIST_DAILY_LIMIT.limit,
     YOUTUBE_CAPTION_LIST_DAILY_LIMIT.windowSeconds,
+  );
+}
+
+/** Checks the per-user daily playlist creation counter (5 creates / 24 h), failing closed. */
+export async function checkPlaylistCreateCounter(input: {
+  rpc: YouTubeWriteBudgetRpc;
+  userId: string;
+}): Promise<WriteCounterResult> {
+  return await checkSingleCounter(
+    input.rpc,
+    YOUTUBE_PLAYLIST_CREATE_DAILY_LIMIT.keyPrefix,
+    input.userId,
+    YOUTUBE_PLAYLIST_CREATE_DAILY_LIMIT.limit,
+    YOUTUBE_PLAYLIST_CREATE_DAILY_LIMIT.windowSeconds,
   );
 }
 

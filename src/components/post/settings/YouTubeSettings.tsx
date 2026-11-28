@@ -146,6 +146,9 @@ let nextYoutubeCaptionReadSeq = 0;
 // A select option cannot carry an empty value, so "no playlist" is a
 // sentinel that is translated back to an empty playlist id.
 const PLAYLIST_NONE_VALUE = "__none__";
+const PLAYLIST_CREATE_VALUE = "__postora_create_playlist__";
+const PLAYLIST_TITLE_MAX_LENGTH = 150;
+const PLAYLIST_DESCRIPTION_MAX_BYTES = 5000;
 const COMMON_CAPTION_LANGUAGES = ["en", "ar", "es", "fr", "de"] as const;
 const CUSTOM_CAPTION_LANGUAGE = "other";
 
@@ -297,6 +300,174 @@ export function YouTubeSettings({
   }, [multipleNativeChannels, onSettingsChange, settings.playlist, singleNativeChannelKey]);
 
   const manageCaptionsCapability = playlistCatalog.capabilities?.manage_captions ?? null;
+  const managePlaylistsCapability = playlistCatalog.capabilities?.manage_playlists ?? null;
+  const showNewPlaylistControl = !playlistSelectorDisabled && Boolean(playlistAccountId) && !composioManaged;
+  const canCreatePlaylist =
+    showNewPlaylistControl &&
+    !playlistCatalog.capabilitiesLoading &&
+    !playlistCatalog.capabilitiesUnavailable &&
+    managePlaylistsCapability?.state === "available";
+
+  const [newPlaylistDialogOpen, setNewPlaylistDialogOpen] = useState(false);
+  const [newPlaylistTitle, setNewPlaylistTitle] = useState("");
+  const [newPlaylistDescription, setNewPlaylistDescription] = useState("");
+  const [newPlaylistPrivacy, setNewPlaylistPrivacy] = useState<"" | "public" | "unlisted" | "private">("");
+  const [newPlaylistDialogError, setNewPlaylistDialogError] = useState<string | null>(null);
+  const [playlistOutcomeUnknownNotice, setPlaylistOutcomeUnknownNotice] = useState(false);
+
+  useEffect(() => {
+    setPlaylistOutcomeUnknownNotice(false);
+    setNewPlaylistDialogOpen(false);
+    setNewPlaylistTitle("");
+    setNewPlaylistDescription("");
+    setNewPlaylistPrivacy("");
+    setNewPlaylistDialogError(null);
+  }, [playlistAccountId, multipleNativeChannels, composioManaged]);
+
+  const resetNewPlaylistForm = () => {
+    setNewPlaylistTitle("");
+    setNewPlaylistDescription("");
+    setNewPlaylistPrivacy("");
+    setNewPlaylistDialogError(null);
+  };
+
+  const openNewPlaylistDialog = () => {
+    if (!canCreatePlaylist) return;
+    resetNewPlaylistForm();
+    setNewPlaylistDialogOpen(true);
+  };
+
+  const formatPlaylistRetryWait = (seconds?: number) => {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return null;
+    return seconds >= 60
+      ? t("youtube.playlistCreateWaitMinutes", "{{count}} minutes", { count: Math.ceil(seconds / 60) })
+      : t("youtube.playlistCreateWaitSeconds", "{{count}} seconds", { count: seconds });
+  };
+
+  const handleCreatePlaylistSubmit = async () => {
+    if (!canCreatePlaylist || playlistCatalog.creating) return;
+    const trimmedTitle = newPlaylistTitle.trim();
+    if (
+      trimmedTitle.length < 1 ||
+      trimmedTitle.length > PLAYLIST_TITLE_MAX_LENGTH ||
+      /[<>]/.test(trimmedTitle) ||
+      /[\r\n]/.test(trimmedTitle)
+    ) {
+      setNewPlaylistDialogError(
+        t(
+          "youtube.playlistCreateInvalidTitle",
+          "Enter a playlist title (1–150 characters, single line, without < or >).",
+        ),
+      );
+      return;
+    }
+    const descBytes = measureUtf8Bytes(newPlaylistDescription);
+    if (descBytes > PLAYLIST_DESCRIPTION_MAX_BYTES || /[<>]/.test(newPlaylistDescription)) {
+      setNewPlaylistDialogError(
+        t(
+          "youtube.playlistCreateInvalidDescription",
+          "Playlist description must be at most 5,000 UTF-8 bytes and cannot contain < or >.",
+        ),
+      );
+      return;
+    }
+    if (
+      newPlaylistPrivacy !== "public" &&
+      newPlaylistPrivacy !== "unlisted" &&
+      newPlaylistPrivacy !== "private"
+    ) {
+      setNewPlaylistDialogError(
+        t("youtube.playlistCreatePrivacyRequired", "Select a privacy setting for the new playlist."),
+      );
+      return;
+    }
+    if (typeof playlistCatalog.createPlaylist !== "function") {
+      setNewPlaylistDialogError(
+        t(
+          "youtube.playlistCreateFailed",
+          "Could not create the playlist. Check the title and description and try again.",
+        ),
+      );
+      return;
+    }
+
+    setNewPlaylistDialogError(null);
+    const trimmedDesc = newPlaylistDescription.trim();
+    const result = await playlistCatalog.createPlaylist({
+      title: trimmedTitle,
+      ...(trimmedDesc.length > 0 ? { description: trimmedDesc } : {}),
+      privacyStatus: newPlaylistPrivacy,
+    });
+
+    if (result.outcome === "created") {
+      setPlaylistOutcomeUnknownNotice(false);
+      setNewPlaylistDialogOpen(false);
+      resetNewPlaylistForm();
+      onSettingsChange({ playlist: result.playlist.id });
+      return;
+    }
+
+    if (result.outcome === "outcome_unknown") {
+      setNewPlaylistDialogOpen(false);
+      resetNewPlaylistForm();
+      setPlaylistOutcomeUnknownNotice(true);
+      return;
+    }
+
+    if (result.outcome === "rate_limited") {
+      const waitLabel = formatPlaylistRetryWait(result.retryAfterSeconds);
+      setNewPlaylistDialogError(
+        waitLabel !== null
+          ? t(
+              "youtube.playlistCreateRateLimitedWithWait",
+              "You have reached today's limit of 5 new playlists. Try again in {{time}}.",
+              { time: waitLabel },
+            )
+          : t(
+              "youtube.playlistCreateRateLimited",
+              "You have reached today's limit of 5 new playlists. Try again later.",
+            ),
+      );
+      return;
+    }
+
+    if (result.outcome === "quota_exceeded") {
+      setNewPlaylistDialogError(
+        t(
+          "youtube.playlistCreateQuotaExceeded",
+          "Postora's YouTube write quota for today is used up. Try again tomorrow.",
+        ),
+      );
+      return;
+    }
+
+    if (result.outcome === "reconnect_required") {
+      setNewPlaylistDialogError(
+        t(
+          "youtube.playlistCreateReconnectRequired",
+          "This channel needs to be reconnected before playlists can be created.",
+        ),
+      );
+      return;
+    }
+
+    if (result.outcome === "missing_scope") {
+      setNewPlaylistDialogError(
+        t(
+          "youtube.playlistCreateMissingScope",
+          "Reconnect this channel and allow Postora to manage your YouTube account (force-ssl) to create playlists.",
+        ),
+      );
+      return;
+    }
+
+    setNewPlaylistDialogError(
+      t(
+        "youtube.playlistCreateFailed",
+        "Could not create the playlist. Check the title and description and try again.",
+      ),
+    );
+  };
   const captionCapabilityUnavailable =
     manageCaptionsCapability !== null && manageCaptionsCapability.state !== "available";
   const captionCapabilityUnconfirmed = Boolean(
@@ -1704,14 +1875,34 @@ export function YouTubeSettings({
 
       {/* Playlist — the new video may join one existing playlist of the target channel */}
       <div className="space-y-2 border-t pt-4">
-        <Label htmlFor="youtube-playlist" className="text-sm font-medium">
-          {t("youtube.playlist", "Playlist")}
-        </Label>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Label htmlFor="youtube-playlist" className="text-sm font-medium">
+            {t("youtube.playlist", "Playlist")}
+          </Label>
+          {showNewPlaylistControl && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="youtube-new-playlist-button"
+              disabled={!canCreatePlaylist}
+              onClick={openNewPlaylistDialog}
+            >
+              {t("youtube.playlistNewButton", "+ New playlist")}
+            </Button>
+          )}
+        </div>
         <Select
           value={settings.playlist || PLAYLIST_NONE_VALUE}
-          onValueChange={(value) => onSettingsChange({
-            playlist: value === PLAYLIST_NONE_VALUE ? "" : value,
-          })}
+          onValueChange={(value) => {
+            if (value === PLAYLIST_CREATE_VALUE) {
+              openNewPlaylistDialog();
+              return;
+            }
+            onSettingsChange({
+              playlist: value === PLAYLIST_NONE_VALUE ? "" : value,
+            });
+          }}
           disabled={playlistSelectorDisabled}
         >
           <SelectTrigger id="youtube-playlist" className="w-full" aria-label={t("youtube.playlist", "Playlist")}>
@@ -1734,8 +1925,45 @@ export function YouTubeSettings({
               && !playlistCatalog.playlists.some((playlist) => playlist.id === settings.playlist) && (
               <SelectItem value={settings.playlist}>{settings.playlist}</SelectItem>
             )}
+            {showNewPlaylistControl && (
+              <SelectItem value={PLAYLIST_CREATE_VALUE} disabled={!canCreatePlaylist}>
+                {t("youtube.playlistNewButton", "+ New playlist")}
+              </SelectItem>
+            )}
           </SelectContent>
         </Select>
+        {playlistOutcomeUnknownNotice && (
+          <p
+            role="status"
+            data-testid="youtube-playlist-outcome-unknown"
+            className="text-xs text-muted-foreground"
+          >
+            {t(
+              "youtube.playlistCreateOutcomeUnknown",
+              "YouTube may have created the playlist. Check the list before trying again.",
+            )}
+          </p>
+        )}
+        {showNewPlaylistControl && !playlistCatalog.capabilitiesLoading && !canCreatePlaylist && (
+          <p data-testid="youtube-playlist-create-disabled-note" className="text-xs text-muted-foreground">
+            {managePlaylistsCapability?.state === "unavailable" &&
+            managePlaylistsCapability.reason === "reconnect_required"
+              ? t(
+                  "youtube.playlistCreateReconnectRequired",
+                  "This channel needs to be reconnected before playlists can be created.",
+                )
+              : managePlaylistsCapability?.state === "unavailable" &&
+                managePlaylistsCapability.reason === "provider_unsupported"
+                ? t(
+                    "youtube.playlistCreateProviderUnsupported",
+                    "Playlist creation is not available for managed accounts.",
+                  )
+                : t(
+                    "youtube.playlistCreateMissingScope",
+                    "Reconnect this channel and allow Postora to manage your YouTube account (force-ssl) to create playlists.",
+                  )}
+          </p>
+        )}
         {playlistCatalog.loading && (
           <p className="text-xs text-muted-foreground">
             {t("youtube.playlistLoading", "Loading playlists…")}
@@ -1768,6 +1996,129 @@ export function YouTubeSettings({
           </div>
         )}
       </div>
+
+      <Dialog
+        open={newPlaylistDialogOpen}
+        onOpenChange={(open) => {
+          setNewPlaylistDialogOpen(open);
+          if (!open) {
+            resetNewPlaylistForm();
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md" data-testid="youtube-new-playlist-dialog">
+          <DialogHeader>
+            <DialogTitle>{t("youtube.playlistCreateDialogTitle", "Create YouTube playlist")}</DialogTitle>
+            <DialogDescription>
+              {t(
+                "youtube.playlistCreateDialogDescription",
+                "Create a new playlist on your connected YouTube channel (up to 5 new playlists per 24 hours).",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="youtube-new-playlist-title" className="text-xs font-medium">
+                {t("youtube.playlistCreateTitleLabel", "Playlist title")}
+              </Label>
+              <Input
+                id="youtube-new-playlist-title"
+                aria-label={t("youtube.playlistCreateTitleLabel", "Playlist title")}
+                placeholder={t("youtube.playlistCreateTitlePlaceholder", "Enter playlist title")}
+                value={newPlaylistTitle}
+                maxLength={PLAYLIST_TITLE_MAX_LENGTH}
+                disabled={Boolean(playlistCatalog.creating)}
+                onChange={(event) => {
+                  setNewPlaylistTitle(event.target.value);
+                  setNewPlaylistDialogError(null);
+                }}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="youtube-new-playlist-description" className="text-xs font-medium">
+                {t("youtube.playlistCreateDescriptionLabel", "Description (optional)")}
+              </Label>
+              <Textarea
+                id="youtube-new-playlist-description"
+                aria-label={t("youtube.playlistCreateDescriptionLabel", "Description (optional)")}
+                placeholder={t("youtube.playlistCreateDescriptionPlaceholder", "Describe this playlist")}
+                value={newPlaylistDescription}
+                disabled={Boolean(playlistCatalog.creating)}
+                onChange={(event) => {
+                  setNewPlaylistDescription(event.target.value);
+                  setNewPlaylistDialogError(null);
+                }}
+                className="min-h-[80px]"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {t("youtube.playlistCreateDescriptionBytes", "{{bytes}} / {{limit}} UTF-8 bytes", {
+                  bytes: measureUtf8Bytes(newPlaylistDescription),
+                  limit: PLAYLIST_DESCRIPTION_MAX_BYTES,
+                })}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="youtube-new-playlist-privacy" className="text-xs font-medium">
+                {t("youtube.playlistCreatePrivacyLabel", "Playlist privacy")}
+              </Label>
+              <select
+                id="youtube-new-playlist-privacy"
+                aria-label={t("youtube.playlistCreatePrivacyLabel", "Playlist privacy")}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-50"
+                value={newPlaylistPrivacy}
+                disabled={Boolean(playlistCatalog.creating)}
+                onChange={(event) => {
+                  setNewPlaylistPrivacy(event.target.value as "" | "public" | "unlisted" | "private");
+                  setNewPlaylistDialogError(null);
+                }}
+              >
+                <option value="" disabled>
+                  {t("youtube.playlistCreatePrivacyPlaceholder", "Select privacy")}
+                </option>
+                <option value="public">{t("youtube.visibilityPublic", "Public")}</option>
+                <option value="unlisted">{t("youtube.visibilityUnlisted", "Unlisted")}</option>
+                <option value="private">{t("youtube.visibilityPrivate", "Private")}</option>
+              </select>
+            </div>
+
+            {newPlaylistDialogError && (
+              <p role="alert" data-testid="youtube-new-playlist-error" className="text-xs text-destructive">
+                {newPlaylistDialogError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={Boolean(playlistCatalog.creating)}
+                onClick={() => {
+                  setNewPlaylistDialogOpen(false);
+                  resetNewPlaylistForm();
+                }}
+              >
+                {t("common:cancel", "Cancel")}
+              </Button>
+              <Button
+                type="button"
+                data-testid="youtube-new-playlist-submit"
+                disabled={
+                  Boolean(playlistCatalog.creating) ||
+                  newPlaylistTitle.trim().length === 0 ||
+                  newPlaylistPrivacy === ""
+                }
+                onClick={() => void handleCreatePlaylistSubmit()}
+              >
+                {playlistCatalog.creating
+                  ? t("youtube.playlistCreatingBtn", "Creating…")
+                  : t("youtube.playlistCreateSubmitBtn", "Create playlist")}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Subtitles / CC — upload-time caption track sent as a captions.insert follow-up */}
       <div className="space-y-3 border-t pt-4" data-testid="youtube-upload-captions-section">

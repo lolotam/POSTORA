@@ -49,6 +49,7 @@ Deno.test("the quota policy is the one the specification publishes", () => {
     videos_page: 2,
     video: 1,
     playlists_page: 1,
+    playlist_create: 50,
     captions_list: 50,
     caption_upload: 400,
   });
