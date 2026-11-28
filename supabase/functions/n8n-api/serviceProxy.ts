@@ -152,11 +152,14 @@ function redactErrorText(data: unknown): unknown {
   return record;
 }
 
+const CREDENTIAL_URL_RE = /(?:[a-z][a-z0-9+.-]*:)?\/\/\S*[?#&](?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S*/i;
+
 // Graph pagination URLs (paging.next / paging.previous) embed the connected
 // account's access_token, so they never leave the proxy; the opaque cursors
-// stay. Any other string that still carries an access_token is dropped too.
+// stay. Any other URL string (or error string embedding a credential URL)
+// is dropped too, while ordinary text fields mentioning parameter names stay intact.
 export function stripCredentialUrls(value: unknown): unknown {
-  if (typeof value === "string") return /(?:access_token|refresh_token|api_key|service_role_key|cron_secret)=/i.test(value) ? null : value;
+  if (typeof value === "string") return CREDENTIAL_URL_RE.test(value) ? null : value;
   if (Array.isArray(value)) return value.map(stripCredentialUrls);
   if (!value || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};

@@ -30,8 +30,10 @@ function providerFailure(status: number, payload: unknown, headers: Headers): Me
       : metaAnalyticsFailure(status, "invalid_response", "capability_unverified", MESSAGE);
   }
   const meta = parseMetaError(status, payload);
-  const throttled = status === 429 || [4, 17, 32, 613].includes(meta.code ?? -1);
-  const reason: FacebookReadReason = meta.code === 190 || isPermanentMetaError(meta) ? "reauth_required" : throttled ? "rate_limited"
+  const throttled = status === 429 || [4, 17, 32, 613, 80001, 80002].includes(meta.code ?? -1);
+  const reason: FacebookReadReason = status === 429 ? "rate_limited"
+    : meta.code === 190 || isPermanentMetaError(meta) ? "reauth_required"
+    : throttled ? "rate_limited"
     : meta.code === 10 || meta.code === 200 ? "permission_missing" : "provider_error";
   const retry = headers.get("retry-after");
   const deadline = retry && /^\d{1,7}$/.test(retry) ? Date.now() + Number(retry) * 1000 : Date.parse(retry ?? "");

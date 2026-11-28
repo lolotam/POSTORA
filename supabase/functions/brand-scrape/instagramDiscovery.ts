@@ -107,13 +107,21 @@ export function discoveryProfile(profile: Record<string, unknown>, fallbackUsern
     website: discoveryText(profile.website), platform: "instagram", source };
 }
 
+function truncateCaption(caption: string): string {
+  const end = caption.charCodeAt(1_999) >= 0xd800 && caption.charCodeAt(1_999) <= 0xdbff ? 1_999 : 2_000;
+  return caption.slice(0, end);
+}
+
 /** One format/count contract shared with the scheduled Graph adapter. */
 export function discoveryMedia(raw: unknown) {
-  const media = discoveryParse(() => parseBusinessDiscoveryMedia(raw));
-  const record = raw as Record<string, unknown>;
+  const record = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+  const normalized = record && typeof record.caption === "string" && record.caption.length > 2_000 && record.caption.length <= 2_200
+    ? { ...record, caption: truncateCaption(record.caption) }
+    : raw;
+  const media = discoveryParse(() => parseBusinessDiscoveryMedia(normalized));
   const mediaType = media.media_product_type === "REELS" ? "REEL" :
     media.media_type === "VIDEO" ? "VIDEO" : media.media_type === "CAROUSEL_ALBUM" ? "CAROUSEL" : "IMAGE";
-  const mediaUrl = discoveryText(record.media_url) ?? "";
+  const mediaUrl = discoveryText(record?.media_url) ?? "";
   return { id: media.ig_media_id, mediaType, thumbnailUrl: media.thumbnail_url ?? mediaUrl,
     mediaUrl, caption: media.caption ?? "",
     likesCount: media.like_count, commentsCount: media.comments_count, videoViewCount: media.view_count,

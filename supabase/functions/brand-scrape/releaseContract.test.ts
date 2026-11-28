@@ -400,3 +400,14 @@ Deno.test("the handler validates the platform before it builds or reads any cach
   assertEquals(validate > 0, true);
   for (const later of ["let cacheKey", '.from("brand_scrape_cache")']) assertEquals(validate < source.indexOf(later), true, later);
 });
+
+Deno.test("discoveryMedia truncates Instagram captions up to 2,200 characters without splitting surrogate pairs and rejects captions above 2,200", () => {
+  const truncated = discoveryMedia(media("caption-2150", { caption: "a".repeat(2_150) }));
+  assertEquals(truncated.caption.length, 2_000);
+  assertEquals(truncated.caption, "a".repeat(2_000));
+  const emojiBoundary = discoveryMedia(media("caption-emoji", { caption: `${"a".repeat(1_999)}🔥${"b".repeat(100)}` }));
+  assertEquals(emojiBoundary.caption.length, 1_999);
+  assertEquals(emojiBoundary.caption, "a".repeat(1_999));
+  const error = assertThrows(() => discoveryMedia(media("caption-2201", { caption: "a".repeat(2_201) })), InstagramDiscoveryError);
+  assertEquals([error.code, error.status], ["DISCOVERY_PROVIDER_UNAVAILABLE", 502]);
+});

@@ -436,7 +436,8 @@
     "failed": "failed",
     "pending": "pending",
     "sending": "sending",
-    "sent": "sent"
+    "sent": "sent",
+    "skipped": "تم التخطي"
   },
   "summary": {
     "agent_config": "إعدادات وكيل الذكاء الاصطناعي",

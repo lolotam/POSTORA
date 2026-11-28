@@ -160,6 +160,10 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Fetch the immutable base history
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           cleanup() {
@@ -167,9 +171,9 @@ jobs:
           }
           trap cleanup EXIT
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
-            git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
-            git cat-file -e "${{ github.event.pull_request.base.sha }}^{commit}"
-            git cat-file -e "${{ github.event.pull_request.head.sha }}^{commit}"
+            git fetch --no-tags origin "${PR_BASE_REF}"
+            git cat-file -e "${PR_BASE_SHA}^{commit}"
+            git cat-file -e "${PR_HEAD_SHA}^{commit}"
           else
             git fetch --no-tags origin main
           fi
@@ -189,6 +193,10 @@ jobs:
         run: node --test scripts/check-instagram-release-gates.test.mjs
 
       - name: Compare lint and i18n against the immutable base
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
           report="${RUNNER_TEMP}/lint-i18n-regression.json"
@@ -196,8 +204,8 @@ jobs:
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             node scripts/ci/lint-i18n-regression.mjs \
               --event pull_request \
-              --base "${{ github.event.pull_request.base.sha }}" \
-              --head "${{ github.event.pull_request.head.sha }}" \
+              --base "${PR_BASE_SHA}" \
+              --head "${PR_HEAD_SHA}" \
               --report "${report}" \
               --summary "${summary}"
           else
@@ -205,7 +213,7 @@ jobs:
               --event push \
               --ref "${GITHUB_REF}" \
               --head "${GITHUB_SHA}" \
-              --before "${{ github.event.before }}" \
+              --before "${PUSH_BEFORE_SHA}" \
               --main-ref origin/main \
               --report "${report}" \
               --summary "${summary}"

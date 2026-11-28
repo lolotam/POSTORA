@@ -34,7 +34,9 @@ export class CollectionThrottle {
   }
 
   async refuse(retryAt: string | null): Promise<string> {
-    await this.store.recordThrottle(this.bucket, 0, retryAt ?? new Date(Date.now() + 15 * 60_000).toISOString());
+    const existing = await this.store.throttle(this.bucket);
+    const usage = Math.min(100, Math.max(0, Math.ceil(existing?.usage_percent ?? 0)));
+    await this.store.recordThrottle(this.bucket, usage, retryAt ?? new Date(Date.now() + 15 * 60_000).toISOString());
     const current = await this.store.throttle(this.bucket);
     if (!current?.throttled_until) throw new AnalyticsWorkerStopped("invalid_contract");
     return current.throttled_until;

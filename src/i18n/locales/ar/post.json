@@ -125,7 +125,9 @@
     "toneInspirational": "ملهم",
     "toneLabel": "النبرة",
     "toneProfessional": "احترافي",
-    "use": "استخدام"
+    "use": "استخدام",
+    "webSearch": "بحث الويب",
+    "webSearchHint": "بيبحث عن معلومات حديثة عن موضوعك الأول. بياخد ثواني زيادة."
   },
   "captionHistory": {
     "copiedDesc": "تم نسخ الوصف للحافظة.",
