@@ -1155,14 +1155,14 @@ export function YouTubeSettings({
         />
         <YouTubePackagingScoreCard
           title={
-            settings.title?.trim()
-              ? settings.title
-              : resolveYouTubeVideoTitle({
+            settings.title?.trim() || caption?.trim()
+              ? resolveYouTubeVideoTitle({
                   title: settings.title,
                   caption,
                   videoType: settings.videoType,
                   fallback: "",
                 })
+              : ""
           }
           description={settings.description || ""}
           requestScore={(params) => requestYouTubePackagingScore({ ...params, notifyOnError: false })}

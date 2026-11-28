@@ -97,15 +97,18 @@ export async function requestYouTubePackagingScore(
   const notifyOnError = input.notifyOnError ?? true;
 
   if (error) {
+    const status = getErrorStatus(error);
+    const message =
+      error &&
+      typeof error === "object" &&
+      typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : "Failed to score packaging";
+    const normalizedError = Object.assign(new Error(message), status !== undefined ? { status } : {});
     if (notifyOnError) {
-      const status = getErrorStatus(error);
-      if (status !== undefined) {
-        handleAIError({ status, message: error.message }, "YouTube Packaging Score");
-      } else {
-        handleAIError(error, "YouTube Packaging Score");
-      }
+      handleAIError({ ...(status !== undefined ? { status } : {}), message }, "YouTube Packaging Score");
     }
-    throw error;
+    throw normalizedError;
   }
 
   const record = (data && typeof data === "object" ? data : null) as Record<string, unknown> | null;
@@ -116,7 +119,7 @@ export async function requestYouTubePackagingScore(
       "Failed to score packaging";
     const err = new Error(message);
     if (notifyOnError) {
-      handleAIError(err, "YouTube Packaging Score");
+      handleAIError({ message }, "YouTube Packaging Score");
     }
     throw err;
   }
@@ -125,7 +128,7 @@ export async function requestYouTubePackagingScore(
   if (!isValidPackagingScore(score)) {
     const err = new Error("Invalid packaging score response");
     if (notifyOnError) {
-      handleAIError(err, "YouTube Packaging Score");
+      handleAIError({ message: err.message }, "YouTube Packaging Score");
     }
     throw err;
   }

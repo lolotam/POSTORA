@@ -226,8 +226,29 @@ export function YouTubePackagingScoreCard({
       setScore(nextScore);
     } catch (error) {
       if (!isMountedRef.current || requestIdRef.current !== requestId) return;
-      handleAIError(error, "YouTube Packaging Score");
       setErrorMessage(labels.errorFallback);
+      const status =
+        error &&
+        typeof error === "object" &&
+        typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : undefined;
+      const safeCode =
+        status === 401
+          ? "401"
+          : status === 402
+            ? "402"
+            : status === 429
+              ? "429"
+              : "request_failed";
+      try {
+        handleAIError(
+          { ...(status !== undefined ? { status } : {}), message: safeCode },
+          "YouTube Packaging Score",
+        );
+      } catch {
+        // Keep the inline fallback alert independent of toast notification handling
+      }
     } finally {
       if (isMountedRef.current && requestIdRef.current === requestId) {
         setIsLoading(false);
