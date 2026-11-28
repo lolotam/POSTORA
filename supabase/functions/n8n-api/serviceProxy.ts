@@ -157,17 +157,17 @@ const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?toke
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
-function extractUrlSpan(token: string): string | null {
-  const urlMatch = /(?:^|[("'[<,;=])((?:https?:)?\/\/[^\s)"'\]]>]+|\/[^\s)"'\]]>]+)/i.exec(token);
-  if (urlMatch) return urlMatch[1];
-  const queryMatch = /(?:^|[("'[<])((?:[?#&]|%3f|%23|%26)[^\s)"'\]]>]+)/i.exec(token);
-  return queryMatch ? queryMatch[1] : null;
+function tokenHasCredentialQuery(token: string): boolean {
+  for (const match of token.matchAll(/(?:^|[("'[<,;=])((?:https?:)?\/\/\S+|\/\S+|(?:[?#]|%3f|%23)\S+)/gi)) {
+    if (CREDENTIAL_PARAM_RE.test(match[1])) return true;
+  }
+  const bareAmp = /(?:^|[("'[<])((?:&|%26)\S+)/i.exec(token);
+  return bareAmp !== null && CREDENTIAL_PARAM_RE.test(bareAmp[1]);
 }
 
 function hasCredentialQuery(value: string): boolean {
   for (const token of value.split(/\s+/)) {
-    const span = token ? extractUrlSpan(token) : null;
-    if (span && CREDENTIAL_PARAM_RE.test(span)) return true;
+    if (token && tokenHasCredentialQuery(token)) return true;
   }
   return false;
 }
