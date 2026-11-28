@@ -11,7 +11,7 @@ export const KEY_ID = "55555555-5555-4555-8555-555555555555";
 export const ACCOUNT_ID = "66666666-6666-4666-8666-666666666666";
 export const OWNER_ID = "77777777-7777-4777-8777-777777777777";
 type Row = Record<string, unknown>;
-export const AGENT_ROW = { id: AGENT_ID, workspace_id: "ws", user_id: IDENTITY_ID, display_name: "Support", status: "offline", max_conversations: 10, current_conversations: 2, last_seen_at: null, created_at: "2026-09-10T00:00:00Z", updated_at: "2026-09-10T00:00:00Z" };
+export const AGENT_ROW = { id: AGENT_ID, workspace_id: WORKSPACE_ID, user_id: IDENTITY_ID, display_name: "Support", status: "offline", max_conversations: 10, current_conversations: 2, last_seen_at: null, created_at: "2026-09-10T00:00:00Z", updated_at: "2026-09-10T00:00:00Z" };
 export function humanAgentFixture(opts: { entitled?: boolean; claim?: string; failRead?: string; rpcFails?: boolean; responseLost?: boolean; cleanupFails?: boolean; createFails?: boolean; settleFails?: boolean; deleteRace?: boolean; incompleteRecovery?: boolean; assignmentRpcFails?: boolean } = {}) {
   const reads: URL[] = [];
   const writes: { table: string; method: string; row: Row; url: URL }[] = [];
@@ -19,8 +19,8 @@ export function humanAgentFixture(opts: { entitled?: boolean; claim?: string; fa
   const identities = new Set<string>();
   const emails = new Set<string>();
   const rows: Record<string, Row[]> = {
-    partner_api_keys: [{ id: "key", workspace_id: "ws", social_account_id: ACCOUNT_ID, key_prefix: "pk_live_test", scopes: ["agents:read", "agents:manage"], rate_limit_per_min: 60, monthly_quota: null, revoked_at: null, expires_at: null }],
-    partner_provisioned_workspaces: [{ workspace_id: "ws", owner_user_id: OWNER_ID }],
+    partner_api_keys: [{ id: KEY_ID, workspace_id: WORKSPACE_ID, social_account_id: ACCOUNT_ID, key_prefix: "pk_live_test", scopes: ["agents:read", "agents:manage"], rate_limit_per_min: 60, monthly_quota: null, revoked_at: null, expires_at: null }],
+    partner_provisioned_workspaces: [{ workspace_id: WORKSPACE_ID, owner_user_id: OWNER_ID }],
     app_settings: [{ key: "feature_human_agent", value: opts.entitled ?? true }], user_feature_overrides: [],
     whatsapp_agents: [{ ...AGENT_ROW }], whatsapp_conversation_assignments: [], whatsapp_assignment_history: [], messaging_cache: [], partner_api_key_accounts: [], system_logs: [], partner_api_usage: [], partner_api_idempotency: [],
   };
@@ -105,5 +105,5 @@ export function humanAgentFixture(opts: { entitled?: boolean; claim?: string; fa
     // if an upstream RPC/query grows its projection.
     return Response.json(selected.slice(0, Number(url.searchParams.get("limit") ?? 1000)), { headers: { "content-range": `0-${Math.max(0, selected.length - 1)}/${count}` } });
   } } });
-  return { admin, rows, reads, writes, creates, deletes, identities, claims, ctx: { admin, workspaceId: "ws", requestId: "req" } };
+  return { admin, rows, reads, writes, creates, deletes, identities, claims, ctx: { admin, workspaceId: WORKSPACE_ID, requestId: "req" } };
 }

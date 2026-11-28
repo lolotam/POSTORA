@@ -343,6 +343,7 @@ async function emitDisconnectedOnTeardown(ctx: PairingContext, accountId: string
       .select("updated_at")
       .eq("workspace_id", ctx.workspaceId)
       .eq("id", accountId)
+      .eq("is_active", false)
       .maybeSingle();
     if (!readbackError && written?.updated_at) {
       const occurredAt = String(written.updated_at);

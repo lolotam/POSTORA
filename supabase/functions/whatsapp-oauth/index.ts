@@ -223,6 +223,9 @@ Deno.serve(async (req) => {
     if (!code || !waba_id || !phone_number_id || !mode) {
       return restrictedErrorResponse(req, "Missing required fields: code, waba_id, phone_number_id, mode", 400);
     }
+    if (mode !== "cloud_api" && mode !== "coexistence") {
+      return restrictedErrorResponse(req, "Invalid mode: must be cloud_api or coexistence", 400);
+    }
 
     // Server-side feature flag guard: block Cloud API connections when disabled
     if (mode === "cloud_api") {
@@ -388,7 +391,10 @@ Deno.serve(async (req) => {
           updated_at: new Date().toISOString(),
         })
         .eq("id", existingAccount.id);
-      if (saveError) throw saveError;
+      if (saveError) {
+        console.error("[whatsapp-oauth] Account update failed:", { code: saveError.code ?? "unknown" });
+        return restrictedErrorResponse(req, "Failed to save WhatsApp account", 500);
+      }
     } else {
       const { error: saveError } = await admin.from("social_accounts").insert({
         user_id: userId,
@@ -402,7 +408,10 @@ Deno.serve(async (req) => {
         account_metadata: accountMetadata,
         is_active: true,
       });
-      if (saveError) throw saveError;
+      if (saveError) {
+        console.error("[whatsapp-oauth] Account insert failed:", { code: saveError.code ?? "unknown" });
+        return restrictedErrorResponse(req, "Failed to save WhatsApp account", 500);
+      }
     }
 
     return restrictedJsonResponse(req, {
