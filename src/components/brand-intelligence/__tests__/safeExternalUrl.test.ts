@@ -182,10 +182,18 @@ describe("safeExternalUrl validation", () => {
     );
   });
 
-  it("encodeSafeProfileUsername encodes valid usernames and returns null for malformed UTF-16 surrogates", () => {
+  it("encodeSafeProfileUsername encodes valid usernames and returns null for malformed UTF-16 surrogates or dot segments", () => {
     expect(encodeSafeProfileUsername("@brand.handle")).toBe("brand.handle");
     expect(encodeSafeProfileUsername("bad\uD800surrogate")).toBeNull();
+    expect(encodeSafeProfileUsername(".")).toBeNull();
+    expect(encodeSafeProfileUsername("..")).toBeNull();
+    expect(encodeSafeProfileUsername("@..")).toBeNull();
     expect(encodeSafeProfileUsername("   ")).toBeNull();
+  });
+
+  it("getSafePlatformPostUrl rejects unknown or prototype platform keys", () => {
+    expect(getSafePlatformPostUrl("https://www.instagram.com/p/abc/", "constructor")).toBeNull();
+    expect(getSafePlatformPostUrl("https://www.instagram.com/p/abc/", "unknown_platform")).toBeNull();
   });
 });
 

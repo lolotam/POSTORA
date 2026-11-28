@@ -47,10 +47,13 @@ export default function BrandIntelligencePost() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [contentTab, setContentTab] = useState("captions");
   const [dbRecordId, setDbRecordId] = useState<string | null>(null);
-  const lastSyncedTranscriptRef = useRef<string | null>(null);
+  const lastAppliedKeyRef = useRef<string | null>(null);
+  const lastSavedKeyRef = useRef<string | null>(null);
+  const inFlightSaveKeyRef = useRef<string | null>(null);
+  const requestedPostKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    lastSyncedTranscriptRef.current = null;
+    requestedPostKeyRef.current = null;
     resetTranscription();
   }, [postId, platform, resetTranscription]);
 
@@ -95,11 +98,12 @@ export default function BrandIntelligencePost() {
     loadCached();
   }, [session?.user?.id, postId, platform, post]);
 
-  const upsertContent = useCallback(async (updates: Database["public"]["Tables"]["bi_post_content"]["Update"]) => {
-    if (!session?.user?.id || !postId || !post) return;
+  const upsertContent = useCallback(async (updates: Database["public"]["Tables"]["bi_post_content"]["Update"]): Promise<boolean> => {
+    if (!session?.user?.id || !postId || !post) return false;
 
     if (dbRecordId) {
-      await supabase.from("bi_post_content").update(updates).eq("id", dbRecordId);
+      const { error } = await supabase.from("bi_post_content").update(updates).eq("id", dbRecordId);
+      return !error;
     } else {
       const payload: Database["public"]["Tables"]["bi_post_content"]["Insert"] = {
         user_id: session.user.id,
@@ -110,22 +114,40 @@ export default function BrandIntelligencePost() {
         ...updates,
         updated_at: new Date().toISOString(),
       };
-      const { data } = await supabase.from("bi_post_content").upsert(payload, { onConflict: "user_id,post_id,platform" }).select("id").single();
+      const { data, error } = await supabase.from("bi_post_content").upsert(payload, { onConflict: "user_id,post_id,platform" }).select("id").single();
       if (data) setDbRecordId(data.id);
+      return !error;
     }
   }, [session?.user?.id, postId, platform, post, dbRecordId, location.state]);
 
-  // Sync transcript from hook to state once per distinct transcription result
+  // Sync transcript from hook to state once per distinct (post, transcript) result
   useEffect(() => {
-    if (transcript && !isTranscribing && lastSyncedTranscriptRef.current !== transcript) {
-      lastSyncedTranscriptRef.current = transcript;
+    const currentPostKey = `${platform}:${postId ?? ""}`;
+    if (!transcript || isTranscribing || requestedPostKeyRef.current !== currentPostKey) return;
+    const syncKey = `${currentPostKey}:${transcript}`;
+
+    if (lastAppliedKeyRef.current !== syncKey) {
+      lastAppliedKeyRef.current = syncKey;
       setEditableTranscript(transcript);
       setCachedTranscript(transcript);
       setCachedLanguage(language);
       setCachedDuration(duration);
-      void upsertContent({ transcript, transcript_language: language, transcript_duration: duration });
     }
-  }, [transcript, isTranscribing, language, duration, upsertContent]);
+
+    if (lastSavedKeyRef.current === syncKey || inFlightSaveKeyRef.current === syncKey) return;
+    inFlightSaveKeyRef.current = syncKey;
+    void upsertContent({ transcript, transcript_language: language, transcript_duration: duration })
+      .then((saved) => {
+        if (saved && requestedPostKeyRef.current === currentPostKey) {
+          lastSavedKeyRef.current = syncKey;
+        }
+      })
+      .finally(() => {
+        if (inFlightSaveKeyRef.current === syncKey) {
+          inFlightSaveKeyRef.current = null;
+        }
+      });
+  }, [transcript, isTranscribing, language, duration, platform, postId, upsertContent]);
 
   const handleTranscribe = () => {
     const safeUrl = getSafeHttpsUrl(post?.mediaUrl);
@@ -133,6 +155,7 @@ export default function BrandIntelligencePost() {
       toast.error(t("errors.noMediaUrl", "No media URL available for transcription"));
       return;
     }
+    requestedPostKeyRef.current = `${platform}:${postId ?? ""}`;
     transcribe(safeUrl);
   };
 

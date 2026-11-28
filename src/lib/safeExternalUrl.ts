@@ -57,10 +57,13 @@ export function getSafePlatformPostUrl(
   if (!parsed) return null;
   const host = parsed.hostname.toLowerCase();
   const normalizedPlatform = expectedPlatform?.trim().toLowerCase();
-  const allowedHosts =
-    normalizedPlatform && PLATFORM_SPECIFIC_HOSTS[normalizedPlatform]
-      ? PLATFORM_SPECIFIC_HOSTS[normalizedPlatform]
-      : PLATFORM_POST_HOSTS;
+  let allowedHosts: ReadonlySet<string> = PLATFORM_POST_HOSTS;
+  if (normalizedPlatform) {
+    if (!Object.prototype.hasOwnProperty.call(PLATFORM_SPECIFIC_HOSTS, normalizedPlatform)) {
+      return null;
+    }
+    allowedHosts = PLATFORM_SPECIFIC_HOSTS[normalizedPlatform];
+  }
   if (!allowedHosts.has(host)) return null;
   if (!parsed.pathname || parsed.pathname === "/") return null;
   return parsed.href;
@@ -77,7 +80,7 @@ export function getSafeTikTokEmbedUrl(raw: string | null | undefined): string | 
 export function encodeSafeProfileUsername(raw: string | null | undefined): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim().replace(/^@+/, "");
-  if (!trimmed) return null;
+  if (!trimmed || trimmed === "." || trimmed === "..") return null;
   try {
     return encodeURIComponent(trimmed);
   } catch {
