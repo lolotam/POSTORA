@@ -4,7 +4,7 @@ import {
   getSafePlatformPostUrl,
   getSafeTikTokEmbedUrl,
 } from "@/lib/safeExternalUrl";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -17,7 +17,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { ArrowLeft, Mic, Loader2, Sparkles, Copy, Check, Heart, MessageCircle, Eye, Share2, Bookmark, TrendingUp, Image, Video, FileText, ExternalLink, Calendar, Play } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import type { Database, Json } from "@/integrations/supabase/types";
 import { useTranscription } from "@/hooks/useTranscription";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -47,15 +46,6 @@ export default function BrandIntelligencePost() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [contentTab, setContentTab] = useState("captions");
   const [dbRecordId, setDbRecordId] = useState<string | null>(null);
-  const lastAppliedKeyRef = useRef<string | null>(null);
-  const lastSavedKeyRef = useRef<string | null>(null);
-  const inFlightSaveKeyRef = useRef<string | null>(null);
-  const requestedPostKeyRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    requestedPostKeyRef.current = null;
-    resetTranscription();
-  }, [postId, platform, resetTranscription]);
 
   // Redirect if no post data
   useEffect(() => {
@@ -98,65 +88,43 @@ export default function BrandIntelligencePost() {
     loadCached();
   }, [session?.user?.id, postId, platform, post]);
 
-  const upsertContent = useCallback(async (updates: Database["public"]["Tables"]["bi_post_content"]["Update"]): Promise<boolean> => {
-    if (!session?.user?.id || !postId || !post) return false;
-
-    if (dbRecordId) {
-      const { error } = await supabase.from("bi_post_content").update(updates).eq("id", dbRecordId);
-      return !error;
-    } else {
-      const payload: Database["public"]["Tables"]["bi_post_content"]["Insert"] = {
-        user_id: session.user.id,
-        post_id: postId,
-        platform,
-        username: (location.state as { username?: string })?.username || "",
-        post_data: post as unknown as Json,
-        ...updates,
-        updated_at: new Date().toISOString(),
-      };
-      const { data, error } = await supabase.from("bi_post_content").upsert(payload, { onConflict: "user_id,post_id,platform" }).select("id").single();
-      if (data) setDbRecordId(data.id);
-      return !error;
-    }
-  }, [session?.user?.id, postId, platform, post, dbRecordId, location.state]);
-
-  // Sync transcript from hook to state once per distinct (post, transcript) result
+  // Sync transcript from hook to state
   useEffect(() => {
-    const currentPostKey = `${platform}:${postId ?? ""}`;
-    if (!transcript || isTranscribing || requestedPostKeyRef.current !== currentPostKey) return;
-    const syncKey = `${currentPostKey}:${transcript}`;
-
-    if (lastAppliedKeyRef.current !== syncKey) {
-      lastAppliedKeyRef.current = syncKey;
+    if (transcript && !isTranscribing) {
       setEditableTranscript(transcript);
       setCachedTranscript(transcript);
       setCachedLanguage(language);
       setCachedDuration(duration);
+      upsertContent({ transcript, transcript_language: language, transcript_duration: duration });
     }
+  }, [transcript, isTranscribing]);
 
-    if (lastSavedKeyRef.current === syncKey || inFlightSaveKeyRef.current === syncKey) return;
-    inFlightSaveKeyRef.current = syncKey;
-    void upsertContent({ transcript, transcript_language: language, transcript_duration: duration })
-      .then((saved) => {
-        if (saved && requestedPostKeyRef.current === currentPostKey) {
-          lastSavedKeyRef.current = syncKey;
-        }
-      })
-      .finally(() => {
-        if (inFlightSaveKeyRef.current === syncKey) {
-          inFlightSaveKeyRef.current = null;
-        }
-      });
-  }, [transcript, isTranscribing, language, duration, platform, postId, upsertContent]);
+  const upsertContent = useCallback(async (updates: Record<string, unknown>) => {
+    if (!session?.user?.id || !postId || !post) return;
+
+    if (dbRecordId) {
+      await supabase.from("bi_post_content").update(updates as any).eq("id", dbRecordId);
+    } else {
+      const payload = {
+        user_id: session.user.id,
+        post_id: postId,
+        platform,
+        username: (location.state as { username?: string })?.username || "",
+        post_data: post as unknown as Record<string, unknown>,
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
+      const { data } = await supabase.from("bi_post_content").upsert(payload as any, { onConflict: "user_id,post_id,platform" }).select("id").single();
+      if (data) setDbRecordId(data.id);
+    }
+  }, [session?.user?.id, postId, platform, post, dbRecordId, location.state]);
 
   const handleTranscribe = () => {
-    const safeUrl = getSafeHttpsUrl(post?.mediaUrl);
-    if (!safeUrl) {
+    if (!post?.mediaUrl) {
       toast.error(t("errors.noMediaUrl", "No media URL available for transcription"));
       return;
     }
-    requestedPostKeyRef.current = `${platform}:${postId ?? ""}`;
-    transcribe(safeUrl);
+    transcribe(post.mediaUrl);
   };
 
   const handleGenerate = async () => {
