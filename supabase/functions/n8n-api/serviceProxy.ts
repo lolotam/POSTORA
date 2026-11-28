@@ -122,7 +122,7 @@ function fromUpstream(functionName: string, result: InvokeResult): ProxyResult {
     console.error(`[n8n-api] service proxy: ${functionName} answered ${result.status}`);
     return proxyError(502, "UPSTREAM_ERROR", "The Postora service behind this endpoint failed. Please retry shortly.");
   }
-  return { status: result.status, body: redactErrorText(stripCredentialUrls(result.data)) };
+  return { status: result.status, body: redactErrorText(stripCredentialUrls(result.data, result.status >= 400)) };
 }
 
 // AI generations are billed per call and have no idempotency key, so a timeout
@@ -152,21 +152,219 @@ function redactErrorText(data: unknown): unknown {
   return record;
 }
 
+const CREDENTIAL_FIELD_RE = /^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i;
+const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+/i;
+const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
+const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
+
+interface ScopeState {
+  closer: string;
+  empty: boolean;
+  afterDelimiter: boolean;
+  hasSlashStart: boolean;
+  hasRelativeStart: boolean;
+  hasQuestionOrHash: boolean;
+  hasLeadingAmp: boolean;
+  hasSchemeSlash: boolean;
+}
+
+function newScopeState(closer: string): ScopeState {
+  return {
+    closer,
+    empty: true,
+    afterDelimiter: true,
+    hasSlashStart: false,
+    hasRelativeStart: false,
+    hasQuestionOrHash: false,
+    hasLeadingAmp: false,
+    hasSchemeSlash: false,
+  };
+}
+
+function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint8Array; allowAmpersand: Uint8Array } {
+  const n = token.length;
+  const allowQuestionOrHash = new Uint8Array(n);
+  const allowAmpersand = new Uint8Array(n);
+  const stack: ScopeState[] = [newScopeState("")];
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let backtickRunLength = 0;
+
+  for (let i = 0; i < n; i++) {
+    const top = stack[stack.length - 1];
+    const urlForQ = top.empty || top.afterDelimiter || top.hasSlashStart || top.hasRelativeStart || top.hasSchemeSlash;
+    const urlForAmp =
+      top.empty ||
+      top.hasSchemeSlash ||
+      top.hasSlashStart ||
+      top.hasLeadingAmp ||
+      (top.hasQuestionOrHash && (top.hasRelativeStart || top.hasSlashStart || top.hasSchemeSlash));
+    allowQuestionOrHash[i] = urlForQ ? 1 : 0;
+    allowAmpersand[i] = urlForAmp ? 1 : 0;
+
+    const ch = String.fromCodePoint(token.codePointAt(i)!);
+    const inUrl = top.hasSchemeSlash || top.hasSlashStart || top.hasQuestionOrHash || top.hasLeadingAmp;
+    const afterColonQuote = i > 0 && token[i - 1] === ":" && !inUrl;
+    if (ch === "`" && !inSingleQuote && !inDoubleQuote) {
+      let runEnd = i + 1;
+      while (runEnd < n && token[runEnd] === "`") runEnd++;
+      const runLen = runEnd - i;
+      for (let k = i + 1; k < runEnd; k++) {
+        allowQuestionOrHash[k] = urlForQ ? 1 : 0;
+        allowAmpersand[k] = urlForAmp ? 1 : 0;
+      }
+      i = runEnd - 1;
+      if (backtickRunLength > 0) {
+        const continuesQuery =
+          top.hasQuestionOrHash &&
+          runEnd < n &&
+          (token[runEnd] !== ":" || /^[&?#]|^%(?:26|3f|23)/i.test(token.slice(runEnd)));
+        if (runLen === backtickRunLength && !continuesQuery) {
+          backtickRunLength = 0;
+          while (stack.length > 1) {
+            const popped = stack.pop();
+            if (popped && popped.closer === "`") break;
+          }
+        }
+      } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !inUrl) {
+        backtickRunLength = runLen;
+        stack.push(newScopeState("`"));
+      }
+      continue;
+    }
+    if (ch === '"' && !inSingleQuote) {
+      if (inDoubleQuote) {
+        inDoubleQuote = false;
+        if (stack.length > 1 && top.closer === '"') stack.pop();
+      } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !inUrl) {
+        inDoubleQuote = true;
+        stack.push(newScopeState('"'));
+      }
+      continue;
+    }
+    if (ch === "'" && !inDoubleQuote) {
+      if (inSingleQuote) {
+        if (i > 0 && i + 1 < n && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
+          continue;
+        }
+        inSingleQuote = false;
+        if (stack.length > 1 && top.closer === "'") stack.pop();
+      } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !inUrl) {
+        inSingleQuote = true;
+        stack.push(newScopeState("'"));
+      }
+      continue;
+    }
+    if (!inSingleQuote && !inDoubleQuote) {
+      if (ch === "(" || ch === "[" || ch === "<") {
+        const nextScope = newScopeState(ch === "(" ? ")" : ch === "[" ? "]" : ">");
+        if (top.hasQuestionOrHash && (top.hasSchemeSlash || top.hasSlashStart || top.hasRelativeStart)) {
+          nextScope.hasQuestionOrHash = true;
+          nextScope.hasSchemeSlash = top.hasSchemeSlash;
+          nextScope.hasSlashStart = top.hasSlashStart;
+          nextScope.hasRelativeStart = top.hasRelativeStart;
+        }
+        stack.push(nextScope);
+        continue;
+      }
+      if ((ch === ")" || ch === "]" || ch === ">") && stack.length > 1 && top.closer === ch) {
+        stack.pop();
+        continue;
+      }
+    }
+
+    if (ch === "/" && i + 1 < n && token[i + 1] === "/") {
+      top.hasSchemeSlash = true;
+    }
+    const isQ = ch === "?" || ch === "#" || (ch === "%" && /^(?:3f|23)/i.test(token.slice(i + 1, i + 3)));
+    const isAmp = ch === "&" || (ch === "%" && /^26/i.test(token.slice(i + 1, i + 3)));
+    const isPctEscape = ch === "%" && !isQ && !isAmp && /^[0-9a-f]{2}/i.test(token.slice(i + 1, i + 3));
+    if (isQ) {
+      if (top.empty || top.afterDelimiter) top.hasSlashStart = true;
+      top.hasQuestionOrHash = true;
+    } else if (isAmp && top.empty) {
+      top.hasLeadingAmp = true;
+    } else if (top.afterDelimiter) {
+      if (ch === "/") {
+        top.hasSlashStart = true;
+      } else if (isPctEscape || /[\p{L}\p{N}._~@!$&*+,'=-]/u.test(ch)) {
+        top.hasRelativeStart = true;
+      }
+    }
+
+    top.empty = false;
+    top.afterDelimiter = ch === "," || ch === ";" || ch === "=";
+  }
+
+  return { allowQuestionOrHash, allowAmpersand };
+}
+
+function tokenHasCredentialQuery(token: string): boolean {
+  const paramGlobalRe = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)(?=\S)/gi;
+  let flags: { allowQuestionOrHash: Uint8Array; allowAmpersand: Uint8Array } | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = paramGlobalRe.exec(token)) !== null) {
+    if (!flags) flags = computeTokenUrlContextFlags(token);
+    const delimiter = match[0].startsWith("%") ? match[0].slice(0, 3).toLowerCase() : match[0][0];
+    const isQuestionOrHash = delimiter === "?" || delimiter === "#" || delimiter === "%3f" || delimiter === "%23";
+    if (isQuestionOrHash ? flags.allowQuestionOrHash[match.index] === 1 : flags.allowAmpersand[match.index] === 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasCredentialQuery(value: string): boolean {
+  if (!CREDENTIAL_PARAM_RE.test(value)) return false;
+  for (const token of value.split(/\s+/)) {
+    if (token && tokenHasCredentialQuery(token)) return true;
+  }
+  return false;
+}
+
+function hasFailureValue(value: unknown): boolean {
+  if (value === undefined || value === null || value === false || value === "") return false;
+  if (Array.isArray(value)) return value.some(hasFailureValue);
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>).some(
+      ([k, v]) => !/^(?:success|ok)$/i.test(k) && hasFailureValue(v),
+    );
+  }
+  return true;
+}
+
+function isFailureRecord(record: Record<string, unknown>): boolean {
+  for (const key of ["error", "errors", "error_code", "errorCode", "error_type", "errorType", "error_message", "errorMessage", "reason_code", "reasonCode"]) {
+    if (hasFailureValue(record[key])) return true;
+  }
+  return record.success === false || record.ok === false;
+}
+
 // Graph pagination URLs (paging.next / paging.previous) embed the connected
 // account's access_token, so they never leave the proxy; the opaque cursors
-// stay. Any other string that still carries an access_token is dropped too.
-export function stripCredentialUrls(value: unknown): unknown {
-  if (typeof value === "string") return /(?:access_token|refresh_token|api_key|service_role_key|cron_secret)=/i.test(value) ? null : value;
-  if (Array.isArray(value)) return value.map(stripCredentialUrls);
+// stay. Any URL/query string carrying a credential parameter is dropped, and
+// diagnostic envelopes (including nested children) also strip bare credential
+// assignments while ordinary content fields preserve benign prose.
+export function stripCredentialUrls(value: unknown, inDiagnosticContext = false): unknown {
+  if (typeof value === "string") {
+    if (hasCredentialQuery(value)) return null;
+    if (inDiagnosticContext && CREDENTIAL_DIAGNOSTIC_RE.test(value)) return null;
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item) => stripCredentialUrls(item, inDiagnosticContext));
   if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const failureEnvelope = isFailureRecord(record);
   const out: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (/^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i.test(key)) continue;
+  for (const [key, child] of Object.entries(record)) {
+    if (CREDENTIAL_FIELD_RE.test(key)) continue;
+    const isDirectErrorField = DIAGNOSTIC_KEY_RE.test(key) && hasFailureValue(child);
+    const childDiagnostic = inDiagnosticContext || isDirectErrorField || (failureEnvelope && /^message$/i.test(key));
     if (key === "paging" && child && typeof child === "object" && !Array.isArray(child)) {
       const { next: _next, previous: _previous, ...rest } = child as Record<string, unknown>;
-      out[key] = stripCredentialUrls(rest);
+      out[key] = stripCredentialUrls(rest, childDiagnostic);
     } else {
-      out[key] = stripCredentialUrls(child);
+      out[key] = stripCredentialUrls(child, childDiagnostic);
     }
   }
   return out;

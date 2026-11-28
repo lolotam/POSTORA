@@ -115,7 +115,10 @@ Deno.test("one platform backoff preserves its retry and permits the other platfo
       else if (name === "reserve_fb_analytics_capture") data = { capture_id: "c6000000-0000-4000-8000-000000000001", capture_sequence: 1, job_id: active.job_id, job_generation: 1,
         kind: "account_day", subject_id: "772001", metric_date: "2026-10-31", since: "2026-10-31T07:00:00Z", until: "2026-11-01T07:00:00Z", timezone: "America/Los_Angeles" };
       else if (name === "read_meta_analytics_provider_throttle") data = { usage_percent: 90, throttled_until: retryAt };
-      else if (name === "record_instagram_provider_throttle_http") data = { bucket_key: args.p_bucket_key, usage_percent: args.p_usage_percent, throttled_until: args.p_throttled_until, job_id: null };
+      else if (name === "record_instagram_provider_throttle_http") {
+        assertEquals(args.p_usage_percent, 90);
+        data = { bucket_key: args.p_bucket_key, usage_percent: args.p_usage_percent, throttled_until: args.p_throttled_until, job_id: null };
+      }
       else if (name.endsWith("_analytics_collection_job")) {
         completed.push(`${active.platform}:${args.p_outcome}`);
         if (active.platform === "facebook") assertEquals(args.p_retry_at, retryAt);
@@ -200,7 +203,11 @@ Deno.test("app usage stops another account and survives credential rotation", as
     return { data: persisted, error: null };
   }, deadline);
   const bucket = await collectionBucketKey(job, "770001");
-  await new CollectionThrottle(store, bucket, deadline).afterResponse(200, new Headers({ "x-app-usage": '{"call_count":85}' }));
+  const throttle = new CollectionThrottle(store, bucket, deadline);
+  await throttle.afterResponse(200, new Headers({ "x-app-usage": '{"call_count":85}' }));
+  const retryAt = new Date(Date.now() + 180_000).toISOString();
+  assertEquals(await throttle.refuse(retryAt), retryAt);
+  assertEquals(persisted, { usage_percent: 85, throttled_until: retryAt });
   for (const authority of [{ platform_user_id: "773002", credential_generation: 1, token_expires_at: null },
     { platform_user_id: "773001", credential_generation: 2, token_expires_at: null }]) {
     const nextBucket = await collectionBucketKey({ ...job, authority }, "770001");
