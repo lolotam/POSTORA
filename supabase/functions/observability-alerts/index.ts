@@ -60,7 +60,7 @@ function formatSilentConnectionRow(conn: SilentStoreConnection): string {
   const accountId = escapeHtml(String(conn.social_account_id ?? "unknown"));
   const bindingId = escapeHtml(conn.binding_id ? String(conn.binding_id) : "deleted");
   const lastDelivery = conn.last_delivery_at ? escapeHtml(String(conn.last_delivery_at)) : "unknown";
-  return `<li style="margin-bottom: 6px; font-family: monospace; font-size: 12px;">Connector: ${connectorId} &bull; Last delivery account: ${accountId} &bull; Current binding: ${bindingId} &bull; Last delivery: ${lastDelivery}</li>`;
+  return `<li style="margin-bottom: 6px; font-family: monospace; font-size: 12px;">Connector: ${connectorId} &bull; Last delivery account: ${accountId} &bull; Binding at alert time: ${bindingId} &bull; Last delivery: ${lastDelivery}</li>`;
 }
 
 export function renderSilentConnectionsEmailHtml(silentConnections: unknown): string {

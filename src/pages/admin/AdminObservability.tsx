@@ -857,7 +857,7 @@ export default function AdminObservability() {
                                         <span>•</span>
                                         <span>Last delivery account: {conn.social_account_id ?? "unknown"}</span>
                                         <span>•</span>
-                                        <span>Current binding: {conn.binding_id ?? "deleted"}</span>
+                                        <span>Binding at alert time: {conn.binding_id ?? "deleted"}</span>
                                         {conn.last_delivery_at && (
                                           <>
                                             <span>•</span>
