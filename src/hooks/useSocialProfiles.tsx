@@ -201,7 +201,7 @@ export function useDisconnectAccountFromProfile() {
     mutationFn: async (accountId: string) => {
       const { data: account, error: lookupError } = await supabase
         .from("social_accounts")
-        .select("platform, auth_provider")
+        .select("platform, auth_provider, connection_mode")
         .eq("id", accountId)
         .maybeSingle();
       if (lookupError) throw lookupError;
@@ -231,13 +231,20 @@ export function useDisconnectAccountFromProfile() {
           ));
         }
       }
-      if (account?.platform === "whatsapp") {
-        // Run Evolution QR remote logout and WhatsApp cleanup before removing the row.
-        const { error: revokeError } = await supabase.functions.invoke("whatsapp-oauth", {
+      if (account?.platform === "whatsapp" && account.connection_mode === "evolution_qr") {
+        // Fail closed for Evolution QR teardown so workspace authorization and local deactivation
+        // commit before the account row is removed; remote logout failures inside whatsapp-oauth
+        // still succeed with warnings.
+        const { data: disconnectData, error: revokeError } = await supabase.functions.invoke("whatsapp-oauth", {
           body: { action: "disconnect", social_account_id: accountId },
         });
-        // Best effort, like TikTok/Meta: removing the account must not depend on Evolution being reachable.
-        if (revokeError) console.warn("WhatsApp disconnect before account removal failed:", revokeError);
+        if (revokeError || !disconnectData?.success) {
+          throw new Error(await readInvokeErrorMessage(
+            disconnectData,
+            revokeError,
+            "Failed to disconnect WhatsApp account. Please try again.",
+          ));
+        }
       }
 
       // Remove account-scoped connectors first so ai_agent_tools_account_same_owner_platform does not block social_accounts deletion.

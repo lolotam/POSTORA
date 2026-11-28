@@ -34,7 +34,7 @@ describe("useDisconnectAccountFromProfile — Issue #253 (WhatsApp disconnect & 
   let accountDeleteEq: Mock;
 
   const mockTables = (
-    accountRow: { platform: string; auth_provider?: string } | null,
+    accountRow: { platform: string; auth_provider?: string; connection_mode?: string | null } | null,
     toolsError: Error | null = null,
     accountDeleteError: Error | null = null,
   ) => {
@@ -68,8 +68,8 @@ describe("useDisconnectAccountFromProfile — Issue #253 (WhatsApp disconnect & 
     vi.clearAllMocks();
   });
 
-  it("calls whatsapp-oauth disconnect before deleting ai_agent_tools and social_accounts for a WhatsApp account", async () => {
-    mockTables({ platform: "whatsapp" });
+  it("calls whatsapp-oauth disconnect before deleting ai_agent_tools and social_accounts for an Evolution QR WhatsApp account", async () => {
+    mockTables({ platform: "whatsapp", connection_mode: "evolution_qr" });
     invoke.mockResolvedValue({ data: { success: true }, error: null });
 
     const { result } = renderHook(() => useDisconnectAccountFromProfile(), {
@@ -90,22 +90,33 @@ describe("useDisconnectAccountFromProfile — Issue #253 (WhatsApp disconnect & 
     );
   });
 
-  it("still deletes ai_agent_tools and social_accounts when whatsapp-oauth disconnect fails best-effort", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    mockTables({ platform: "whatsapp" });
-    invoke.mockResolvedValue({ data: null, error: new Error("Evolution unreachable") });
+  it("aborts deletion when whatsapp-oauth disconnect fails for an Evolution QR account", async () => {
+    mockTables({ platform: "whatsapp", connection_mode: "evolution_qr" });
+    invoke.mockResolvedValue({ data: null, error: new Error("Not authorized to disconnect") });
 
     const { result } = renderHook(() => useDisconnectAccountFromProfile(), {
       wrapper: createWrapper(),
     });
-    await result.current.mutateAsync("acc-wa-2");
+    await expect(result.current.mutateAsync("acc-wa-2")).rejects.toThrow("Not authorized to disconnect");
 
     expect(invoke).toHaveBeenCalledWith("whatsapp-oauth", {
       body: { action: "disconnect", social_account_id: "acc-wa-2" },
     });
-    expect(toolsDeleteEq).toHaveBeenCalledWith("social_account_id", "acc-wa-2");
-    expect(accountDeleteEq).toHaveBeenCalledWith("id", "acc-wa-2");
-    warnSpy.mockRestore();
+    expect(toolsDeleteEq).not.toHaveBeenCalled();
+    expect(accountDeleteEq).not.toHaveBeenCalled();
+  });
+
+  it("does not call whatsapp-oauth disconnect for Meta-hosted WhatsApp accounts so sibling WABA numbers stay subscribed", async () => {
+    mockTables({ platform: "whatsapp", connection_mode: "coexistence" });
+
+    const { result } = renderHook(() => useDisconnectAccountFromProfile(), {
+      wrapper: createWrapper(),
+    });
+    await result.current.mutateAsync("acc-wa-meta");
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(toolsDeleteEq).toHaveBeenCalledWith("social_account_id", "acc-wa-meta");
+    expect(accountDeleteEq).toHaveBeenCalledWith("id", "acc-wa-meta");
   });
 
   it("aborts and rejects without deleting social_accounts when ai_agent_tools deletion fails", async () => {
