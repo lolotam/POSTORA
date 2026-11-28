@@ -179,26 +179,28 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
   return { span: token.slice(start, i), end: i };
 }
 
-function hasBalancedRelativePathQuery(token: string, start: number): boolean {
+function scanBalancedRelativePathQuery(token: string, start: number): { matched: boolean; resumeAt: number; isScheme: boolean } {
   let depth = 0;
   for (let i = start; i < token.length; i++) {
     const ch = token[i];
     if (ch === "(") {
       depth++;
     } else if (ch === ")") {
-      if (depth === 0) return false;
+      if (depth === 0) return { matched: false, resumeAt: i, isScheme: false };
       depth--;
     } else if (depth === 0 && (ch === "?" || ch === "#")) {
-      return true;
+      return { matched: true, resumeAt: i, isScheme: false };
+    } else if (ch === ":" && token.slice(i, i + 3) === "://") {
+      return { matched: false, resumeAt: i, isScheme: depth === 0 && /^[a-z][a-z0-9+.-]*$/i.test(token.slice(start, i)) };
     } else if (ch === "%") {
       const code = token.slice(i + 1, i + 3).toLowerCase();
-      if (code === "3f" || code === "23") return depth === 0;
-      if (code === "26") return false;
+      if (code === "3f" || code === "23") return { matched: depth === 0, resumeAt: i, isScheme: false };
+      if (code === "26") return { matched: false, resumeAt: i, isScheme: false };
     } else if (ch === "&" || ch === '"' || ch === "'" || ch === "[" || ch === "]" || ch === "<" || ch === ">") {
-      return false;
+      return { matched: false, resumeAt: i, isScheme: false };
     }
   }
-  return false;
+  return { matched: false, resumeAt: token.length, isScheme: false };
 }
 
 function tokenHasCredentialQuery(token: string): boolean {
@@ -208,7 +210,13 @@ function tokenHasCredentialQuery(token: string): boolean {
   while ((match = startRe.exec(token)) !== null) {
     const marker = match[1] ?? match[2] ?? match[3] ?? match[4];
     const spanStart = match[1] ? match.index : match.index + match[0].length - marker.length;
-    if (match[3] && !hasBalancedRelativePathQuery(token, spanStart)) continue;
+    if (match[3]) {
+      const probe = scanBalancedRelativePathQuery(token, spanStart);
+      if (!probe.matched && !probe.isScheme) {
+        startRe.lastIndex = Math.max(spanStart + 1, probe.resumeAt);
+        continue;
+      }
+    }
     const { span, end } = boundedUrlSpan(token, spanStart);
     if (CREDENTIAL_PARAM_RE.test(span)) return true;
     startRe.lastIndex = Math.max(spanStart + 1, end);
