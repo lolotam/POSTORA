@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertCircle, CheckCircle2, Loader2, Sparkles, Wrench } from "lucide-react";
+import { handleAIError } from "@/lib/aiErrorHandler";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,6 +64,7 @@ export function YouTubePackagingScoreCard({
   useEffect(() => {
     requestIdRef.current += 1;
     setIsLoading(false);
+    setScore(null);
     setErrorMessage(null);
   }, [title, description]);
 
@@ -222,8 +224,9 @@ export function YouTubePackagingScoreCard({
       });
       if (!isMountedRef.current || requestIdRef.current !== requestId) return;
       setScore(nextScore);
-    } catch {
+    } catch (error) {
       if (!isMountedRef.current || requestIdRef.current !== requestId) return;
+      handleAIError(error, "YouTube Packaging Score");
       setErrorMessage(labels.errorFallback);
     } finally {
       if (isMountedRef.current && requestIdRef.current === requestId) {
@@ -279,7 +282,13 @@ export function YouTubePackagingScoreCard({
           id={thumbnailInputId}
           data-testid="youtube-packaging-thumbnail-text"
           value={thumbnailText}
-          onChange={(e) => setThumbnailText(e.target.value.slice(0, 300))}
+          onChange={(e) => {
+            requestIdRef.current += 1;
+            setIsLoading(false);
+            setScore(null);
+            setErrorMessage(null);
+            setThumbnailText(e.target.value.slice(0, 300));
+          }}
           maxLength={300}
           disabled={disabled || isLoading}
           placeholder={labels.thumbnailPlaceholder}
@@ -290,7 +299,13 @@ export function YouTubePackagingScoreCard({
       <div className="flex flex-wrap items-center gap-2">
         <Select
           value={language}
-          onValueChange={(value) => setLanguage(value as "english" | "arabic")}
+          onValueChange={(value) => {
+            requestIdRef.current += 1;
+            setIsLoading(false);
+            setScore(null);
+            setErrorMessage(null);
+            setLanguage(value as "english" | "arabic");
+          }}
           disabled={disabled || isLoading}
         >
           <SelectTrigger className="h-8 w-28 text-xs">

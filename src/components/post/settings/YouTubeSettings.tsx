@@ -1154,9 +1154,18 @@ export function YouTubeSettings({
           onSelect={(val) => onSettingsChange({ title: val })}
         />
         <YouTubePackagingScoreCard
-          title={settings.title || ""}
+          title={
+            settings.title?.trim()
+              ? settings.title
+              : resolveYouTubeVideoTitle({
+                  title: settings.title,
+                  caption,
+                  videoType: settings.videoType,
+                  fallback: "",
+                })
+          }
           description={settings.description || ""}
-          requestScore={requestYouTubePackagingScore}
+          requestScore={(params) => requestYouTubePackagingScore({ ...params, notifyOnError: false })}
           onApplyTitle={(newTitle) => onSettingsChange({ title: newTitle })}
         />
       </div>

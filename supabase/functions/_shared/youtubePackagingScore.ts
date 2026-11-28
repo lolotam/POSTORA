@@ -56,7 +56,7 @@ export function scoreMobileLength(title: string): number {
   if (trimmed.length === 0) return 0;
   if (trimmed.length <= 60) return 100;
   if (trimmed.length >= 100) return 0;
-  return Math.round(((100 - trimmed.length) / 40) * 100);
+  return Math.round(((100 - trimmed.length) * 100) / 40);
 }
 
 export function validatePackagingModelOutput(
@@ -123,7 +123,14 @@ export function validatePackagingModelOutput(
     if (typeof item !== "string") {
       return { ok: false, reason: "bad_title" };
     }
-    if (item.includes("\r") || item.includes("\n") || item.includes("<") || item.includes(">")) {
+    if (
+      item.includes("\r") ||
+      item.includes("\n") ||
+      item.includes("\u2028") ||
+      item.includes("\u2029") ||
+      item.includes("<") ||
+      item.includes(">")
+    ) {
       return { ok: false, reason: "bad_title" };
     }
     const cleaned = stripControlCharacters(item).trim();

@@ -10,6 +10,7 @@ Deno.test("scoreMobileLength scores boundaries deterministically", () => {
   assertEquals(scoreMobileLength("Short title"), 100);
   assertEquals(scoreMobileLength("x".repeat(60)), 100);
   assertEquals(scoreMobileLength(`  ${"x".repeat(60)}  `), 100);
+  assertEquals(scoreMobileLength("x".repeat(77)), 58);
   assertEquals(scoreMobileLength("x".repeat(80)), 50);
   assertEquals(scoreMobileLength("x".repeat(95)), 13);
   assertEquals(scoreMobileLength("x".repeat(100)), 0);
@@ -175,8 +176,17 @@ Deno.test("validatePackagingModelOutput rejects invalid better_titles", () => {
     { ok: false, reason: "bad_title" },
   );
 
-  // Over 100 chars, empty, multiline, or angle brackets
-  for (const badTitle of ["x".repeat(101), "   ", "Line 1\nLine 2", "Line 1\rLine 2", "Bad <script> Title", "Title > 10"]) {
+  // Over 100 chars, empty, multiline (including Unicode U+2028 / U+2029), or angle brackets
+  for (const badTitle of [
+    "x".repeat(101),
+    "   ",
+    "Line 1\nLine 2",
+    "Line 1\rLine 2",
+    "Line 1\u2028Line 2",
+    "Line 1\u2029Line 2",
+    "Bad <script> Title",
+    "Title > 10",
+  ]) {
     assertEquals(
       validatePackagingModelOutput(
         { ...validBase, better_titles: [badTitle, "Second Title", "Third Title"] },

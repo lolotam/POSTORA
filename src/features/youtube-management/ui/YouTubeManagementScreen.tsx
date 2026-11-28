@@ -33,7 +33,7 @@ import { YouTubeVideoLibrary } from "./YouTubeVideoLibrary";
 import { YouTubeVideoDrawer } from "./YouTubeVideoDrawer";
 
 const defaultYouTubePackagingScoreGateway: YouTubePackagingScoreGateway = {
-  scorePackaging: (params) => requestYouTubePackagingScore(params),
+  scorePackaging: (params) => requestYouTubePackagingScore({ ...params, notifyOnError: false }),
 };
 
 export interface YouTubeManagementScreenProps {

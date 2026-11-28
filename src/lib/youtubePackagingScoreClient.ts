@@ -9,6 +9,7 @@ export interface RequestYouTubePackagingScoreInput {
   thumbnailText?: string;
   description?: string;
   language?: "english" | "arabic";
+  notifyOnError?: boolean;
 }
 
 function isScoreNumber(value: unknown): value is number {
@@ -93,12 +94,16 @@ export async function requestYouTubePackagingScore(
     },
   });
 
+  const notifyOnError = input.notifyOnError ?? true;
+
   if (error) {
-    const status = getErrorStatus(error);
-    if (status !== undefined) {
-      handleAIError({ status, message: error.message }, "YouTube Packaging Score");
-    } else {
-      handleAIError(error, "YouTube Packaging Score");
+    if (notifyOnError) {
+      const status = getErrorStatus(error);
+      if (status !== undefined) {
+        handleAIError({ status, message: error.message }, "YouTube Packaging Score");
+      } else {
+        handleAIError(error, "YouTube Packaging Score");
+      }
     }
     throw error;
   }
@@ -110,14 +115,18 @@ export async function requestYouTubePackagingScore(
       (typeof record.error === "string" && record.error) ||
       "Failed to score packaging";
     const err = new Error(message);
-    handleAIError(err, "YouTube Packaging Score");
+    if (notifyOnError) {
+      handleAIError(err, "YouTube Packaging Score");
+    }
     throw err;
   }
 
   const score = record?.score;
   if (!isValidPackagingScore(score)) {
     const err = new Error("Invalid packaging score response");
-    handleAIError(err, "YouTube Packaging Score");
+    if (notifyOnError) {
+      handleAIError(err, "YouTube Packaging Score");
+    }
     throw err;
   }
 
