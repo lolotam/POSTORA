@@ -590,7 +590,7 @@ describe("YouTube resources gateway — createPlaylist", () => {
         description: "Notes",
         privacy_status: "private",
       },
-      timeout: 15000,
+      timeout: 25000,
     });
     expect(received.data.playlist).toEqual(validPlaylist);
 
@@ -607,7 +607,7 @@ describe("YouTube resources gateway — createPlaylist", () => {
         title: "New Playlist",
         privacy_status: "unlisted",
       },
-      timeout: 15000,
+      timeout: 25000,
     });
   });
 

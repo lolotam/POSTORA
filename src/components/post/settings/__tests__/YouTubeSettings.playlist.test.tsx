@@ -516,4 +516,95 @@ describe("YouTubeSettings playlist selector", () => {
     expect(playlistCatalog.createPlaylist).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).not.toHaveBeenCalled();
   });
+
+  it("displays the rate-limited message with wait time when createPlaylist returns rate_limited", async () => {
+    playlistCatalog.createPlaylist.mockResolvedValueOnce({
+      outcome: "rate_limited",
+      retryAfterSeconds: 1800,
+    });
+
+    renderSettings({}, [nativeAccount("account-1", "UC_1")]);
+
+    fireEvent.click(screen.getByTestId("youtube-new-playlist-button"));
+    const dialog = screen.getByTestId("youtube-new-playlist-dialog");
+    fireEvent.change(within(dialog).getByLabelText("Playlist title"), {
+      target: { value: "Sixth Playlist" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Playlist privacy"), {
+      target: { value: "private" },
+    });
+    fireEvent.click(within(dialog).getByTestId("youtube-new-playlist-submit"));
+
+    await waitFor(() =>
+      expect(within(dialog).getByTestId("youtube-new-playlist-error")).toHaveTextContent(
+        "Playlist creation is rate-limited (up to 5 new playlists per 24 hours). Try again in 30 minutes.",
+      ),
+    );
+  });
+
+  it("does not select the old channel's playlist on the new channel when switching channels while createPlaylist is pending", async () => {
+    let resolveCreate!: (value: unknown) => void;
+    playlistCatalog.createPlaylist.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveCreate = res;
+        }),
+    );
+
+    const onSettingsChange = vi.fn();
+    function SwitchWhileCreatingHarness({ accounts }: { accounts: TestAccount[] }) {
+      const [settings, setSettings] = useState<YouTubeSettingsState>(BASE_SETTINGS);
+      return (
+        <YouTubeSettings
+          settings={settings}
+          onSettingsChange={(changes) => {
+            onSettingsChange(changes);
+            setSettings((current) => ({ ...current, ...changes }));
+          }}
+          hasVideo={false}
+          autoThumbnails={[]}
+          selectedAutoThumbnail={null}
+          onSelectAutoThumbnail={vi.fn()}
+          onGenerateAutoThumbnails={vi.fn()}
+          aiGeneratedThumbnails={[]}
+          onGenerateAiThumbnail={vi.fn()}
+          isGeneratingAiThumbnail={false}
+          onDownloadThumbnail={vi.fn()}
+          selectedAccounts={accounts}
+        />
+      );
+    }
+
+    const { rerender } = render(
+      <SwitchWhileCreatingHarness accounts={[nativeAccount("account-1", "UC_1")]} />,
+    );
+
+    fireEvent.click(screen.getByTestId("youtube-new-playlist-button"));
+    const dialog = screen.getByTestId("youtube-new-playlist-dialog");
+    fireEvent.change(within(dialog).getByLabelText("Playlist title"), {
+      target: { value: "Channel 1 Playlist" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Playlist privacy"), {
+      target: { value: "private" },
+    });
+    fireEvent.click(within(dialog).getByTestId("youtube-new-playlist-submit"));
+    expect(playlistCatalog.createPlaylist).toHaveBeenCalledTimes(1);
+
+    // Switch to channel 2 while createPlaylist is still pending
+    rerender(<SwitchWhileCreatingHarness accounts={[nativeAccount("account-2", "UC_2")]} />);
+    expect(screen.queryByTestId("youtube-new-playlist-dialog")).toBeNull();
+
+    resolveCreate({
+      outcome: "created",
+      playlist: {
+        id: "PL_FROM_CHANNEL_1",
+        title: "Channel 1 Playlist",
+        privacy_status: "private",
+        thumbnail_url: null,
+      },
+    });
+
+    await waitFor(() => expect(playlistCatalog.createPlaylist).toHaveBeenCalledTimes(1));
+    expect(onSettingsChange).not.toHaveBeenCalledWith({ playlist: "PL_FROM_CHANNEL_1" });
+  });
 });

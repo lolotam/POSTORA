@@ -263,8 +263,8 @@ const GoogleApiDisclosure = () => {
                         <li>
                           <strong>Create a new playlist on your channel when you explicitly ask</strong> in Create Post
                           (<code className="bg-muted px-1 rounded">playlists.insert</code>, with the title, optional
-                          description and privacy setting you choose, capped at 5 new playlists per 24 hours for your
-                          account), and <strong>add a newly uploaded video to an existing playlist</strong> on your channel when you
+                          description and privacy setting you choose, capped at 5 playlist creation attempts per user
+                          per 24 hours across your connected channels), and <strong>add a newly uploaded video to an existing playlist</strong> on your channel when you
                           select one in Create Post (
                           <code className="bg-muted px-1 rounded">playlistItems.insert</code>). Postora does not
                           rename, reorder, or delete playlists, and does not remove items from a playlist.

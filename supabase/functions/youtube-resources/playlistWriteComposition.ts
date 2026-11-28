@@ -199,7 +199,7 @@ export function createYouTubePlaylistWritePort(
       if (!budget.ok) {
         return {
           ok: false,
-          code: budget.code,
+          code: "quota_exceeded",
           ...(budget.retryAfterSeconds !== undefined
             ? { retryAfterSeconds: budget.retryAfterSeconds }
             : {}),

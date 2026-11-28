@@ -10,7 +10,7 @@ import {
 const USER_ID = "0ee00001-0000-4000-8000-000000000001";
 const ACCOUNT_ID = "0ee20001-0000-4000-8000-000000000021";
 const CHANNEL_ID = "UCfixturechannel000000001";
-const BOUND_BEARER = "bound-fixture-123";
+const BOUND_BEARER = "yt-access";
 const PLAYLIST_ID = "PLfixtureplaylist001";
 
 function makeAccount(overrides: Partial<YouTubeResourceAccount> = {}): YouTubeResourceAccount {
@@ -22,7 +22,7 @@ function makeAccount(overrides: Partial<YouTubeResourceAccount> = {}): YouTubeRe
     authProvider: null,
     needsReauth: false,
     accessToken: BOUND_BEARER,
-    refreshToken: "refresh-fixture-123",
+    refreshToken: "yt-refresh",
     tokenExpiresAt: "2026-12-01T00:00:00Z",
     accountMetadata: {
       granted_scopes: [YOUTUBE_SCOPE.readonly, YOUTUBE_SCOPE.force_ssl],
@@ -248,7 +248,7 @@ Deno.test("step 4: createPlaylist refuses on counter limit with retryAfterSecond
   assertEquals(harness.requests.length, 0);
 });
 
-Deno.test("step 5: createPlaylist refuses on budget exhaustion with zero token, stillBound, or provider calls", async () => {
+Deno.test("step 5: createPlaylist refuses on budget exhaustion or unreadable budget with quota_exceeded and zero token, stillBound, or provider calls", async () => {
   const harness = makeHarness({
     budgetResult: { ok: false, code: "quota_exceeded", retryAfterSeconds: 900 },
   });
@@ -262,6 +262,20 @@ Deno.test("step 5: createPlaylist refuses on budget exhaustion with zero token, 
   assertEquals(harness.order, ["counter", "debit:50"]);
   assertEquals(harness.debits, [50]);
   assertEquals(harness.requests.length, 0);
+
+  const unreadableBudget = makeHarness({
+    budgetResult: { ok: false, code: "upstream_unavailable" },
+  });
+  const unreadableResult = await unreadableBudget.port.createPlaylist({
+    account: makeAccount(),
+    userId: USER_ID,
+    title: "Tutorials",
+    privacyStatus: "private",
+  });
+  assertEquals(unreadableResult, { ok: false, code: "quota_exceeded" });
+  assertEquals(unreadableBudget.order, ["counter", "debit:50"]);
+  assertEquals(unreadableBudget.debits, [50]);
+  assertEquals(unreadableBudget.requests.length, 0);
 });
 
 Deno.test("step 6: createPlaylist refuses on token failure or stillBound=false with zero provider calls", async () => {

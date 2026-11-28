@@ -8,6 +8,7 @@ import type {
 
 export type YouTubeCreatePlaylistOutcome =
   | { outcome: "created"; playlist: YouTubePlaylistListItem }
+  | { outcome: "aborted" }
   | {
       outcome:
         | "outcome_unknown"
@@ -79,10 +80,23 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   const cursorRef = useRef<string | null>(null);
   const loadingMoreRef = useRef(false);
   const creatingRef = useRef(false);
+  const createSeqRef = useRef(0);
+  const activeCreateAccountRef = useRef<string | null>(null);
+  const accountIdRef = useRef<string | null>(accountId ?? null);
+  accountIdRef.current = accountId ?? null;
   // Every read belongs to a generation. A page that arrives after the account
   // changed belongs to an older generation and may not write into the list
   // the newer generation owns.
   const generationRef = useRef(0);
+
+  useEffect(() => {
+    if (activeCreateAccountRef.current !== (accountId ?? null)) {
+      createSeqRef.current += 1;
+      activeCreateAccountRef.current = null;
+      creatingRef.current = false;
+      setCreating(false);
+    }
+  }, [accountId]);
 
   const capabilitiesGenerationRef = useRef(0);
   useEffect(() => {
@@ -223,10 +237,15 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   }, []);
 
   const refreshPlaylistsInPlace = useCallback(
-    async (targetAccountId: string, generation: number, mustInclude?: YouTubePlaylistListItem) => {
+    async (targetAccountId: string, mustInclude?: YouTubePlaylistListItem) => {
+      const refreshGen = generationRef.current + 1;
+      generationRef.current = refreshGen;
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+      setLoading(false);
       try {
         const result = await gateway.listPlaylists({ accountId: targetAccountId });
-        if (generationRef.current !== generation) return;
+        if (generationRef.current !== refreshGen) return;
         const items = result.data.items;
         const merged =
           mustInclude && !items.some((item) => item.id === mustInclude.id)
@@ -237,7 +256,9 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
         setNextPageToken(result.data.next_page_token);
         setUnavailable(false);
       } catch {
-        // Keep existing playlists if the post-create refresh fails.
+        if (generationRef.current !== refreshGen) return;
+        // Keep existing playlists (including mustInclude if prepended) and surface retry UI.
+        setUnavailable(true);
       }
     },
     [],
@@ -252,33 +273,44 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
       if (!accountId || typeof gateway.createPlaylist !== "function" || creatingRef.current) {
         return { outcome: "failed" };
       }
-      const generation = generationRef.current;
+      const targetAccountId = accountId;
+      const createSeq = createSeqRef.current + 1;
+      createSeqRef.current = createSeq;
+      activeCreateAccountRef.current = targetAccountId;
       creatingRef.current = true;
       setCreating(true);
       try {
         const result = await gateway.createPlaylist({
-          accountId,
+          accountId: targetAccountId,
           title: input.title,
           ...(input.description !== undefined ? { description: input.description } : {}),
           privacyStatus: input.privacyStatus,
         });
+        if (createSeqRef.current !== createSeq || accountIdRef.current !== targetAccountId) {
+          return { outcome: "aborted" };
+        }
         const created = result.data.playlist;
-        if (generationRef.current === generation) {
-          setPlaylists((current) =>
-            current.some((item) => item.id === created.id) ? current : [created, ...current],
-          );
-          await refreshPlaylistsInPlace(accountId, generation, created);
+        setPlaylists((current) =>
+          current.some((item) => item.id === created.id) ? current : [created, ...current],
+        );
+        await refreshPlaylistsInPlace(targetAccountId, created);
+        if (createSeqRef.current !== createSeq || accountIdRef.current !== targetAccountId) {
+          return { outcome: "aborted" };
         }
         return { outcome: "created", playlist: created };
       } catch (error) {
+        if (createSeqRef.current !== createSeq || accountIdRef.current !== targetAccountId) {
+          return { outcome: "aborted" };
+        }
         const code = error instanceof YouTubeResourceError ? error.code : null;
         const retryAfterSeconds =
           error instanceof YouTubeResourceError && error.retryAfterSeconds !== null
             ? error.retryAfterSeconds
             : undefined;
         if (code === "outcome_unknown") {
-          if (generationRef.current === generation) {
-            await refreshPlaylistsInPlace(accountId, generation);
+          await refreshPlaylistsInPlace(targetAccountId);
+          if (createSeqRef.current !== createSeq || accountIdRef.current !== targetAccountId) {
+            return { outcome: "aborted" };
           }
           return { outcome: "outcome_unknown" };
         }
@@ -296,8 +328,9 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
         }
         return { outcome: "failed" };
       } finally {
-        creatingRef.current = false;
-        if (generationRef.current === generation) {
+        if (createSeqRef.current === createSeq) {
+          activeCreateAccountRef.current = null;
+          creatingRef.current = false;
           setCreating(false);
         }
       }

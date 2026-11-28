@@ -314,8 +314,12 @@ export function YouTubeSettings({
   const [newPlaylistPrivacy, setNewPlaylistPrivacy] = useState<"" | "public" | "unlisted" | "private">("");
   const [newPlaylistDialogError, setNewPlaylistDialogError] = useState<string | null>(null);
   const [playlistOutcomeUnknownNotice, setPlaylistOutcomeUnknownNotice] = useState(false);
+  const latestPlaylistAccountIdRef = useRef<string | null>(playlistAccountId);
+  latestPlaylistAccountIdRef.current = playlistAccountId;
+  const createDialogSessionRef = useRef(0);
 
   useEffect(() => {
+    createDialogSessionRef.current += 1;
     setPlaylistOutcomeUnknownNotice(false);
     setNewPlaylistDialogOpen(false);
     setNewPlaylistTitle("");
@@ -333,6 +337,7 @@ export function YouTubeSettings({
 
   const openNewPlaylistDialog = () => {
     if (!canCreatePlaylist) return;
+    createDialogSessionRef.current += 1;
     resetNewPlaylistForm();
     setNewPlaylistDialogOpen(true);
   };
@@ -393,11 +398,20 @@ export function YouTubeSettings({
 
     setNewPlaylistDialogError(null);
     const trimmedDesc = newPlaylistDescription.trim();
+    const submitAccountId = playlistAccountId;
+    const submitSession = createDialogSessionRef.current;
     const result = await playlistCatalog.createPlaylist({
       title: trimmedTitle,
       ...(trimmedDesc.length > 0 ? { description: trimmedDesc } : {}),
       privacyStatus: newPlaylistPrivacy,
     });
+    if (
+      latestPlaylistAccountIdRef.current !== submitAccountId ||
+      createDialogSessionRef.current !== submitSession ||
+      result.outcome === "aborted"
+    ) {
+      return;
+    }
 
     if (result.outcome === "created") {
       setPlaylistOutcomeUnknownNotice(false);
@@ -420,12 +434,12 @@ export function YouTubeSettings({
         waitLabel !== null
           ? t(
               "youtube.playlistCreateRateLimitedWithWait",
-              "You have reached today's limit of 5 new playlists. Try again in {{time}}.",
+              "Playlist creation is rate-limited (up to 5 new playlists per 24 hours). Try again in {{time}}.",
               { time: waitLabel },
             )
           : t(
               "youtube.playlistCreateRateLimited",
-              "You have reached today's limit of 5 new playlists. Try again later.",
+              "Playlist creation is rate-limited (up to 5 new playlists per 24 hours). Try again later.",
             ),
       );
       return;
@@ -2002,6 +2016,7 @@ export function YouTubeSettings({
         onOpenChange={(open) => {
           setNewPlaylistDialogOpen(open);
           if (!open) {
+            createDialogSessionRef.current += 1;
             resetNewPlaylistForm();
           }
         }}
@@ -2095,6 +2110,7 @@ export function YouTubeSettings({
                 variant="outline"
                 disabled={Boolean(playlistCatalog.creating)}
                 onClick={() => {
+                  createDialogSessionRef.current += 1;
                   setNewPlaylistDialogOpen(false);
                   resetNewPlaylistForm();
                 }}

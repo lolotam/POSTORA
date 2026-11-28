@@ -22,6 +22,9 @@ import type { YouTubeResourcesGateway } from "../application/ports";
 
 // A stalled edge call must not hang the screen: abort after 15 seconds.
 export const YOUTUBE_GATEWAY_TIMEOUT_MS = 15000;
+// Playlist creation runs admission, daily counter, budget debit, token refresh,
+// and stillBound before a 15-second provider POST, so the browser allows 25s.
+export const YOUTUBE_CREATE_PLAYLIST_GATEWAY_TIMEOUT_MS = 25000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -102,15 +105,16 @@ function isVideoData(value: unknown): value is YouTubeVideoDetails {
 async function call<T>(
   body: Record<string, unknown>,
   isData: (value: unknown) => boolean,
-  options?: { unreadableFailureCode?: "upstream_unavailable" | "outcome_unknown" },
+  options?: { unreadableFailureCode?: "upstream_unavailable" | "outcome_unknown"; timeoutMs?: number },
 ): Promise<YouTubeResourceSuccess<T>> {
   const unreadableFailureCode = options?.unreadableFailureCode ?? "upstream_unavailable";
+  const timeoutMs = options?.timeoutMs ?? YOUTUBE_GATEWAY_TIMEOUT_MS;
   let data: YouTubeResourceSuccess<T> | null = null;
   let error: { context?: unknown } | null = null;
   try {
     const result = await supabase.functions.invoke<YouTubeResourceSuccess<T>>("youtube-resources", {
       body,
-      timeout: YOUTUBE_GATEWAY_TIMEOUT_MS,
+      timeout: timeoutMs,
     });
     data = result.data ?? null;
     error = (result.error ?? null) as { context?: unknown } | null;
@@ -247,7 +251,10 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
         privacy_status: params.privacyStatus,
       },
       isCreatePlaylistData,
-      { unreadableFailureCode: "outcome_unknown" },
+      {
+        unreadableFailureCode: "outcome_unknown",
+        timeoutMs: YOUTUBE_CREATE_PLAYLIST_GATEWAY_TIMEOUT_MS,
+      },
     );
   }
 
