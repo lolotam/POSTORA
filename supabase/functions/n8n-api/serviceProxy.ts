@@ -157,56 +157,62 @@ const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?toke
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
-function extractSameLevelPrefixBeforeParameter(token: string, paramStart: number): string {
-  const chars: string[] = [];
-  let parenDepth = 0;
-  let bracketDepth = 0;
+function computeTokenLevelPrefixes(token: string): string[] {
+  const prefixes = new Array<string>(token.length);
+  const stack: string[] = [""];
+  const closers: string[] = [""];
   let inSingleQuote = false;
   let inDoubleQuote = false;
-  for (let i = paramStart - 1; i >= 0; i--) {
+  for (let i = 0; i < token.length; i++) {
+    prefixes[i] = stack[stack.length - 1];
     const ch = token[i];
     if (ch === '"' && !inSingleQuote) {
-      if (inDoubleQuote) break;
-      inDoubleQuote = true;
+      if (inDoubleQuote) {
+        inDoubleQuote = false;
+        if (stack.length > 1 && closers[closers.length - 1] === '"') {
+          stack.pop();
+          closers.pop();
+        }
+      } else {
+        inDoubleQuote = true;
+        stack.push("");
+        closers.push('"');
+      }
       continue;
     }
     if (ch === "'" && !inDoubleQuote) {
       if (i > 0 && i + 1 < token.length && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
-        if (parenDepth === 0 && bracketDepth === 0 && !inSingleQuote) chars.push(ch);
+        stack[stack.length - 1] += ch;
         continue;
       }
-      if (inSingleQuote) break;
-      inSingleQuote = true;
+      if (inSingleQuote) {
+        inSingleQuote = false;
+        if (stack.length > 1 && closers[closers.length - 1] === "'") {
+          stack.pop();
+          closers.pop();
+        }
+      } else {
+        inSingleQuote = true;
+        stack.push("");
+        closers.push("'");
+      }
       continue;
     }
-    if (!inSingleQuote && !inDoubleQuote) {
-      if (ch === ")") {
-        parenDepth++;
-        continue;
-      }
-      if (ch === "(") {
-        if (parenDepth > 0) {
-          parenDepth--;
-          continue;
-        }
-        break;
-      }
-      if (ch === "]") {
-        bracketDepth++;
-        continue;
-      }
-      if (ch === "[") {
-        if (bracketDepth > 0) {
-          bracketDepth--;
-          continue;
-        }
-        break;
-      }
-      if (ch === "<") break;
-      if (parenDepth === 0 && bracketDepth === 0) chars.push(ch);
+    if (inSingleQuote || inDoubleQuote) {
+      stack[stack.length - 1] += ch;
+      continue;
+    }
+    if (ch === "(" || ch === "[" || ch === "<") {
+      stack.push("");
+      closers.push(ch === "(" ? ")" : ch === "[" ? "]" : ">");
+    } else if ((ch === ")" || ch === "]" || ch === ">") && stack.length > 1 && closers[closers.length - 1] === ch) {
+      stack.pop();
+      closers.pop();
+    } else {
+      stack[stack.length - 1] += ch;
     }
   }
-  return chars.reverse().join("");
+  return prefixes;
 }
 
 function isUrlPrefixBeforeParameter(prefix: string): boolean {
@@ -221,12 +227,14 @@ function isUrlPrefixBeforeParameter(prefix: string): boolean {
 }
 
 function tokenHasCredentialQuery(token: string): boolean {
-  const paramGlobalRe = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+/gi;
+  const paramGlobalRe = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)(?=\S)/gi;
+  let prefixes: string[] | null = null;
   let match: RegExpExecArray | null;
   while ((match = paramGlobalRe.exec(token)) !== null) {
+    if (!prefixes) prefixes = computeTokenLevelPrefixes(token);
     const delimiter = match[0].startsWith("%") ? match[0].slice(0, 3).toLowerCase() : match[0][0];
     const isQuestionOrHash = delimiter === "?" || delimiter === "#" || delimiter === "%3f" || delimiter === "%23";
-    const prefix = extractSameLevelPrefixBeforeParameter(token, match.index);
+    const prefix = prefixes[match.index] ?? "";
     if (isQuestionOrHash) {
       if (!prefix || /(?:^|[,;=])(?:\.\.?\/|[A-Za-z0-9._~@/-])/i.test(prefix) || /(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(prefix)) {
         return true;
