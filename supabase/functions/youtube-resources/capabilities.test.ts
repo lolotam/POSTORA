@@ -29,6 +29,7 @@ Deno.test("native row with all scopes recorded can browse, upload, edit metadata
     edit_metadata: { state: "available" },
     manage_thumbnail: { state: "available" },
     manage_captions: { state: "available" },
+    manage_playlists: { state: "available" },
     comments: { state: "available" },
   });
 });
@@ -41,6 +42,7 @@ Deno.test("native row with no recorded scopes is unknown for browse, upload and 
   assertEquals(result.capabilities.edit_metadata, { state: "unknown" });
   assertEquals(result.capabilities.manage_thumbnail, { state: "unknown" });
   assertEquals(result.capabilities.manage_captions, { state: "unknown" });
+  assertEquals(result.capabilities.manage_playlists, { state: "unknown" });
   assertEquals(result.capabilities.comments, { state: "unavailable", reason: "missing_scope" });
 });
 
@@ -54,6 +56,7 @@ Deno.test("a recorded list without readonly blocks browse, edit_metadata, thumbn
   assertEquals(result.capabilities.edit_metadata, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.manage_thumbnail, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.manage_captions, { state: "unavailable", reason: "missing_scope" });
+  assertEquals(result.capabilities.manage_playlists, { state: "unavailable", reason: "missing_scope" });
   assertEquals(result.capabilities.comments, { state: "available" });
 });
 
@@ -67,6 +70,7 @@ Deno.test("needs_reauth makes every capability reconnect_required", () => {
     edit_metadata: expected,
     manage_thumbnail: expected,
     manage_captions: expected,
+    manage_playlists: expected,
     comments: expected,
   });
 });
@@ -76,6 +80,7 @@ Deno.test("a native row with no token at all needs a reconnect", () => {
   assertEquals(result.connection, "reconnect_required");
   assertEquals(result.capabilities.manage_thumbnail, { state: "unavailable", reason: "reconnect_required" });
   assertEquals(result.capabilities.manage_captions, { state: "unavailable", reason: "reconnect_required" });
+  assertEquals(result.capabilities.manage_playlists, { state: "unavailable", reason: "reconnect_required" });
 });
 
 Deno.test("composio row: browse unsupported, upload unknown, comments by the existing rule", () => {
@@ -89,6 +94,7 @@ Deno.test("composio row: browse unsupported, upload unknown, comments by the exi
   assertEquals(result.capabilities.upload, { state: "unknown" });
   assertEquals(result.capabilities.manage_thumbnail, { state: "unavailable", reason: "provider_unsupported" });
   assertEquals(result.capabilities.manage_captions, { state: "unavailable", reason: "provider_unsupported" });
+  assertEquals(result.capabilities.manage_playlists, { state: "unavailable", reason: "provider_unsupported" });
   assertEquals(result.capabilities.comments, { state: "available" });
 });
 
@@ -139,6 +145,80 @@ Deno.test("manage_captions derivation requires readonly and force_ssl", () => {
     account({ accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly, YOUTUBE_SCOPE.force_ssl] } }),
   );
   assertEquals(readonlyAndForceSsl.capabilities.manage_captions, { state: "available" });
+});
+
+Deno.test("manage_playlists derivation table: requires readonly and force_ssl; readonly + upload alone is missing_scope", () => {
+  const rows: Array<{
+    name: string;
+    input: Partial<YouTubeCapabilityAccountInput>;
+    expected: YouTubeCapabilityState;
+  }> = [
+    {
+      name: "composio provider",
+      input: { authProvider: "composio", hasAccessToken: false, hasRefreshToken: false, accountMetadata: {} },
+      expected: { state: "unavailable", reason: "provider_unsupported" },
+    },
+    {
+      name: "composio provider even when needsReauth is true",
+      input: { authProvider: "composio", needsReauth: true, accountMetadata: { granted_scopes: ALL_SCOPES } },
+      expected: { state: "unavailable", reason: "provider_unsupported" },
+    },
+    {
+      name: "native needsReauth",
+      input: { needsReauth: true, accountMetadata: { granted_scopes: ALL_SCOPES } },
+      expected: { state: "unavailable", reason: "reconnect_required" },
+    },
+    {
+      name: "native without access or refresh token",
+      input: { hasAccessToken: false, hasRefreshToken: false, accountMetadata: { granted_scopes: ALL_SCOPES } },
+      expected: { state: "unavailable", reason: "reconnect_required" },
+    },
+    {
+      name: "readonly only",
+      input: { accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly] } },
+      expected: { state: "unavailable", reason: "missing_scope" },
+    },
+    {
+      name: "upload only (missing readonly)",
+      input: { accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.upload] } },
+      expected: { state: "unavailable", reason: "missing_scope" },
+    },
+    {
+      name: "force_ssl only (missing readonly)",
+      input: { accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.force_ssl] } },
+      expected: { state: "unavailable", reason: "missing_scope" },
+    },
+    {
+      name: "upload + force_ssl without readonly",
+      input: { accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.upload, YOUTUBE_SCOPE.force_ssl] } },
+      expected: { state: "unavailable", reason: "missing_scope" },
+    },
+    {
+      name: "readonly + upload without force_ssl (OD-10: upload does not authorize playlists.insert)",
+      input: { accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly, YOUTUBE_SCOPE.upload] } },
+      expected: { state: "unavailable", reason: "missing_scope" },
+    },
+    {
+      name: "readonly + force_ssl",
+      input: { accountMetadata: { granted_scopes: [YOUTUBE_SCOPE.readonly, YOUTUBE_SCOPE.force_ssl] } },
+      expected: { state: "available" },
+    },
+    {
+      name: "all three scopes granted",
+      input: { accountMetadata: { granted_scopes: ALL_SCOPES } },
+      expected: { state: "available" },
+    },
+    {
+      name: "unrecorded scope list (empty metadata)",
+      input: { accountMetadata: {} },
+      expected: { state: "unknown" },
+    },
+  ];
+
+  for (const row of rows) {
+    const derived = deriveYouTubeCapabilities(account(row.input));
+    assertEquals(derived.capabilities.manage_playlists, row.expected, row.name);
+  }
 });
 
 

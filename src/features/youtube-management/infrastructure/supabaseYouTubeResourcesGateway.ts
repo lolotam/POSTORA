@@ -10,6 +10,7 @@ import type {
   YouTubeChannelDetails,
   YouTubeCaptionFormat,
   YouTubeCaptionsListData,
+  YouTubeCreatePlaylistData,
   YouTubePlaylistsPage,
   YouTubeResourceSuccess,
   YouTubeSetThumbnailResult,
@@ -21,6 +22,9 @@ import type { YouTubeResourcesGateway } from "../application/ports";
 
 // A stalled edge call must not hang the screen: abort after 15 seconds.
 export const YOUTUBE_GATEWAY_TIMEOUT_MS = 15000;
+// Playlist creation runs admission, daily counter, budget debit, token refresh,
+// and stillBound before a 15-second provider POST, so the browser allows 25s.
+export const YOUTUBE_CREATE_PLAYLIST_GATEWAY_TIMEOUT_MS = 25000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -72,6 +76,16 @@ function isPlaylistsData(value: unknown): value is YouTubePlaylistsPage {
   return value.next_page_token === null || typeof value.next_page_token === "string";
 }
 
+function isCreatePlaylistData(value: unknown): value is YouTubeCreatePlaylistData {
+  if (!isRecord(value) || !isRecord(value.playlist)) return false;
+  const playlist = value.playlist;
+  return (
+    typeof playlist.id === "string" &&
+    /^[A-Za-z0-9_-]{10,64}$/.test(playlist.id) &&
+    typeof playlist.title === "string"
+  );
+}
+
 function isVideoData(value: unknown): value is YouTubeVideoDetails {
   if (!isRecord(value)) return false;
   if (typeof value.id !== "string" || typeof value.title !== "string" || typeof value.description !== "string" || typeof value.url !== "string") return false;
@@ -91,15 +105,16 @@ function isVideoData(value: unknown): value is YouTubeVideoDetails {
 async function call<T>(
   body: Record<string, unknown>,
   isData: (value: unknown) => boolean,
-  options?: { unreadableFailureCode?: "upstream_unavailable" | "outcome_unknown" },
+  options?: { unreadableFailureCode?: "upstream_unavailable" | "outcome_unknown"; timeoutMs?: number },
 ): Promise<YouTubeResourceSuccess<T>> {
   const unreadableFailureCode = options?.unreadableFailureCode ?? "upstream_unavailable";
+  const timeoutMs = options?.timeoutMs ?? YOUTUBE_GATEWAY_TIMEOUT_MS;
   let data: YouTubeResourceSuccess<T> | null = null;
   let error: { context?: unknown } | null = null;
   try {
     const result = await supabase.functions.invoke<YouTubeResourceSuccess<T>>("youtube-resources", {
       body,
-      timeout: YOUTUBE_GATEWAY_TIMEOUT_MS,
+      timeout: timeoutMs,
     });
     data = result.data ?? null;
     error = (result.error ?? null) as { context?: unknown } | null;
@@ -218,6 +233,28 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
         ...(params.pageToken ? { page_token: params.pageToken } : {}),
       },
       isPlaylistsData,
+    );
+  }
+
+  createPlaylist(params: {
+    accountId: string;
+    title: string;
+    description?: string;
+    privacyStatus: "public" | "unlisted" | "private";
+  }): Promise<YouTubeResourceSuccess<YouTubeCreatePlaylistData>> {
+    return call(
+      {
+        operation: "create_playlist",
+        account_id: params.accountId,
+        title: params.title,
+        ...(params.description !== undefined ? { description: params.description } : {}),
+        privacy_status: params.privacyStatus,
+      },
+      isCreatePlaylistData,
+      {
+        unreadableFailureCode: "outcome_unknown",
+        timeoutMs: YOUTUBE_CREATE_PLAYLIST_GATEWAY_TIMEOUT_MS,
+      },
     );
   }
 

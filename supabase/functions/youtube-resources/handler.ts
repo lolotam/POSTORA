@@ -10,6 +10,7 @@ import {
   YOUTUBE_VIDEOS_MAX_PAGE_SIZE,
   type YouTubeAccountCapabilities,
   type YouTubeCaptionsListData,
+  type YouTubeCreatePlaylistData,
   type YouTubeResourceErrorCode,
   type YouTubeResourceSuccess,
   type YouTubeSetThumbnailResult,
@@ -58,6 +59,19 @@ export interface YouTubeCaptionPort {
     content: string;
   }): Promise<
     | { ok: true; value: YouTubeUploadCaptionData }
+    | { ok: false; code: YouTubeResourceErrorCode; retryAfterSeconds?: number }
+  >;
+}
+
+export interface YouTubePlaylistWritePort {
+  createPlaylist(input: {
+    account: YouTubeResourceAccount;
+    userId: string;
+    title: string;
+    description?: string;
+    privacyStatus: "public" | "unlisted" | "private";
+  }): Promise<
+    | { ok: true; value: YouTubeCreatePlaylistData }
     | { ok: false; code: YouTubeResourceErrorCode; retryAfterSeconds?: number }
   >;
 }
@@ -118,6 +132,7 @@ export interface YouTubeResourcesPorts {
   edit?: YouTubeEditPort;
   thumbnail?: YouTubeThumbnailPort;
   captions?: YouTubeCaptionPort;
+  playlists?: YouTubePlaylistWritePort;
   rateLimit: { check(userId: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> };
 }
 
@@ -200,6 +215,13 @@ const UploadCaptionRequest = z.object({
   // is answered as `caption_invalid` by the caption validator.
   content: z.string(),
 }).strict();
+const CreatePlaylistRequest = z.object({
+  operation: z.literal("create_playlist"),
+  account_id: AccountId,
+  title: z.string(),
+  description: z.string().optional(),
+  privacy_status: z.enum(["private", "unlisted", "public"]),
+}).strict();
 const RequestSchema = z.discriminatedUnion("operation", [
   CapabilitiesRequest,
   CategoriesRequest,
@@ -212,6 +234,7 @@ const RequestSchema = z.discriminatedUnion("operation", [
   SetThumbnailRequest,
   CaptionsRequest,
   UploadCaptionRequest,
+  CreatePlaylistRequest,
 ]);
 
 // The audit label for a refusal: the requested operation when the body names one of
@@ -223,7 +246,7 @@ function requestedOperationOf(body: unknown): string {
   return requested === "capabilities" || requested === "categories" || requested === "channel" ||
       requested === "videos" || requested === "video" || requested === "playlists" ||
       requested === "edit_snapshot" || requested === "update_video" || requested === "set_thumbnail" ||
-      requested === "captions" || requested === "upload_caption"
+      requested === "captions" || requested === "upload_caption" || requested === "create_playlist"
     ? requested
     : "unknown";
 }
@@ -684,6 +707,28 @@ export function createYouTubeResourcesHandler(
           name: uploadData.name,
           format: uploadData.format,
           content: uploadData.content,
+        })
+      );
+    }
+    if (parsed.data.operation === "create_playlist") {
+      if (!ports.playlists) {
+        return await refuse(req, {
+          operation: "create_playlist",
+          code: "write_not_enabled",
+          userId,
+          accountId,
+          requestId,
+        });
+      }
+      const playlistsPort = ports.playlists;
+      const createData = parsed.data;
+      return await runAdmittedPort("create_playlist", account, () =>
+        playlistsPort.createPlaylist({
+          account,
+          userId,
+          title: createData.title,
+          description: createData.description,
+          privacyStatus: createData.privacy_status,
         })
       );
     }

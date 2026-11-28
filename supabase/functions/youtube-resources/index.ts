@@ -26,9 +26,11 @@ import {
   THUMBNAIL_MAX_BYTES,
 } from "./thumbnailMedia.ts";
 import { createYouTubeCaptionPort } from "./captionComposition.ts";
+import { createYouTubePlaylistWritePort } from "./playlistWriteComposition.ts";
 import {
   checkCaptionListCounter,
   checkCaptionUploadCounter,
+  checkPlaylistCreateCounter,
   checkUserWriteCounters,
   debitWriteBudget,
 } from "./writeLimits.ts";
@@ -366,6 +368,24 @@ ports.captions = createYouTubeCaptionPort({
   stillBound: (input) => verifyAccountStillBound({ loadAccount: ports.accounts.load, ...input }),
   tokens: ports.tokens,
   youtube: ports.youtube,
+  fetchImpl: fetch,
+});
+
+ports.playlists = createYouTubePlaylistWritePort({
+  writeLimits: {
+    checkPlaylistCreateCounter: (userId) =>
+      checkPlaylistCreateCounter({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        userId,
+      }),
+    debitWriteBudget: (units) =>
+      debitWriteBudget({
+        rpc: async (fn, params) => await admin.rpc(fn, params),
+        units,
+      }),
+  },
+  stillBound: (input) => verifyAccountStillBound({ loadAccount: ports.accounts.load, ...input }),
+  tokens: ports.tokens,
   fetchImpl: fetch,
 });
 

@@ -852,14 +852,14 @@ Phase 7 (§14), not started:
 - [ ] **7.0 Caption errors** Each of `missing_scope`, `reconnect_required`, `rate_limited`, `quota_exceeded`, `not_found` and a retryable failure shows its own message; Retry is offered only where a repeat can succeed; deployed `youtube-resources` matches `main` by SHA256.
 - [ ] **7A** `segments` is returned only when the provider supplied times and they pass validation; the generated `.srt` and `.vtt` pass `validateCaptionUploadInput`; the timed outline fits 8,000 characters and starts at `00:00`; chapters built from it pass the time-subset rule.
 - [ ] **7B** OD-9 recorded. The caption is validated before any quota is spent, counts against the creator's two uploads per day, debits 400 units once, is sent once, and never changes the upload receipt; `content` appears in no log, evidence row or API view and is removed from the stored post on settlement.
-- [ ] **7C** OD-10 recorded. A playlist is created only with `youtube.force-ssl`, at most five per user per day, after a 50-unit debit, in one attempt; a lost answer is `outcome_unknown`; the new playlist is selected only when Google's answer names the bound channel.
+- [x] **7C** OD-10 recorded. A playlist is created only with `youtube.force-ssl`, at most five per user per day, after a 50-unit debit, in one attempt; a lost answer is `outcome_unknown`; the new playlist is selected only when Google's answer names the bound channel.
 - [ ] **7D** `overall_score` is computed by the server from validated parts; `thumbnail_synergy` is `null` when no thumbnail description was given; "Use this title" only fills a field; no title or thumbnail text reaches a log.
 - [ ] **7E** OD-11 recorded. Privacy cannot be saved without the confirmation matching the chosen value; a scheduled video's privacy control is disabled and a forged request is refused with zero counter, budget and provider-write calls; the saved response is the verified re-read.
 
 ## 13. Non-goals
 
 - No new OAuth scope. Every operation here is covered by the three scopes already granted (`youtube.readonly`, `youtube.upload`, `youtube.force-ssl`), subject to the plan's reference check.
-- No video deletion, no replacement of video bytes, no playlist creation, rename, reorder or item removal, no caption download, replacement or deletion.
+- No video deletion, no replacement of video bytes, no playlist rename, reorder, deletion or item removal (playlist creation on the owner's explicit instruction shipped in PR-18), no caption download, replacement or deletion.
 - No storage of analytics numbers, competitor figures or caption files in Postora's database.
 - No change to the n8n community node or to the public n8n API options.
 - No refactor of `StudioVideoPicker.tsx`, `process-post/index.ts` or the three `PlatformMetadata` copies beyond the two added keys.

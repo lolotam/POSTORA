@@ -90,6 +90,18 @@ function manageCaptionsCapability({ composio, needsReconnect, scopes, hasRecorde
   return hasRecordedList ? MISSING_SCOPE : UNKNOWN;
 }
 
+// Spec section 14.4 (OD-10): playlists.insert requires youtube.readonly (for admission)
+// and youtube.force-ssl (youtube.upload does not authorize playlists.insert).
+function managePlaylistsCapability({ composio, needsReconnect, scopes, hasRecordedList }: DerivationContext): YouTubeCapabilityState {
+  if (composio) return { state: "unavailable", reason: "provider_unsupported" };
+  if (needsReconnect) return RECONNECT;
+  if (scopes.readonly === "missing") return MISSING_SCOPE;
+  if (scopes.readonly === "granted" && scopes.force_ssl === "granted") {
+    return AVAILABLE;
+  }
+  return hasRecordedList ? MISSING_SCOPE : UNKNOWN;
+}
+
 // Spec section 8.1: published metadata editing requires native provider, active
 // connection, PUBLISHED_EDIT_WRITE_ENABLED, readonly (for admission and
 // ownership pre-check), and force-ssl (for videos.update).
@@ -144,6 +156,7 @@ export function deriveYouTubeCapabilities(
       edit_metadata: editMetadataCapability(context, editWriteEnabled),
       manage_thumbnail: manageThumbnailCapability(context),
       manage_captions: manageCaptionsCapability(context),
+      manage_playlists: managePlaylistsCapability(context),
       comments: commentsCapability({
         needsReconnect,
         authProvider: account.authProvider,

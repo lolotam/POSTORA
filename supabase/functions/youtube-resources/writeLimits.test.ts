@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   checkCaptionListCounter,
   checkCaptionUploadCounter,
+  checkPlaylistCreateCounter,
   checkUserWriteCounters,
   debitWriteBudget,
   parseStrictRateLimitDecision,
@@ -9,6 +10,8 @@ import {
   YOUTUBE_CAPTION_UPLOAD_DAILY_LIMIT,
   YOUTUBE_EDIT_BURST_LIMIT,
   YOUTUBE_EDIT_DAILY_LIMIT,
+  YOUTUBE_PLAYLIST_CREATE_DAILY_LIMIT,
+  YOUTUBE_PLAYLIST_CREATE_UNIT_COST,
   YOUTUBE_THUMBNAIL_SET_UNIT_COST,
 } from "./writeLimits.ts";
 
@@ -185,4 +188,53 @@ Deno.test("checkCaptionListCounter and checkCaptionUploadCounter use the 4-param
     rpc: () => Promise.resolve({ data: { allowed: true, count: 9, retry_after: 0 }, error: null }),
   });
   assertEquals(brokenUpload, { ok: false, code: "upstream_unavailable" });
+});
+
+Deno.test("checkPlaylistCreateCounter allows 1..5 per day, refuses 6th with rate_limited, and fails closed on RPC error or malformed response", async () => {
+  assertEquals(YOUTUBE_PLAYLIST_CREATE_UNIT_COST, 50);
+  assertEquals(YOUTUBE_PLAYLIST_CREATE_DAILY_LIMIT, {
+    keyPrefix: "youtube-resources:playlist-create:day",
+    limit: 5,
+    windowSeconds: 86400,
+  });
+
+  const calls: Array<{ fn: string; params: Record<string, unknown> }> = [];
+  for (let count = 1; count <= 5; count += 1) {
+    const decision = await checkPlaylistCreateCounter({
+      userId: USER_ID,
+      rpc: (fn, params) => {
+        calls.push({ fn, params });
+        return Promise.resolve({ data: { allowed: true, count, retry_after: 0 }, error: null });
+      },
+    });
+    assertEquals(decision, { ok: true });
+  }
+  assertEquals(calls[0], {
+    fn: "check_rate_limit",
+    params: {
+      p_endpoint: "youtube-resources:playlist-create:day",
+      p_identifier: `user:${USER_ID}`,
+      p_max_requests: 5,
+      p_window_seconds: 86400,
+    },
+  });
+
+  const sixth = await checkPlaylistCreateCounter({
+    userId: USER_ID,
+    rpc: () => Promise.resolve({ data: { allowed: false, count: 5, retry_after: 3600 }, error: null }),
+  });
+  assertEquals(sixth, { ok: false, code: "rate_limited", retryAfterSeconds: 3600 });
+
+  const failClosedCases = [
+    () => Promise.resolve({ data: null, error: { message: "db outage" } }),
+    () => Promise.reject(new Error("rpc timeout")),
+    () => Promise.resolve({ data: null, error: null }),
+    () => Promise.resolve({ data: { allowed: true, count: 6, retry_after: 0 }, error: null }),
+    () => Promise.resolve({ data: { allowed: true, count: 0, retry_after: 0 }, error: null }),
+  ];
+
+  for (const rpc of failClosedCases) {
+    const result = await checkPlaylistCreateCounter({ userId: USER_ID, rpc });
+    assertEquals(result, { ok: false, code: "upstream_unavailable" });
+  }
 });

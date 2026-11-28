@@ -37,10 +37,10 @@ const GoogleApiDisclosure = () => {
               <p className="text-muted-foreground">
                 Postora ("we", "us", or "our") uses Google API Services, including the YouTube Data API v3 and
                 YouTube Analytics API v2, to enable owners to publish and browse their YouTube content, edit
-                published video details (title, description, tags and category), add a newly uploaded video to
-                a playlist they choose, add a caption track to a video they uploaded, manage comments, and view
-                on-demand analytics. This disclosure describes how we access, use, store, and share information
-                obtained through Google APIs.
+                published video details (title, description, tags and category), create a new playlist on their
+                channel when they explicitly ask or add a newly uploaded video to a playlist they choose, add a
+                caption track to a video they uploaded, manage comments, and view on-demand analytics. This
+                disclosure describes how we access, use, store, and share information obtained through Google APIs.
               </p>
               <p className="text-muted-foreground">
                 Our use of information received from Google APIs adheres to the{" "}
@@ -95,8 +95,9 @@ const GoogleApiDisclosure = () => {
                 <li>
                   <strong>No broad management scope:</strong> We intentionally do not request the full{" "}
                   <code className="bg-muted px-1 rounded">youtube</code> scope, because it would grant broader access
-                  than Postora needs. Postora edits published video metadata and can add a newly uploaded video to
-                  an existing playlist you choose through the narrower force-ssl scope, but does not create, rename,
+                  than Postora needs. Postora edits published video metadata, can create a new playlist on your channel
+                  when you explicitly ask (<code className="bg-muted px-1 rounded">playlists.insert</code>), and can add a newly uploaded video to
+                  an existing playlist you choose through the narrower force-ssl scope, but does not rename,
                   reorder, or delete playlists or remove playlist items, change channel settings, replace existing
                   video media bytes, or delete videos. Setting a thumbnail is not a media-byte replacement: only the
                   thumbnail image of your own video changes. Postora also never modifies, replaces, or deletes
@@ -260,9 +261,12 @@ const GoogleApiDisclosure = () => {
                           <code className="bg-muted px-1 rounded">banAuthor</code> request attached only to rejection.
                         </li>
                         <li>
-                          <strong>Add a newly uploaded video to an existing playlist</strong> on your channel when you
+                          <strong>Create a new playlist on your channel when you explicitly ask</strong> in Create Post
+                          (<code className="bg-muted px-1 rounded">playlists.insert</code>, with the title, optional
+                          description and privacy setting you choose, capped at 5 playlist creation attempts per user
+                          per 24 hours across your connected channels), and <strong>add a newly uploaded video to an existing playlist</strong> on your channel when you
                           select one in Create Post (
-                          <code className="bg-muted px-1 rounded">playlistItems.insert</code>). Postora does not create,
+                          <code className="bg-muted px-1 rounded">playlistItems.insert</code>). Postora does not
                           rename, reorder, or delete playlists, and does not remove items from a playlist.
                         </li>
                         <li>
@@ -333,9 +337,10 @@ const GoogleApiDisclosure = () => {
                   media bytes are never replaced and the video is never deleted
                 </li>
                 <li>
-                  <strong>Playlist Selection:</strong> To list the playlists of your channel so you can choose a
-                  destination playlist when publishing, and to add a newly uploaded video to the playlist you selected,
-                  without creating, renaming, reordering, or deleting playlists or removing playlist items
+                  <strong>Playlist Selection &amp; Creation:</strong> To list the playlists of your channel so you can choose a
+                  destination playlist when publishing, to create a new playlist on your channel when you explicitly ask
+                  in Create Post (<code className="bg-muted px-1 rounded">playlists.insert</code>), and to add a newly uploaded video to the playlist you selected,
+                  without renaming, reordering, or deleting playlists or removing playlist items
                 </li>
                 <li>
                   <strong>Caption Management:</strong> To list the caption tracks of a video you already uploaded

@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 
 import { useYouTubePlaylists } from "../useYouTubePlaylists";
+import { YouTubeResourceError } from "@/features/youtube-management/domain/errors";
 import type {
   YouTubeAccountCapabilities,
   YouTubePlaylistListItem,
@@ -10,15 +11,17 @@ import type {
 // The hook's only outward dependency is the resources gateway, which is the
 // seam to the provider read. Everything below it is the hook's own logic:
 // the cursor, the deduplication and the retry rules.
-const { listPlaylistsMock, getCapabilitiesMock } = vi.hoisted(() => ({
+const { listPlaylistsMock, getCapabilitiesMock, createPlaylistMock } = vi.hoisted(() => ({
   listPlaylistsMock: vi.fn(),
   getCapabilitiesMock: vi.fn(),
+  createPlaylistMock: vi.fn(),
 }));
 
 vi.mock("@/features/youtube-management/infrastructure/supabaseYouTubeResourcesGateway", () => ({
   SupabaseYouTubeResourcesGateway: class {
     listPlaylists = listPlaylistsMock;
     getCapabilities = getCapabilitiesMock;
+    createPlaylist = createPlaylistMock;
   },
 }));
 
@@ -63,6 +66,7 @@ function deferred() {
 beforeEach(() => {
   listPlaylistsMock.mockReset();
   getCapabilitiesMock.mockReset();
+  createPlaylistMock.mockReset();
   getCapabilitiesMock.mockRejectedValue(new Error("unconfigured"));
 });
 
@@ -233,5 +237,226 @@ describe("useYouTubePlaylists", () => {
     expect(result.current.capabilities).toBeNull();
     expect(result.current.capabilitiesLoading).toBe(false);
     expect(result.current.capabilitiesUnavailable).toBe(false);
+  });
+
+  it("creates a playlist, refetches the playlist list, and returns the created playlist", async () => {
+    const createdPlaylist = playlist("PL_NEW_12345");
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], null))
+      .mockResolvedValueOnce(page([createdPlaylist, playlist("PL1")], null));
+    createPlaylistMock.mockResolvedValueOnce({
+      schema_version: 1 as const,
+      request_id: "req-create-1",
+      freshness: { fetched_at: "2026-11-27T10:00:00.000Z", source: "provider" as const },
+      data: { playlist: createdPlaylist },
+    });
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+
+    let outcome: Awaited<ReturnType<typeof result.current.createPlaylist>> | undefined;
+    await act(async () => {
+      outcome = await result.current.createPlaylist({
+        title: "Playlist PL_NEW_12345",
+        description: "Created inline",
+        privacyStatus: "private",
+      });
+    });
+
+    expect(createPlaylistMock).toHaveBeenCalledWith({
+      accountId: "acc-1",
+      title: "Playlist PL_NEW_12345",
+      description: "Created inline",
+      privacyStatus: "private",
+    });
+    expect(outcome).toEqual({ outcome: "created", playlist: createdPlaylist });
+    expect(listPlaylistsMock).toHaveBeenCalledTimes(2);
+    expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_NEW_12345", "PL1"]);
+    expect(result.current.creating).toBe(false);
+  });
+
+  it("refetches the playlist list and returns outcome_unknown when createPlaylist loses the provider answer", async () => {
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], null))
+      .mockResolvedValueOnce(page([playlist("PL_MAYBE"), playlist("PL1")], null));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("outcome_unknown"));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+
+    let outcome: Awaited<ReturnType<typeof result.current.createPlaylist>> | undefined;
+    await act(async () => {
+      outcome = await result.current.createPlaylist({
+        title: "Playlist PL_MAYBE",
+        privacyStatus: "unlisted",
+      });
+    });
+
+    expect(outcome).toEqual({ outcome: "outcome_unknown" });
+    expect(createPlaylistMock).toHaveBeenCalledTimes(1);
+    expect(listPlaylistsMock).toHaveBeenCalledTimes(2);
+    expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_MAYBE", "PL1"]);
+  });
+
+  it("returns rate_limited with retryAfterSeconds without refetching when the daily cap is reached", async () => {
+    listPlaylistsMock.mockResolvedValueOnce(page([playlist("PL1")], null));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("rate_limited", 1800));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+
+    let outcome: Awaited<ReturnType<typeof result.current.createPlaylist>> | undefined;
+    await act(async () => {
+      outcome = await result.current.createPlaylist({
+        title: "Sixth playlist",
+        privacyStatus: "public",
+      });
+    });
+
+    expect(outcome).toEqual({ outcome: "rate_limited", retryAfterSeconds: 1800 });
+    expect(listPlaylistsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears creating and ignores a stale createPlaylist result when accountId changes mid-flight", async () => {
+    listPlaylistsMock.mockImplementation(({ accountId }: { accountId: string }) =>
+      Promise.resolve(page([playlist(accountId === "acc-1" ? "PL1" : "PL9")], null)),
+    );
+
+    let resolveCreate!: (value: unknown) => void;
+    createPlaylistMock.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveCreate = res;
+        }),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ accountId }: { accountId: string | null }) => useYouTubePlaylists(accountId),
+      { initialProps: { accountId: "acc-1" as string | null } },
+    );
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+
+    let createPromise!: Promise<Awaited<ReturnType<typeof result.current.createPlaylist>>>;
+    act(() => {
+      createPromise = result.current.createPlaylist({
+        title: "Old Channel Playlist",
+        privacyStatus: "private",
+      });
+    });
+    expect(result.current.creating).toBe(true);
+
+    rerender({ accountId: "acc-2" });
+    expect(result.current.creating).toBe(false);
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL9"]));
+
+    let outcome: Awaited<ReturnType<typeof result.current.createPlaylist>> | undefined;
+    await act(async () => {
+      resolveCreate({
+        schema_version: 1 as const,
+        request_id: "req-create-stale",
+        freshness: { fetched_at: "2026-11-27T10:00:00.000Z", source: "provider" as const },
+        data: { playlist: playlist("PL_OLD_STALE") },
+      });
+      outcome = await createPromise;
+    });
+
+    expect(outcome).toEqual({ outcome: "aborted" });
+    expect(result.current.creating).toBe(false);
+    expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL9"]);
+  });
+
+  it("sets unavailable to true when the post-create refresh after outcome_unknown fails", async () => {
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], null))
+      .mockRejectedValueOnce(new Error("refresh failed"));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("outcome_unknown"));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]));
+
+    let outcome: Awaited<ReturnType<typeof result.current.createPlaylist>> | undefined;
+    await act(async () => {
+      outcome = await result.current.createPlaylist({
+        title: "Playlist PL_MAYBE",
+        privacyStatus: "unlisted",
+      });
+    });
+
+    expect(outcome).toEqual({ outcome: "outcome_unknown" });
+    expect(result.current.unavailable).toBe(true);
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]);
+  });
+
+  it("retries first-page reconciliation instead of loadMore when post-create refresh fails after a paginated list", async () => {
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], "PAGE2"))
+      .mockRejectedValueOnce(new Error("refresh failed"))
+      .mockResolvedValueOnce(page([playlist("PL_NEW"), playlist("PL1")], "PAGE2_FRESH"));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("outcome_unknown"));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+
+    await act(async () => {
+      await result.current.createPlaylist({
+        title: "Playlist PL_NEW",
+        privacyStatus: "unlisted",
+      });
+    });
+
+    expect(result.current.unavailable).toBe(true);
+    expect(result.current.hasMore).toBe(false);
+
+    await act(async () => {
+      result.current.retry();
+    });
+
+    await waitFor(() => expect(result.current.unavailable).toBe(false));
+    expect(listPlaylistsMock).toHaveBeenLastCalledWith({ accountId: "acc-1" });
+    expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_NEW", "PL1"]);
+    expect(result.current.hasMore).toBe(true);
+  });
+
+  it("ignores a second retry click while reconciliation retry is in flight and unlocks loadMore once settled", async () => {
+    const deferredReconcile = deferred();
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], "PAGE2"))
+      .mockRejectedValueOnce(new Error("refresh failed"))
+      .mockImplementationOnce(() => deferredReconcile.promise)
+      .mockResolvedValueOnce(page([playlist("PL2")], null));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("outcome_unknown"));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+
+    await act(async () => {
+      await result.current.createPlaylist({
+        title: "Playlist PL_NEW",
+        privacyStatus: "unlisted",
+      });
+    });
+    expect(result.current.unavailable).toBe(true);
+
+    act(() => {
+      result.current.retry();
+      result.current.retry();
+    });
+    expect(listPlaylistsMock).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      deferredReconcile.resolve(page([playlist("PL_NEW"), playlist("PL1")], "PAGE2_FRESH"));
+    });
+
+    await waitFor(() => expect(result.current.unavailable).toBe(false));
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+
+    await waitFor(() =>
+      expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_NEW", "PL1", "PL2"]),
+    );
   });
 });
