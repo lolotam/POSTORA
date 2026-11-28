@@ -115,8 +115,9 @@ function truncateCaption(caption: string): string {
 /** One format/count contract shared with the scheduled Graph adapter. */
 export function discoveryMedia(raw: unknown) {
   const record = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
-  const normalized = record && typeof record.caption === "string" && record.caption.length > 2_000 && record.caption.length <= 2_200
-    ? { ...record, caption: truncateCaption(record.caption) }
+  const caption = record && typeof record.caption === "string" ? record.caption : null;
+  const normalized = record && caption !== null && caption.length > 2_000 && Array.from(caption).length <= 2_200
+    ? { ...record, caption: truncateCaption(caption) }
     : raw;
   const media = discoveryParse(() => parseBusinessDiscoveryMedia(normalized));
   const mediaType = media.media_product_type === "REELS" ? "REEL" :

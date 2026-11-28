@@ -23,8 +23,10 @@ export class CollectionThrottle {
   }
 
   async afterResponse(status: number, headers: Headers): Promise<void> {
-    const usage = Math.ceil(parseMetaUsagePercent(headers));
-    if (!usage && status !== 429) return;
+    const measured = Math.ceil(parseMetaUsagePercent(headers));
+    if (!measured && status !== 429) return;
+    const existing = !measured ? await this.store.throttle(this.bucket) : null;
+    const usage = measured || Math.min(100, Math.max(0, Math.ceil(existing?.usage_percent ?? 0)));
     const rawRetry = headers.get("retry-after");
     const retry = rawRetry && /^\d{1,7}$/.test(rawRetry) ? Date.now() + Number(rawRetry) * 1000 : Date.parse(rawRetry ?? "");
     const requested = Number.isFinite(retry) && retry > Date.now() ? retry : Date.now() + 15 * 60_000;
