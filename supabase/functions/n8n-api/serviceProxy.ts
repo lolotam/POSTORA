@@ -188,7 +188,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
   const stack: ScopeState[] = [newScopeState("")];
   let inSingleQuote = false;
   let inDoubleQuote = false;
-  let inBacktick = false;
+  let backtickRunLength = 0;
 
   for (let i = 0; i < n; i++) {
     const top = stack[stack.length - 1];
@@ -206,16 +206,29 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
     const inUrl = top.hasSchemeSlash || top.hasSlashStart || top.hasQuestionOrHash || top.hasLeadingAmp;
     const afterColonQuote = i > 0 && token[i - 1] === ":" && !inUrl;
     if (ch === "`" && !inSingleQuote && !inDoubleQuote) {
-      if (inBacktick) {
-        inBacktick = false;
-        if (stack.length > 1 && top.closer === "`") stack.pop();
+      let runEnd = i + 1;
+      while (runEnd < n && token[runEnd] === "`") runEnd++;
+      const runLen = runEnd - i;
+      for (let k = i + 1; k < runEnd; k++) {
+        allowQuestionOrHash[k] = urlForQ ? 1 : 0;
+        allowAmpersand[k] = urlForAmp ? 1 : 0;
+      }
+      i = runEnd - 1;
+      if (backtickRunLength > 0) {
+        if (runLen === backtickRunLength && !inUrl) {
+          backtickRunLength = 0;
+          while (stack.length > 1) {
+            const popped = stack.pop();
+            if (popped && popped.closer === "`") break;
+          }
+        }
       } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !inUrl) {
-        inBacktick = true;
+        backtickRunLength = runLen;
         stack.push(newScopeState("`"));
       }
       continue;
     }
-    if (ch === '"' && !inSingleQuote && !inBacktick) {
+    if (ch === '"' && !inSingleQuote) {
       if (inDoubleQuote) {
         inDoubleQuote = false;
         if (stack.length > 1 && top.closer === '"') stack.pop();
@@ -225,7 +238,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
       }
       continue;
     }
-    if (ch === "'" && !inDoubleQuote && !inBacktick) {
+    if (ch === "'" && !inDoubleQuote) {
       if (inSingleQuote) {
         if (i > 0 && i + 1 < n && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
           continue;
@@ -238,7 +251,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
       }
       continue;
     }
-    if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
+    if (!inSingleQuote && !inDoubleQuote) {
       if (ch === "(" || ch === "[" || ch === "<") {
         stack.push(newScopeState(ch === "(" ? ")" : ch === "[" ? "]" : ">"));
         continue;
