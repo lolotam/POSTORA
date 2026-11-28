@@ -202,12 +202,13 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
     allowAmpersand[i] = urlForAmp ? 1 : 0;
 
     const ch = token[i];
-    const afterColonQuote = i > 0 && token[i - 1] === ":";
+    const inUrl = top.hasSchemeSlash || top.hasSlashStart || top.hasQuestionOrHash || top.hasLeadingAmp;
+    const afterColonQuote = i > 0 && token[i - 1] === ":" && !inUrl;
     if (ch === '"' && !inSingleQuote) {
       if (inDoubleQuote) {
         inDoubleQuote = false;
         if (stack.length > 1 && top.closer === '"') stack.pop();
-      } else if (top.empty || top.afterDelimiter || afterColonQuote) {
+      } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !inUrl) {
         inDoubleQuote = true;
         stack.push(newScopeState('"'));
       }
@@ -220,7 +221,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
         }
         inSingleQuote = false;
         if (stack.length > 1 && top.closer === "'") stack.pop();
-      } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !top.hasQuestionOrHash) {
+      } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !inUrl) {
         inSingleQuote = true;
         stack.push(newScopeState("'"));
       }
@@ -242,6 +243,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
     }
     const isQ = ch === "?" || ch === "#" || (ch === "%" && /^(?:3f|23)/i.test(token.slice(i + 1, i + 3)));
     const isAmp = ch === "&" || (ch === "%" && /^26/i.test(token.slice(i + 1, i + 3)));
+    const isPctEscape = ch === "%" && !isQ && !isAmp && /^[0-9a-f]{2}/i.test(token.slice(i + 1, i + 3));
     if (isQ) {
       if (top.empty || top.afterDelimiter) top.hasSlashStart = true;
       top.hasQuestionOrHash = true;
@@ -250,9 +252,11 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
     } else if (top.afterDelimiter) {
       if (ch === "/") {
         top.hasSlashStart = true;
-      } else if (/[A-Za-z0-9._~@-]/.test(ch)) {
+      } else if (isPctEscape || /[A-Za-z0-9._~@!$&*+-]/.test(ch)) {
         top.hasRelativeStart = true;
       }
+    } else if (ch === "/" && !top.hasQuestionOrHash) {
+      top.hasSlashStart = true;
     }
 
     top.empty = false;
