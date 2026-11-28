@@ -252,7 +252,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
     } else if (top.afterDelimiter) {
       if (ch === "/") {
         top.hasSlashStart = true;
-      } else if (isPctEscape || /[A-Za-z0-9._~@!$&*+-]/.test(ch)) {
+      } else if (isPctEscape || /[\p{L}\p{N}._~@!$&*+-]/u.test(ch)) {
         top.hasRelativeStart = true;
       }
     }
