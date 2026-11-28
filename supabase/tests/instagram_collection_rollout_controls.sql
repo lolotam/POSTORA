@@ -2409,6 +2409,118 @@ $r12_claim_wrong_viewer$;
 RESET ROLE;
 SELECT set_config('request.jwt.claim.role', '', true);
 
+-- ===========================================================================
+-- R12 - the claim audits a refused claim, never an idle queue.
+--
+-- (This is the second R12 in the file: the first one is the three-branch
+--  section above. The block is tagged $r12$, as the task brief names it.)
+--
+-- The drain ticks every two minutes. An idle queue wrote one warn row per
+-- tick and buried the refusals that matter: 1,082 rows between 2026-11-04
+-- and 2026-11-05. An idle queue is silence; only due work that nothing
+-- could claim is a refusal.
+-- ===========================================================================
+
+-- The section needs an idle competitor queue, so every due row is parked
+-- first, exactly as R11 parks them.
+UPDATE public.instagram_collection_jobs
+   SET due_at = now() + interval '1 day'
+ WHERE due_at <= now();
+
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+
+DO $r12$
+DECLARE
+  r                jsonb;
+  v_claimed        integer := 0;
+  v_before_ids     uuid[] := ARRAY[]::uuid[];
+  v_new_rows       integer;
+  v_new_empty      integer;
+  v_reason         text;
+  v_due_candidates text;
+BEGIN
+  SELECT COALESCE(array_agg(id), ARRAY[]::uuid[]) INTO v_before_ids
+    FROM public.system_logs
+   WHERE source = 'instagram-collection-rollout';
+
+  -- ONE claim against an idle queue. The result set is materialised, so this
+  -- call happens once.
+  FOR r IN
+    SELECT c.value FROM public.claim_instagram_collection_jobs('competitor', 50) AS c(value)
+  LOOP
+    v_claimed := v_claimed + 1;
+  END LOOP;
+
+  ASSERT v_claimed = 0,
+    'R12 the idle queue claim returned no job, got ' || v_claimed;
+
+  -- An idle queue is silence: the claim wrote no audit row at all.
+  SELECT count(*) INTO v_new_rows
+    FROM public.system_logs
+   WHERE source = 'instagram-collection-rollout'
+     AND NOT (id = ANY(v_before_ids));
+
+  ASSERT v_new_rows = 0,
+    'R12 the idle queue wrote no audit row, got ' || v_new_rows;
+
+  SELECT count(*) INTO v_new_empty
+    FROM public.system_logs
+   WHERE source = 'instagram-collection-rollout'
+     AND metadata ->> 'event' = 'collection_claim_refused'
+     AND metadata ->> 'reason_code' = 'collection_queue_empty'
+     AND NOT (id = ANY(v_before_ids));
+
+  ASSERT v_new_empty = 0,
+    'R12 the idle queue wrote no collection_queue_empty row, got ' || v_new_empty;
+
+  -- One due competitor job the policy excludes: owner A's own watchlist
+  -- entry, which the allowlist does not name.
+  INSERT INTO public.instagram_collection_jobs
+    (user_id, target_kind, target_id, watchlist_id, captured_on,
+     status, due_at, attempts, job_generation)
+  VALUES
+    ('aa100000-0000-4000-8000-000000000001', 'competitor',
+     'c1000000-0000-4000-8000-000000000011', 'c1000000-0000-4000-8000-000000000011',
+     current_date - 46, 'queued', now() - interval '1 day', 0, 1);
+
+  -- ONE more claim. The excluded job never becomes a candidate, so nothing
+  -- is claimed and the refusal is audited.
+  v_claimed := 0;
+
+  FOR r IN
+    SELECT c.value FROM public.claim_instagram_collection_jobs('competitor', 50) AS c(value)
+  LOOP
+    v_claimed := v_claimed + 1;
+  END LOOP;
+
+  ASSERT v_claimed = 0,
+    'R12 the excluded job was not claimed, got ' || v_claimed;
+
+  SELECT count(*) INTO v_new_rows
+    FROM public.system_logs
+   WHERE source = 'instagram-collection-rollout'
+     AND NOT (id = ANY(v_before_ids));
+
+  ASSERT v_new_rows = 1,
+    'R12 the refused claim wrote exactly one audit row, got ' || v_new_rows;
+
+  SELECT metadata ->> 'reason_code',
+         metadata -> 'details' ->> 'due_candidates'
+    INTO v_reason, v_due_candidates
+    FROM public.system_logs
+   WHERE source = 'instagram-collection-rollout'
+     AND NOT (id = ANY(v_before_ids));
+
+  ASSERT v_reason = 'collection_not_eligible',
+    'R12 the refused claim carries collection_not_eligible, got ' || v_reason;
+  ASSERT v_due_candidates = '1',
+    'R12 the refused claim counted one due candidate, got ' || v_due_candidates;
+END
+$r12$;
+
+RESET ROLE;
+SELECT set_config('request.jwt.claim.role', '', true);
+
 ROLLBACK;
 
 \echo 'ALL CHECKS PASSED'
