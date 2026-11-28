@@ -1004,24 +1004,28 @@ Deno.test("API and MCP account report proxy preserves the precise direct reconne
 Deno.test("stripCredentialUrls preserves ordinary text fields mentioning credential parameters while stripping credential URLs", () => {
   const stripped = stripCredentialUrls({
     text: "Never commit api_key= or access_token= in source control",
-    caption: "How refresh_token= rotation works in OAuth",
+    caption: "Set public_api_key=YOUR_KEY in the sample config",
     message: "Set service_role_key= in your local .env",
     bio: "Helping devs avoid cron_secret= leaks",
     transcript: "See https://example.com/docs when access_token= expires",
     description: "Check api_key= configuration",
     leakedUrl: "https://graph.facebook.com/v22.0/me?access_token=SECRET_TOKEN",
+    relativeUrl: "/v22.0/me?access_token=SECRET_TOKEN",
     embeddedInError: "GRAPH_ERROR: request to https://graph.facebook.com/v22.0/me?access_token=SECRET_TOKEN failed",
+    diagnosticError: "Upstream failed with access_token=SECRET_TOKEN",
     protocolRelative: "//graph.facebook.com/v22.0/me?refresh_token%3DSECRET_TOKEN",
   });
   assertEquals(stripped, {
     text: "Never commit api_key= or access_token= in source control",
-    caption: "How refresh_token= rotation works in OAuth",
+    caption: "Set public_api_key=YOUR_KEY in the sample config",
     message: "Set service_role_key= in your local .env",
     bio: "Helping devs avoid cron_secret= leaks",
     transcript: "See https://example.com/docs when access_token= expires",
     description: "Check api_key= configuration",
     leakedUrl: null,
+    relativeUrl: null,
     embeddedInError: null,
+    diagnosticError: null,
     protocolRelative: null,
   });
 });

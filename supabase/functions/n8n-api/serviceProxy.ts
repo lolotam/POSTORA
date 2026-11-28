@@ -152,25 +152,31 @@ function redactErrorText(data: unknown): unknown {
   return record;
 }
 
-const CREDENTIAL_VALUE_RE = /(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
+const CREDENTIAL_QUERY_RE = /(?:[?#&]|%3f|%26)(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
+const CREDENTIAL_DIAGNOSTIC_RE = /(?:^|[\s"'(&?])(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
+const DIAGNOSTIC_KEY_RE = /(?:error|message|reason|detail|cause|diagnostic|stack|trace)/i;
 
 // Graph pagination URLs (paging.next / paging.previous) embed the connected
 // account's access_token, so they never leave the proxy; the opaque cursors
-// stay. Any other string carrying a non-empty credential parameter assignment
-// is dropped too, while ordinary text fields mentioning bare parameter names
-// (e.g. "access_token= ") stay intact.
-export function stripCredentialUrls(value: unknown): unknown {
-  if (typeof value === "string") return CREDENTIAL_VALUE_RE.test(value) ? null : value;
-  if (Array.isArray(value)) return value.map(stripCredentialUrls);
+// stay. Any URL/query string carrying a credential parameter is dropped, and
+// diagnostic fields also strip bare credential assignments while ordinary
+// content fields (`text`, `caption`, `message`, etc.) preserve benign prose.
+export function stripCredentialUrls(value: unknown, parentKey?: string): unknown {
+  if (typeof value === "string") {
+    if (CREDENTIAL_QUERY_RE.test(value)) return null;
+    if (parentKey && DIAGNOSTIC_KEY_RE.test(parentKey) && CREDENTIAL_DIAGNOSTIC_RE.test(value)) return null;
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item) => stripCredentialUrls(item, parentKey));
   if (!value || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (/^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i.test(key)) continue;
     if (key === "paging" && child && typeof child === "object" && !Array.isArray(child)) {
       const { next: _next, previous: _previous, ...rest } = child as Record<string, unknown>;
-      out[key] = stripCredentialUrls(rest);
+      out[key] = stripCredentialUrls(rest, key);
     } else {
-      out[key] = stripCredentialUrls(child);
+      out[key] = stripCredentialUrls(child, key);
     }
   }
   return out;
