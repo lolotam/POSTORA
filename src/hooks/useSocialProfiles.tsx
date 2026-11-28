@@ -231,6 +231,21 @@ export function useDisconnectAccountFromProfile() {
           ));
         }
       }
+      if (account?.platform === "whatsapp") {
+        // Run Evolution QR remote logout and WhatsApp cleanup before removing the row.
+        const { error: revokeError } = await supabase.functions.invoke("whatsapp-oauth", {
+          body: { action: "disconnect", social_account_id: accountId },
+        });
+        // Best effort, like TikTok/Meta: removing the account must not depend on Evolution being reachable.
+        if (revokeError) console.warn("WhatsApp disconnect before account removal failed:", revokeError);
+      }
+
+      // Remove account-scoped connectors first so ai_agent_tools_account_same_owner_platform does not block social_accounts deletion.
+      const { error: toolsDeleteError } = await supabase
+        .from("ai_agent_tools")
+        .delete()
+        .eq("social_account_id", accountId);
+      if (toolsDeleteError) throw toolsDeleteError;
 
       const { error } = await supabase
         .from("social_accounts")

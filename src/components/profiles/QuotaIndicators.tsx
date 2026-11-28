@@ -9,7 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Reveal, Icon3D, GradientRingCard, type GradientKey } from "@/components/fx";
 
 export function QuotaIndicators() {
-  const { quota, isLoading, planLimits, effectivePlanSlug, realUsage } = useQuotas();
+  const { quota, isLoading, isQuotaError, planLimits, effectivePlanSlug, realUsage } = useQuotas();
   const { isAdmin } = useUserRole();
   const { planName } = useSubscription();
   const { user } = useAuth();
@@ -94,23 +94,27 @@ export function QuotaIndicators() {
     showRemaining?: boolean;
     description?: string;
     isUnlimited: boolean;
+    isError?: boolean;
   }> = [
     { label: "Profile",         icon: User,      current: profileCount,            max: maxProfiles,        variant: "sky",     isUnlimited: maxProfiles === -1 },
     { label: "Social Media",    icon: Share2,    current: socialAccountCount,      max: maxSocialAccounts,  variant: "violet",  isUnlimited: maxSocialAccounts === -1 },
     { label: "Posts Available", icon: FileText,  current: postsRemaining,          max: maxPosts,           variant: "emerald", showRemaining: true, description: "posts remaining this month", isUnlimited: maxPosts === -1 },
     { label: "Daily Posts",     icon: Calendar,  current: dailyPostsRemaining,     max: maxPostsPerDay,     variant: "amber",   showRemaining: true, description: "posts remaining today",      isUnlimited: maxPostsPerDay === -1 },
-    { label: "Media Uploads",   icon: ImagePlus, current: mediaUploadsRemaining,   max: maxMediaUploads === -1 ? 999999 : maxMediaUploads, variant: "rose", showRemaining: true, description: "uploads remaining today", isUnlimited: maxMediaUploads === -1 },
+    { label: "Media Uploads",   icon: ImagePlus, current: mediaUploadsRemaining,   max: maxMediaUploads === -1 ? 999999 : maxMediaUploads, variant: "rose", showRemaining: true, description: "uploads remaining today", isUnlimited: maxMediaUploads === -1, isError: isQuotaError },
   ];
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
       {indicators.map((indicator, i) => {
         const isUnlimited = indicator.isUnlimited;
-        const percentage = isUnlimited ? 100 : indicator.showRemaining 
-          ? (indicator.current / indicator.max) * 100 
-          : (indicator.current / indicator.max) * 100;
-        const isAtLimit = !indicator.showRemaining && indicator.current >= indicator.max;
-        const isLow = indicator.showRemaining && !isUnlimited && indicator.current <= (indicator.max <= 5 ? 1 : 5);
+        const hasError = !isUnlimited && Boolean(indicator.isError);
+        const percentage = isUnlimited
+          ? 100
+          : hasError
+            ? 0
+            : (indicator.current / indicator.max) * 100;
+        const isAtLimit = !hasError && !indicator.showRemaining && indicator.current >= indicator.max;
+        const isLow = !hasError && indicator.showRemaining && !isUnlimited && indicator.current <= (indicator.max <= 5 ? 1 : 5);
 
         return (
           <Reveal key={indicator.label} delay={i * 90}>
@@ -123,20 +127,24 @@ export function QuotaIndicators() {
                 <span className={`text-lg font-bold tracking-tight ${isAtLimit || isLow ? 'text-amber-500' : ''}`}>
                   {isUnlimited
                     ? '∞'
-                    : indicator.showRemaining
-                      ? `${indicator.current}`
-                      : `${indicator.current}/${indicator.max}`}
+                    : hasError
+                      ? '—'
+                      : indicator.showRemaining
+                        ? `${indicator.current}`
+                        : `${indicator.current}/${indicator.max}`}
                 </span>
               </div>
               <Progress value={percentage} className="h-2" />
               <p className="text-xs text-muted-foreground mt-2">
                 {isUnlimited
                   ? `Unlimited (${displayPlanName})`
-                  : indicator.showRemaining
-                    ? `${indicator.current} of ${indicator.max} ${indicator.description || 'remaining'}`
-                    : isAtLimit
-                      ? "Limit reached - upgrade to add more"
-                      : `${indicator.max - indicator.current} more available`}
+                  : hasError
+                    ? "Usage unavailable"
+                    : indicator.showRemaining
+                      ? `${indicator.current} of ${indicator.max} ${indicator.description || 'remaining'}`
+                      : isAtLimit
+                        ? "Limit reached - upgrade to add more"
+                        : `${indicator.max - indicator.current} more available`}
               </p>
             </GradientRingCard>
           </Reveal>
