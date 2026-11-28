@@ -7,13 +7,29 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import crypto from "node:crypto";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isValidUserIdUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
+}
 
 export interface AuthResult {
   userId: string;
   isServiceRole: boolean;
+}
+
+export interface AuthenticateCallerDeps {
+  serviceRoleKey?: string;
+  getClaims?: (
+    token: string,
+  ) => Promise<{
+    data: { claims?: { sub?: unknown } | null } | null;
+    error: { message?: string } | null;
+  }>;
 }
 
 export function timingSafeTokenEqual(token: string, expectedToken: string): boolean {
@@ -32,11 +48,13 @@ export function timingSafeTokenEqual(token: string, expectedToken: string): bool
  * 
  * @param req The incoming request
  * @param bodyUserId The user_id from the request body (used as fallback for service-role calls)
+ * @param deps Optional dependency overrides for unit testing
  * @returns AuthResult with the validated userId
  */
 export async function authenticateCaller(
   req: Request,
   bodyUserId?: string | null,
+  deps?: AuthenticateCallerDeps,
 ): Promise<AuthResult> {
   const authHeader = req.headers.get("Authorization");
 
@@ -45,29 +63,39 @@ export async function authenticateCaller(
   }
 
   const token = authHeader.replace("Bearer ", "");
+  const serviceRoleKey =
+    deps?.serviceRoleKey ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? SUPABASE_SERVICE_ROLE_KEY;
 
   // Check if this is a service-role call (internal system call)
   // An empty configured key must never let an empty bearer act as the service role.
-  if (SUPABASE_SERVICE_ROLE_KEY && timingSafeTokenEqual(token, SUPABASE_SERVICE_ROLE_KEY)) {
-    if (!bodyUserId) {
-      throw new Error("Service-role call requires user_id in request body");
+  if (serviceRoleKey && timingSafeTokenEqual(token, serviceRoleKey)) {
+    if (!bodyUserId || typeof bodyUserId !== "string" || !UUID_RE.test(bodyUserId)) {
+      throw new Error("Service-role call requires a valid UUID user_id in request body");
     }
     return { userId: bodyUserId, isServiceRole: true };
   }
 
   // Validate as a user JWT using getClaims (local validation, no network roundtrip)
-  const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
+  const getClaims = deps?.getClaims ?? (async (jwt: string) => {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? SUPABASE_URL;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? SUPABASE_ANON_KEY;
+    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    return await supabaseAuth.auth.getClaims(jwt);
   });
 
-  const { data: claimsData, error } = await supabaseAuth.auth.getClaims(token);
+  const { data: claimsData, error } = await getClaims(token);
 
   if (error || !claimsData?.claims) {
     console.warn("JWT claims validation failed:", error?.message);
     throw new Error("Unauthorized: invalid or expired token");
   }
 
-  const jwtUserId = claimsData.claims.sub as string;
+  const jwtUserId = claimsData.claims.sub;
+  if (typeof jwtUserId !== "string" || !UUID_RE.test(jwtUserId)) {
+    throw new Error("Unauthorized: token subject is not a valid user ID");
+  }
 
   // If body has a different user_id, log a warning but use the JWT one
   if (bodyUserId && bodyUserId !== jwtUserId) {
@@ -79,8 +107,6 @@ export async function authenticateCaller(
   return { userId: jwtUserId, isServiceRole: false };
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 /**
  * For functions that keep their own user-JWT check. Returns the user a
  * service-role call acts for (the `user_id` in its JSON body), or null when the
@@ -91,9 +117,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
  */
 export async function serviceRoleCallerUserId(req: Request): Promise<string | null> {
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ") || !SUPABASE_SERVICE_ROLE_KEY) return null;
-  if (!timingSafeTokenEqual(authHeader.replace("Bearer ", ""), SUPABASE_SERVICE_ROLE_KEY)) return null;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? SUPABASE_SERVICE_ROLE_KEY;
+  if (!authHeader?.startsWith("Bearer ") || !serviceRoleKey) return null;
+  if (!timingSafeTokenEqual(authHeader.replace("Bearer ", ""), serviceRoleKey)) return null;
   const body = await req.clone().json().catch(() => null);
-  const bodyUserId = typeof body?.user_id === "string" && UUID_RE.test(body.user_id) ? body.user_id : null;
+  const bodyUserId = isValidUserIdUuid(body?.user_id) ? body.user_id : null;
   return (await authenticateCaller(req, bodyUserId)).userId;
 }

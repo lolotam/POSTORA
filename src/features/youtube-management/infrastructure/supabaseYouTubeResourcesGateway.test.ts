@@ -169,6 +169,25 @@ describe("YouTube resources gateway", () => {
     expect(received.data).toEqual({ items: [], next_page_token: "PAGE2" });
   });
 
+  it.each([
+    ["a non-record item", null],
+    ["a missing id", { title: "Valid title" }],
+    ["an empty id", { id: "", title: "Valid title" }],
+    ["a non-string id", { id: 123, title: "Valid title" }],
+    ["a missing title", { id: "vid-1" }],
+    ["a non-string title", { id: "vid-1", title: 456 }],
+  ])("rejects a videos page containing an item with %s as upstream_unavailable", async (_scenario, badItem) => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: envelope({ items: [badItem], next_page_token: null }),
+      error: null,
+    });
+    const failure = await new SupabaseYouTubeResourcesGateway()
+      .listVideos({ accountId: "acc-1" })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(YouTubeResourceError);
+    expect((failure as YouTubeResourceError).code).toBe("upstream_unavailable");
+  });
+
   it("converts a timed-out invoke into upstream_unavailable", async () => {
     vi.mocked(supabase.functions.invoke).mockRejectedValue(
       Object.assign(new Error("The operation was aborted due to timeout"), { name: "FunctionsFetchError" }),

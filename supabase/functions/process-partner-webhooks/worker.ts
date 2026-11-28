@@ -232,7 +232,7 @@ async function reportBacklog(
 
   const { error: logError } = await admin.from("system_logs").insert({
     source: "process-partner-webhooks",
-    category: "api",
+    category: "webhook",
     level: "warn",
     message: `Partner webhook backlog: oldest due delivery ${Math.round(oldest)}s old, ` +
       `${stuck} stuck lease(s)`,

@@ -175,7 +175,7 @@ export function optOutDb(admin: SupabaseClient): OptOutDb {
             : "Opt-out was recorded but unclaimed replies could not be cancelled";
       const { error } = await admin.from("system_logs").insert({
         level: "warn",
-        category: "messaging",
+        category: "system",
         source: "opt-out",
         message,
         user_id: userId,

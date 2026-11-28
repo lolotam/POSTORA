@@ -233,7 +233,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             </Button>
           </div>
 
-          {capabilities.isError ? (
+          {capabilities.isError && !capabilities.data ? (
             <YouTubeResourceNotice
               code={errorCode(capabilities.error)}
               retryAfterSeconds={retryHint(capabilities.error)}
@@ -247,7 +247,13 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             />
           ) : (
             <div className="space-y-4">
-              {capabilities.isPending ? loadingLine : null}
+              {capabilities.isError ? (
+                <YouTubeResourceNotice
+                  code={errorCode(capabilities.error)}
+                  retryAfterSeconds={retryHint(capabilities.error)}
+                  onRetry={() => void capabilities.refetch()}
+                />
+              ) : capabilities.isPending ? loadingLine : null}
 
               {channel.isError ? (
                 <YouTubeResourceNotice

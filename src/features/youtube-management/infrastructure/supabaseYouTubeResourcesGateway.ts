@@ -66,8 +66,19 @@ function isChannelData(value: unknown): value is YouTubeChannelDetails {
     && isNumberOrNull(stats.video_count);
 }
 
+function isVideoListItem(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "string" || value.id.length === 0 || typeof value.title !== "string") return false;
+  if ("thumbnail_url" in value && value.thumbnail_url !== undefined && value.thumbnail_url !== null && typeof value.thumbnail_url !== "string") return false;
+  if ("published_at" in value && value.published_at !== undefined && value.published_at !== null && typeof value.published_at !== "string") return false;
+  if ("privacy_status" in value && value.privacy_status !== undefined && value.privacy_status !== null && typeof value.privacy_status !== "string") return false;
+  if ("url" in value && value.url !== undefined && typeof value.url !== "string") return false;
+  return true;
+}
+
 function isVideosData(value: unknown): value is YouTubeVideosPage {
   if (!isRecord(value) || !Array.isArray(value.items)) return false;
+  if (!value.items.every(isVideoListItem)) return false;
   return value.next_page_token === null || typeof value.next_page_token === "string";
 }
 

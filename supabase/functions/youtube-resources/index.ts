@@ -109,14 +109,14 @@ const ports: YouTubeResourcesPorts = {
   categories: categoriesClient,
   rateLimit: {
     check: async (userId) => {
-      const burst = toRateLimitDecision(
-        await checkUserRateLimit(admin, "youtube-resources:burst", userId, BURST.limit, BURST.window_seconds),
-        BURST.window_seconds,
-      );
-      if (!burst.allowed) return burst;
-      return toRateLimitDecision(
+      const daily = toRateLimitDecision(
         await checkUserRateLimit(admin, "youtube-resources:day", userId, DAILY.limit, DAILY.window_seconds),
         DAILY.window_seconds,
+      );
+      if (!daily.allowed) return daily;
+      return toRateLimitDecision(
+        await checkUserRateLimit(admin, "youtube-resources:burst", userId, BURST.limit, BURST.window_seconds),
+        BURST.window_seconds,
       );
     },
   },

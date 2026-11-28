@@ -715,6 +715,7 @@ Deno.test("only POST is served", async () => {
   const { handler, calls } = fixture();
   const response = await handler(request(null, "GET"));
   assertEquals(response.status, 405);
+  assertEquals(response.headers.get("Allow"), "POST, OPTIONS");
   assertEquals(calls.auth, 0);
 });
 
