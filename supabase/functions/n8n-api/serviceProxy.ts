@@ -158,8 +158,10 @@ const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?t
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
 function extractUrlSpan(token: string): string | null {
-  const match = /(?:^|[("'[<,;=])((?:https?:)?\/\/\S+|\/\S+|(?:[?#&]|%3f|%23|%26)\S+)/i.exec(token);
-  return match ? match[1] : null;
+  const urlMatch = /(?:^|[("'[<,;=])((?:https?:)?\/\/[^\s)"'\]]>]+|\/[^\s)"'\]]>]+)/i.exec(token);
+  if (urlMatch) return urlMatch[1];
+  const queryMatch = /(?:^|[("'[<])((?:[?#&]|%3f|%23|%26)[^\s)"'\]]>]+)/i.exec(token);
+  return queryMatch ? queryMatch[1] : null;
 }
 
 function hasCredentialQuery(value: string): boolean {
