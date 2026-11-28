@@ -181,7 +181,7 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
 
 function tokenHasCredentialQuery(token: string): boolean {
   if (!CREDENTIAL_PARAM_RE.test(token)) return false;
-  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<,;=])((?:\.\.?\/|[A-Za-z0-9._~@-])(?:[^%?#&\s()"'[\]<>]|%(?!3f|23|26)[0-9a-f]{2})*(?=(?:[?#]|%3f|%23)))|(?:^|[("'[<])(&|%26)/gi;
+  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<,;=])((?:\.\.?\/|[A-Za-z0-9._~@-])(?=(?:[^%?#&\s()"'[\]<>]|\([^%?#&\s()"'[\]<>]*\)|%(?!3f|23|26))*(?:[?#]|%3f|%23)))|(?:^|[("'[<])(&|%26)/gi;
   let match: RegExpExecArray | null;
   while ((match = startRe.exec(token)) !== null) {
     const marker = match[1] ?? match[2] ?? match[3] ?? match[4];
