@@ -122,7 +122,12 @@ async function settleRow(
 
 export async function applyTikTokPublishOutcome(
   admin: SupabaseClient,
-  input: { publishId: string; userOpenId: string | null; outcome: TikTokOutcome },
+  input: {
+    publishId: string;
+    userOpenId: string | null;
+    accountId?: string | null;
+    outcome: TikTokOutcome;
+  },
 ): Promise<ApplyOutcomeResult> {
   const { data, error } = await admin
     .from("platform_posts")
@@ -143,6 +148,13 @@ export async function applyTikTokPublishOutcome(
   for (const row of rows) {
     const account = accountOf(row);
     if (!account) continue;
+    if (input.accountId && row.social_account_id !== input.accountId) {
+      console.error(JSON.stringify({
+        event: "tiktok_account_mismatch",
+        publish_id: input.publishId,
+      }));
+      continue;
+    }
     if (input.userOpenId !== null && input.userOpenId !== account.platform_user_id) {
       console.error(JSON.stringify({
         event: "tiktok_openid_mismatch",

@@ -143,6 +143,40 @@ Deno.test("applyTikTokPublishOutcome: openid mismatch returns unmatched and exec
   assertEquals(rpcCalls.length, 0);
 });
 
+Deno.test("applyTikTokPublishOutcome: null userOpenId skips rows belonging to a different accountId", async () => {
+  const { client, calls } = createFakeSupabase({
+    platformPostsSelect: () =>
+      Promise.resolve({
+        data: [
+          {
+            id: "pp-other",
+            post_id: "post-other",
+            social_account_id: "sa-other",
+            status: "pending",
+            platform_post_url: null,
+            social_accounts: {
+              platform_user_id: null,
+              platform_username: "other_user",
+              account_metadata: {},
+            },
+          },
+        ],
+        error: null,
+      }),
+  });
+
+  const result = await applyTikTokPublishOutcome(client, {
+    publishId: "pub-null-openid",
+    userOpenId: null,
+    accountId: "sa-caller",
+    outcome: { kind: "published", providerPostId: "v-1" },
+  });
+
+  assertEquals(result, "unmatched");
+  const rpcCalls = calls.filter((c) => c.name.startsWith("rpc:"));
+  assertEquals(rpcCalls.length, 0);
+});
+
 Deno.test("applyTikTokPublishOutcome: pending row + published settles with p_status success and stripped leading @ in URL", async () => {
   let settledParams: unknown = null;
   const { client } = createFakeSupabase({

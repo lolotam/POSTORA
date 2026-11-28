@@ -24,18 +24,24 @@ function json(body: unknown, status = 200): Response {
 }
 
 type TokenMatch = {
+  accountId: string | null;
   accessToken: string;
   username: string | null;
   userOpenId: string | null;
 };
 
-function tokenFromAccount(account: {
-  access_token?: string | null;
-  platform_username?: string | null;
-  platform_user_id?: string | null;
-} | null): TokenMatch | null {
+function tokenFromAccount(
+  account: {
+    id?: string | null;
+    access_token?: string | null;
+    platform_username?: string | null;
+    platform_user_id?: string | null;
+  } | null,
+  accountId: string | null = null,
+): TokenMatch | null {
   if (!account?.access_token) return null;
   return {
+    accountId: account.id ?? accountId,
     accessToken: account.access_token,
     username: account.platform_username ?? null,
     userOpenId: account.platform_user_id ?? null,
@@ -60,6 +66,7 @@ async function tokenByPublishKey(
   const { data, error } = await query.limit(1);
   if (error) throw new Error("tiktok_status_read_failed");
   const row = Array.isArray(data) ? data[0] as {
+    social_account_id?: string | null;
     social_accounts?: {
       access_token?: string | null;
       platform_username?: string | null;
@@ -73,7 +80,7 @@ async function tokenByPublishKey(
   if (!row) return null;
   const joined = row.social_accounts;
   const account = Array.isArray(joined) ? joined[0] : joined;
-  return tokenFromAccount(account ?? null);
+  return tokenFromAccount(account ?? null, row.social_account_id ?? null);
 }
 
 serve(async (req) => {
@@ -121,13 +128,13 @@ serve(async (req) => {
     if (account_id) {
       let accountQuery = supabase
         .from("social_accounts")
-        .select("access_token, platform_username, platform_user_id")
+        .select("id, access_token, platform_username, platform_user_id")
         .eq("id", account_id)
         .eq("platform", "tiktok");
       if (callerUserId) accountQuery = accountQuery.eq("user_id", callerUserId);
       const { data: account, error: accountError } = await accountQuery.maybeSingle();
       if (accountError) throw new Error("tiktok_status_account_read_failed");
-      match = tokenFromAccount(account);
+      match = tokenFromAccount(account, account_id);
     }
 
     if (!match) {
@@ -219,6 +226,7 @@ serve(async (req) => {
       await applyTikTokPublishOutcome(supabase, {
         publishId: publish_id,
         userOpenId: match.userOpenId,
+        accountId: match.accountId,
         outcome: { kind: "published", providerPostId: postId },
       });
     }
@@ -227,6 +235,7 @@ serve(async (req) => {
       await applyTikTokPublishOutcome(supabase, {
         publishId: publish_id,
         userOpenId: match.userOpenId,
+        accountId: match.accountId,
         outcome: { kind: "failed", reason: failReason || "Unknown error" },
       });
     }

@@ -108,7 +108,7 @@ export function MediaUploadDialog({
   const { t } = useTranslation("assets");
   const limits = useMediaUploadLimits();
   const { toast } = useToast();
-  const { canUploadMedia, quota, planLimits } = useQuotas();
+  const { canUploadMedia, quota, isQuotaError, planLimits } = useQuotas();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
 
   // Check quota when files are added
@@ -349,7 +349,11 @@ export function MediaUploadDialog({
   // per-user overrides and any plan edit (I2, 2026-08-23 final review).
   const maxUploads = planLimits.max_media_uploads_per_day;
   const usedUploads = quota?.media_uploads_today ?? 0;
-  const remainingUploads = maxUploads === -1 ? t("upload.unlimited", "Unlimited") : Math.max(0, maxUploads - usedUploads);
+  const remainingUploads = maxUploads === -1
+    ? t("upload.unlimited", "Unlimited")
+    : isQuotaError
+      ? t("upload.unknownRemaining", "Unknown")
+      : Math.max(0, maxUploads - usedUploads);
 
   const resetUpload = () => {
     setFiles([]);

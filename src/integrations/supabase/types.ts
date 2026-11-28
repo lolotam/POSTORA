@@ -2551,7 +2551,10 @@ export type Database = {
           id: string
           is_enabled: boolean | null
           name: string
+          platform: string | null
+          scope: string
           secret: string | null
+          social_account_id: string | null
           tool_type: string
           updated_at: string | null
           url: string | null
@@ -2566,7 +2569,10 @@ export type Database = {
           id?: string
           is_enabled?: boolean | null
           name: string
+          platform?: string | null
+          scope?: string
           secret?: string | null
+          social_account_id?: string | null
           tool_type?: string
           updated_at?: string | null
           url?: string | null
@@ -2581,7 +2587,10 @@ export type Database = {
           id?: string
           is_enabled?: boolean | null
           name?: string
+          platform?: string | null
+          scope?: string
           secret?: string | null
+          social_account_id?: string | null
           tool_type?: string
           updated_at?: string | null
           url?: string | null

@@ -244,7 +244,12 @@ export function useQuotas() {
     return resolvePlanLimits(plan ?? null, db ?? null);
   };
 
-  const { data: quota, isLoading } = useQuery({
+  const {
+    data: quota,
+    isLoading,
+    isError: isQuotaError,
+    error: quotaError,
+  } = useQuery({
     queryKey: ["user-quota", user?.id],
     queryFn: async (): Promise<UserQuota | null> => {
       if (!user?.id) return null;
@@ -257,7 +262,7 @@ export function useQuotas() {
 
       if (error) {
         console.error("Error fetching quota:", error);
-        return null;
+        throw error;
       }
 
       if (!data) return null;
@@ -318,6 +323,7 @@ export function useQuotas() {
       return normalized;
     },
     enabled: !!user?.id,
+    retry: false,
   });
 
   // Fetch REAL usage by counting actual rows in the posts table
@@ -572,6 +578,8 @@ export function useQuotas() {
   return {
     quota,
     isLoading: isLoading || isLoadingRealUsage,
+    isQuotaError,
+    quotaError: quotaError ?? null,
     // F6: whether planLimits above is still resolving (still possibly the
     // FREE_TIER_FALLBACK placeholder). The canX() enforcement helpers never
     // need this - they already await getReadyPlanLimits() internally - but

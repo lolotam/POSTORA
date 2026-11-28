@@ -3450,11 +3450,11 @@ Deno.serve(async (req) => {
           case "tiktok": {
             const reviewSubmissionId = requiredReviewSubmissionId(post);
             result = reviewSubmissionId
-              ? await postToTikTok(account, post, mediaUrls, (publishId) =>
+              ? await postToTikTok(account, post, mediaUrls, supabase, (publishId) =>
                 recordReviewPublishId(supabase, {
                   submissionId: reviewSubmissionId, postId: post.id, userId: post.user_id, publishId,
                 }))
-              : await postToTikTok(account, post, mediaUrls);
+              : await postToTikTok(account, post, mediaUrls, supabase);
             break;
           }
           case "twitter":
@@ -8962,6 +8962,7 @@ async function postToTikTok(
   account: SocialAccount,
   post: PostData,
   mediaUrls: string[],
+  supabase: SupabaseClient,
   onPublishIdAssigned?: (publishId: string) => Promise<void>,
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
@@ -8973,7 +8974,7 @@ async function postToTikTok(
   let reviewPostInfo: Record<string, unknown> | null = null;
   if (reviewSubmissionId) {
     const prepared = await prepareTikTokReviewPublish({
-      admin: createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY),
+      admin: supabase,
       accessToken,
       submissionId: reviewSubmissionId,
       accountId: account.id,
