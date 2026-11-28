@@ -153,18 +153,19 @@ function redactErrorText(data: unknown): unknown {
 }
 
 const CREDENTIAL_FIELD_RE = /^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i;
-const CREDENTIAL_QUERY_RE = /(?:(?:https?:)?\/\/[^\s?#]*|\/[A-Za-z0-9._~:/@-]+|^\s*)(?:[?#&]|%3f|%26)(?:[^=\s&#]+=[^&\s#]*(?:&|%26))*(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+/i;
+const CREDENTIAL_URL_CONTEXT_RE = /(?:(?:https?:)?\/\/[^\s?#]*|\/[A-Za-z0-9._~:/@-]+|^\s*)(?:[?#&]|%3f|%26)/i;
+const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%26)(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+/i;
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
+
+function hasCredentialQuery(value: string): boolean {
+  return CREDENTIAL_URL_CONTEXT_RE.test(value) && CREDENTIAL_PARAM_RE.test(value);
+}
 
 function hasFailureValue(value: unknown): boolean {
   if (value === undefined || value === null || value === false || value === "") return false;
   if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === "object") {
-    return Object.entries(value as Record<string, unknown>).some(
-      ([k, v]) => !/^(?:success|ok|data|items|messages|posts|videos|media|entries|paging)$/i.test(k) && hasFailureValue(v),
-    );
-  }
+  if (typeof value === "object") return Object.values(value as Record<string, unknown>).some(hasFailureValue);
   return true;
 }
 
@@ -182,7 +183,7 @@ function isFailureRecord(record: Record<string, unknown>): boolean {
 // assignments while ordinary content fields preserve benign prose.
 export function stripCredentialUrls(value: unknown, inDiagnosticContext = false): unknown {
   if (typeof value === "string") {
-    if (CREDENTIAL_QUERY_RE.test(value)) return null;
+    if (hasCredentialQuery(value)) return null;
     if (inDiagnosticContext && CREDENTIAL_DIAGNOSTIC_RE.test(value)) return null;
     return value;
   }
@@ -193,7 +194,7 @@ export function stripCredentialUrls(value: unknown, inDiagnosticContext = false)
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(record)) {
     if (CREDENTIAL_FIELD_RE.test(key)) continue;
-    const isDirectErrorField = DIAGNOSTIC_KEY_RE.test(key) && (!child || typeof child !== "object" || Array.isArray(child) || hasFailureValue(child));
+    const isDirectErrorField = DIAGNOSTIC_KEY_RE.test(key) && hasFailureValue(child);
     const childDiagnostic = inDiagnosticContext || isDirectErrorField || (failureEnvelope && /^message$/i.test(key));
     if (key === "paging" && child && typeof child === "object" && !Array.isArray(child)) {
       const { next: _next, previous: _previous, ...rest } = child as Record<string, unknown>;
