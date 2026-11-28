@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  YOUTUBE_CREDENTIAL_UNUSABLE_REASON,
+  youtubeCredentialRefusalReason,
+} from "../_shared/youtubeCredentialPolicy.ts";
+import {
   youtubePostDeferral,
   type ScheduledYouTubeRefreshProbe,
 } from "./youtubePostDeferral.ts";
@@ -163,4 +167,20 @@ Deno.test("an inactive account with a retryable refusal never defers the post", 
     { nowMs: NOW },
   );
   assertEquals(decision.defer, false);
+});
+
+Deno.test("shared youtubeCredentialRefusalReason policy classifies expired, missing, and usable tokens identically", () => {
+  assertEquals(
+    youtubeCredentialRefusalReason("tok", EXPIRED_AT, NOW),
+    YOUTUBE_CREDENTIAL_UNUSABLE_REASON,
+  );
+  assertEquals(
+    youtubeCredentialRefusalReason(null, USABLE_AT, NOW),
+    YOUTUBE_CREDENTIAL_UNUSABLE_REASON,
+  );
+  assertEquals(
+    youtubeCredentialRefusalReason("tok", null, NOW),
+    YOUTUBE_CREDENTIAL_UNUSABLE_REASON,
+  );
+  assertEquals(youtubeCredentialRefusalReason("tok", USABLE_AT, NOW), null);
 });

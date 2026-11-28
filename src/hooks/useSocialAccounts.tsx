@@ -27,6 +27,21 @@ export interface SocialAccount {
   } | null;
 }
 
+function compareSocialAccounts(
+  left: Pick<SocialAccount, "id" | "connected_at">,
+  right: Pick<SocialAccount, "id" | "connected_at">,
+): number {
+  const leftMs = left.connected_at ? Date.parse(left.connected_at) : Number.NaN;
+  const rightMs = right.connected_at ? Date.parse(right.connected_at) : Number.NaN;
+  const leftValid = Number.isFinite(leftMs);
+  const rightValid = Number.isFinite(rightMs);
+  if (leftValid && rightValid && leftMs !== rightMs) return leftMs - rightMs;
+  if (leftValid !== rightValid) return leftValid ? -1 : 1;
+  const leftId = left.id ?? "";
+  const rightId = right.id ?? "";
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
+
 export function useSocialAccounts() {
   const { user } = useAuth();
 
@@ -57,7 +72,8 @@ export function useSocialAccounts() {
         return false;
       });
 
-      return validAccounts as SocialAccount[];
+      // Sort in memory rather than chaining PostgREST .order() so existing query mocks stay compatible.
+      return (validAccounts as SocialAccount[]).sort(compareSocialAccounts);
     },
     enabled: !!user,
     retry: false,

@@ -533,6 +533,99 @@ Deno.test("transient 5xx releases lease without touching needs_reauth when recor
   });
 });
 
+Deno.test("recordTransientFailure: retryable Google failures (503, 429, network error) never call recordFailureWithLease and always release the lease", async () => {
+  await withGoogleEnv(async () => {
+    const scenarios: Array<{
+      label: string;
+      fetchImpl: typeof fetch;
+      expectedReason: string;
+    }> = [
+      {
+        label: "503 temporarily_unavailable",
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ error: "temporarily_unavailable" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          }),
+        expectedReason: "refresh_refused",
+      },
+      {
+        label: "429 rate limit",
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ error: "rate_limit_exceeded" }), {
+            status: 429,
+            headers: { "Content-Type": "application/json" },
+          }),
+        expectedReason: "refresh_refused",
+      },
+      {
+        label: "network timeout",
+        fetchImpl: async () => {
+          throw new DOMException("The operation timed out.", "TimeoutError");
+        },
+        expectedReason: "refresh_request_failed",
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const { state, store } = makeFakeStore();
+      const outcome = await refreshYouTubeAccountToken({
+        accountId: ACCOUNT_ID,
+        recordTransientFailure: true,
+        store,
+        nowMs: () => NOW,
+        fetchImpl: scenario.fetchImpl,
+      });
+
+      assertEquals(outcome.ok, false, scenario.label);
+      if (!outcome.ok) {
+        assertEquals(outcome.status, "retryable_refusal", scenario.label);
+        assertEquals(outcome.retryable, true, scenario.label);
+        assertEquals(outcome.reason, scenario.expectedReason, scenario.label);
+        assertEquals(outcome.needsReauth, false, scenario.label);
+      }
+      assertEquals(state.failures.length, 0, `${scenario.label}: must not record failure`);
+      assertEquals(state.releases.length, 1, `${scenario.label}: must release lease`);
+    }
+  });
+});
+
+Deno.test("recordTransientFailure: non-retryable non-invalid_grant failure (400 unauthorized_client) records failure with isInvalidGrant=false", async () => {
+  await withGoogleEnv(async () => {
+    const { state, store } = makeFakeStore({
+      failureResult: {
+        ok: true,
+        needs_reauth: false,
+        failure_count: 1,
+        transitioned: false,
+        enqueued: 0,
+      },
+    });
+    const outcome = await refreshYouTubeAccountToken({
+      accountId: ACCOUNT_ID,
+      recordTransientFailure: true,
+      store,
+      nowMs: () => NOW,
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ error: "unauthorized_client" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    assertEquals(outcome.ok, false);
+    if (!outcome.ok) {
+      assertEquals(outcome.status, "failed");
+      assertEquals(outcome.retryable, false);
+      assertEquals(outcome.reason, "refresh_refused");
+      assertEquals(outcome.needsReauth, false);
+    }
+    assertEquals(state.failures.length, 1);
+    assertEquals(state.failures[0].isInvalidGrant, false);
+    assertEquals(state.releases.length, 0, "lease was consumed by recordFailureWithLease");
+  });
+});
+
 Deno.test("fresh snapshot fast-path skips lease and Google entirely", async () => {
   const freshAccess = synth("already", "fresh", "tok");
   const { state, store } = makeFakeStore();

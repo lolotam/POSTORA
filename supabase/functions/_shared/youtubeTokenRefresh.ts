@@ -127,9 +127,12 @@ export interface RefreshYouTubeAccountOptions {
   /** Force a refresh even when token_expires_at looks fresh (e.g. after a 401). */
   force?: boolean;
   /**
-   * When true, non-invalid_grant failures also record failure_count via
-   * recordFailureWithLease (used by refresh-tokens). On-demand callers leave
-   * this false so transient 5xx/network errors never mutate failure_count.
+   * When true, non-retryable non-invalid_grant failures (e.g. 400
+   * unauthorized_client / invalid_request / 401 invalid_client) also record
+   * failure_count via recordFailureWithLease (used by refresh-tokens).
+   * Retryable transient failures (5xx, 429, temporarily_unavailable, network
+   * timeouts, unreadable JSON) never record failure_count or escalate to
+   * needs_reauth even when this flag is true.
    * invalid_grant ALWAYS records needs_reauth via recordFailureWithLease.
    */
   recordTransientFailure?: boolean;
@@ -840,7 +843,7 @@ export async function refreshYouTubeAccountToken(
         );
       }
 
-      if (recordTransientFailure && !healthNeutral) {
+      if (recordTransientFailure && !healthNeutral && !exchangeResult.retryable) {
         const recorded = await store.recordFailureWithLease({
           accountId,
           leaseToken: lease.lease_token,

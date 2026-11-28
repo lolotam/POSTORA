@@ -203,9 +203,10 @@ Deno.serve(async (req) => {
         // post row is not written, and the next tick selects it again.
         const youtubeProbes: ScheduledYouTubeRefreshProbe[] = [];
 
-        // Check for expiring tokens before processing. is_active matches the
-        // publish path's own filter: an inactive account never refreshes here
-        // and never defers the post on a refresh refusal.
+        // Check for expiring tokens before processing. Filtering `is_active = true`
+        // across all platforms matches `process-post`'s active-account requirement:
+        // inactive accounts are never published to, never refreshed here, and
+        // never allowed to defer a scheduled post on a refresh refusal.
         if (post.platforms && Array.isArray(post.platforms) && post.platforms.length > 0) {
           // Use selected_account_ids from metadata to only refresh relevant accounts
           const selectedAccountIds = post.metadata?.selected_account_ids;
@@ -216,7 +217,9 @@ Deno.serve(async (req) => {
             .eq('is_active', true);
 
           if (selectedAccountIds && Array.isArray(selectedAccountIds) && selectedAccountIds.length > 0) {
-            accountQuery = accountQuery.in('id', selectedAccountIds);
+            accountQuery = accountQuery
+              .in('id', selectedAccountIds)
+              .in('platform', post.platforms);
             console.log(`[JIT-SCHEDULED] Filtering token refresh to selected accounts: ${selectedAccountIds.join(', ')} (post: ${post.id})`);
           } else {
             accountQuery = accountQuery.in('platform', post.platforms);

@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import {
   clearPendingOperation,
   clearPendingOperationsForAccount,
-  findPendingOperation,
+  findPendingOperations,
   listPendingOperations,
   mintOperationId,
   savePendingOperation,
@@ -32,16 +32,16 @@ describe("durable operation identity", () => {
   it("round-trips an operation for the same user and target", () => {
     const entry = op();
     savePendingOperation(USER, entry);
-    expect(findPendingOperation(USER, { accountId: ACCOUNT, videoId: "vid-1", action: "create_thread" })).toEqual(entry);
-    expect(findPendingOperation(USER, { accountId: ACCOUNT, videoId: "vid-1", action: "create_thread", targetCommentId: "" })).toEqual(entry);
+    expect(findPendingOperations(USER, { accountId: ACCOUNT, videoId: "vid-1", action: "create_thread" })).toEqual([entry]);
+    expect(findPendingOperations(USER, { accountId: ACCOUNT, videoId: "vid-1", action: "create_thread", targetCommentId: "" })).toEqual([entry]);
   });
 
   it("scopes by account, video, action and target comment", () => {
     savePendingOperation(USER, op());
     savePendingOperation(USER, op({ action: "reply", targetCommentId: "c-1", videoId: "vid-2" }));
-    expect(findPendingOperation(USER, { accountId: ACCOUNT, videoId: "vid-1", action: "reply", targetCommentId: "c-1" })).toBeNull();
-    expect(findPendingOperation(USER, { accountId: "other", videoId: "vid-1", action: "create_thread" })).toBeNull();
-    expect(findPendingOperation("other-user", { accountId: ACCOUNT, videoId: "vid-1", action: "create_thread" })).toBeNull();
+    expect(findPendingOperations(USER, { accountId: ACCOUNT, videoId: "vid-1", action: "reply", targetCommentId: "c-1" })).toEqual([]);
+    expect(findPendingOperations(USER, { accountId: "other", videoId: "vid-1", action: "create_thread" })).toEqual([]);
+    expect(findPendingOperations("other-user", { accountId: ACCOUNT, videoId: "vid-1", action: "create_thread" })).toEqual([]);
   });
 
   it("clears one operation and everything for one account", () => {

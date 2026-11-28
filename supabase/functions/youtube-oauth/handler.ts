@@ -80,7 +80,7 @@ export interface YouTubeOAuthPorts {
     countOtherActiveGrantHolders(input: {
       userId: string;
       channelId: string;
-      excludeAccountId: string;
+      excludeAccountId?: string;
     }): Promise<number>;
     clearCredentials(input: {
       accountId: string;
@@ -164,7 +164,15 @@ function errorCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-type DisconnectReason = "missing_grant" | "grant_shared" | "already_invalid" | "grant_unverifiable" | null;
+type DisconnectReason =
+  | "missing_grant"
+  | "grant_shared"
+  | "already_invalid"
+  | "grant_unverifiable"
+  | "grant_count_failed"
+  | "google_revoke_failed"
+  | "google_revoke_rejected"
+  | null;
 
 type RevokeGrantOutcome =
   | { ok: true; revoked: boolean; reason: DisconnectReason }
@@ -289,6 +297,31 @@ export function createYouTubeOAuthHandler(
         return refuse(req, "disconnect", "account_changed", userId, 409);
       }
       return refuse(req, "disconnect", "account_clear_failed", userId, 500);
+    }
+
+    if (reason === "grant_shared") {
+      // Best-effort post-clear check: local credentials are already cleared, so a failure
+      // here must still return 200 (never ask the user to retry a cleared row) while
+      // including the cleared row itself so a concurrent reconnect on the same row is not revoked.
+      let remainingActiveCount: number | null = null;
+      try {
+        remainingActiveCount = await ports.accounts.countOtherActiveGrantHolders({
+          userId,
+          channelId: account.channelId,
+        });
+      } catch {
+        reason = "grant_count_failed";
+      }
+
+      if (remainingActiveCount === 0) {
+        const revokeOutcome = await revokeDisconnectGrant(refreshToken, accessToken, ports.google.revoke);
+        if (revokeOutcome.ok) {
+          revoked = revokeOutcome.revoked;
+          reason = revokeOutcome.reason;
+        } else {
+          reason = revokeOutcome.reason as DisconnectReason;
+        }
+      }
     }
 
     if (!revoked && reason !== null) {
