@@ -159,6 +159,8 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   useEffect(() => {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
+    reconcilingRef.current = false;
+    reconciliationFailedRef.current = false;
 
     if (!accountId) {
       setPlaylists([]);
@@ -270,6 +272,7 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   );
 
   const retry = useCallback(() => {
+    if (reconcilingRef.current) return;
     if (reconciliationFailedRef.current && accountId) {
       void refreshPlaylistsInPlace(accountId);
       return;

@@ -417,4 +417,46 @@ describe("useYouTubePlaylists", () => {
     expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_NEW", "PL1"]);
     expect(result.current.hasMore).toBe(true);
   });
+
+  it("ignores a second retry click while reconciliation retry is in flight and unlocks loadMore once settled", async () => {
+    const deferredReconcile = deferred();
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], "PAGE2"))
+      .mockRejectedValueOnce(new Error("refresh failed"))
+      .mockImplementationOnce(() => deferredReconcile.promise)
+      .mockResolvedValueOnce(page([playlist("PL2")], null));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("outcome_unknown"));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+
+    await act(async () => {
+      await result.current.createPlaylist({
+        title: "Playlist PL_NEW",
+        privacyStatus: "unlisted",
+      });
+    });
+    expect(result.current.unavailable).toBe(true);
+
+    act(() => {
+      result.current.retry();
+      result.current.retry();
+    });
+    expect(listPlaylistsMock).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      deferredReconcile.resolve(page([playlist("PL_NEW"), playlist("PL1")], "PAGE2_FRESH"));
+    });
+
+    await waitFor(() => expect(result.current.unavailable).toBe(false));
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+
+    await waitFor(() =>
+      expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_NEW", "PL1", "PL2"]),
+    );
+  });
 });

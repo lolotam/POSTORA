@@ -344,7 +344,7 @@ export function YouTubeSettings({
   };
 
   const openNewPlaylistDialog = () => {
-    if (!canCreatePlaylist) return;
+    if (!canCreatePlaylist || playlistCatalog.creating) return;
     createDialogSessionRef.current += 1;
     resetNewPlaylistForm();
     setNewPlaylistDialogOpen(true);
@@ -422,10 +422,8 @@ export function YouTubeSettings({
     }
 
     if (result.outcome === "outcome_unknown") {
-      if (createDialogSessionRef.current === submitSession) {
-        setNewPlaylistDialogOpen(false);
-        resetNewPlaylistForm();
-      }
+      setNewPlaylistDialogOpen(false);
+      resetNewPlaylistForm();
       setPlaylistOutcomeUnknownNotice(true);
       return;
     }
@@ -1913,7 +1911,7 @@ export function YouTubeSettings({
               variant="outline"
               size="sm"
               data-testid="youtube-new-playlist-button"
-              disabled={!canCreatePlaylist}
+              disabled={!canCreatePlaylist || Boolean(playlistCatalog.creating)}
               onClick={openNewPlaylistDialog}
             >
               {t("youtube.playlistNewButton", "+ New playlist")}
@@ -1954,7 +1952,10 @@ export function YouTubeSettings({
               <SelectItem value={settings.playlist}>{settings.playlist}</SelectItem>
             )}
             {showNewPlaylistControl && (
-              <SelectItem value={PLAYLIST_CREATE_VALUE} disabled={!canCreatePlaylist}>
+              <SelectItem
+                value={PLAYLIST_CREATE_VALUE}
+                disabled={!canCreatePlaylist || Boolean(playlistCatalog.creating)}
+              >
                 {t("youtube.playlistNewButton", "+ New playlist")}
               </SelectItem>
             )}
