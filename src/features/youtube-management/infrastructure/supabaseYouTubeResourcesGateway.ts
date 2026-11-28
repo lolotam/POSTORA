@@ -73,6 +73,18 @@ function isVideoListItem(value: unknown): boolean {
   if ("published_at" in value && value.published_at !== undefined && value.published_at !== null && typeof value.published_at !== "string") return false;
   if ("privacy_status" in value && value.privacy_status !== undefined && value.privacy_status !== null && typeof value.privacy_status !== "string") return false;
   if ("url" in value && value.url !== undefined && typeof value.url !== "string") return false;
+  if ("description" in value && value.description !== undefined && value.description !== null && typeof value.description !== "string") return false;
+  if ("duration_iso8601" in value && value.duration_iso8601 !== undefined && value.duration_iso8601 !== null && typeof value.duration_iso8601 !== "string") return false;
+  if ("statistics" in value && value.statistics !== undefined && value.statistics !== null) {
+    if (
+      !isRecord(value.statistics) ||
+      !isNumberOrNull(value.statistics.view_count) ||
+      !isNumberOrNull(value.statistics.like_count) ||
+      !isNumberOrNull(value.statistics.comment_count)
+    ) {
+      return false;
+    }
+  }
   return true;
 }
 

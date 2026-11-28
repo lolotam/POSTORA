@@ -107,16 +107,19 @@ const ports: YouTubeResourcesPorts = {
   },
   youtube: createYouTubeReadClient({ fetchImpl: fetch, uploadsPlaylistIdFor: uploadsPlaylistId }),
   categories: categoriesClient,
+  // Per spec §10 & checkUserWriteCounters in writeLimits.ts: check the 10-minute burst
+  // bucket (30/10m) before the 24-hour daily bucket (300/24h). Both buckets are charged
+  // per admitted attempt, and burst refusals never consume the user's daily allowance.
   rateLimit: {
     check: async (userId) => {
-      const daily = toRateLimitDecision(
-        await checkUserRateLimit(admin, "youtube-resources:day", userId, DAILY.limit, DAILY.window_seconds),
-        DAILY.window_seconds,
-      );
-      if (!daily.allowed) return daily;
-      return toRateLimitDecision(
+      const burst = toRateLimitDecision(
         await checkUserRateLimit(admin, "youtube-resources:burst", userId, BURST.limit, BURST.window_seconds),
         BURST.window_seconds,
+      );
+      if (!burst.allowed) return burst;
+      return toRateLimitDecision(
+        await checkUserRateLimit(admin, "youtube-resources:day", userId, DAILY.limit, DAILY.window_seconds),
+        DAILY.window_seconds,
       );
     },
   },

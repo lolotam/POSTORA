@@ -233,7 +233,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             </Button>
           </div>
 
-          {capabilities.isError && !capabilities.data ? (
+          {capabilities.isError && (!capabilities.data || browseUnavailable) ? (
             <YouTubeResourceNotice
               code={errorCode(capabilities.error)}
               retryAfterSeconds={retryHint(capabilities.error)}
@@ -261,9 +261,10 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                   retryAfterSeconds={retryHint(channel.error)}
                   onRetry={() => void channel.refetch()}
                 />
-              ) : channel.data ? (
+              ) : null}
+              {channel.data ? (
                 <YouTubeChannelSummary channel={channel.data.data} fetchedAt={channel.data.freshness.fetched_at} />
-              ) : channel.isPending ? loadingLine : null}
+              ) : !channel.isError && channel.isPending ? loadingLine : null}
 
               {videos.data ? (
                 <div className="space-y-3">

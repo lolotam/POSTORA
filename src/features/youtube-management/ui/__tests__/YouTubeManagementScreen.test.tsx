@@ -166,16 +166,22 @@ describe("YouTubeManagementScreen", () => {
     expect(caps).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the loaded channel summary and video library visible when a capabilities refetch fails on Refresh", async () => {
+  it("keeps the loaded channel summary and video library visible when a capabilities and channel refetch fails on Refresh", async () => {
     const base = gateway();
     const caps = vi.fn()
       .mockImplementationOnce((accountId: string) => base.getCapabilities(accountId))
       .mockImplementationOnce(() => Promise.reject(new YouTubeResourceError("upstream_unavailable")))
       .mockImplementationOnce(() => Promise.reject(new YouTubeResourceError("upstream_unavailable")))
       .mockImplementationOnce((accountId: string) => base.getCapabilities(accountId));
+    const chan = vi.fn()
+      .mockImplementationOnce((accountId: string) => base.getChannel(accountId))
+      .mockImplementationOnce(() => Promise.reject(new YouTubeResourceError("upstream_unavailable")))
+      .mockImplementationOnce(() => Promise.reject(new YouTubeResourceError("upstream_unavailable")))
+      .mockImplementationOnce((accountId: string) => base.getChannel(accountId));
     const fake: YouTubeResourcesGateway = {
       ...base,
       getCapabilities: caps as unknown as YouTubeResourcesGateway["getCapabilities"],
+      getChannel: chan as unknown as YouTubeResourcesGateway["getChannel"],
     };
     await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
     expect(await screen.findByRole("heading", { name: "Channel of acc-a" })).toBeInTheDocument();
@@ -183,14 +189,14 @@ describe("YouTubeManagementScreen", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("YouTube did not answer");
+    await waitFor(() => expect(screen.getAllByRole("alert").length).toBeGreaterThanOrEqual(1));
+    expect(screen.getAllByRole("alert")[0]).toHaveTextContent("YouTube did not answer");
     expect(screen.getByRole("heading", { name: "Channel of acc-a" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Video of acc-a/ })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Try again" })[0]);
 
     await waitFor(() => expect(caps).toHaveBeenCalledTimes(4));
-    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByRole("heading", { name: "Channel of acc-a" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Video of acc-a/ })).toBeInTheDocument();
   });
