@@ -152,9 +152,10 @@ function redactErrorText(data: unknown): unknown {
   return record;
 }
 
+const CREDENTIAL_FIELD_RE = /^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i;
 const CREDENTIAL_QUERY_RE = /(?:[?#&]|%3f|%26)(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
-const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[\s"'(&?])(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+|["'](?:access_token|refresh_token|api_key|service_role_key|cron_secret)["']\s*:\s*["']?[^\s"',}]+)/i;
-const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|(?:diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Error|Errors|Reason|Detail|Details|Cause|Diagnostic|Diagnostics|Stack|Trace)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
+const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[\s"'(&?])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|["'](?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']\s*:\s*["']?[^\s"',}]+)/i;
+const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
 function hasFailureValue(value: unknown): boolean {
   if (value === undefined || value === null || value === false || value === "") return false;
@@ -164,12 +165,10 @@ function hasFailureValue(value: unknown): boolean {
 }
 
 function isFailureRecord(record: Record<string, unknown>): boolean {
-  if (record.success === false || record.ok === false) return true;
-  if (record.success === true || record.ok === true) return false;
   for (const key of ["error", "errors", "error_code", "errorCode", "error_type", "errorType", "error_message", "errorMessage", "reason_code", "reasonCode"]) {
     if (hasFailureValue(record[key])) return true;
   }
-  return false;
+  return record.success === false || record.ok === false;
 }
 
 // Graph pagination URLs (paging.next / paging.previous) embed the connected
@@ -189,7 +188,7 @@ export function stripCredentialUrls(value: unknown, inDiagnosticContext = false)
   const failureEnvelope = isFailureRecord(record);
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(record)) {
-    if (/^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i.test(key)) continue;
+    if (CREDENTIAL_FIELD_RE.test(key)) continue;
     const childDiagnostic = inDiagnosticContext || DIAGNOSTIC_KEY_RE.test(key) || (failureEnvelope && /^message$/i.test(key));
     if (key === "paging" && child && typeof child === "object" && !Array.isArray(child)) {
       const { next: _next, previous: _previous, ...rest } = child as Record<string, unknown>;
