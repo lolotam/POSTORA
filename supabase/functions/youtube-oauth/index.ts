@@ -184,15 +184,16 @@ const ports: YouTubeOAuthPorts = {
     // Within one user, two different channels have distinct channelIds and do
     // not block each other; a null auth_provider counts as native.
     countOtherActiveGrantHolders: async ({ userId, channelId, excludeAccountId }) => {
-      const { count, error } = await admin
+      let query = admin
         .from("social_accounts")
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)
         .eq("platform", "youtube")
         .eq("is_active", true)
         .eq("platform_user_id", channelId)
-        .or("auth_provider.is.null,auth_provider.neq.composio")
-        .neq("id", excludeAccountId);
+        .or("auth_provider.is.null,auth_provider.neq.composio");
+      if (excludeAccountId) query = query.neq("id", excludeAccountId);
+      const { count, error } = await query;
       if (error || count === null) throw rpcFailure(error ?? {});
       return count;
     },

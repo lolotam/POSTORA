@@ -31,9 +31,15 @@ function compareSocialAccounts(
   left: Pick<SocialAccount, "id" | "connected_at">,
   right: Pick<SocialAccount, "id" | "connected_at">,
 ): number {
-  const byConnectedAt = (left.connected_at ?? "").localeCompare(right.connected_at ?? "");
-  if (byConnectedAt !== 0) return byConnectedAt;
-  return (left.id ?? "").localeCompare(right.id ?? "");
+  const leftMs = left.connected_at ? Date.parse(left.connected_at) : Number.NaN;
+  const rightMs = right.connected_at ? Date.parse(right.connected_at) : Number.NaN;
+  const leftValid = Number.isFinite(leftMs);
+  const rightValid = Number.isFinite(rightMs);
+  if (leftValid && rightValid && leftMs !== rightMs) return leftMs - rightMs;
+  if (leftValid !== rightValid) return leftValid ? -1 : 1;
+  const leftId = left.id ?? "";
+  const rightId = right.id ?? "";
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
 }
 
 export function useSocialAccounts() {

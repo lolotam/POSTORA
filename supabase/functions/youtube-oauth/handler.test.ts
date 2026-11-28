@@ -74,7 +74,7 @@ function fixture(overrides: {
   const revokedTokens: string[] = [];
   const logs: Array<{ action: string; reason: string; userId: string | null }> = [];
   const outcomeLogs: Array<{ userId: string; accountId: string; revoked: boolean; reason: string }> = [];
-  const grantCountInputs: Array<{ userId: string; channelId: string; excludeAccountId: string }> = [];
+  const grantCountInputs: Array<{ userId: string; channelId: string; excludeAccountId?: string }> = [];
   const saved: YouTubeAccountSave[] = [];
   const account: {
     accessToken: string | null;
@@ -511,6 +511,10 @@ Deno.test("concurrent disconnect revokes at Google after clearing when the last 
   assertEquals(response.status, 200);
   assertEquals(JSON.parse(text), { success: true, revoked: true, reason: null });
   assertEquals(f.calls.countOtherActiveGrantHolders, 2);
+  assertEquals(f.grantCountInputs, [
+    { userId: USER_ID, channelId: "synthetic-channel", excludeAccountId: ACCOUNT_ID },
+    { userId: USER_ID, channelId: "synthetic-channel" },
+  ]);
   assertEquals(f.calls.revoke, 1);
   assertEquals(f.revokedTokens, [f.storedRefreshToken]);
   assertEquals(f.calls.clearCredentials, 1);
@@ -521,6 +525,22 @@ Deno.test("concurrent disconnect revokes at Google after clearing when the last 
   assertEquals(f.outcomeLogs, []);
   assert(!text.includes(f.accessToken));
   assert(!text.includes(f.storedRefreshToken));
+});
+
+Deno.test("post-clear revoke failure after shared-grant race still completes local disconnect with 200 and logs outcome", async () => {
+  const f = fixture({
+    activeSharingGrantCounts: [1, 0],
+    revokeResult: { ok: false, status: 503, reason: "google_revoke_failed" },
+  });
+  const response = await f.handler(post({ action: "disconnect", account_id: ACCOUNT_ID }));
+
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { success: true, revoked: false, reason: "google_revoke_failed" });
+  assertEquals(f.calls.clearCredentials, 1);
+  assertEquals(f.calls.revoke, 1);
+  assertEquals(f.outcomeLogs, [
+    { userId: USER_ID, accountId: ACCOUNT_ID, revoked: false, reason: "google_revoke_failed" },
+  ]);
 });
 
 Deno.test("disconnect with missing grant skips Google revoke and clears local credentials", async () => {
