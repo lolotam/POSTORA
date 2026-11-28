@@ -157,87 +157,83 @@ const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?toke
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
-function boundedUrlSpan(token: string, start: number): { span: string; end: number } {
-  const opener = start > 0 ? token[start - 1] : "";
-  const closer = opener === "(" ? ")" : opener === "[" ? "]" : opener === "<" ? ">" : opener === '"' ? '"' : opener === "'" ? "'" : "";
-  let depth = 0;
-  let i = start;
-  for (; i < token.length; i++) {
+function extractSameLevelPrefixBeforeParameter(token: string, paramStart: number): string {
+  const chars: string[] = [];
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  for (let i = paramStart - 1; i >= 0; i--) {
     const ch = token[i];
-    if ((closer === ")" && ch === "(") || (closer === "]" && ch === "[")) {
-      depth++;
-    } else if (closer && ch === closer) {
-      if (closer === "'" && i > start && i + 1 < token.length && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
+    if (ch === '"' && !inSingleQuote) {
+      if (inDoubleQuote) break;
+      inDoubleQuote = true;
+      continue;
+    }
+    if (ch === "'" && !inDoubleQuote) {
+      if (i > 0 && i + 1 < token.length && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
+        if (parenDepth === 0 && bracketDepth === 0 && !inSingleQuote) chars.push(ch);
         continue;
       }
-      if (depth > 0) depth--;
-      else break;
-    } else if (!closer && (ch === '"' || ch === "<" || ch === ">")) {
-      break;
+      if (inSingleQuote) break;
+      inSingleQuote = true;
+      continue;
+    }
+    if (!inSingleQuote && !inDoubleQuote) {
+      if (ch === ")") {
+        parenDepth++;
+        continue;
+      }
+      if (ch === "(") {
+        if (parenDepth > 0) {
+          parenDepth--;
+          continue;
+        }
+        break;
+      }
+      if (ch === "]") {
+        bracketDepth++;
+        continue;
+      }
+      if (ch === "[") {
+        if (bracketDepth > 0) {
+          bracketDepth--;
+          continue;
+        }
+        break;
+      }
+      if (ch === "<") break;
+      if (parenDepth === 0 && bracketDepth === 0) chars.push(ch);
     }
   }
-  return { span: token.slice(start, i), end: i };
+  return chars.reverse().join("");
 }
 
-function scanBalancedRelativePathQuery(token: string, start: number): { matchedStarts: number[]; resumeAt: number } {
-  const depthStarts: number[] = [start];
-  const matchedStarts: number[] = [];
-  let depth = 0;
-  for (let i = start; i < token.length; i++) {
-    const ch = token[i];
-    if (ch === "(") {
-      depth++;
-      depthStarts[depth] = i + 1;
-    } else if (ch === ")") {
-      if (depth === 0) return { matchedStarts, resumeAt: i };
-      depth--;
-    } else if (ch === "?" || ch === "#") {
-      const candidate = depthStarts[depth];
-      if (!matchedStarts.includes(candidate)) matchedStarts.push(candidate);
-      if (depth === 0) return { matchedStarts, resumeAt: i };
-    } else if (ch === ":" && token.slice(i, i + 3) === "://") {
-      const candidate = depthStarts[depth];
-      if (/^[a-z][a-z0-9+.-]*$/i.test(token.slice(candidate, i)) && !matchedStarts.includes(candidate)) {
-        matchedStarts.push(candidate);
-      }
-      if (depth === 0) return { matchedStarts, resumeAt: i };
-    } else if (ch === "%") {
-      const code = token.slice(i + 1, i + 3).toLowerCase();
-      if (code === "3f" || code === "23") {
-        const candidate = depthStarts[depth];
-        if (!matchedStarts.includes(candidate)) matchedStarts.push(candidate);
-        if (depth === 0) return { matchedStarts, resumeAt: i };
-      } else if (code === "26" && depth === 0) {
-        return { matchedStarts, resumeAt: i };
-      }
-    } else if (depth === 0 && (ch === "&" || ch === '"' || ch === "'" || ch === "[" || ch === "]" || ch === "<" || ch === ">")) {
-      return { matchedStarts, resumeAt: i };
-    }
+function isUrlPrefixBeforeParameter(prefix: string): boolean {
+  if (!prefix) return true;
+  if (/(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(prefix)) return true;
+  if (/(?:^|[,;=])(?:\/|[?#]|%3f|%23)/i.test(prefix)) return true;
+  if (/^(?:&|%26)/i.test(prefix)) return true;
+  if (/[?#]|%3f|%23/i.test(prefix)) {
+    return /(?:^|[,;=])(?:\.\.?\/|[A-Za-z0-9._~@-])/i.test(prefix);
   }
-  return { matchedStarts, resumeAt: token.length };
+  return false;
 }
 
 function tokenHasCredentialQuery(token: string): boolean {
-  if (!CREDENTIAL_PARAM_RE.test(token)) return false;
-  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<,;=])(\.\.?\/|[A-Za-z0-9._~@-])|(?:^|[("'[<])(&|%26)/gi;
+  const paramGlobalRe = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+/gi;
   let match: RegExpExecArray | null;
-  while ((match = startRe.exec(token)) !== null) {
-    const marker = match[1] ?? match[2] ?? match[3] ?? match[4];
-    const spanStart = match[1] ? match.index : match.index + match[0].length - marker.length;
-    if (match[3]) {
-      const probe = scanBalancedRelativePathQuery(token, spanStart);
-      let maxEnd = probe.resumeAt;
-      for (const candidateStart of probe.matchedStarts) {
-        const { span, end } = boundedUrlSpan(token, candidateStart);
-        if (CREDENTIAL_PARAM_RE.test(span)) return true;
-        maxEnd = Math.max(maxEnd, end);
+  while ((match = paramGlobalRe.exec(token)) !== null) {
+    const delimiter = match[0].startsWith("%") ? match[0].slice(0, 3).toLowerCase() : match[0][0];
+    const isQuestionOrHash = delimiter === "?" || delimiter === "#" || delimiter === "%3f" || delimiter === "%23";
+    const prefix = extractSameLevelPrefixBeforeParameter(token, match.index);
+    if (isQuestionOrHash) {
+      if (!prefix || /(?:^|[,;=])(?:\.\.?\/|[A-Za-z0-9._~@/-])/i.test(prefix) || /(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(prefix)) {
+        return true;
       }
-      startRe.lastIndex = Math.max(spanStart + 1, maxEnd);
-      continue;
+    } else if (isUrlPrefixBeforeParameter(prefix)) {
+      return true;
     }
-    const { span, end } = boundedUrlSpan(token, spanStart);
-    if (CREDENTIAL_PARAM_RE.test(span)) return true;
-    startRe.lastIndex = Math.max(spanStart + 1, end);
   }
   return false;
 }
