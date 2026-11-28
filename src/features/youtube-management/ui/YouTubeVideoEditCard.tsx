@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { YouTubeCategorySelect } from "@/components/post/settings/YouTubeCategorySelect";
+import { YouTubePackagingScoreCard } from "@/components/post/settings/YouTubePackagingScoreCard";
+import type { YouTubePackagingScoreGateway } from "../application/ports";
 import type { YouTubePlayerSizeMode } from "../domain/player";
 import type { YouTubeVideoDetails } from "../domain/types";
 import { YouTubeVideoDetail } from "./YouTubeVideoDetail";
@@ -52,6 +54,8 @@ export interface YouTubeVideoEditCardProps {
     categoryId: string;
     baseRevision: string;
   }) => Promise<EditSaveResult>;
+  /** Scores draft title and thumbnail synergy without touching YouTube. */
+  onRequestPackagingScore?: YouTubePackagingScoreGateway["scorePackaging"];
   /** How large the embedded player is drawn; the drawer owns it. */
   playerSizeMode?: YouTubePlayerSizeMode;
   onPlayerSizeModeChange?: (mode: YouTubePlayerSizeMode) => void;
@@ -113,6 +117,7 @@ export function YouTubeVideoEditCard({
   region,
   onSnapshot,
   onSave,
+  onRequestPackagingScore,
   playerSizeMode,
   onPlayerSizeModeChange,
 }: YouTubeVideoEditCardProps): JSX.Element {
@@ -314,6 +319,20 @@ export function YouTubeVideoEditCard({
                 setDraftTitle(event.target.value);
               }}
               maxLength={100}
+            />
+            <YouTubePackagingScoreCard
+              namespace="accounts"
+              title={draftTitle}
+              description={draftDescription}
+              disabled={saving}
+              requestScore={
+                onRequestPackagingScore ??
+                (() => Promise.reject(new Error("Packaging score is unavailable.")))
+              }
+              onApplyTitle={(newTitle) => {
+                dirtyFieldsRef.current.title = true;
+                setDraftTitle(newTitle);
+              }}
             />
           </div>
           <div className="space-y-2">

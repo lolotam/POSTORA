@@ -472,4 +472,73 @@ describe("YouTubeVideoEditCard — the edit toggle", () => {
     release?.();
     await waitFor(() => expect(toggle).not.toBeDisabled());
   });
+
+  it("scores the draft title and applies an alternative title to the draft without saving", async () => {
+    const onSave = vi.fn().mockResolvedValue("saved");
+    let resolveSnapshot: ((snap: { revision: string; values: { title: string } }) => void) | null = null;
+    const onSnapshot = vi.fn(
+      () =>
+        new Promise<{ revision: string; values: { title: string } }>((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+    const onRequestPackagingScore = vi.fn().mockResolvedValue({
+      overall_score: 88,
+      breakdown: {
+        hook: 90,
+        clarity: 86,
+        mobile_length: 95,
+        thumbnail_synergy: null,
+      },
+      strengths: ["Strong curiosity hook"],
+      fixes: ["Front-load the keyword"],
+      better_titles: [
+        "Why Every YouTube Creator Needs This Workflow",
+        "The YouTube Workflow That Saved Me 10 Hours a Week",
+        "My Exact YouTube Publishing Setup in 2026",
+      ] as [string, string, string],
+    });
+
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSave={onSave}
+        onSnapshot={onSnapshot}
+        onRequestPackagingScore={onRequestPackagingScore}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    fireEvent.click(screen.getByTestId("youtube-packaging-score-button"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("youtube-packaging-overall-score")).toHaveTextContent("88/100"),
+    );
+    expect(onRequestPackagingScore).toHaveBeenCalledWith({
+      title: "First video",
+      description: "Body text",
+      language: "english",
+    });
+
+    fireEvent.click(screen.getByTestId("youtube-packaging-use-title-0"));
+    expect(screen.getByLabelText("Title")).toHaveValue(
+      "Why Every YouTube Creator Needs This Workflow",
+    );
+    expect(onSave).not.toHaveBeenCalled();
+
+    // Because "Use this title" marks the title dirty, a late snapshot return must not overwrite it.
+    resolveSnapshot?.({
+      revision: "rev-late",
+      values: { title: "Server snapshot title" },
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled());
+    expect(screen.getByLabelText("Title")).toHaveValue(
+      "Why Every YouTube Creator Needs This Workflow",
+    );
+    expect(onSave).not.toHaveBeenCalled();
+  });
 });

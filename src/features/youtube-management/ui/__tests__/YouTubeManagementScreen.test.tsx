@@ -823,4 +823,46 @@ describe("YouTubeManagementScreen published metadata editing", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent(expected);
   });
+
+  it("scores the draft title through packagingScoreGateway and fills Title without calling updateVideo", async () => {
+    const updateVideo = vi.fn(async () => envelope({ revision: "rev-2" }));
+    const scorePackaging = vi.fn(async () => ({
+      overall_score: 91,
+      breakdown: {
+        hook: 93,
+        clarity: 88,
+        mobile_length: 100,
+        thumbnail_synergy: null,
+      },
+      strengths: ["Punchy hook"],
+      fixes: ["Include the year"],
+      better_titles: [
+        "How I Scaled My YouTube Channel in 90 Days",
+        "The 90-Day YouTube Growth Blueprint",
+        "What 90 Days of Daily YouTube Shorts Taught Me",
+      ] as [string, string, string],
+    }));
+    const fake = editGateway({ updateVideo: updateVideo as unknown as YouTubeResourcesGateway["updateVideo"] });
+    await renderScreen(
+      <YouTubeManagementScreen
+        accounts={ACCOUNTS}
+        accountsLoading={false}
+        gateway={fake}
+        packagingScoreGateway={{ scorePackaging }}
+      />,
+    );
+    await openTheEditor();
+
+    await userEvent.click(screen.getByTestId("youtube-packaging-score-button"));
+    expect(await screen.findByTestId("youtube-packaging-overall-score")).toHaveTextContent("91/100");
+    expect(scorePackaging).toHaveBeenCalledWith({
+      title: "Details of acc-a-video",
+      description: "Body text",
+      language: "english",
+    });
+
+    await userEvent.click(screen.getByTestId("youtube-packaging-use-title-1"));
+    expect(screen.getByLabelText("Title")).toHaveValue("The 90-Day YouTube Growth Blueprint");
+    expect(updateVideo).not.toHaveBeenCalled();
+  });
 });

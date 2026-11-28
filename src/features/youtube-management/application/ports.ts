@@ -1,4 +1,5 @@
 import type {
+  PackagingScore,
   YouTubeAccountCapabilities,
   YouTubeCategoryOption,
   YouTubeChannelDetails,
@@ -127,4 +128,15 @@ export interface YouTubeThumbnailAiGateway {
     referenceImages?: readonly string[];
     signal?: AbortSignal;
   }): Promise<{ imageUrl: string }>;
+}
+
+export type YouTubePackagingScoreResult = PackagingScore;
+
+export interface YouTubePackagingScoreGateway {
+  scorePackaging(params: {
+    title: string;
+    thumbnailText?: string;
+    description?: string;
+    language: "english" | "arabic";
+  }): Promise<YouTubePackagingScoreResult>;
 }

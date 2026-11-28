@@ -942,6 +942,27 @@
       "subscribers": "المشتركين",
       "videos": "الفيديوهات",
       "views": "المشاهدات"
+    },
+    "score": {
+      "heading": "تقييم تغليف العنوان والصورة المصغّرة",
+      "disclaimer": "تقدير بالذكاء الاصطناعي، وليس مقياسًا رسميًا من YouTube",
+      "thumbnailLabel": "نص الصورة المصغّرة / العنصر البصري (اختياري)",
+      "thumbnailPlaceholder": "صف الصورة المصغّرة أو النص المكتوب عليها لتقييم التناغم...",
+      "langEnglish": "الإنجليزية",
+      "langArabic": "العربية",
+      "scoreButton": "تقييم العنوان والصورة المصغّرة",
+      "scoringButton": "جارٍ التقييم…",
+      "overallLabel": "التقييم الكلي للتغليف",
+      "hookLabel": "الجذب (Hook)",
+      "clarityLabel": "الوضوح",
+      "mobileLengthLabel": "طول العنوان للموبايل",
+      "synergyLabel": "التناغم مع الصورة المصغّرة",
+      "synergyEmpty": "صف صورتك المصغّرة لتقييم هذا البند",
+      "strengthsHeading": "نقاط القوة",
+      "fixesHeading": "تحسينات مقترحة",
+      "betterTitlesHeading": "عناوين بديلة مقترحة",
+      "useThisTitle": "استخدم هذا العنوان",
+      "errorFallback": "تعذّر تقييم العنوان والصورة المصغّرة الآن. حاول مرة أخرى."
     }
   },
   "deleteWhatsApp": {

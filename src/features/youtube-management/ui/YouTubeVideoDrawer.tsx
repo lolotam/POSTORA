@@ -19,6 +19,7 @@ import type {
   YouTubeVideoDetails,
 } from "../domain/types";
 import type { YouTubeThumbnailCandidate, YouTubeThumbnailOutcome } from "../domain/thumbnail";
+import type { YouTubePackagingScoreGateway } from "../application/ports";
 import type { EditSaveResult, EditSnapshotInput } from "./YouTubeVideoEditCard";
 import type { ResolvedTier } from "@/components/ai/ResolvedModelCards";
 import { YouTubeVideoEditCard } from "./YouTubeVideoEditCard";
@@ -37,6 +38,7 @@ export function YouTubeVideoDrawer({
   region,
   onSnapshot,
   onSave,
+  onRequestPackagingScore,
   thumbnailCapability,
   thumbnailCandidates,
   thumbnailCandidatesLoading,
@@ -67,6 +69,7 @@ export function YouTubeVideoDrawer({
     categoryId: string;
     baseRevision: string;
   }) => Promise<EditSaveResult>;
+  onRequestPackagingScore?: YouTubePackagingScoreGateway["scorePackaging"];
   /** The server's derived thumbnail capability; null until it is known. */
   thumbnailCapability?: YouTubeCapabilityState | null;
   /** The creator's own library images, filtered by the picker. */
@@ -148,6 +151,7 @@ export function YouTubeVideoDrawer({
               region={region}
               onSnapshot={onSnapshot}
               onSave={onSave}
+              onRequestPackagingScore={onRequestPackagingScore}
               disabledReason={disabledReason}
               playerSizeMode={playerSizeMode}
               onPlayerSizeModeChange={setPlayerSizeMode}

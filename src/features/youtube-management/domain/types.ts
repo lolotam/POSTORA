@@ -55,3 +55,5 @@ export type {
   YouTubeCaptionUploadResult,
   YouTubeUploadCaptionData,
 } from "./captions";
+
+export type { PackagingScore } from "../../../../supabase/functions/_shared/youtubePackagingScore";
