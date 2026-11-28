@@ -169,7 +169,7 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
     } else if (closer && ch === closer) {
       if (closer === ")" && depth > 0) depth--;
       else break;
-    } else if (!closer && (ch === '"' || ch === "'" || ch === "<" || ch === ">")) {
+    } else if (!closer && (ch === '"' || ch === "<" || ch === ">")) {
       break;
     }
   }
@@ -177,17 +177,20 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
 }
 
 function tokenHasCredentialQuery(token: string): boolean {
+  if (!CREDENTIAL_PARAM_RE.test(token)) return false;
   const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<])(&|%26)/gi;
   let match: RegExpExecArray | null;
   while ((match = startRe.exec(token)) !== null) {
     const spanStart = match[1] ? match.index : match.index + match[0].length - (match[2] ?? match[3]).length;
-    const { span } = boundedUrlSpan(token, spanStart);
+    const { span, end } = boundedUrlSpan(token, spanStart);
     if (CREDENTIAL_PARAM_RE.test(span)) return true;
+    startRe.lastIndex = Math.max(startRe.lastIndex, end);
   }
   return false;
 }
 
 function hasCredentialQuery(value: string): boolean {
+  if (!CREDENTIAL_PARAM_RE.test(value)) return false;
   for (const token of value.split(/\s+/)) {
     if (token && tokenHasCredentialQuery(token)) return true;
   }
