@@ -22,9 +22,9 @@ interface AuthorizationDetails {
 
 const SCOPE_LABEL: Record<string, string> = {
   "accounts:read": "View your connected social media accounts",
-  "posts:read": "Read your posts and their status",
-  "posts:write": "Create, schedule and publish posts on your behalf",
-  "media:write": "Upload media to your Postora library",
+  "posts:read": "Read your posts, media library, analytics, competitor reports, brand analysis, and run paid AI best-time suggestions",
+  "posts:write": "Create, schedule, publish, and delete posts (including platform copies and media), sync analytics, track competitors, and run paid AI generation (captions, hashtags, and images; post creation and image generation also require media:write)",
+  "media:write": "Upload and store media in your Postora library",
   "webhooks:manage": "Register and manage webhook subscriptions",
 };
 

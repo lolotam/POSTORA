@@ -67,6 +67,14 @@ interface AlertConfig {
   created_at: string;
 }
 
+interface SilentStoreConnection {
+  connector_id?: string;
+  social_account_id?: string;
+  binding_id?: string | null;
+  user_id?: string;
+  last_delivery_at?: string;
+}
+
 interface AlertHistory {
   id: string;
   alert_config_id: string | null;
@@ -120,6 +128,7 @@ const TRIGGER_TYPES = [
   { value: "token_health", label: "Token Health", icon: Zap, description: "Alert when token health drops below threshold" },
   { value: "cron_failure", label: "Cron Job Failure", icon: Clock, description: "Alert when scheduled jobs fail" },
   { value: "jev_triage_failure", label: "Jev Triage Failure (%)", icon: Gauge, description: "Alert when AI agent triage fails on more than this share of replies (needs 10+ replies in the window)" },
+  { value: "store_webhook_silence", label: "Store Webhook Silence", icon: Server, description: "Alert when a store connection with recent deliveries goes silent" },
 ];
 
 const OPERATORS = [
@@ -836,6 +845,29 @@ export default function AdminObservability() {
                                 {formatDistanceToNow(new Date(alert.created_at), { addSuffix: true })}
                                 {alert.metric_name && ` • ${alert.metric_name}`}
                               </p>
+                              {Array.isArray(alert.details?.silent_connections) &&
+                                alert.details.silent_connections.length > 0 && (
+                                  <div className="mt-2 space-y-1">
+                                    {(alert.details.silent_connections as SilentStoreConnection[]).map((conn, idx) => (
+                                      <div
+                                        key={conn.connector_id ?? idx}
+                                        className="text-xs font-mono bg-background/60 border rounded px-2 py-1 flex flex-wrap items-center gap-x-2 gap-y-0.5"
+                                      >
+                                        <span>Connector: {conn.connector_id ?? "unknown"}</span>
+                                        <span>•</span>
+                                        <span>Last delivery account: {conn.social_account_id ?? "unknown"}</span>
+                                        <span>•</span>
+                                        <span>Binding at alert time: {conn.binding_id ?? "deleted"}</span>
+                                        {conn.last_delivery_at && (
+                                          <>
+                                            <span>•</span>
+                                            <span>Last delivery: {conn.last_delivery_at}</span>
+                                          </>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                             </div>
                             {!alert.is_resolved && (
                               <Button
