@@ -34,6 +34,7 @@ export interface TikTokWebhookDeps {
   nowSeconds: () => number;
   admin: SupabaseClient | null;
   applyPending?: typeof applyPendingWebhookEvents;
+  scheduleBackground?: (task: Promise<unknown>) => void;
   log: (message: string) => void;
 }
 
@@ -240,7 +241,22 @@ export async function handleTikTokWebhook(
     });
 
     const applyPending = deps.applyPending ?? applyPendingWebhookEvents;
-    const result: ApplyOutcomeResult | "none" = await applyPending(deps.admin, publishId);
+    const admin = deps.admin;
+    if (deps.scheduleBackground) {
+      const settleTask = (async () => {
+        try {
+          const result: ApplyOutcomeResult | "none" = await applyPending(admin, publishId);
+          deps.log(`tiktok_webhook_applied:${result}`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          deps.log(message.startsWith("tiktok_") ? message : "tiktok_webhook_error");
+        }
+      })();
+      deps.scheduleBackground(settleTask);
+      return json({ success: true }, 200);
+    }
+
+    const result: ApplyOutcomeResult | "none" = await applyPending(admin, publishId);
     deps.log(`tiktok_webhook_applied:${result}`);
     return json({ success: true }, 200);
   } catch (error) {

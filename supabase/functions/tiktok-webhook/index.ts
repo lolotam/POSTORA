@@ -10,12 +10,19 @@ Deno.serve((req) => {
     ? createClient(url, serviceRoleKey)
     : null;
 
+  const runtime = (globalThis as unknown as {
+    EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void };
+  }).EdgeRuntime;
+
   return handleTikTokWebhook(req, {
     clientSecret: Deno.env.get("TIKTOK_CLIENT_SECRET") ?? null,
     webhookSecret: Deno.env.get("TIKTOK_WEBHOOK_SECRET") ?? null,
     nowSeconds: () => Date.now() / 1000,
     admin,
     applyPending: applyPendingWebhookEvents,
+    scheduleBackground: typeof runtime?.waitUntil === "function"
+      ? (task) => runtime.waitUntil!(task)
+      : undefined,
     log: (message) => console.log(message),
   });
 });

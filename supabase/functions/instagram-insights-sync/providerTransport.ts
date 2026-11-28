@@ -367,7 +367,7 @@ export function readOwnerGraphErrorEnvelope(
 }
 
 /** The Graph error codes that mean "the provider is throttling". */
-const RATE_LIMIT_CODES = new Set([4, 17, 32, 613]);
+const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80001, 80002]);
 
 /** The Graph error codes that mean "the credential was rejected". */
 const TOKEN_ERROR_CODES = new Set([190]);

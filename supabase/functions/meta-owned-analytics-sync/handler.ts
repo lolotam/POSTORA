@@ -19,7 +19,7 @@ const syncRequest = z.discriminatedUnion("action", [
 ]).refine((input) => input.action !== "retention" || input.dryRun || input.continuation === undefined,
   { message: "Continuation is only valid for retention dry runs" });
 type WorkCounts = DispatchCounts | DrainCounts | RetentionCounts;
-export type OwnedAnalyticsAudit = { event: "owned_analytics_enqueue" | "owned_analytics_admission" | "owned_analytics_dispatch" | "owned_analytics_drain" | "owned_analytics_retention"; status: string; reason: string | null;
+export type OwnedAnalyticsAudit = { event: "owned_analytics_request" | "owned_analytics_enqueue" | "owned_analytics_admission" | "owned_analytics_dispatch" | "owned_analytics_drain" | "owned_analytics_retention"; status: string; reason: string | null;
   platform: OwnedAnalyticsPlatform | "all" | null; accountId: string | null; dryRun?: boolean; retentionFloor?: string; counts?: WorkCounts; resume?: DispatchResult };
 export type OwnedAnalyticsSyncDeps = {
   authorizeEnqueue?: (req: Request, userId: string) => Promise<boolean>;
@@ -69,7 +69,7 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
     if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
     const deadline = new AnalyticsWorkerDeadline(Date.now(), req.signal);
     let platform: OwnedAnalyticsPlatform | "all" | null = null;
-    let action: "enqueue" | "admit" | "enqueue-daily" | "drain" | "retention" = "admit";
+    let action: "enqueue" | "admit" | "enqueue-daily" | "drain" | "retention" | null = null;
     let dryRun: boolean | null = null;
     let retentionFloor: string | null = null;
     let accountId: string | null = null;
@@ -82,7 +82,7 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
       // A disconnected caller must not erase the terminal refusal receipt.
       // Work stops within 40 seconds; this independent audit has a 5-second cap.
       const auditSignal = AbortSignal.timeout(5_000);
-      try { auditStored = await awaitWithAbort(() => deps.audit({ event: event[action],
+      try { auditStored = await awaitWithAbort(() => deps.audit({ event: action ? event[action] : "owned_analytics_request",
         status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}), ...(resume ? { resume } : {}) }, auditSignal), auditSignal); }
       catch { auditStored = false; }
       return restrictedJsonResponse(req, { ok: (action === "enqueue" ? statusCode >= 200 && statusCode < 300 && !["collection_disabled", "not_eligible"].includes(status) : statusCode === 200) && auditStored, action, platform, status,
@@ -94,12 +94,12 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
       const auth = deps.authorize(req);
       const parsed = syncRequest.safeParse(await readSyncBody(req, deadline));
       if (!parsed.success) return await finish(auth.ok ? 400 : auth.status, "refused", auth.ok ? "invalid_request" : "unauthorized");
+      platform = parsed.data.platform;
+      action = parsed.data.action;
       if (parsed.data.action === "enqueue") {
         const ownerId = parsed.data.user_id;
         if (!deps.authorizeEnqueue || !await deadline.run(() => deps.authorizeEnqueue!(req, ownerId))) return await finish(401, "refused", "unauthorized");
       } else if (!auth.ok) return await finish(auth.status, "refused", "unauthorized");
-      platform = parsed.data.platform;
-      action = parsed.data.action;
       const store = new OwnedAnalyticsStore(deps.rpc, deadline);
       if (parsed.data.action === "enqueue") {
         const input = parsed.data;

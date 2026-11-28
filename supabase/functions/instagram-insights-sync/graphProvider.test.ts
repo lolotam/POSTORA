@@ -722,7 +722,7 @@ Deno.test("a nearly spent usage budget stops the media sweep", async () => {
 // ---------------------------------------------------------------------------
 
 Deno.test("the rate limit codes and HTTP 429 are rate limits", async () => {
-  for (const code of [4, 17, 32, 613]) {
+  for (const code of [4, 17, 32, 613, 80001, 80002]) {
     const { provider } = providerWith(() =>
       jsonResponse({ error: { code, message: "slow down" } }, { status: 400 })
     );

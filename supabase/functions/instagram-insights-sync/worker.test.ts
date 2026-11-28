@@ -2104,6 +2104,64 @@ Deno.test("a permission refusal of a backfill day closes no history", async () =
   assertEquals(harness.calls.completes, [{ outcome: "unavailable", reasonCode: "scope_missing" }]);
 });
 
+Deno.test("a transient failure on a backfill day skips the rest of the backfill and continues the core capture", async () => {
+  const failingDay = "2026-10-24";
+  const skippedDay = "2026-10-23";
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      missingDays: ["2026-10-25", failingDay, skippedDay],
+      missingPeriods: [7],
+    },
+    graph: {
+      accountDays: {
+        [TEST_PRIMARY_DAY]: accountDayAnswer({ reach: 450, views: 890 }),
+        [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+        "2026-10-25": accountDayAnswer({ reach: 350, views: 700 }),
+        [failingDay]: { error: { code: 2, message: "An unexpected error occurred" } },
+        [skippedDay]: accountDayAnswer({ reach: 300, views: 600 }),
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.partial, 1);
+  assertEquals(summary.retried, 0);
+
+  // The primary, correction and first backfill day were collected; the
+  // failing backfill day stopped the rest of the backfill for this visit.
+  assertEquals(writtenDays(harness.calls), [
+    TEST_PRIMARY_DAY,
+    TEST_CORRECTION_DAY,
+    "2026-10-25",
+  ]);
+  const askedDayUrls = harness.graphUrls.filter((url) =>
+    url.includes("metric_type=total_value") && !url.includes("metric=reach&")
+  );
+  assertEquals(askedDayUrls.length, 4);
+
+  // The core capture continued: period reach, media inventory and media
+  // insights were all collected on this visit.
+  assertEquals(harness.calls.periodTotals.length, 1);
+  assertEquals(harness.calls.periodTotals[0]!.period_days, 7);
+  assertEquals(
+    harness.calls.snapshots.filter((entry) => entry.kind === "owner_media").length,
+    2,
+  );
+
+  // The uncollected backfill days stay owed in the checkpoint, and the
+  // visit ends as partial (daily_observation_pending) rather than retry.
+  const progress = lastInventoryProgress(harness.calls);
+  assertEquals(progress.remaining_ids, [
+    `account_day:${failingDay}`,
+    `account_day:${skippedDay}`,
+  ]);
+  assertEquals(harness.calls.completes, [
+    { outcome: "partial", reasonCode: "daily_observation_pending" },
+  ]);
+});
+
 Deno.test("a throttled backfill day is never closed as unavailable", async () => {
   // HTTP 429 carrying code 100: a throttle of the application, not a refusal
   // of the day. Storing it as unavailable would close the day for good.

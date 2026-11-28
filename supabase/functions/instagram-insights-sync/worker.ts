@@ -2109,15 +2109,17 @@ async function collectDays(
   }
 
   // --- The daily observations --------------------------------------------
+  let backfillStopped = false;
   for (const day of visit.owedDays) {
     // The usage budget is nearly spent: no further provider call is made.
     if (visit.usageStop) break;
     if (!context.budget.canStartProviderCall()) break;
-    // History waits for a quiet budget. A backfill day queued by an earlier
-    // visit is checked again here, against the usage seen NOW, so a queue
-    // planned at low usage cannot spend a budget that has since filled. The
-    // day stays owed; the daily capture's own days still run.
-    if (visit.backfillDays.includes(day) && backfillCeilingReached(visit)) continue;
+    const isBackfillDay = visit.backfillDays.includes(day);
+    // History waits for a quiet budget, and a transient failure on one
+    // backfill day skips the rest of the backfill for this visit so the
+    // periods and the media capture can still run. The skipped days stay
+    // owed; the daily capture's own days still run.
+    if (isBackfillDay && (backfillStopped || backfillCeilingReached(visit))) continue;
 
     let dayValue: Awaited<
       ReturnType<InstagramGraphProvider["fetchAccountDay"]>
@@ -2147,10 +2149,20 @@ async function collectDays(
       // failure: a refusal of TODAY's data is about the account, not a day.
       if (
         error instanceof OwnerProviderError && isDefinitiveHistoryRefusal(error) &&
-        visit.backfillDays.includes(day)
+        isBackfillDay
       ) {
         logHistoryUnavailable(context, "owner_account_day_unavailable");
         dayValue = refusedAccountDay(day);
+      } else if (
+        isBackfillDay &&
+        (!(error instanceof OwnerProviderError) || error.kind === "provider_error")
+      ) {
+        if (error instanceof OwnerProviderError) {
+          visit.usagePercent = Math.max(visit.usagePercent, error.usagePercent);
+          visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
+        }
+        backfillStopped = true;
+        continue;
       } else {
         return {
           kind: "end",

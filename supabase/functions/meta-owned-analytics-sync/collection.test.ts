@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { FacebookInsightsProvider } from "../facebook-page-insights/provider.ts";
-import { createOwnedAnalyticsSyncHandler } from "./handler.ts";
+import { createOwnedAnalyticsSyncHandler, type OwnedAnalyticsAudit } from "./handler.ts";
 import type { MetricValue } from "../_shared/analyticsContract.ts";
 import { ThreadsInsightsProvider } from "../threads-insights/provider.ts";
 import { threadsCollection } from "./threadsCollection.ts";
@@ -223,3 +223,55 @@ Deno.test("post metadata truncation preserves complete Unicode characters at the
     assertEquals(collectionPost({ text, published_at: "2026-11-01T00:00:00Z", permalink: null }).text, expected);
   }
 });
+
+Deno.test("pre-parse method, auth, and body refusals audit as owned_analytics_request instead of admission", async (test) => {
+  const scenarios = [
+    {
+      name: "method_not_allowed",
+      authorized: true,
+      request: new Request("https://owned-analytics.invalid", { method: "GET" }),
+      expectedStatus: 405,
+      expectedReason: "method_not_allowed",
+    },
+    {
+      name: "invalid_request",
+      authorized: true,
+      request: new Request("https://owned-analytics.invalid", { method: "POST", body: JSON.stringify({ action: "unknown" }) }),
+      expectedStatus: 400,
+      expectedReason: "invalid_request",
+    },
+    {
+      name: "pre_parse_unauthorized",
+      authorized: false,
+      request: new Request("https://owned-analytics.invalid", { method: "POST", body: "not-json" }),
+      expectedStatus: 401,
+      expectedReason: "unauthorized",
+    },
+  ] as const;
+  for (const scenario of scenarios) {
+    await test.step(scenario.name, async () => {
+      const audits: OwnedAnalyticsAudit[] = [];
+      const handler = createOwnedAnalyticsSyncHandler({
+        authorize: () => scenario.authorized ? { ok: true } : { ok: false, status: 401 },
+        app: () => null,
+        audit: async (event) => { audits.push(event); return true; },
+        rpc: async () => { throw new Error("Pre-parse refusals must not call RPCs"); },
+      });
+      const response = await handler(scenario.request);
+      const body = await response.json();
+      assertEquals(response.status, scenario.expectedStatus);
+      assertEquals(body.action, null);
+      assertEquals(body.platform, null);
+      assertEquals(body.status, "refused");
+      assertEquals(body.reason, scenario.expectedReason);
+      assertEquals(audits, [{
+        event: "owned_analytics_request",
+        status: "refused",
+        reason: scenario.expectedReason,
+        platform: null,
+        accountId: null,
+      }]);
+    });
+  }
+});
+

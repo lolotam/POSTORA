@@ -13,6 +13,23 @@ export type StoredReportAudit = { event: "persisted_report_read" | "persisted_re
 export type StoredReportHandlerDeps = { authenticate: (req: Request, actingUserId: string | undefined) => Promise<{ userId: string }>;
   rpc: StoredAnalyticsRpc; secret: string; audit: (event: StoredReportAudit, signal: AbortSignal) => PromiseLike<boolean> };
 
+function refusalMessage(reason: PersistedReportRefused["reason"]): string {
+  switch (reason) {
+    case "account_not_found":
+      return "Account not found.";
+    case "history_expired":
+      return "Saved analytics history for this cursor has expired. Request the first page without a cursor.";
+    case "history_revision_changed":
+      return "Saved analytics history was updated while paging. Request the first page without a cursor.";
+    case "invalid_cursor":
+      return "Invalid saved analytics pagination cursor.";
+    case "invalid_contract":
+      return "Saved analytics storage returned an invalid contract.";
+    case "storage_unavailable":
+      return "Saved analytics could not be read. Please retry.";
+  }
+}
+
 export function createStoredReportHandler(deps: StoredReportHandlerDeps): (req: Request) => Promise<Response> {
   return async (req) => {
     if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
@@ -52,8 +69,12 @@ export function createStoredReportHandler(deps: StoredReportHandlerDeps): (req: 
         cursor: parsed.data.cursor ?? null, secret: deps.secret, now: new Date().toISOString(), rpc: deps.rpc, signal });
       return await finish(200, report, null);
     } catch (error) {
+      if (!(error instanceof PersistedReportRefused)) {
+        console.error(JSON.stringify({ event: "persisted_report_unexpected_error", ownerId, platform, accountId,
+          errorName: error instanceof Error ? error.name : "UnknownError" }));
+      }
       const refused = error instanceof PersistedReportRefused ? error : new PersistedReportRefused("storage_unavailable", 503);
-      return await finish(refused.status, { ok: false, reason: refused.reason, message: refused.reason === "account_not_found" ? "Account not found." : "Saved analytics could not be read. Please retry." }, refused.reason);
+      return await finish(refused.status, { ok: false, reason: refused.reason, message: refusalMessage(refused.reason) }, refused.reason);
     }
   };
 }

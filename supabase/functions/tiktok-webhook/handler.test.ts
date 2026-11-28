@@ -691,3 +691,116 @@ Deno.test("invalid envelopes return 200 and nothing is recorded (table-driven)",
     assertEquals(calls.length, 0, `Expected 0 calls for ${c.name}`);
   }
 });
+
+Deno.test("scheduleBackground returns 200 immediately after recording while applyPending settles in background", async () => {
+  const { client, getUpsertArgs } = createFakeWebhookAdmin({});
+  const logs: string[] = [];
+  const backgroundTasks: Promise<unknown>[] = [];
+  let releaseApply!: (value: "applied") => void;
+  let applyStarted = false;
+  let applyFinished = false;
+
+  const deps: TikTokWebhookDeps = {
+    clientSecret,
+    webhookSecret: null,
+    nowSeconds: () => nowSeconds,
+    admin: client,
+    applyPending: () => {
+      applyStarted = true;
+      return new Promise<"applied">((resolve) => {
+        releaseApply = (val) => {
+          applyFinished = true;
+          resolve(val);
+        };
+      });
+    },
+    scheduleBackground: (task) => {
+      backgroundTasks.push(task);
+    },
+    log: (msg) => logs.push(msg),
+  };
+
+  const payload = {
+    event: "post.publish.complete",
+    user_openid: "open_id_bg",
+    create_time: 1727700060,
+    content: JSON.stringify({
+      publish_id: "pub_bg_1",
+      post_id: "video_bg_1",
+    }),
+  };
+  const body = JSON.stringify(payload);
+  const signature = await computeSignature(clientSecret, nowSeconds, body);
+
+  const req = new Request("https://example.com/tiktok-webhook", {
+    method: "POST",
+    headers: { "TikTok-Signature": signature },
+    body,
+  });
+
+  const res = await handleTikTokWebhook(req, deps);
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { success: true });
+
+  const [upsertRow] = getUpsertArgs() as [{ publish_id: string }, unknown];
+  assertEquals(upsertRow.publish_id, "pub_bg_1");
+
+  assert(applyStarted, "Expected applyPending to have started");
+  assertEquals(applyFinished, false);
+  assertEquals(backgroundTasks.length, 1);
+
+  releaseApply("applied");
+  await backgroundTasks[0];
+  assertEquals(applyFinished, true);
+  assert(logs.includes("tiktok_webhook_applied:applied"));
+});
+
+Deno.test("scheduleBackground catches and logs background applyPending rejection without failing the 200 response", async () => {
+  const cases = [
+    { error: new Error("unexpected failure"), expectedLog: "tiktok_webhook_error" },
+    { error: new Error("tiktok_publish_apply_failed"), expectedLog: "tiktok_publish_apply_failed" },
+  ];
+
+  for (const tc of cases) {
+    const { client } = createFakeWebhookAdmin({});
+    const logs: string[] = [];
+    const backgroundTasks: Promise<unknown>[] = [];
+
+    const deps: TikTokWebhookDeps = {
+      clientSecret,
+      webhookSecret: null,
+      nowSeconds: () => nowSeconds,
+      admin: client,
+      applyPending: () => Promise.reject(tc.error),
+      scheduleBackground: (task) => {
+        backgroundTasks.push(task);
+      },
+      log: (msg) => logs.push(msg),
+    };
+
+    const payload = {
+      event: "post.publish.complete",
+      user_openid: "open_id_bg_err",
+      create_time: 1727700070,
+      content: JSON.stringify({ publish_id: "pub_bg_err" }),
+    };
+    const body = JSON.stringify(payload);
+    const signature = await computeSignature(clientSecret, nowSeconds, body);
+
+    const req = new Request("https://example.com/tiktok-webhook", {
+      method: "POST",
+      headers: { "TikTok-Signature": signature },
+      body,
+    });
+
+    const res = await handleTikTokWebhook(req, deps);
+    assertEquals(res.status, 200);
+    assertEquals(backgroundTasks.length, 1);
+
+    await backgroundTasks[0];
+    assert(
+      logs.includes(tc.expectedLog),
+      `Expected logs to include ${tc.expectedLog}, got: ${logs.join(", ")}`,
+    );
+  }
+});
