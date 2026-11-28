@@ -14,16 +14,27 @@ import { useYouTubeCategories } from "@/hooks/useYouTubeCategories";
 
 export type EditSaveOutcome = "saved" | "edit_conflict" | "rate_limited" | "refused" | "outcome_unknown";
 
+export type EditableYouTubePrivacy = "public" | "unlisted" | "private";
+
+function isEditablePrivacy(value: unknown): value is EditableYouTubePrivacy {
+  return value === "public" || value === "unlisted" || value === "private";
+}
+
 export interface EditSnapshotValues {
   title?: string;
   description?: string;
   tags?: string[];
   categoryId?: string | null;
+  privacyStatus?: string;
 }
 
 export type EditSnapshotInput =
   | string
-  | { revision: string; values?: EditSnapshotValues }
+  | {
+      revision: string;
+      values?: EditSnapshotValues;
+      restrictions?: { scheduleProtected: boolean };
+    }
   | null;
 
 /**
@@ -53,6 +64,8 @@ export interface YouTubeVideoEditCardProps {
     tags: string[];
     categoryId: string;
     baseRevision: string;
+    privacyStatus?: EditableYouTubePrivacy;
+    privacyConfirmation?: { to: EditableYouTubePrivacy };
   }) => Promise<EditSaveResult>;
   /** Scores draft title and thumbnail synergy without touching YouTube. */
   onRequestPackagingScore?: YouTubePackagingScoreGateway["scorePackaging"];
@@ -127,15 +140,33 @@ export function YouTubeVideoEditCard({
   const [draftTitle, setDraftTitle] = useState(video.title);
   const [draftDescription, setDraftDescription] = useState(video.description ?? "");
   const [draftTags, setDraftTags] = useState(formatTags(video.tags ?? []));
+  const [snapshotPrivacy, setSnapshotPrivacy] = useState<EditableYouTubePrivacy | null>(
+    isEditablePrivacy(video.privacy_status) ? video.privacy_status : null,
+  );
+  const [draftPrivacy, setDraftPrivacy] = useState<EditableYouTubePrivacy | "">(
+    isEditablePrivacy(video.privacy_status) ? video.privacy_status : "",
+  );
+  // Fail-closed (D-P7-8): privacy editing stays disabled until the snapshot
+  // explicitly reports restrictions.scheduleProtected === false.
+  const [scheduleProtected, setScheduleProtected] = useState(true);
+  const [scheduleProtectionReasonShown, setScheduleProtectionReasonShown] = useState(false);
+  const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<{ outcome: EditSaveOutcome; retryAfterSeconds: number | null } | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   const snapshotRequestIdRef = useRef(0);
-  const dirtyFieldsRef = useRef<{ title: boolean; description: boolean; tags: boolean; category: boolean }>({
+  const dirtyFieldsRef = useRef<{
+    title: boolean;
+    description: boolean;
+    tags: boolean;
+    category: boolean;
+    privacy: boolean;
+  }>({
     title: false,
     description: false,
     tags: false,
     category: false,
+    privacy: false,
   });
   const locale: "en" | "ar" = i18n.language?.startsWith("ar") ? "ar" : "en";
   const categoryCatalog = useYouTubeCategories(locale, accountId, region);
@@ -147,7 +178,10 @@ export function YouTubeVideoEditCard({
     setEditing(false);
     setOutcome(null);
     setRevision(null);
-    dirtyFieldsRef.current = { title: false, description: false, tags: false, category: false };
+    setScheduleProtected(true);
+    setScheduleProtectionReasonShown(false);
+    setPrivacyConfirmed(false);
+    dirtyFieldsRef.current = { title: false, description: false, tags: false, category: false, privacy: false };
   }, [video.id]);
 
   // While the editor is closed, keep the preview draft in sync with the latest
@@ -160,16 +194,26 @@ export function YouTubeVideoEditCard({
     setDraftTitle(video.title);
     setDraftDescription(video.description ?? "");
     setDraftTags(formatTags(video.tags ?? []));
-  }, [editing, video.id, video.category_id, video.title, video.description, video.tags]);
+    const nextPrivacy = isEditablePrivacy(video.privacy_status) ? video.privacy_status : null;
+    setSnapshotPrivacy(nextPrivacy);
+    setDraftPrivacy(nextPrivacy ?? "");
+    setPrivacyConfirmed(false);
+  }, [editing, video.id, video.category_id, video.title, video.description, video.tags, video.privacy_status]);
 
   const openEditor = async () => {
     snapshotRequestIdRef.current += 1;
     const requestId = snapshotRequestIdRef.current;
-    dirtyFieldsRef.current = { title: false, description: false, tags: false, category: false };
+    dirtyFieldsRef.current = { title: false, description: false, tags: false, category: false, privacy: false };
     setDraftCategory(video.category_id ?? "");
     setDraftTitle(video.title);
     setDraftDescription(video.description ?? "");
     setDraftTags(formatTags(video.tags ?? []));
+    const initialPrivacy = isEditablePrivacy(video.privacy_status) ? video.privacy_status : null;
+    setSnapshotPrivacy(initialPrivacy);
+    setDraftPrivacy(initialPrivacy ?? "");
+    setScheduleProtected(true);
+    setScheduleProtectionReasonShown(false);
+    setPrivacyConfirmed(false);
     setRevision(null);
     setEditing(true);
     setOutcome(null);
@@ -178,14 +222,29 @@ export function YouTubeVideoEditCard({
     if (snapshotRequestIdRef.current !== requestId) return;
     if (snap === null) {
       setRevision(null);
+      setScheduleProtected(true);
+      setScheduleProtectionReasonShown(false);
       setOutcome({ outcome: "outcome_unknown", retryAfterSeconds: null });
       return;
     }
     if (typeof snap === "string") {
       setRevision(snap);
+      setScheduleProtected(true);
+      setScheduleProtectionReasonShown(false);
       return;
     }
     setRevision(snap.revision);
+    const isProtected = snap.restrictions?.scheduleProtected !== false;
+    setScheduleProtected(isProtected);
+    setScheduleProtectionReasonShown(isProtected);
+    const nextSnapPrivacy = isEditablePrivacy(snap.values?.privacyStatus)
+      ? snap.values.privacyStatus
+      : null;
+    setSnapshotPrivacy(nextSnapPrivacy);
+    if (!dirtyFieldsRef.current.privacy) {
+      setDraftPrivacy(nextSnapPrivacy ?? "");
+      setPrivacyConfirmed(false);
+    }
     if (snap.values) {
       if (typeof snap.values.title === "string" && !dirtyFieldsRef.current.title) {
         setDraftTitle(snap.values.title);
@@ -208,6 +267,12 @@ export function YouTubeVideoEditCard({
     || containsAngleBrackets(draftTitle)
     || containsAngleBrackets(draftDescription)
     || parsedTags.some(containsAngleBrackets);
+  const privacyChanged =
+    !scheduleProtected
+    && snapshotPrivacy !== null
+    && draftPrivacy !== ""
+    && draftPrivacy !== snapshotPrivacy;
+  const privacySelectDisabled = saving || scheduleProtected || snapshotPrivacy === null;
 
   // The button toggles: an open editor closes without a save and without a
   // request, and the next open starts from a fresh snapshot.
@@ -216,22 +281,37 @@ export function YouTubeVideoEditCard({
       snapshotRequestIdRef.current += 1;
       setEditing(false);
       setRevision(null);
+      setPrivacyConfirmed(false);
       return;
     }
     void openEditor();
   };
 
   const save = async () => {
-    if (!onSave || saving || revision === null) return;
+    if (!onSave || saving || revision === null || (privacyChanged && !privacyConfirmed)) return;
     setSaving(true);
     setOutcome(null);
     try {
+      const confirmedPrivacy: EditableYouTubePrivacy | null =
+        !scheduleProtected &&
+        snapshotPrivacy !== null &&
+        draftPrivacy !== "" &&
+        draftPrivacy !== snapshotPrivacy &&
+        privacyConfirmed
+          ? draftPrivacy
+          : null;
       const result = await onSave({
         title: draftTitle,
         description: draftDescription,
         tags: parsedTags,
         categoryId: draftCategory,
         baseRevision: revision,
+        ...(confirmedPrivacy !== null
+          ? {
+              privacyStatus: confirmedPrivacy,
+              privacyConfirmation: { to: confirmedPrivacy },
+            }
+          : {}),
       });
       if (typeof result === "string") {
         setOutcome({ outcome: result, retryAfterSeconds: null });
@@ -320,20 +400,6 @@ export function YouTubeVideoEditCard({
               }}
               maxLength={100}
             />
-            <YouTubePackagingScoreCard
-              namespace="accounts"
-              title={draftTitle}
-              description={draftDescription}
-              disabled={saving}
-              requestScore={
-                onRequestPackagingScore ??
-                (() => Promise.reject(new Error("Packaging score is unavailable.")))
-              }
-              onApplyTitle={(newTitle) => {
-                dirtyFieldsRef.current.title = true;
-                setDraftTitle(newTitle);
-              }}
-            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="edit-video-description">
@@ -376,10 +442,72 @@ export function YouTubeVideoEditCard({
             label={t("youtubeManagement.detail.category", "Category")}
             unavailableText={t("youtubeManagement.detail.categoryUnavailable", "Currently unavailable")}
           />
+          <YouTubePackagingScoreCard
+            namespace="accounts"
+            title={draftTitle}
+            description={draftDescription}
+            disabled={saving}
+            requestScore={
+              onRequestPackagingScore ??
+              (() => Promise.reject(new Error("Packaging score is unavailable.")))
+            }
+            onApplyTitle={(newTitle) => {
+              dirtyFieldsRef.current.title = true;
+              setDraftTitle(newTitle);
+            }}
+          />
+          <div className="space-y-2">
+            <Label htmlFor="edit-video-privacy">
+              {t("youtubeManagement.detail.privacyLabel", "Privacy")}
+            </Label>
+            <select
+              id="edit-video-privacy"
+              value={draftPrivacy}
+              disabled={privacySelectDisabled}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                if (!isEditablePrivacy(nextValue)) return;
+                dirtyFieldsRef.current.privacy = true;
+                setDraftPrivacy(nextValue);
+                setPrivacyConfirmed(false);
+              }}
+            >
+              {draftPrivacy === "" ? <option value="" disabled /> : null}
+              <option value="public">{t("youtubeManagement.detail.privacyPublic", "Public")}</option>
+              <option value="unlisted">{t("youtubeManagement.detail.privacyUnlisted", "Unlisted")}</option>
+              <option value="private">{t("youtubeManagement.detail.privacyPrivate", "Private")}</option>
+            </select>
+            {scheduleProtectionReasonShown && snapshotPrivacy !== null ? (
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  "youtubeManagement.detail.privacyScheduleProtected",
+                  "This video is scheduled on YouTube. Its privacy changes at the scheduled time.",
+                )}
+              </p>
+            ) : null}
+            {privacyChanged ? (
+              <div className="flex items-start gap-2">
+                <input
+                  id="edit-video-privacy-confirm"
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-input"
+                  checked={privacyConfirmed}
+                  disabled={saving}
+                  onChange={(event) => setPrivacyConfirmed(event.target.checked)}
+                />
+                <Label htmlFor="edit-video-privacy-confirm" className="text-xs font-normal leading-relaxed">
+                  {draftPrivacy === "public"
+                    ? `${t("youtubeManagement.detail.privacyConfirm", "I understand this changes who can see this video on YouTube.")} ${t("youtubeManagement.detail.privacyConfirmPublic", "It becomes visible to everyone.")}`
+                    : t("youtubeManagement.detail.privacyConfirm", "I understand this changes who can see this video on YouTube.")}
+                </Label>
+              </div>
+            ) : null}
+          </div>
           <Button
             type="button"
             size="sm"
-            disabled={!onSave || saving || revision === null || draftIsRefused}
+            disabled={!onSave || saving || revision === null || draftIsRefused || (privacyChanged && !privacyConfirmed)}
             onClick={save}
           >
             {saving

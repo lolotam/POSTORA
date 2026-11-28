@@ -55,8 +55,8 @@ const Terms = () => {
             <h3 className="text-xl font-semibold mt-6 mb-3">4.1 YouTube and Google Services</h3>
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora uses YouTube API Services to provide owner-authorized video and Short publishing (including creating a new playlist on your channel when you explicitly ask via playlists.insert, adding a newly uploaded video to a playlist you choose via playlistItems.insert, and, when you attach an .srt or .vtt caption file to a new video upload in Create Post or attach subtitles generated from the video's audio in Create Post, sending that caption track to YouTube after the video upload completes under youtube.force-ssl), channel
-              and uploaded-video browsing, published video metadata editing (title, description, tags and
-              category), comment creation and moderation,
+              and uploaded-video browsing, published video metadata editing (title, description, tags,
+              category and privacy, with privacy changed only on your explicit confirmation), comment creation and moderation,
               and on-demand channel and video analytics. Analytics is available only where enabled and after you
               accept the current Analytics Purpose Clause inside Postora for that connection. By connecting your
               YouTube account to Postora:

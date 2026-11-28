@@ -693,6 +693,7 @@ describe("YouTubeManagementScreen caption tracks", () => {
 describe("YouTubeManagementScreen published metadata editing", () => {
   function editGateway(options: {
     editMetadata?: YouTubeCapabilityState;
+    getEditSnapshot?: YouTubeResourcesGateway["getEditSnapshot"];
     updateVideo?: YouTubeResourcesGateway["updateVideo"];
   }): YouTubeResourcesGateway {
     const base = gateway();
@@ -733,9 +734,10 @@ describe("YouTubeManagementScreen published metadata editing", () => {
         statistics: { view_count: null, like_count: null, comment_count: null },
         url: "https://www.youtube.com/watch?v=x",
       }))),
-      getEditSnapshot: vi.fn(async () => envelope({
+      getEditSnapshot: options.getEditSnapshot ?? vi.fn(async () => envelope({
         revision: "rev-1",
         values: { title: "Details of acc-a-video", description: "Body text", tags: ["one"], privacyStatus: "public", categoryId: "22" },
+        restrictions: { scheduleProtected: false },
       })),
       updateVideo: options.updateVideo ?? vi.fn(async () => envelope({ revision: "rev-2" })),
     };
@@ -864,5 +866,66 @@ describe("YouTubeManagementScreen published metadata editing", () => {
     await userEvent.click(screen.getByTestId("youtube-packaging-use-title-1"));
     expect(screen.getByLabelText("Title")).toHaveValue("The 90-Day YouTube Growth Blueprint");
     expect(updateVideo).not.toHaveBeenCalled();
+  });
+
+  it("sends privacy_status and privacyConfirmation only when privacy is changed and confirmed, and disables Privacy when scheduleProtected is true", async () => {
+    const updateVideo = vi.fn(async () => envelope({ revision: "rev-2" }));
+    const fake = editGateway({ updateVideo: updateVideo as unknown as YouTubeResourcesGateway["updateVideo"] });
+    const view = await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+    await openTheEditor();
+
+    const privacySelect = screen.getByLabelText("Privacy");
+    await waitFor(() => expect(privacySelect).not.toBeDisabled());
+    expect(privacySelect).toHaveValue("public");
+
+    await userEvent.selectOptions(privacySelect, "unlisted");
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+
+    await userEvent.click(
+      screen.getByRole("checkbox", {
+        name: "I understand this changes who can see this video on YouTube.",
+      }),
+    );
+    expect(save).not.toBeDisabled();
+    await userEvent.click(save);
+
+    await waitFor(() => expect(updateVideo).toHaveBeenCalledTimes(1));
+    expect(updateVideo).toHaveBeenCalledWith({
+      accountId: "acc-a",
+      videoId: "acc-a-video",
+      baseRevision: "rev-1",
+      changes: {
+        privacy_status: "unlisted",
+      },
+      privacyConfirmation: { to: "unlisted" },
+    });
+
+    // When the video is schedule-protected, the Privacy select is disabled with its reason.
+    view.unmount();
+    const scheduledFake = editGateway({
+      getEditSnapshot: vi.fn(async () =>
+        envelope({
+          revision: "rev-sched",
+          values: {
+            title: "Details of acc-a-video",
+            description: "Body text",
+            tags: ["one"],
+            privacyStatus: "private",
+            categoryId: "22",
+          },
+          restrictions: { scheduleProtected: true },
+        }),
+      ),
+    });
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={scheduledFake} />);
+    await openTheEditor();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("This video is scheduled on YouTube. Its privacy changes at the scheduled time."),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Privacy")).toBeDisabled();
   });
 });

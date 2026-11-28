@@ -20,7 +20,7 @@ import type {
 } from "../domain/types";
 import type { YouTubeThumbnailCandidate, YouTubeThumbnailOutcome } from "../domain/thumbnail";
 import type { YouTubePackagingScoreGateway } from "../application/ports";
-import type { EditSaveResult, EditSnapshotInput } from "./YouTubeVideoEditCard";
+import type { EditableYouTubePrivacy, EditSaveResult, EditSnapshotInput } from "./YouTubeVideoEditCard";
 import type { ResolvedTier } from "@/components/ai/ResolvedModelCards";
 import { YouTubeVideoEditCard } from "./YouTubeVideoEditCard";
 import { YouTubeThumbnailChange } from "./YouTubeThumbnailChange";
@@ -68,6 +68,8 @@ export function YouTubeVideoDrawer({
     tags: string[];
     categoryId: string;
     baseRevision: string;
+    privacyStatus?: EditableYouTubePrivacy;
+    privacyConfirmation?: { to: EditableYouTubePrivacy };
   }) => Promise<EditSaveResult>;
   onRequestPackagingScore?: YouTubePackagingScoreGateway["scorePackaging"];
   /** The server's derived thumbnail capability; null until it is known. */

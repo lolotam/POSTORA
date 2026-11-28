@@ -81,8 +81,8 @@ describe("YouTube legal disclosures", () => {
     expect(text).toContain("thumbnails.set");
     expect(text).toContain("Edit published video metadata");
     expect(text).toContain("videos.update");
-    expect(text).toContain("title, description, tags");
-    expect(text).toContain("and category");
+    expect(text).toContain("title, description, tags, category and privacy");
+    expect(text).toContain("with privacy changed only on the owner's explicit confirmation");
     expect(text).toContain("Postora does not replace existing video media bytes or delete your videos.");
     expect(text).toContain("can create a new playlist on your channel when you explicitly ask (playlists.insert)");
     expect(text).toContain("can add a newly uploaded video to an existing playlist you choose through the narrower force-ssl scope");
@@ -238,10 +238,10 @@ describe("YouTube legal disclosures", () => {
     const text = pageText(container);
 
     expect(text).toContain("Your uploaded videos and their details when you browse your channel in Postora");
-    expect(text).toContain("Published video metadata (title, description, tags and category) when you instruct Postora to edit a video you already uploaded");
+    expect(text).toContain("Published video metadata (title, description, tags, category and privacy, with privacy changed only on your explicit confirmation) when you instruct Postora to edit a video you already uploaded");
     expect(text).toContain("The playlists of your channel (playlist ID, title, privacy status) when you open YouTube publishing settings for a single connected channel or choose a destination playlist for a video you publish");
     expect(text).toContain("let you browse your uploaded videos and their full details");
-    expect(text).toContain("Edit published video metadata (title, description, tags and category) only when you instruct Postora to make that change");
+    expect(text).toContain("Edit published video metadata (title, description, tags, category and privacy, with privacy changed only on your explicit confirmation) only when you instruct Postora to make that change");
     expect(text).toContain("Replace the thumbnail of a video you already uploaded with a JPEG or PNG image from your own media library, only when you pick the image and confirm the change");
     expect(text).toContain("The bytes of a JPEG or PNG image from your own Postora media library when you replace the thumbnail of a video you already uploaded");
     expect(text).toContain("List your channel's playlists so you can choose a destination playlist when publishing, create a new playlist on your channel when you explicitly instruct Postora in Create Post (playlists.insert), and add a newly uploaded video to the playlist you select");
@@ -266,7 +266,7 @@ describe("YouTube legal disclosures", () => {
 
     expect(text).toContain("video and Short publishing");
     expect(text).toContain("channel and uploaded-video browsing");
-    expect(text).toContain("published video metadata editing (title, description, tags and category)");
+    expect(text).toContain("published video metadata editing (title, description, tags, category and privacy, with privacy changed only on your explicit confirmation)");
     expect(text).toContain("comment creation and moderation");
     expect(text).toContain("on-demand channel and video analytics");
     expect(text).toContain("accept the current Analytics Purpose Clause inside Postora for that connection");

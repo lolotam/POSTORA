@@ -34,10 +34,12 @@ export type EditScenario = "available" | "conflict" | "unknown" | "reconnect" | 
 
 /** Mutations the browser actually sent, so a journey can assert the wire body. */
 export const youtubeFixtureState = {
+  currentPrivacy: VIDEO.privacy as string,
   updateRequests: [] as Array<{
     videoId: unknown;
     baseRevision: unknown;
     changes: Record<string, unknown>;
+    privacyConfirmation?: unknown;
   }>,
 };
 
@@ -68,6 +70,7 @@ function storageKey(url: string): string {
 }
 
 export async function startStage3Journey(page: Page, scenario: Stage3Scenario = {}): Promise<void> {
+  youtubeFixtureState.currentPrivacy = VIDEO.privacy;
   youtubeFixtureState.updateRequests = [];
   const url = requireLocalUrl();
   await page.addInitScript(
@@ -142,7 +145,13 @@ export async function startStage3Journey(page: Page, scenario: Stage3Scenario = 
     }]));
 
   await page.route(/\/functions\/v1\/youtube-resources/, async (route) => {
-    const body = (route.request().postDataJSON() ?? {}) as { operation?: string };
+    const body = (route.request().postDataJSON() ?? {}) as {
+      operation?: string;
+      video_id?: unknown;
+      base_revision?: unknown;
+      changes?: Record<string, unknown>;
+      privacy_confirmation?: unknown;
+    };
     const operation = body.operation;
     if (operation === "capabilities") {
       const state = scenario.edit === "reconnect"
@@ -182,7 +191,7 @@ export async function startStage3Journey(page: Page, scenario: Stage3Scenario = 
     if (operation === "videos") {
       return json(route, 200, envelope({ items: [{
         id: VIDEO.id, title: VIDEO.title, thumbnail_url: null, published_at: null,
-        privacy_status: VIDEO.privacy, url: `https://www.youtube.com/watch?v=${VIDEO.id}`,
+        privacy_status: youtubeFixtureState.currentPrivacy, url: `https://www.youtube.com/watch?v=${VIDEO.id}`,
       }], next_page_token: null, total_results: 1 }));
     }
     if (operation === "video" || operation === "edit_snapshot") {
@@ -196,12 +205,12 @@ export async function startStage3Journey(page: Page, scenario: Stage3Scenario = 
         description: "Fixture description",
         category_id: VIDEO.categoryId,
         categoryId: VIDEO.categoryId,
-        privacy_status: VIDEO.privacy,
+        privacy_status: youtubeFixtureState.currentPrivacy,
         values: {
           title: VIDEO.title,
           description: "Fixture description",
           tags: [],
-          privacyStatus: VIDEO.privacy,
+          privacyStatus: youtubeFixtureState.currentPrivacy,
           categoryId: VIDEO.categoryId,
         },
         restrictions: { scheduleProtected: false, unknownFieldsBlocked: false },
@@ -213,14 +222,21 @@ export async function startStage3Journey(page: Page, scenario: Stage3Scenario = 
       }));
     }
     if (operation === "update_video") {
+      const nextChanges = (body.changes ?? {}) as Record<string, unknown>;
       youtubeFixtureState.updateRequests.push({
         videoId: body.video_id,
         baseRevision: body.base_revision,
-        changes: (body.changes ?? {}) as Record<string, unknown>,
+        changes: nextChanges,
+        ...(body.privacy_confirmation !== undefined
+          ? { privacyConfirmation: body.privacy_confirmation }
+          : {}),
       });
       if (scenario.edit === "conflict") return json(route, 409, { error: "edit_conflict", request_id: "fixture" });
       if (scenario.edit === "unknown") return json(route, 502, { error: "outcome_unknown", request_id: "fixture" });
       if (scenario.edit === "reconnect") return json(route, 409, { error: "reconnect_required", request_id: "fixture" });
+      if (typeof nextChanges.privacy_status === "string") {
+        youtubeFixtureState.currentPrivacy = nextChanges.privacy_status;
+      }
       return json(route, 200, envelope({ revision: "fixture-revision-2" }));
     }
     return json(route, 400, { error: "invalid_request", request_id: "fixture" });

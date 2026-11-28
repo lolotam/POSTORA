@@ -147,7 +147,18 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
   const browseUnavailable = browse?.state === "unavailable";
   const refreshBusy = capabilities.isFetching || channel.isFetching || videos.isFetching || video.isFetching;
 
-  // A refused capability means every read is refused; Refresh must not spend
+  const editSnapshotValuesByRevisionRef = useRef<
+    Map<
+      string,
+      {
+        title: string;
+        description?: string;
+        tags?: string[];
+        categoryId: string | null;
+        privacyStatus: string;
+      }
+    >
+  >(new Map());
   // the user's quota by refetching against it.
   const refresh = () => {
     if (browseUnavailable) return;
@@ -308,25 +319,50 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
           if (!activeAccountId || !gateway.getEditSnapshot) return null;
           try {
             const result = await gateway.getEditSnapshot({ accountId: activeAccountId, videoId });
-            return { revision: result.data.revision, values: result.data.values };
+            editSnapshotValuesByRevisionRef.current.set(
+              `${activeAccountId}:${videoId}:${result.data.revision}`,
+              result.data.values,
+            );
+            return {
+              revision: result.data.revision,
+              values: result.data.values,
+              ...(result.data.restrictions ? { restrictions: result.data.restrictions } : {}),
+            };
           } catch {
             return null;
           }
         }}
         onRequestPackagingScore={(params) => packagingScoreGateway.scorePackaging(params)}
-        onSave={async ({ title, description, tags, categoryId, baseRevision }) => {
+        onSave={async ({ title, description, tags, categoryId, baseRevision, privacyStatus, privacyConfirmation }) => {
           if (!activeAccountId || !selectedVideoId || !gateway.updateVideo) return "outcome_unknown";
           try {
+            const snapVals = editSnapshotValuesByRevisionRef.current.get(
+              `${activeAccountId}:${selectedVideoId}:${baseRevision}`,
+            );
+            const snippetChanged =
+              !snapVals ||
+              title !== snapVals.title ||
+              description !== (snapVals.description ?? "") ||
+              categoryId !== (snapVals.categoryId ?? "") ||
+              tags.length !== (snapVals.tags ?? []).length ||
+              tags.some((tag, idx) => tag !== (snapVals.tags ?? [])[idx]);
+            const includeSnippet = !privacyStatus || snippetChanged;
             const updated = await gateway.updateVideo({
               accountId: activeAccountId,
               videoId: selectedVideoId,
               baseRevision,
               changes: {
-                title,
-                description,
-                tags,
-                ...(categoryId ? { category_id: categoryId } : {}),
+                ...(includeSnippet
+                  ? {
+                      title,
+                      description,
+                      tags,
+                      ...(categoryId ? { category_id: categoryId } : {}),
+                    }
+                  : {}),
+                ...(privacyStatus ? { privacy_status: privacyStatus } : {}),
               },
+              ...(privacyConfirmation ? { privacyConfirmation } : {}),
             });
             // The saved answer is only a claim: the verified values live in the
             // video itself, so the drawer and the library read it again.

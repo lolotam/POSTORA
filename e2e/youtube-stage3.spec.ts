@@ -88,6 +88,40 @@ test.describe("YouTube Stage 3 offline journeys", () => {
     expect(typeof youtubeFixtureState.updateRequests[0].baseRevision).toBe("string");
   });
 
+  test("EN privacy change in drawer requires confirmation checkbox before saving", async ({ page }) => {
+    await startStage3Journey(page, { edit: "available" });
+    await openEditor(page);
+    const privacySelect = page.getByLabel("Privacy", { exact: true });
+    await expect(privacySelect).toBeEnabled();
+    await expect(privacySelect).toHaveValue("private");
+
+    await privacySelect.selectOption("public");
+    const saveButton = page.getByRole("button", { name: /^save$/i });
+    await expect(saveButton).toBeDisabled();
+
+    const confirmCheckbox = page.getByRole("checkbox", {
+      name: /I understand this changes who can see this video on YouTube\. It becomes visible to everyone\./i,
+    });
+    await expect(confirmCheckbox).toBeVisible();
+    await confirmCheckbox.check();
+    await expect(saveButton).toBeEnabled();
+
+    await saveButton.click();
+    await expect(page.getByRole("status")).toContainText(/match your changes/i);
+    await expect(privacySelect).toBeHidden();
+    await expect(page.getByRole("dialog").locator("dd", { hasText: /^public$/ })).toBeVisible();
+    expect(youtubeFixtureState.updateRequests).toHaveLength(1);
+    expect(youtubeFixtureState.updateRequests[0]).toMatchObject({
+      videoId: VIDEO.id,
+      changes: {
+        privacy_status: "public",
+      },
+      privacyConfirmation: {
+        to: "public",
+      },
+    });
+  });
+
   test("a stale base is reported as a conflict without claiming success", async ({ page }) => {
     await startStage3Journey(page, { edit: "conflict" });
     await openEditor(page);

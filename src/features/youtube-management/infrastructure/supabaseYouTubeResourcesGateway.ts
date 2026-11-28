@@ -146,6 +146,9 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
       privacyStatus: string;
       categoryId: string | null;
     };
+    restrictions?: {
+      scheduleProtected: boolean;
+    };
   }>> {
     return call(
       { operation: "edit_snapshot", account_id: params.accountId, video_id: params.videoId },
@@ -158,8 +161,20 @@ export class SupabaseYouTubeResourcesGateway implements YouTubeResourcesGateway 
           privacyStatus: string;
           categoryId: string | null;
         };
-      } =>
-        typeof data === "object" && data !== null && typeof (data as { revision?: unknown }).revision === "string",
+        restrictions?: {
+          scheduleProtected: boolean;
+        };
+      } => {
+        if (!isRecord(data) || typeof data.revision !== "string") {
+          return false;
+        }
+        if ("restrictions" in data && data.restrictions !== undefined) {
+          if (!isRecord(data.restrictions) || typeof data.restrictions.scheduleProtected !== "boolean") {
+            return false;
+          }
+        }
+        return true;
+      },
     );
   }
 

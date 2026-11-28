@@ -110,7 +110,7 @@ Deno.test("a status edit carries every writable sibling including explicit false
   assertEquals(status.containsSyntheticMedia, false);
 });
 
-Deno.test("a stale base, an unconfirmed privacy change and an unknown field are refused", async () => {
+Deno.test("a stale base, an unconfirmed or mismatched privacy change and an unknown field are refused", async () => {
   const snapshot = await snapshotOf();
   const stale = video({ snippet: { ...video().snippet, title: "Changed elsewhere" } });
   await assertRejects(
@@ -125,7 +125,7 @@ Deno.test("a stale base, an unconfirmed privacy change and an unknown field are 
     EditFailure,
     "changed since it was opened",
   );
-  await assertRejects(
+  const unconfirmedErr = await assertRejects(
     () => planEditUpdate({
       snapshot,
       changes: { privacyStatus: "public" },
@@ -137,6 +137,22 @@ Deno.test("a stale base, an unconfirmed privacy change and an unknown field are 
     EditFailure,
     "not confirmed",
   );
+  assertEquals(unconfirmedErr.code, "invalid_request");
+
+  const mismatchedErr = await assertRejects(
+    () => planEditUpdate({
+      snapshot,
+      changes: { privacyStatus: "public" },
+      freshVideo: video(),
+      ownerId: OWNER,
+      accountId: ACCOUNT,
+      privacyConfirmation: { to: "unlisted" },
+    }),
+    EditFailure,
+    "not confirmed",
+  );
+  assertEquals(mismatchedErr.code, "invalid_request");
+
   await assertRejects(
     () => planEditUpdate({
       snapshot,
@@ -173,7 +189,7 @@ Deno.test("a scheduled video cannot change privacy", async () => {
   scheduled.status.publishAt = "2026-12-01T10:00:00Z";
   const snapshot = await snapshotOf(scheduled);
   assertEquals(snapshot.restrictions.scheduleProtected, true);
-  await assertRejects(
+  const scheduledErr = await assertRejects(
     () => planEditUpdate({
       snapshot,
       changes: { privacyStatus: "public" },
@@ -185,9 +201,10 @@ Deno.test("a scheduled video cannot change privacy", async () => {
     EditFailure,
     "protected",
   );
+  assertEquals(scheduledErr.code, "invalid_request");
 });
 
-Deno.test("verification demands the same video id and the intended field values", async () => {
+Deno.test("verification demands the same video id and the intended field values including privacyStatus", async () => {
   const snapshot = await snapshotOf();
   const plan = await planEditUpdate({
     snapshot,
@@ -223,6 +240,32 @@ Deno.test("verification demands the same video id and the intended field values"
     EditFailure,
     "title",
   );
+
+  const privacyPlan = await planEditUpdate({
+    snapshot,
+    changes: { privacyStatus: "unlisted" },
+    freshVideo: video(),
+    ownerId: OWNER,
+    accountId: ACCOUNT,
+    privacyConfirmation: { to: "unlisted" },
+  });
+  verifyEditResult({
+    responseId: VIDEO_ID,
+    reread: video({ status: { ...video().status, privacyStatus: "unlisted" } }),
+    expectedVideoId: VIDEO_ID,
+    plan: privacyPlan,
+  });
+  const privacyMismatchErr = assertThrows(
+    () => verifyEditResult({
+      responseId: VIDEO_ID,
+      reread: video({ status: { ...video().status, privacyStatus: "private" } }),
+      expectedVideoId: VIDEO_ID,
+      plan: privacyPlan,
+    }),
+    EditFailure,
+    "privacy",
+  );
+  assertEquals(privacyMismatchErr.code, "outcome_unknown");
 });
 
 Deno.test("tags validation accepts valid tags and refuses empty, angle-bracket, or >500 total char tags", async () => {
