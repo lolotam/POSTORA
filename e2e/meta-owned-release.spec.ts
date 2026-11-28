@@ -93,7 +93,7 @@ for (const platform of META_PLATFORMS) {
       expect(archivedReport.connection.reason_code).toBe("account_inactive");
     }
     await expect(region.getByText(`Saved ${platform} archived post 00`, { exact: true })).toBeVisible();
-    await expect(region.getByText(platform === "facebook" ? "Analytics collection is not enabled for this account yet." : "Reconnect the account to resume collection.", { exact: true })).toBeVisible();
+    await expect(region.getByText(platform === "facebook" ? "Analytics collection is not enabled for this account yet." : "Up to date", { exact: true })).toBeVisible();
     await region.getByLabel("Account").selectOption(account(platform, "active").id);
     await expect(region.getByRole("button", { name: "Load more posts" })).toBeVisible();
     await control(request, platform, "revision");
