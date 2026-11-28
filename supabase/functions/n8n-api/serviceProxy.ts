@@ -154,7 +154,7 @@ function redactErrorText(data: unknown): unknown {
 
 const CREDENTIAL_QUERY_RE = /(?:[?#&]|%3f|%26)(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:^|[\s"'(&?])(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
-const DIAGNOSTIC_KEY_RE = /(?:error|message|reason|detail|cause|diagnostic|stack|trace)/i;
+const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
 // Graph pagination URLs (paging.next / paging.previous) embed the connected
 // account's access_token, so they never leave the proxy; the opaque cursors
