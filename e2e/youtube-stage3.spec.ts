@@ -108,7 +108,8 @@ test.describe("YouTube Stage 3 offline journeys", () => {
 
     await saveButton.click();
     await expect(page.getByRole("status")).toContainText(/match your changes/i);
-    await expect(page.getByRole("dialog")).toContainText(/public/i);
+    await expect(privacySelect).toBeHidden();
+    await expect(page.getByRole("dialog").locator("dd", { hasText: /^public$/ })).toBeVisible();
     expect(youtubeFixtureState.updateRequests).toHaveLength(1);
     expect(youtubeFixtureState.updateRequests[0]).toMatchObject({
       videoId: VIDEO.id,
