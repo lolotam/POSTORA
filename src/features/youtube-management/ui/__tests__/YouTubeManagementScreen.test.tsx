@@ -896,10 +896,6 @@ describe("YouTubeManagementScreen published metadata editing", () => {
       videoId: "acc-a-video",
       baseRevision: "rev-1",
       changes: {
-        title: "Details of acc-a-video",
-        description: "Body text",
-        tags: ["one"],
-        category_id: "22",
         privacy_status: "unlisted",
       },
       privacyConfirmation: { to: "unlisted" },

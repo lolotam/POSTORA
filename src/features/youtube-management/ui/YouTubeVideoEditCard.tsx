@@ -149,6 +149,7 @@ export function YouTubeVideoEditCard({
   // Fail-closed (D-P7-8): privacy editing stays disabled until the snapshot
   // explicitly reports restrictions.scheduleProtected === false.
   const [scheduleProtected, setScheduleProtected] = useState(true);
+  const [scheduleProtectionReasonShown, setScheduleProtectionReasonShown] = useState(false);
   const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<{ outcome: EditSaveOutcome; retryAfterSeconds: number | null } | null>(null);
@@ -178,6 +179,7 @@ export function YouTubeVideoEditCard({
     setOutcome(null);
     setRevision(null);
     setScheduleProtected(true);
+    setScheduleProtectionReasonShown(false);
     setPrivacyConfirmed(false);
     dirtyFieldsRef.current = { title: false, description: false, tags: false, category: false, privacy: false };
   }, [video.id]);
@@ -210,6 +212,7 @@ export function YouTubeVideoEditCard({
     setSnapshotPrivacy(initialPrivacy);
     setDraftPrivacy(initialPrivacy ?? "");
     setScheduleProtected(true);
+    setScheduleProtectionReasonShown(false);
     setPrivacyConfirmed(false);
     setRevision(null);
     setEditing(true);
@@ -220,16 +223,28 @@ export function YouTubeVideoEditCard({
     if (snap === null) {
       setRevision(null);
       setScheduleProtected(true);
+      setScheduleProtectionReasonShown(false);
       setOutcome({ outcome: "outcome_unknown", retryAfterSeconds: null });
       return;
     }
     if (typeof snap === "string") {
       setRevision(snap);
       setScheduleProtected(true);
+      setScheduleProtectionReasonShown(false);
       return;
     }
     setRevision(snap.revision);
-    setScheduleProtected(snap.restrictions?.scheduleProtected !== false);
+    const isProtected = snap.restrictions?.scheduleProtected !== false;
+    setScheduleProtected(isProtected);
+    setScheduleProtectionReasonShown(isProtected);
+    const nextSnapPrivacy = isEditablePrivacy(snap.values?.privacyStatus)
+      ? snap.values.privacyStatus
+      : null;
+    setSnapshotPrivacy(nextSnapPrivacy);
+    if (!dirtyFieldsRef.current.privacy) {
+      setDraftPrivacy(nextSnapPrivacy ?? "");
+      setPrivacyConfirmed(false);
+    }
     if (snap.values) {
       if (typeof snap.values.title === "string" && !dirtyFieldsRef.current.title) {
         setDraftTitle(snap.values.title);
@@ -242,16 +257,6 @@ export function YouTubeVideoEditCard({
       }
       if (snap.values.categoryId !== undefined && !dirtyFieldsRef.current.category) {
         setDraftCategory(snap.values.categoryId ?? "");
-      }
-      if (snap.values.privacyStatus !== undefined) {
-        const nextSnapPrivacy = isEditablePrivacy(snap.values.privacyStatus)
-          ? snap.values.privacyStatus
-          : null;
-        setSnapshotPrivacy(nextSnapPrivacy);
-        if (!dirtyFieldsRef.current.privacy) {
-          setDraftPrivacy(nextSnapPrivacy ?? "");
-          setPrivacyConfirmed(false);
-        }
       }
     }
   };
@@ -473,7 +478,7 @@ export function YouTubeVideoEditCard({
               <option value="unlisted">{t("youtubeManagement.detail.privacyUnlisted", "Unlisted")}</option>
               <option value="private">{t("youtubeManagement.detail.privacyPrivate", "Private")}</option>
             </select>
-            {scheduleProtected && snapshotPrivacy !== null ? (
+            {scheduleProtectionReasonShown && snapshotPrivacy !== null ? (
               <p className="text-xs text-muted-foreground">
                 {t(
                   "youtubeManagement.detail.privacyScheduleProtected",

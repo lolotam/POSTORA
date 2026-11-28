@@ -8,6 +8,8 @@ const OWNER = "owner-1";
 const CHANNEL = "UCfixturechannel000000001";
 const VIDEO = "AbcD1234eFg";
 
+const FAKE_CRED = "yt";
+
 const baseVideo = (
   title = "Original",
   statusOverrides: Partial<ProviderVideo["status"]> = {},
@@ -77,11 +79,11 @@ function composition(
         });
       },
     },
-    tokens: { get: () => Promise.resolve({ ok: true as const, accessToken: "yt-access", minted: false }) },
+    tokens: { get: () => Promise.resolve({ ok: true as const, accessToken: FAKE_CRED, minted: false }) },
     accounts: {
       load: ({ accountId, userId }) => Promise.resolve({
         id: accountId, userId, channelId: CHANNEL, authProvider: null, needsReauth: false,
-        accessToken: "yt-access", refreshToken: null, tokenExpiresAt: null, accountMetadata: { country: "DE" },
+        accessToken: FAKE_CRED, refreshToken: null, tokenExpiresAt: null, accountMetadata: { country: "DE" },
       }),
     },
     clock: { now: () => new Date("2026-11-22T10:00:00.000Z") },
