@@ -188,6 +188,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
   const stack: ScopeState[] = [newScopeState("")];
   let inSingleQuote = false;
   let inDoubleQuote = false;
+  let inBacktick = false;
 
   for (let i = 0; i < n; i++) {
     const top = stack[stack.length - 1];
@@ -204,7 +205,17 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
     const ch = token[i];
     const inUrl = top.hasSchemeSlash || top.hasSlashStart || top.hasQuestionOrHash || top.hasLeadingAmp;
     const afterColonQuote = i > 0 && token[i - 1] === ":" && !inUrl;
-    if (ch === '"' && !inSingleQuote) {
+    if (ch === "`" && !inSingleQuote && !inDoubleQuote) {
+      if (inBacktick) {
+        inBacktick = false;
+        if (stack.length > 1 && top.closer === "`") stack.pop();
+      } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !inUrl) {
+        inBacktick = true;
+        stack.push(newScopeState("`"));
+      }
+      continue;
+    }
+    if (ch === '"' && !inSingleQuote && !inBacktick) {
       if (inDoubleQuote) {
         inDoubleQuote = false;
         if (stack.length > 1 && top.closer === '"') stack.pop();
@@ -214,7 +225,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
       }
       continue;
     }
-    if (ch === "'" && !inDoubleQuote) {
+    if (ch === "'" && !inDoubleQuote && !inBacktick) {
       if (inSingleQuote) {
         if (i > 0 && i + 1 < n && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
           continue;
@@ -227,7 +238,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
       }
       continue;
     }
-    if (!inSingleQuote && !inDoubleQuote) {
+    if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
       if (ch === "(" || ch === "[" || ch === "<") {
         stack.push(newScopeState(ch === "(" ? ")" : ch === "[" ? "]" : ">"));
         continue;
@@ -252,7 +263,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
     } else if (top.afterDelimiter) {
       if (ch === "/") {
         top.hasSlashStart = true;
-      } else if (isPctEscape || /[\p{L}\p{N}._~@!$&*+-]/u.test(ch)) {
+      } else if (isPctEscape || /[\p{L}\p{N}._~@!$&*+,'=-]/u.test(ch)) {
         top.hasRelativeStart = true;
       }
     }
