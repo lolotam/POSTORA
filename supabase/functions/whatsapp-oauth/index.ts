@@ -1,6 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedJsonResponse, restrictedErrorResponse } from "../_shared/cors.ts";
-import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 import { disconnectWhatsAppAccount, reconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { requireWhatsAppWorkspaceAccess, roleAtLeast, WhatsAppAccessError, type WhatsAppWorkspaceAccessClient, type WorkspaceRole } from "../_shared/whatsappWorkspaceAccess.ts";
@@ -253,7 +252,7 @@ Deno.serve(async (req) => {
 
     const { data: existingAccount, error: existingAccountError } = await admin
       .from("social_accounts")
-      .select("id, account_metadata")
+      .select("id, workspace_id, account_metadata")
       .eq("platform", "whatsapp")
       .eq("platform_user_id", phone_number_id)
       .maybeSingle();
@@ -281,8 +280,15 @@ Deno.serve(async (req) => {
       `&client_secret=${encodeURIComponent(appSecret)}` +
       `&code=${encodeURIComponent(code)}`;
 
-    const tokenRes = await fetch(tokenUrl);
-    const tokenData = await tokenRes.json();
+    let tokenRes: Response;
+    let tokenData: { access_token?: string; expires_in?: number; error?: { message?: string } };
+    try {
+      tokenRes = await fetch(tokenUrl);
+      tokenData = await tokenRes.json();
+    } catch {
+      console.error("[whatsapp-oauth] Token exchange request failed");
+      return restrictedErrorResponse(req, "Token exchange failed", 502);
+    }
     if (!tokenRes.ok || !tokenData.access_token) {
       console.error("[whatsapp-oauth] Token exchange failed:", tokenData);
       return restrictedErrorResponse(req, 
@@ -378,7 +384,7 @@ Deno.serve(async (req) => {
     };
 
     if (existingAccount) {
-      const { error: saveError } = await admin
+      const updateBuilder = admin
         .from("social_accounts")
         .update({
           platform_username: displayPhone || verifiedName || phone_number_id,
@@ -391,9 +397,11 @@ Deno.serve(async (req) => {
           needs_reauth: false,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", existingAccount.id)
-        .select("id")
-        .single();
+        .eq("id", existingAccount.id);
+      const scopedUpdate = existingAccount.workspace_id
+        ? updateBuilder.eq("workspace_id", existingAccount.workspace_id)
+        : updateBuilder.is("workspace_id", null);
+      const { error: saveError } = await scopedUpdate.select("id").single();
       if (saveError) {
         console.error("[whatsapp-oauth] Account update failed:", { code: saveError.code ?? "unknown" });
         return restrictedErrorResponse(req, "Failed to save WhatsApp account", 500);
@@ -426,8 +434,11 @@ Deno.serve(async (req) => {
       sync_requests: syncRequests,
     });
   } catch (err) {
-    console.error("[whatsapp-oauth] Error:", err);
     if (err instanceof WhatsAppAccessError) return restrictedErrorResponse(req, err.message, err.status);
-    return restrictedErrorResponse(req, sanitizeErrorMessage(err), 500);
+    console.error("[whatsapp-oauth] Unexpected error:", {
+      name: err instanceof Error ? err.name : "unknown",
+      code: typeof err === "object" && err !== null && "code" in err ? (err as { code?: unknown }).code : undefined,
+    });
+    return restrictedErrorResponse(req, "An unexpected error occurred", 500);
   }
 });
