@@ -255,8 +255,6 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
       } else if (isPctEscape || /[A-Za-z0-9._~@!$&*+-]/.test(ch)) {
         top.hasRelativeStart = true;
       }
-    } else if (ch === "/" && !top.hasQuestionOrHash) {
-      top.hasSlashStart = true;
     }
 
     top.empty = false;
