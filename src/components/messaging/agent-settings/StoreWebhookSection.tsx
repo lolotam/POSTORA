@@ -147,7 +147,7 @@ function ConnectorWebhookRow({
 export function StoreWebhookSection({ accountId }: { accountId: string }) {
   const { t } = useTranslation("agent");
   const { tools } = useAiAgentTools();
-  const { links, linksReady } = useAiToolAccountLinks();
+  const { links, linksReady, linksError, refetchLinks } = useAiToolAccountLinks();
   const { bindings, isLoading, isError, refetch, createBinding, rotateSecret } = useStoreWebhookBindings();
   // Shown once, straight from the create/rotate response; a later list read does not restore it.
   const [shown, setShown] = useState<ShownSecret | null>(null);
@@ -163,7 +163,15 @@ export function StoreWebhookSection({ accountId }: { accountId: string }) {
   useEffect(() => setShown(null), [accountId]);
 
   const connectors = eligibleWooConnectors(tools, accountId, links, linksReady);
-  if (connectors.length === 0) return null;
+  const needsShareLinks = tools.some(
+    (tool) =>
+      tool.connector_type === "woocommerce" &&
+      tool.scope === "account" &&
+      tool.social_account_id !== accountId,
+  );
+  const hasLinksError = Boolean(linksError) && needsShareLinks;
+  if (connectors.length === 0 && !hasLinksError) return null;
+  const hasBindingsError = !isLoading && (isError || bindings === undefined);
   const listReady = bindings !== undefined && !isLoading && !isError;
   const pending = createBinding.isPending || rotateSecret.isPending;
 
@@ -208,12 +216,20 @@ export function StoreWebhookSection({ accountId }: { accountId: string }) {
           {t("procedures.store.loading", "Loading the store webhook…")}
         </p>
       )}
-      {!isLoading && (isError || bindings === undefined) && (
+      {(hasBindingsError || hasLinksError) && (
         <div className="space-y-2">
           <p role="alert" className="text-xs text-destructive">
             {t("procedures.store.loadFailed", "The store webhook could not be loaded.")}
           </p>
-          <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (hasBindingsError) void refetch();
+              if (hasLinksError) void refetchLinks();
+            }}
+          >
             {t("procedures.store.retry", "Retry")}
           </Button>
         </div>

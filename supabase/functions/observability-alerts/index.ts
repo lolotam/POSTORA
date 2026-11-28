@@ -36,6 +36,41 @@ interface HealthSnapshot {
   metrics_breakdown: Record<string, any>;
 }
 
+interface SilentStoreConnection {
+  connector_id?: string;
+  social_account_id?: string;
+  binding_id?: string | null;
+  user_id?: string;
+  last_delivery_at?: string;
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatSilentConnectionRow(conn: SilentStoreConnection): string {
+  const connectorId = escapeHtml(String(conn.connector_id ?? "unknown"));
+  const accountId = escapeHtml(String(conn.social_account_id ?? "unknown"));
+  const bindingId = escapeHtml(conn.binding_id ? String(conn.binding_id) : "deleted");
+  const lastDelivery = conn.last_delivery_at ? escapeHtml(String(conn.last_delivery_at)) : "unknown";
+  return `<li style="margin-bottom: 6px; font-family: monospace; font-size: 12px;">Connector: ${connectorId} &bull; Account: ${accountId} &bull; Binding: ${bindingId} &bull; Last delivery: ${lastDelivery}</li>`;
+}
+
+export function renderSilentConnectionsEmailHtml(silentConnections: unknown): string {
+  if (!Array.isArray(silentConnections) || silentConnections.length === 0) {
+    return "";
+  }
+  const items = (silentConnections as SilentStoreConnection[])
+    .map(formatSilentConnectionRow)
+    .join("");
+  return `<div style="margin-top: 16px;"><div style="font-weight: 600; margin-bottom: 8px;">Silent Store Connections</div><ul style="margin: 0; padding-left: 20px;">${items}</ul></div>`;
+}
+
 // A store counts as silent only if it delivered something this recently; see the
 // silent_store_connections migration for why a floor is needed at all.
 const STORE_ACTIVE_DAYS = 7;
@@ -450,6 +485,7 @@ serve(async (req) => {
                       </tr>
                     </table>
                     ${config.description ? `<p style="margin-top: 16px; color: #6b7280;">${config.description}</p>` : ""}
+                    ${renderSilentConnectionsEmailHtml(ruleDetails.silent_connections)}
                     <div style="margin-top: 20px;">
                       <a href="https://postora.cloud/admin/observability" 
                          style="display: inline-block; background: #6366f1; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: 500;">

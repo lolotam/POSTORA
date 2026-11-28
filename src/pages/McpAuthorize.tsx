@@ -20,12 +20,13 @@ interface AuthorizationDetails {
   expires_at: string;
 }
 
-const SCOPE_LABEL: Record<string, string> = {
+export const SCOPE_LABEL: Record<string, string> = {
   "accounts:read": "View your connected social media accounts",
-  "posts:read": "Read your posts and their status",
-  "posts:write": "Create, schedule and publish posts on your behalf",
-  "media:write": "Upload media to your Postora library",
+  "posts:read": "Read your posts, analytics, competitor reports, and brand analysis",
+  "posts:write": "Create, schedule, and publish posts, sync analytics, track competitors, and run paid AI generation (captions, hashtags, and images)",
+  "media:write": "Upload and store media in your Postora library",
   "webhooks:manage": "Register and manage webhook subscriptions",
+  "ai:generate": "Generate captions, hashtags, and images using your paid AI quota",
 };
 
 function functionUrl(path: string): string {

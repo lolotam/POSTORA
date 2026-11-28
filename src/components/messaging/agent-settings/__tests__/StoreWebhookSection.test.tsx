@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   tools: [] as Array<Record<string, unknown>>,
   links: [] as Array<{ tool_id: string; social_account_id: string }>,
   linksReady: true,
+  linksError: null as unknown,
+  refetchLinks: vi.fn(),
   bindings: [] as Array<Record<string, unknown>> | undefined,
   isLoading: false,
   isError: false,
@@ -26,7 +28,8 @@ vi.mock("@/hooks/useAiAgentTools", () => ({
   useAiToolAccountLinks: () => ({
     links: mocks.links,
     linksReady: mocks.linksReady,
-    linksError: null,
+    linksError: mocks.linksError,
+    refetchLinks: mocks.refetchLinks,
     setToolAccounts: { mutateAsync: vi.fn() },
   }),
 }));
@@ -59,6 +62,8 @@ describe("StoreWebhookSection", () => {
     mocks.tools = [woo];
     mocks.links = [];
     mocks.linksReady = true;
+    mocks.linksError = null;
+    mocks.refetchLinks.mockReset();
     mocks.bindings = [];
     mocks.isLoading = false;
     mocks.isError = false;
@@ -66,6 +71,26 @@ describe("StoreWebhookSection", () => {
     mocks.create.mockReset();
     mocks.rotate.mockReset();
     vi.mocked(toast.error).mockClear();
+  });
+
+  it("shows a recoverable error with retry when the tool account links query fails for a share-candidate WooCommerce connector", () => {
+    mocks.tools = [{ ...woo, social_account_id: "other-acc" }];
+    mocks.linksReady = false;
+    mocks.linksError = new Error("link query failed");
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    expect(screen.getByTestId("store-webhook-section")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("The store webhook could not be loaded.");
+    fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+    expect(mocks.refetchLinks).toHaveBeenCalledTimes(1);
+    expect(mocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("renders nothing when there are no WooCommerce connectors even if the tool account links query fails", () => {
+    mocks.tools = [{ ...woo, connector_type: "shopify", social_account_id: "other-acc" }];
+    mocks.linksReady = false;
+    mocks.linksError = new Error("link query failed");
+    const { container } = render(<StoreWebhookSection accountId={ACCOUNT} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("shows a WooCommerce connector explicitly shared to this account", () => {
