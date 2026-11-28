@@ -167,6 +167,9 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
     if ((closer === ")" && ch === "(") || (closer === "]" && ch === "[")) {
       depth++;
     } else if (closer && ch === closer) {
+      if (closer === "'" && i > start && i + 1 < token.length && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
+        continue;
+      }
       if (depth > 0) depth--;
       else break;
     } else if (!closer && (ch === '"' || ch === "<" || ch === ">")) {
@@ -178,7 +181,7 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
 
 function tokenHasCredentialQuery(token: string): boolean {
   if (!CREDENTIAL_PARAM_RE.test(token)) return false;
-  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<])(&|%26)/gi;
+  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])((?:\.\.?\/|[A-Za-z0-9._~@-]+\/)\S*|\/|(?:[?#]|%3f|%23))|(?:^|[("'[<])(&|%26)/gi;
   let match: RegExpExecArray | null;
   while ((match = startRe.exec(token)) !== null) {
     const spanStart = match[1] ? match.index : match.index + match[0].length - (match[2] ?? match[3]).length;
