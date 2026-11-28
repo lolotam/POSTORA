@@ -145,14 +145,6 @@ export function savePendingOperation(userId: string, op: PendingStage4Operation)
   writeAll(userId, all);
 }
 
-/** The pending operation for one target, if any: restored before a composer renders. */
-export function findPendingOperation(
-  userId: string,
-  target: { accountId: string; videoId: string; action: Stage4OperationAction; targetCommentId?: string },
-): PendingStage4Operation | null {
-  return findPendingOperations(userId, target)[0] ?? null;
-}
-
 /**
  * Every pending operation for one target. An unresolved earlier submit can sit
  * beside the one in flight, so a guard has to look at all of them.

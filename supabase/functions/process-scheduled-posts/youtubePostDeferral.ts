@@ -21,7 +21,7 @@
  * still usable, the post proceeds as today.
  */
 
-import { youtubeCredentialRefusalReason } from "../process-post/youtubeUploadPolicy.ts";
+import { youtubeCredentialRefusalReason } from "../_shared/youtubeCredentialPolicy.ts";
 
 /** One account the scheduler tried to refresh before kicking process-post. */
 export interface ScheduledYouTubeRefreshProbe {

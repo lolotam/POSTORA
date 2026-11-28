@@ -27,6 +27,15 @@ export interface SocialAccount {
   } | null;
 }
 
+function compareSocialAccounts(
+  left: Pick<SocialAccount, "id" | "connected_at">,
+  right: Pick<SocialAccount, "id" | "connected_at">,
+): number {
+  const byConnectedAt = (left.connected_at ?? "").localeCompare(right.connected_at ?? "");
+  if (byConnectedAt !== 0) return byConnectedAt;
+  return (left.id ?? "").localeCompare(right.id ?? "");
+}
+
 export function useSocialAccounts() {
   const { user } = useAuth();
 
@@ -57,7 +66,8 @@ export function useSocialAccounts() {
         return false;
       });
 
-      return validAccounts as SocialAccount[];
+      // Sort in memory rather than chaining PostgREST .order() so existing query mocks stay compatible.
+      return (validAccounts as SocialAccount[]).sort(compareSocialAccounts);
     },
     enabled: !!user,
     retry: false,

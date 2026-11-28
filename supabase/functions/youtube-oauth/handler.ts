@@ -291,6 +291,28 @@ export function createYouTubeOAuthHandler(
       return refuse(req, "disconnect", "account_clear_failed", userId, 500);
     }
 
+    if (reason === "grant_shared") {
+      let remainingActiveCount: number;
+      try {
+        remainingActiveCount = await ports.accounts.countOtherActiveGrantHolders({
+          userId,
+          channelId: account.channelId,
+          excludeAccountId: account.id,
+        });
+      } catch {
+        return refuse(req, "disconnect", "grant_count_failed", userId, 500);
+      }
+
+      if (remainingActiveCount === 0) {
+        const revokeOutcome = await revokeDisconnectGrant(refreshToken, accessToken, ports.google.revoke);
+        if (!revokeOutcome.ok) {
+          return refuse(req, "disconnect", revokeOutcome.reason, userId, 502);
+        }
+        revoked = revokeOutcome.revoked;
+        reason = revokeOutcome.reason;
+      }
+    }
+
     if (!revoked && reason !== null) {
       await ports.log.disconnectOutcome({
         userId,

@@ -45,6 +45,7 @@ function fixture(overrides: {
   disconnectAccount?: Partial<YouTubeDisconnectAccount> | null;
   loadError?: boolean;
   activeSharingGrantCount?: number;
+  activeSharingGrantCounts?: number[];
   countGrantError?: boolean;
   revokeResult?: GoogleRevokeResult;
   revokeResults?: GoogleRevokeResult[];
@@ -167,7 +168,10 @@ function fixture(overrides: {
         calls.countOtherActiveGrantHolders++;
         grantCountInputs.push(input);
         if (overrides.countGrantError) return Promise.reject(new Error("grant count failed"));
-        return Promise.resolve(overrides.activeSharingGrantCount ?? 0);
+        return Promise.resolve(
+          overrides.activeSharingGrantCounts?.[calls.countOtherActiveGrantHolders - 1] ??
+            overrides.activeSharingGrantCount ?? 0,
+        );
       },
       clearCredentials: (input) => {
         calls.clearCredentials++;
@@ -487,7 +491,7 @@ Deno.test("disconnect skips Google revoke when another active holder shares the 
 
   assertEquals(response.status, 200);
   assertEquals(JSON.parse(text), { success: true, revoked: false, reason: "grant_shared" });
-  assertEquals(f.calls.countOtherActiveGrantHolders, 1);
+  assertEquals(f.calls.countOtherActiveGrantHolders, 2);
   assertEquals(f.calls.revoke, 0);
   assertEquals(f.calls.clearCredentials, 1);
   assertEquals(f.account.accessToken, null);
@@ -495,6 +499,26 @@ Deno.test("disconnect skips Google revoke when another active holder shares the 
   assertEquals(f.account.isActive, false);
   assertEquals(f.account.metadata, { unrelated: { retained: true } });
   assertEquals(f.outcomeLogs, [{ userId: USER_ID, accountId: ACCOUNT_ID, revoked: false, reason: "grant_shared" }]);
+  assert(!text.includes(f.accessToken));
+  assert(!text.includes(f.storedRefreshToken));
+});
+
+Deno.test("concurrent disconnect revokes at Google after clearing when the last sibling holder cleared at the same time", async () => {
+  const f = fixture({ activeSharingGrantCounts: [1, 0] });
+  const response = await f.handler(post({ action: "disconnect", account_id: ACCOUNT_ID }));
+  const text = await response.text();
+
+  assertEquals(response.status, 200);
+  assertEquals(JSON.parse(text), { success: true, revoked: true, reason: null });
+  assertEquals(f.calls.countOtherActiveGrantHolders, 2);
+  assertEquals(f.calls.revoke, 1);
+  assertEquals(f.revokedTokens, [f.storedRefreshToken]);
+  assertEquals(f.calls.clearCredentials, 1);
+  assertEquals(f.order, ["clearCredentials", "revoke"]);
+  assertEquals(f.account.accessToken, null);
+  assertEquals(f.account.refreshToken, null);
+  assertEquals(f.account.isActive, false);
+  assertEquals(f.outcomeLogs, []);
   assert(!text.includes(f.accessToken));
   assert(!text.includes(f.storedRefreshToken));
 });
