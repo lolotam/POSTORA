@@ -43,6 +43,8 @@ import {
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { CountryMultiSelect } from "./CountryMultiSelect";
 import { YouTubeAISuggestions } from "./YouTubeAISuggestions";
+import { YouTubePackagingScoreCard } from "./YouTubePackagingScoreCard";
+import { requestYouTubePackagingScore } from "@/lib/youtubePackagingScoreClient";
 import { MediaLibraryPicker } from "../MediaLibraryPicker";
 import { StockMediaPicker, SelectedMedia } from "../StockMediaPicker";
 import { UploadedFile } from "@/hooks/usePostForm";
@@ -1150,6 +1152,12 @@ export function YouTubeSettings({
           type="title"
           context={settings.title || ""}
           onSelect={(val) => onSettingsChange({ title: val })}
+        />
+        <YouTubePackagingScoreCard
+          title={settings.title || ""}
+          description={settings.description || ""}
+          requestScore={requestYouTubePackagingScore}
+          onApplyTitle={(newTitle) => onSettingsChange({ title: newTitle })}
         />
       </div>
 

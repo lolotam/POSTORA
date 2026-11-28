@@ -17,10 +17,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
 import { useYouTubeVideo } from "../application/useYouTubeVideo";
 import type {
+  YouTubePackagingScoreGateway,
   YouTubeResourcesGateway,
   YouTubeThumbnailAiGateway,
   YouTubeThumbnailMediaGateway,
 } from "../application/ports";
+import { requestYouTubePackagingScore } from "@/lib/youtubePackagingScoreClient";
 import { defaultYouTubeResourcesGateway } from "../infrastructure/supabaseYouTubeResourcesGateway";
 import { defaultYouTubeThumbnailMediaGateway } from "../infrastructure/supabaseYouTubeThumbnailMediaGateway";
 import { defaultYouTubeThumbnailAiGateway } from "../infrastructure/supabaseYouTubeThumbnailAiGateway";
@@ -30,6 +32,10 @@ import { YouTubeChannelSummary } from "./YouTubeChannelSummary";
 import { YouTubeVideoLibrary } from "./YouTubeVideoLibrary";
 import { YouTubeVideoDrawer } from "./YouTubeVideoDrawer";
 
+const defaultYouTubePackagingScoreGateway: YouTubePackagingScoreGateway = {
+  scorePackaging: (params) => requestYouTubePackagingScore(params),
+};
+
 export interface YouTubeManagementScreenProps {
   accounts: readonly YouTubeAccountOption[];
   accountsLoading: boolean;
@@ -38,6 +44,8 @@ export interface YouTubeManagementScreenProps {
   mediaGateway?: YouTubeThumbnailMediaGateway;
   /** The app's image generator, used to create a thumbnail from a prompt. */
   aiGateway?: YouTubeThumbnailAiGateway;
+  /** Scores draft title and thumbnail synergy without touching YouTube. */
+  packagingScoreGateway?: YouTubePackagingScoreGateway;
   // The page's connected-accounts query can fail; the screen then offers a
   // retry instead of pretending no channel is connected.
   accountsError?: unknown;
@@ -53,6 +61,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
     gateway = defaultYouTubeResourcesGateway,
     mediaGateway = defaultYouTubeThumbnailMediaGateway,
     aiGateway = defaultYouTubeThumbnailAiGateway,
+    packagingScoreGateway = defaultYouTubePackagingScoreGateway,
     accountsError,
     onRetryAccounts,
   } = props;
@@ -304,6 +313,7 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             return null;
           }
         }}
+        onRequestPackagingScore={(params) => packagingScoreGateway.scorePackaging(params)}
         onSave={async ({ title, description, tags, categoryId, baseRevision }) => {
           if (!activeAccountId || !selectedVideoId || !gateway.updateVideo) return "outcome_unknown";
           try {

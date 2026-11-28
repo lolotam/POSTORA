@@ -530,10 +530,13 @@ jobs:
           deno check --no-config --node-modules-dir=none \
             supabase/functions/_shared/youtubeChapters.ts \
             supabase/functions/_shared/youtubeChapters.test.ts \
+            supabase/functions/_shared/youtubePackagingScore.ts \
+            supabase/functions/_shared/youtubePackagingScore.test.ts \
             supabase/functions/generate-caption/handler.ts \
             supabase/functions/generate-caption/handler.test.ts
           deno test --no-config --allow-env --allow-read --node-modules-dir=none \
             supabase/functions/_shared/youtubeChapters.test.ts \
+            supabase/functions/_shared/youtubePackagingScore.test.ts \
             supabase/functions/generate-caption/handler.test.ts
 
       - name: Typecheck and test transcribe-media and YouTube transcript formatters

@@ -128,3 +128,25 @@ export interface YouTubeThumbnailAiGateway {
     signal?: AbortSignal;
   }): Promise<{ imageUrl: string }>;
 }
+
+export interface YouTubePackagingScoreResult {
+  overall_score: number;
+  breakdown: {
+    hook: number;
+    clarity: number;
+    mobile_length: number;
+    thumbnail_synergy: number | null;
+  };
+  strengths: string[];
+  fixes: string[];
+  better_titles: [string, string, string];
+}
+
+export interface YouTubePackagingScoreGateway {
+  scorePackaging(params: {
+    title: string;
+    thumbnailText?: string;
+    description?: string;
+    language: "english" | "arabic";
+  }): Promise<YouTubePackagingScoreResult>;
+}

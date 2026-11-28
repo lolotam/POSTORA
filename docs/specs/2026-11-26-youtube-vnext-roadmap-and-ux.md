@@ -853,7 +853,7 @@ Phase 7 (§14), not started:
 - [ ] **7A** `segments` is returned only when the provider supplied times and they pass validation; the generated `.srt` and `.vtt` pass `validateCaptionUploadInput`; the timed outline fits 8,000 characters and starts at `00:00`; chapters built from it pass the time-subset rule.
 - [ ] **7B** OD-9 recorded. The caption is validated before any quota is spent, counts against the creator's two uploads per day, debits 400 units once, is sent once, and never changes the upload receipt; `content` appears in no log, evidence row or API view and is removed from the stored post on settlement.
 - [x] **7C** OD-10 recorded. A playlist is created only with `youtube.force-ssl`, at most five per user per day, after a 50-unit debit, in one attempt; a lost answer is `outcome_unknown`; the new playlist is selected only when Google's answer names the bound channel.
-- [ ] **7D** `overall_score` is computed by the server from validated parts; `thumbnail_synergy` is `null` when no thumbnail description was given; "Use this title" only fills a field; no title or thumbnail text reaches a log.
+- [x] **7D** `overall_score` is computed by the server from validated parts; `thumbnail_synergy` is `null` when no thumbnail description was given; "Use this title" only fills a field; no title or thumbnail text reaches a log.
 - [ ] **7E** OD-11 recorded. Privacy cannot be saved without the confirmation matching the chosen value; a scheduled video's privacy control is disabled and a forged request is refused with zero counter, budget and provider-write calls; the saved response is the verified re-read.
 
 ## 13. Non-goals
