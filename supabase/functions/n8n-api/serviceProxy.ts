@@ -181,13 +181,14 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
 
 function tokenHasCredentialQuery(token: string): boolean {
   if (!CREDENTIAL_PARAM_RE.test(token)) return false;
-  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])((?:\.\.?\/|[A-Za-z0-9._~@-]+\/)\S*|\/|(?:[?#]|%3f|%23))|(?:^|[("'[<])(&|%26)/gi;
+  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<,;=])((?:\.\.?\/)+[A-Za-z0-9._~@/-]*(?=(?:[?#]|%3f|%23))|[A-Za-z0-9._~@-]+(?:\/[A-Za-z0-9._~@-]*)*(?=(?:[?#]|%3f|%23)))|(?:^|[("'[<])(&|%26)/gi;
   let match: RegExpExecArray | null;
   while ((match = startRe.exec(token)) !== null) {
-    const spanStart = match[1] ? match.index : match.index + match[0].length - (match[2] ?? match[3]).length;
+    const marker = match[1] ?? match[2] ?? match[3] ?? match[4];
+    const spanStart = match[1] ? match.index : match.index + match[0].length - marker.length;
     const { span, end } = boundedUrlSpan(token, spanStart);
     if (CREDENTIAL_PARAM_RE.test(span)) return true;
-    startRe.lastIndex = Math.max(startRe.lastIndex, end);
+    startRe.lastIndex = Math.max(spanStart + 1, end);
   }
   return false;
 }
