@@ -201,6 +201,20 @@ Deno.test("Y3: each failed attempt asks for the next rung, in order", async () =
 
 // --- Y4: operational visibility -------------------------------------------
 
+const ALLOWED_SYSTEM_LOG_CATEGORIES = new Set([
+  "auth",
+  "edge",
+  "database",
+  "token",
+  "post",
+  "system",
+  "ai",
+  "scheduler",
+  "webhook",
+  "payment",
+  "media",
+]);
+
 Deno.test("Y4: an aged backlog writes a system_logs row", async () => {
   const admin = stub({
     waves: [[]],
@@ -212,6 +226,8 @@ Deno.test("Y4: an aged backlog writes a system_logs row", async () => {
   const logged = admin.writes.find((w: any) => w.table === "system_logs");
   assert(logged, "a correct outbox accumulates undelivered rows in perfect silence");
   assertEquals(logged.values.source, "process-partner-webhooks");
+  assertEquals(logged.values.category, "webhook");
+  assert(ALLOWED_SYSTEM_LOG_CATEGORIES.has(logged.values.category));
   assertEquals(logged.values.metadata.pending, 12);
 });
 

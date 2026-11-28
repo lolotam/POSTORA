@@ -166,6 +166,35 @@ describe("YouTubeManagementScreen", () => {
     expect(caps).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps the loaded channel summary and video library visible when a capabilities refetch fails on Refresh", async () => {
+    const base = gateway();
+    const caps = vi.fn()
+      .mockImplementationOnce((accountId: string) => base.getCapabilities(accountId))
+      .mockImplementationOnce(() => Promise.reject(new YouTubeResourceError("upstream_unavailable")))
+      .mockImplementationOnce(() => Promise.reject(new YouTubeResourceError("upstream_unavailable")))
+      .mockImplementationOnce((accountId: string) => base.getCapabilities(accountId));
+    const fake: YouTubeResourcesGateway = {
+      ...base,
+      getCapabilities: caps as unknown as YouTubeResourcesGateway["getCapabilities"],
+    };
+    await renderScreen(<YouTubeManagementScreen accounts={ACCOUNTS} accountsLoading={false} gateway={fake} />);
+    expect(await screen.findByRole("heading", { name: "Channel of acc-a" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Video of acc-a/ })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("YouTube did not answer");
+    expect(screen.getByRole("heading", { name: "Channel of acc-a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Video of acc-a/ })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await waitFor(() => expect(caps).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "Channel of acc-a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Video of acc-a/ })).toBeInTheDocument();
+  });
+
   it("keeps loaded pages visible when Load more fails and retries only the next page", async () => {
     const videoItem = (id: string) => ({
       id, title: `Video ${id}`, thumbnail_url: null, published_at: null, privacy_status: "public", url: "https://www.youtube.com/watch?v=x",

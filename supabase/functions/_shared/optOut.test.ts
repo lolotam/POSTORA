@@ -140,7 +140,7 @@ function recordingAdmin(
         return Promise.resolve({ data: table === "ai_threads" ? thread : null, error: null });
       },
       then(
-        onFulfilled?: (value: { data: Array<{ id: string }> | null; error: null }) => unknown,
+        onFulfilled?: (value: { data: Array<{ id: string }> | null; error: { message: string } | null }) => unknown,
         onRejected?: (reason: unknown) => unknown,
       ) {
         const failed = table === failTable;
@@ -186,12 +186,28 @@ Deno.test("optOutDb filters pending and claimed events for that account and phon
   assertEquals(replies[3].args, ["status", "pending"]);
 });
 
+const ALLOWED_SYSTEM_LOG_CATEGORIES = new Set([
+  "auth",
+  "edge",
+  "database",
+  "token",
+  "post",
+  "system",
+  "ai",
+  "scheduler",
+  "webhook",
+  "payment",
+  "media",
+]);
+
 Deno.test("optOutDb logs a failed unclaimed-reply cancel and still returns the opt-out as recorded", async () => {
   const admin = recordingAdmin({ id: "thread-1", procedure_state: { origin: "event" } }, "pending_agent_replies");
   assertEquals(await recordOptOut(optOutDb(admin as never), INPUT), true);
   const logged = callsOn(admin.calls, "system_logs", "insert");
   assertEquals(logged.length, 1);
-  const row = logged[0].args[0] as { message: string; metadata: { phase: string } };
+  const row = logged[0].args[0] as { category: string; message: string; metadata: { phase: string } };
+  assertEquals(row.category, "system");
+  assertEquals(ALLOWED_SYSTEM_LOG_CATEGORIES.has(row.category), true);
   assertEquals(row.metadata.phase, "cancel");
   assertEquals(row.message.includes("96555512345"), false);
 });

@@ -251,8 +251,8 @@ function requestedOperationOf(body: unknown): string {
     : "unknown";
 }
 
-// Same shape as _shared/auth-helper.ts, defined locally on purpose: authenticateCaller
-// returns claims.sub unchecked, so the handler re-checks the identity shape itself.
+// Same shape as _shared/auth-helper.ts, retained locally as defense-in-depth at the
+// injectable ports.auth boundary in case a test or alternate port returns a non-UUID.
 const USER_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
@@ -283,7 +283,11 @@ export function createYouTubeResourcesHandler(
       JSON.stringify({ error: entry.code, request_id: entry.requestId, ...extra }),
       {
         status: YOUTUBE_RESOURCE_ERROR_STATUS[entry.code],
-        headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
+        headers: {
+          ...restrictedCorsHeaders(req),
+          "Content-Type": "application/json",
+          ...(entry.code === "method_not_allowed" ? { "Allow": "POST, OPTIONS" } : {}),
+        },
       },
     );
   }
@@ -374,9 +378,8 @@ export function createYouTubeResourcesHandler(
       });
     }
     if (typeof userId !== "string" || !USER_ID_UUID_RE.test(userId)) {
-      // authenticateCaller trusts claims.sub unchecked, so a validly signed token
-      // without a subject (the public anon key) yields a non-identity here. It is an
-      // anonymous caller: refuse it before any account read, without a log row.
+      // Defense-in-depth at the ports.auth boundary: refuse any non-UUID caller
+      // identity before any account read, without a log row.
       return await refuse(req, {
         operation: unknownOperation,
         code: "unauthorized",
