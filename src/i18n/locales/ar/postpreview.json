@@ -365,26 +365,6 @@
     "vertical": " (طولي)",
     "warningsCount": "تحذيرات ({{count}})"
   },
-  "tikTokProcessing": {
-    "closeNotice": "تقدر تقفل اللوحة دي. هنبعتلك إشعار لما تخلص.",
-    "dismiss": "إغلاق",
-    "elapsed": "الوقت المنقضي: {{time}}",
-    "inboxDescription": "افتح تطبيق TikTok لمراجعة المنشور وإكماله. ممكن ياخد كام دقيقة عشان يظهر.",
-    "inboxTitle": "راجع صندوق رسائل TikTok",
-    "minutesSeconds": "{{minutes}}د {{seconds}}ث",
-    "postLive": "منشورك اتنشر الآن على TikTok!",
-    "preparingUpload": "جاري تجهيز الرفع...",
-    "processingVideo": "جاري معالجة الفيديو...",
-    "publishedSuccess": "تم النشر بنجاح!",
-    "publishingFailed": "فشل النشر",
-    "seconds": "{{count}}ث",
-    "sentToInbox": "تم الإرسال لصندوق رسائل TikTok",
-    "stepProcessVideo": "معالجة الفيديو",
-    "stepReviewPublish": "المراجعة والنشر",
-    "stepUploadFile": "رفع الملف",
-    "uploadingToTikTok": "جاري الرفع إلى TikTok...",
-    "viewPost": "عرض المنشور"
-  },
   "tiktokVideo": {
     "defaultSoundName": "صوت أصلي",
     "discover": "اكتشف",
