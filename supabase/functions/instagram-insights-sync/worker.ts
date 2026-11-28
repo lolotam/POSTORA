@@ -2110,7 +2110,7 @@ async function collectDays(
 
   // --- The daily observations --------------------------------------------
   let backfillStopped = false;
-  for (const day of visit.owedDays) {
+  for (const day of [...visit.owedDays]) {
     // The usage budget is nearly spent: no further provider call is made.
     if (visit.usageStop) break;
     if (!context.budget.canStartProviderCall()) break;
@@ -2161,6 +2161,7 @@ async function collectDays(
           visit.usagePercent = Math.max(visit.usagePercent, error.usagePercent);
           visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
         }
+        moveOwedDayToBack(visit, day);
         backfillStopped = true;
         continue;
       } else {
@@ -3104,6 +3105,17 @@ function moveToBackOfQueue(visit: OwnerVisitState, mediaId: string): void {
   visit.mediaQueue = [
     ...visit.mediaQueue.filter((id) => id !== mediaId),
     mediaId,
+  ];
+}
+
+/**
+ * Moves a failing backfill day to the BACK of the owed days so a repeatedly
+ * failing date cannot starve other queued backfill days on subsequent visits.
+ */
+function moveOwedDayToBack(visit: OwnerVisitState, day: string): void {
+  visit.owedDays = [
+    ...visit.owedDays.filter((entry) => entry !== day),
+    day,
   ];
 }
 

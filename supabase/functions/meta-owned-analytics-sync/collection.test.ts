@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { FacebookInsightsProvider } from "../facebook-page-insights/provider.ts";
 import { createOwnedAnalyticsSyncHandler, type OwnedAnalyticsAudit } from "./handler.ts";
+import { retainOwnedAnalytics } from "./retention.ts";
 import type { MetricValue } from "../_shared/analyticsContract.ts";
 import { ThreadsInsightsProvider } from "../threads-insights/provider.ts";
 import { threadsCollection } from "./threadsCollection.ts";
@@ -247,6 +248,13 @@ Deno.test("pre-parse method, auth, and body refusals audit as owned_analytics_re
       expectedStatus: 401,
       expectedReason: "unauthorized",
     },
+    {
+      name: "valid_body_unauthorized",
+      authorized: false,
+      request: new Request("https://owned-analytics.invalid", { method: "POST", body: JSON.stringify({ action: "drain", platform: "all" }) }),
+      expectedStatus: 401,
+      expectedReason: "unauthorized",
+    },
   ] as const;
   for (const scenario of scenarios) {
     await test.step(scenario.name, async () => {
@@ -274,4 +282,59 @@ Deno.test("pre-parse method, auth, and body refusals audit as owned_analytics_re
     });
   }
 });
+
+Deno.test("dry-run retention carries earlier skipped or saturated state across continuation pages", async () => {
+  const targets = [
+    { account_id: "c3000000-0000-4000-8000-000000000001", last_visited_at: null },
+    { account_id: "c3000000-0000-4000-8000-000000000002", last_visited_at: null },
+  ];
+  const startedAt = Date.now();
+  const makeStore = (deletedByAccount: Record<string, { deleted: number; skipped: boolean }>) =>
+    new OwnedAnalyticsStore(async (name, args) => {
+      if (name === "list_meta_analytics_retention_targets") {
+        return { data: { state: "enabled", targets }, error: null };
+      }
+      if (name === "cleanup_meta_analytics_target") {
+        const entry = deletedByAccount[String(args.p_account_id)]!;
+        return {
+          data: {
+            deleted: entry.deleted,
+            dry_run: true,
+            skipped: entry.skipped,
+            report_revision: null,
+            floor: args.p_floor,
+          },
+          error: null,
+        };
+      }
+      throw new Error(`Unexpected RPC: ${name}`);
+    }, new AnalyticsWorkerDeadline(startedAt, new AbortController().signal));
+
+  const firstPage = await retainOwnedAnalytics({
+    platform: "facebook",
+    dryRun: true,
+    store: makeStore({
+      [targets[0].account_id]: { deleted: 500, skipped: true },
+      [targets[1].account_id]: { deleted: 0, skipped: false },
+    }),
+    deadline: new AnalyticsWorkerDeadline(startedAt, new AbortController().signal),
+  });
+  assertEquals(firstPage.status, "partial");
+  assertEquals(firstPage.continuation?.afterAccountId, targets[0].account_id);
+  assertEquals(firstPage.continuation?.incomplete, true);
+
+  const secondPage = await retainOwnedAnalytics({
+    platform: "facebook",
+    dryRun: true,
+    continuation: firstPage.continuation!,
+    store: makeStore({
+      [targets[0].account_id]: { deleted: 500, skipped: true },
+      [targets[1].account_id]: { deleted: 10, skipped: false },
+    }),
+    deadline: new AnalyticsWorkerDeadline(startedAt, new AbortController().signal),
+  });
+  assertEquals(secondPage.status, "partial");
+  assertEquals(secondPage.continuation, null);
+});
+
 

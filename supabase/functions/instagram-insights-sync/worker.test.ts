@@ -2150,12 +2150,13 @@ Deno.test("a transient failure on a backfill day skips the rest of the backfill 
     2,
   );
 
-  // The uncollected backfill days stay owed in the checkpoint, and the
-  // visit ends as partial (daily_observation_pending) rather than retry.
+  // The uncollected backfill days stay owed in the checkpoint with the
+  // failing day rotated behind the skipped day, and the visit ends as
+  // partial (daily_observation_pending) rather than retry.
   const progress = lastInventoryProgress(harness.calls);
   assertEquals(progress.remaining_ids, [
-    `account_day:${failingDay}`,
     `account_day:${skippedDay}`,
+    `account_day:${failingDay}`,
   ]);
   assertEquals(harness.calls.completes, [
     { outcome: "partial", reasonCode: "daily_observation_pending" },

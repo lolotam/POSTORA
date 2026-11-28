@@ -221,7 +221,6 @@ Deno.test("resolveDiscoveryAuthority reads capabilities with bounded parallelism
     ...ACCOUNT_ROW,
     id: `8a000000-0000-4000-8000-00000000001${index}`,
     platform_username: `owner_${index}`,
-    access_token: `direct-token-${index}`,
     ig_auth_type: "business_login",
   }));
   const resolved = await resolveDiscoveryAuthority({

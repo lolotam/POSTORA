@@ -11,7 +11,14 @@ const requestSchema = z.object({ platform: z.enum(["facebook", "threads"]), acco
 export type StoredReportAudit = { event: "persisted_report_read" | "persisted_report_refused"; reason: string | null; status: number;
   ownerId: string | null; platform: "facebook" | "threads" | null; accountId: string | null; correlationId?: string | null };
 export type StoredReportHandlerDeps = { authenticate: (req: Request, actingUserId: string | undefined) => Promise<{ userId: string }>;
-  rpc: StoredAnalyticsRpc; secret: string; audit: (event: StoredReportAudit, signal: AbortSignal) => PromiseLike<boolean> };
+  rpc: StoredAnalyticsRpc; secret: string; audit: (event: StoredReportAudit, signal: AbortSignal) => PromiseLike<boolean>;
+  now?: () => string };
+
+const SAFE_ERROR_KINDS = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "URIError", "EvalError", "ReferenceError", "DOMException"]);
+function classifyErrorKind(error: unknown): string {
+  if (error instanceof Error && SAFE_ERROR_KINDS.has(error.name)) return error.name;
+  return "UnknownError";
+}
 
 function refusalMessage(reason: PersistedReportRefused["reason"]): string {
   switch (reason) {
@@ -66,12 +73,12 @@ export function createStoredReportHandler(deps: StoredReportHandlerDeps): (req: 
       ownerId = owner.data.toLowerCase(); platform = parsed.data.platform; accountId = parsed.data.accountId.toLowerCase();
       if (parsed.data.analyticsContractVersion !== 1) return await finish(400, { ok: false, reason: "unsupported_contract_version", message: "Unsupported analytics contract version." }, "unsupported_contract_version");
       const report = await persistedOwnedAnalyticsReport({ scope: { platform, ownerId, accountId, days: parsed.data.periodDays },
-        cursor: parsed.data.cursor ?? null, secret: deps.secret, now: new Date().toISOString(), rpc: deps.rpc, signal });
+        cursor: parsed.data.cursor ?? null, secret: deps.secret, now: deps.now ? deps.now() : new Date().toISOString(), rpc: deps.rpc, signal });
       return await finish(200, report, null);
     } catch (error) {
       if (!(error instanceof PersistedReportRefused)) {
         console.error(JSON.stringify({ event: "persisted_report_unexpected_error", ownerId, platform, accountId,
-          errorName: error instanceof Error ? error.name : "UnknownError" }));
+          errorKind: classifyErrorKind(error) }));
       }
       const refused = error instanceof PersistedReportRefused ? error : new PersistedReportRefused("storage_unavailable", 503);
       return await finish(refused.status, { ok: false, reason: refused.reason, message: refusalMessage(refused.reason) }, refused.reason);

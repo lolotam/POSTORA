@@ -94,12 +94,12 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
       const auth = deps.authorize(req);
       const parsed = syncRequest.safeParse(await readSyncBody(req, deadline));
       if (!parsed.success) return await finish(auth.ok ? 400 : auth.status, "refused", auth.ok ? "invalid_request" : "unauthorized");
-      platform = parsed.data.platform;
-      action = parsed.data.action;
       if (parsed.data.action === "enqueue") {
         const ownerId = parsed.data.user_id;
         if (!deps.authorizeEnqueue || !await deadline.run(() => deps.authorizeEnqueue!(req, ownerId))) return await finish(401, "refused", "unauthorized");
       } else if (!auth.ok) return await finish(auth.status, "refused", "unauthorized");
+      platform = parsed.data.platform;
+      action = parsed.data.action;
       const store = new OwnedAnalyticsStore(deps.rpc, deadline);
       if (parsed.data.action === "enqueue") {
         const input = parsed.data;

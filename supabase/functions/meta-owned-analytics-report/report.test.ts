@@ -11,6 +11,7 @@ const OWNER = "d1000000-0000-4000-8000-000000000001";
 const ACCOUNT = "d2000000-0000-4000-8000-000000000001";
 const NOW = "2026-11-01T12:00:00.000Z";
 const COLLECTED = "2026-11-01T10:00:00.000Z";
+const CURSOR_SIGNING_MATERIAL = "cursor-signing-test-material";
 const scope: StoredReportScope = { platform: "facebook", ownerId: OWNER, accountId: ACCOUNT, days: 7 };
 const windows = closedAnalyticsPeriods({ now: NOW, days: 7, timezone: "America/Los_Angeles" });
 
@@ -364,7 +365,7 @@ Deno.test("handler maps every PersistedReportRefused reason to a distinct status
     revision: 4,
     publishedAt: "2026-10-31T12:00:00.123456Z",
     postId: "772001_9001",
-    secret: "fixture-sign",
+    secret: CURSOR_SIGNING_MATERIAL,
   });
   const cases = [
     {
@@ -412,7 +413,7 @@ Deno.test("handler maps every PersistedReportRefused reason to a distinct status
       status: 503,
       message: "Saved analytics could not be read. Please retry.",
       authenticate: undefined,
-      envelope: { data: null, error: { code: "57014", message: "fixture-secret" } },
+      envelope: { data: null, error: { code: "57014", message: "synthetic-db-failure" } },
       cursor: undefined,
     },
   ];
@@ -420,7 +421,8 @@ Deno.test("handler maps every PersistedReportRefused reason to a distinct status
     await test.step(reason, async () => {
       const handler = createStoredReportHandler({
         authenticate: authenticate ?? (async () => ({ userId: OWNER })),
-        secret: "fixture-sign",
+        secret: CURSOR_SIGNING_MATERIAL,
+        now: () => NOW,
         rpc: () => Promise.resolve(envelope),
         audit: async () => true,
       });
@@ -444,8 +446,9 @@ Deno.test("handler maps every PersistedReportRefused reason to a distinct status
     try {
       const handler = createStoredReportHandler({
         authenticate: async () => ({ userId: OWNER }),
-        get secret(): string {
-          throw new TypeError("fixture-secret-in-message");
+        secret: CURSOR_SIGNING_MATERIAL,
+        now: () => {
+          throw new TypeError("unexpected-internal-failure");
         },
         rpc: () => Promise.resolve({ data: fixture(), error: null }),
         audit: async () => true,
@@ -461,13 +464,13 @@ Deno.test("handler maps every PersistedReportRefused reason to a distinct status
         message: "Saved analytics could not be read. Please retry.",
       });
       assertEquals(logged.length, 1);
-      assertEquals(logged[0].includes("fixture-secret-in-message"), false);
+      assertEquals(logged[0].includes("unexpected-internal-failure"), false);
       assertEquals(JSON.parse(logged[0]), {
         event: "persisted_report_unexpected_error",
         ownerId: OWNER,
         platform: "facebook",
         accountId: ACCOUNT,
-        errorName: "TypeError",
+        errorKind: "TypeError",
       });
     } finally {
       console.error = origError;
@@ -482,14 +485,15 @@ Deno.test("handler accepts a valid signed pagination cursor and rejects a tamper
     revision: 4,
     publishedAt: "2026-10-31T12:00:00.123456Z",
     postId: "772001_9001",
-    secret: "fixture-sign",
+    secret: CURSOR_SIGNING_MATERIAL,
   });
   await test.step("valid cursor passes decoded after position to read_meta_owned_analytics_history", async () => {
     let capturedName = "";
     const capturedRequests: Array<Record<string, unknown>> = [];
     const handler = createStoredReportHandler({
       authenticate: async () => ({ userId: OWNER }),
-      secret: "fixture-sign",
+      secret: CURSOR_SIGNING_MATERIAL,
+      now: () => NOW,
       audit: async () => true,
       rpc: (name, args) => {
         capturedName = name;
@@ -513,7 +517,8 @@ Deno.test("handler accepts a valid signed pagination cursor and rejects a tamper
     const tampered = `${validCursor.slice(0, -3)}bad`;
     const handler = createStoredReportHandler({
       authenticate: async () => ({ userId: OWNER }),
-      secret: "fixture-sign",
+      secret: CURSOR_SIGNING_MATERIAL,
+      now: () => NOW,
       audit: async () => true,
       rpc: () => Promise.resolve({ data: fixture(), error: null }),
     });

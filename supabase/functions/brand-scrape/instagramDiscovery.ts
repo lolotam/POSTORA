@@ -149,13 +149,14 @@ async function discoveryJson(url: string, fetchFn: typeof fetch): Promise<unknow
   try {
     const response = await fetchFn(url, { signal, redirect: "error" });
     const responseBody = response.body;
-    if (response.status === 429 && responseBody) {
+    const throttledHeader = response.status === 429 || parseUsagePercent(response.headers) >= 80;
+    if (throttledHeader && responseBody) {
       // Cleanup stays inside the attempt ceiling and cannot mask known throttling.
       await awaitWithAbort(() => responseBody.cancel(), signal).catch(() => undefined);
     }
-    const payload: unknown = response.status === 429 ? null : JSON.parse(await readBoundedBody(response, 1_048_576, signal));
+    const payload: unknown = throttledHeader ? null : JSON.parse(await readBoundedBody(response, 1_048_576, signal));
     const providerError = readGraphErrorEnvelope(payload);
-    if (response.status === 429 || [4, 17, 32, 613, 80001, 80002].includes(providerError?.code ?? -1) || parseUsagePercent(response.headers) >= 80) {
+    if (throttledHeader || [4, 17, 32, 613, 80001, 80002].includes(providerError?.code ?? -1)) {
       throw new InstagramDiscoveryError("DISCOVERY_RATE_LIMITED", "Instagram discovery is temporarily unavailable.", 429);
     }
     if (providerError?.code === 190) throw new InstagramDiscoveryError("IG_RECONNECT_REQUIRED", "Reconnect Instagram to enable official competitor data.");

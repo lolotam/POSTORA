@@ -4,7 +4,7 @@ import { OwnedAnalyticsStore, type OwnedAnalyticsPlatform } from "./store.ts";
 
 export type RetentionCounts = { targeted: number; visited: number; deleted: number; wouldDelete: number; skipped: number; refused: number };
 export const retentionContinuation = z.object({ afterAccountId: z.string().uuid(), scopeDigest: z.string().regex(/^[a-f0-9]{64}$/),
-  floor: z.string().regex(/^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/) }).strict();
+  floor: z.string().regex(/^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/), incomplete: z.boolean().optional() }).strict();
 export type RetentionContinuation = z.infer<typeof retentionContinuation>;
 type RetentionInput = { platform: OwnedAnalyticsPlatform | "all"; dryRun: boolean; continuation?: RetentionContinuation;
   store: OwnedAnalyticsStore; deadline: AnalyticsWorkerDeadline };
@@ -48,6 +48,8 @@ export async function retainOwnedAnalytics(input: RetentionInput): Promise<Reten
       }
     }
     counts.targeted = targets.length;
+    const priorIncomplete = Boolean(input.dryRun && input.continuation?.incomplete);
+    let budgetSaturated = false;
     for (const target of targets) {
       const remaining = 500 - counts.deleted - counts.wouldDelete;
       if (counts.visited >= 50 || remaining <= 0 || input.deadline.remainingMs < 10_000) break;
@@ -57,15 +59,18 @@ export async function retainOwnedAnalytics(input: RetentionInput): Promise<Reten
           floor: floor.toISOString(), limit: remaining, dryRun: input.dryRun });
         counts[input.dryRun ? "wouldDelete" : "deleted"] += receipt.deleted;
         if (receipt.skipped) counts.skipped++;
+        if (receipt.deleted >= remaining) budgetSaturated = true;
       } catch (error) {
         if (!(error instanceof AnalyticsWorkerStopped) || !["MAH02", "MAH03", "MAH04"].includes(error.sqlstate ?? "")) throw error;
         counts.refused++;
       }
     }
+    const pageIncomplete = priorIncomplete || budgetSaturated || counts.refused > 0 || counts.skipped > 0;
     const next = input.dryRun && counts.visited > 0 && counts.visited < targets.length ? {
       afterAccountId: targets[counts.visited - 1].accountId, scopeDigest, floor: floor.toISOString(),
+      ...(pageIncomplete ? { incomplete: true as const } : {}),
     } : null;
-    return { status: counts.visited === targets.length && counts.deleted + counts.wouldDelete < 500 && !counts.refused && !counts.skipped ? "complete" : "partial",
+    return { status: counts.visited === targets.length && !pageIncomplete ? "complete" : "partial",
       counts, reason: null, floor: floor.toISOString(), ...(input.dryRun ? { continuation: next } : {}) };
   } catch (error) {
     return { status: "unavailable", counts, reason: error instanceof AnalyticsWorkerStopped ? error.reason : "storage_unavailable", floor: floor.toISOString() };
