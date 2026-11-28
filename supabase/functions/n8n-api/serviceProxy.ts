@@ -215,7 +215,11 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
       }
       i = runEnd - 1;
       if (backtickRunLength > 0) {
-        if (runLen === backtickRunLength) {
+        const continuesQuery =
+          top.hasQuestionOrHash &&
+          runEnd < n &&
+          (token[runEnd] !== ":" || /^[&?#]|^%(?:26|3f|23)/i.test(token.slice(runEnd)));
+        if (runLen === backtickRunLength && !continuesQuery) {
           backtickRunLength = 0;
           while (stack.length > 1) {
             const popped = stack.pop();
