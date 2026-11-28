@@ -164,10 +164,10 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
   let i = start;
   for (; i < token.length; i++) {
     const ch = token[i];
-    if (closer === ")" && ch === "(") {
+    if ((closer === ")" && ch === "(") || (closer === "]" && ch === "[")) {
       depth++;
     } else if (closer && ch === closer) {
-      if (closer === ")" && depth > 0) depth--;
+      if (depth > 0) depth--;
       else break;
     } else if (!closer && (ch === '"' || ch === "<" || ch === ">")) {
       break;
@@ -184,7 +184,7 @@ function tokenHasCredentialQuery(token: string): boolean {
     const spanStart = match[1] ? match.index : match.index + match[0].length - (match[2] ?? match[3]).length;
     const { span, end } = boundedUrlSpan(token, spanStart);
     if (CREDENTIAL_PARAM_RE.test(span)) return true;
-    startRe.lastIndex = Math.max(startRe.lastIndex, end);
+    if (end === token.length) break;
   }
   return false;
 }
