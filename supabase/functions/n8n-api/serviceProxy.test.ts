@@ -1016,6 +1016,10 @@ Deno.test("stripCredentialUrls preserves ordinary text fields mentioning credent
     diagnostic_error: "Upstream failed with access_token=SECRET_TOKEN",
     error: { title: "Upstream failed with access_token=SECRET_TOKEN", items: ["refresh_token=SECRET_TOKEN"] },
     failureEnvelope: { success: false, message: "Upstream failed with api_key=SECRET_KEY" },
+    serializedFailureEnvelope: { success: false, message: 'Upstream body: {"access_token":"SECRET_TOKEN"}' },
+    camelCaseFailureEnvelope: { errorCode: "UPSTREAM_REJECTED", message: "Rejected with refresh_token=SECRET_TOKEN" },
+    successWithNullError: { success: true, error: null, message: "Set api_key=DEMO_KEY in the docs" },
+    videoDetails: { caption: "Use access_token=DEMO_TOKEN in local mock" },
     messages: [{ message: "Use api_key=DEMO_KEY in the docs", attachments: [{ title: "Sample access_token=EXAMPLE_VALUE" }] }],
     protocolRelative: "//graph.facebook.com/v22.0/me?refresh_token%3DSECRET_TOKEN",
   });
@@ -1033,6 +1037,10 @@ Deno.test("stripCredentialUrls preserves ordinary text fields mentioning credent
     diagnostic_error: null,
     error: { title: null, items: [null] },
     failureEnvelope: { success: false, message: null },
+    serializedFailureEnvelope: { success: false, message: null },
+    camelCaseFailureEnvelope: { errorCode: "UPSTREAM_REJECTED", message: null },
+    successWithNullError: { success: true, error: null, message: "Set api_key=DEMO_KEY in the docs" },
+    videoDetails: { caption: "Use access_token=DEMO_TOKEN in local mock" },
     messages: [{ message: "Use api_key=DEMO_KEY in the docs", attachments: [{ title: "Sample access_token=EXAMPLE_VALUE" }] }],
     protocolRelative: null,
   });

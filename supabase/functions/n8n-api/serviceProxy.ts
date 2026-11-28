@@ -153,11 +153,23 @@ function redactErrorText(data: unknown): unknown {
 }
 
 const CREDENTIAL_QUERY_RE = /(?:[?#&]|%3f|%26)(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
-const CREDENTIAL_DIAGNOSTIC_RE = /(?:^|[\s"'(&?])(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
-const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_?)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
+const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[\s"'(&?])(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+|["'](?:access_token|refresh_token|api_key|service_role_key|cron_secret)["']\s*:\s*["']?[^\s"',}]+)/i;
+const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|(?:diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Error|Errors|Reason|Detail|Details|Cause|Diagnostic|Diagnostics|Stack|Trace)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
+
+function hasFailureValue(value: unknown): boolean {
+  if (value === undefined || value === null || value === false || value === "") return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as Record<string, unknown>).length > 0;
+  return true;
+}
 
 function isFailureRecord(record: Record<string, unknown>): boolean {
-  return record.success === false || record.ok === false || record.error !== undefined || record.error_code !== undefined || record.error_type !== undefined || record.reason_code !== undefined;
+  if (record.success === false || record.ok === false) return true;
+  if (record.success === true || record.ok === true) return false;
+  for (const key of ["error", "errors", "error_code", "errorCode", "error_type", "errorType", "error_message", "errorMessage", "reason_code", "reasonCode"]) {
+    if (hasFailureValue(record[key])) return true;
+  }
+  return false;
 }
 
 // Graph pagination URLs (paging.next / paging.previous) embed the connected
