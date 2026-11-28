@@ -1012,8 +1012,10 @@ Deno.test("stripCredentialUrls preserves ordinary text fields mentioning credent
     leakedUrl: "https://graph.facebook.com/v22.0/me?access_token=SECRET_TOKEN",
     relativeUrl: "/v22.0/me?access_token=SECRET_TOKEN",
     embeddedInError: "GRAPH_ERROR: request to https://graph.facebook.com/v22.0/me?access_token=SECRET_TOKEN failed",
+    diagnosticError: "Upstream failed with access_token=SECRET_TOKEN",
     diagnostic_error: "Upstream failed with access_token=SECRET_TOKEN",
     error: { title: "Upstream failed with access_token=SECRET_TOKEN", items: ["refresh_token=SECRET_TOKEN"] },
+    failureEnvelope: { success: false, message: "Upstream failed with api_key=SECRET_KEY" },
     messages: [{ message: "Use api_key=DEMO_KEY in the docs", attachments: [{ title: "Sample access_token=EXAMPLE_VALUE" }] }],
     protocolRelative: "//graph.facebook.com/v22.0/me?refresh_token%3DSECRET_TOKEN",
   });
@@ -1027,8 +1029,10 @@ Deno.test("stripCredentialUrls preserves ordinary text fields mentioning credent
     leakedUrl: null,
     relativeUrl: null,
     embeddedInError: null,
+    diagnosticError: null,
     diagnostic_error: null,
     error: { title: null, items: [null] },
+    failureEnvelope: { success: false, message: null },
     messages: [{ message: "Use api_key=DEMO_KEY in the docs", attachments: [{ title: "Sample access_token=EXAMPLE_VALUE" }] }],
     protocolRelative: null,
   });

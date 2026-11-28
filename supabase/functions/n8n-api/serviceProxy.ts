@@ -122,7 +122,7 @@ function fromUpstream(functionName: string, result: InvokeResult): ProxyResult {
     console.error(`[n8n-api] service proxy: ${functionName} answered ${result.status}`);
     return proxyError(502, "UPSTREAM_ERROR", "The Postora service behind this endpoint failed. Please retry shortly.");
   }
-  return { status: result.status, body: redactErrorText(stripCredentialUrls(result.data)) };
+  return { status: result.status, body: redactErrorText(stripCredentialUrls(result.data, result.status >= 400)) };
 }
 
 // AI generations are billed per call and have no idempotency key, so a timeout
@@ -154,7 +154,11 @@ function redactErrorText(data: unknown): unknown {
 
 const CREDENTIAL_QUERY_RE = /(?:[?#&]|%3f|%26)(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:^|[\s"'(&?])(?:access_token|refresh_token|api_key|service_role_key|cron_secret)(?:=|%3d)\S+/i;
-const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
+const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_?)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
+
+function isFailureRecord(record: Record<string, unknown>): boolean {
+  return record.success === false || record.ok === false || record.error !== undefined || record.error_code !== undefined || record.error_type !== undefined || record.reason_code !== undefined;
+}
 
 // Graph pagination URLs (paging.next / paging.previous) embed the connected
 // account's access_token, so they never leave the proxy; the opaque cursors
@@ -169,10 +173,12 @@ export function stripCredentialUrls(value: unknown, inDiagnosticContext = false)
   }
   if (Array.isArray(value)) return value.map((item) => stripCredentialUrls(item, inDiagnosticContext));
   if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const failureEnvelope = isFailureRecord(record);
   const out: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+  for (const [key, child] of Object.entries(record)) {
     if (/^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i.test(key)) continue;
-    const childDiagnostic = inDiagnosticContext || DIAGNOSTIC_KEY_RE.test(key);
+    const childDiagnostic = inDiagnosticContext || DIAGNOSTIC_KEY_RE.test(key) || (failureEnvelope && /^message$/i.test(key));
     if (key === "paging" && child && typeof child === "object" && !Array.isArray(child)) {
       const { next: _next, previous: _previous, ...rest } = child as Record<string, unknown>;
       out[key] = stripCredentialUrls(rest, childDiagnostic);
