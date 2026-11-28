@@ -4,7 +4,7 @@ import {
   getSafePlatformPostUrl,
   getSafeTikTokEmbedUrl,
 } from "@/lib/safeExternalUrl";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -47,6 +47,12 @@ export default function BrandIntelligencePost() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [contentTab, setContentTab] = useState("captions");
   const [dbRecordId, setDbRecordId] = useState<string | null>(null);
+  const lastSyncedTranscriptRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    lastSyncedTranscriptRef.current = null;
+    resetTranscription();
+  }, [postId, platform, resetTranscription]);
 
   // Redirect if no post data
   useEffect(() => {
@@ -109,14 +115,15 @@ export default function BrandIntelligencePost() {
     }
   }, [session?.user?.id, postId, platform, post, dbRecordId, location.state]);
 
-  // Sync transcript from hook to state
+  // Sync transcript from hook to state once per distinct transcription result
   useEffect(() => {
-    if (transcript && !isTranscribing) {
+    if (transcript && !isTranscribing && lastSyncedTranscriptRef.current !== transcript) {
+      lastSyncedTranscriptRef.current = transcript;
       setEditableTranscript(transcript);
       setCachedTranscript(transcript);
       setCachedLanguage(language);
       setCachedDuration(duration);
-      upsertContent({ transcript, transcript_language: language, transcript_duration: duration });
+      void upsertContent({ transcript, transcript_language: language, transcript_duration: duration });
     }
   }, [transcript, isTranscribing, language, duration, upsertContent]);
 
@@ -195,7 +202,7 @@ export default function BrandIntelligencePost() {
   const safeTikTokEmbedUrl = getSafeTikTokEmbedUrl(post.mediaUrl);
   const safeMediaUrl = getSafeHttpsUrl(post.mediaUrl);
   const safeThumbnailUrl = getSafeHttpsUrl(post.thumbnailUrl);
-  const safePermalink = getSafePlatformPostUrl(post.permalink);
+  const safePermalink = getSafePlatformPostUrl(post.permalink, platform);
 
   const stats = [
     { id: "likes", icon: Heart, label: t("stats.likes", "Likes"), value: post.likesCount, color: "text-red-500" },

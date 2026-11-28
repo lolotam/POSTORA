@@ -19,6 +19,14 @@ const PLATFORM_POST_HOSTS = new Set([
   "youtu.be",
 ]);
 
+const PLATFORM_SPECIFIC_HOSTS: Record<string, ReadonlySet<string>> = {
+  instagram: new Set(["instagram.com", "www.instagram.com"]),
+  tiktok: new Set(["tiktok.com", "www.tiktok.com", "vm.tiktok.com", "vt.tiktok.com"]),
+  facebook: new Set(["facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com", "fb.watch"]),
+  threads: new Set(["threads.net", "www.threads.net", "threads.com", "www.threads.com"]),
+  youtube: new Set(["youtube.com", "www.youtube.com", "youtu.be"]),
+};
+
 const TIKTOK_EMBED_HOSTS = new Set(["tiktok.com", "www.tiktok.com"]);
 const TIKTOK_EMBED_PATH = /^\/(embed|player)(\/|$)/i;
 
@@ -41,10 +49,20 @@ export function getSafeHttpsUrl(raw: string | null | undefined): string | null {
   return parsed ? parsed.href : null;
 }
 
-export function getSafePlatformPostUrl(raw: string | null | undefined): string | null {
+export function getSafePlatformPostUrl(
+  raw: string | null | undefined,
+  expectedPlatform?: string | null,
+): string | null {
   const parsed = parseHttpsUrl(raw);
   if (!parsed) return null;
-  if (!PLATFORM_POST_HOSTS.has(parsed.hostname.toLowerCase())) return null;
+  const host = parsed.hostname.toLowerCase();
+  const normalizedPlatform = expectedPlatform?.trim().toLowerCase();
+  const allowedHosts =
+    normalizedPlatform && PLATFORM_SPECIFIC_HOSTS[normalizedPlatform]
+      ? PLATFORM_SPECIFIC_HOSTS[normalizedPlatform]
+      : PLATFORM_POST_HOSTS;
+  if (!allowedHosts.has(host)) return null;
+  if (!parsed.pathname || parsed.pathname === "/") return null;
   return parsed.href;
 }
 
@@ -56,8 +74,22 @@ export function getSafeTikTokEmbedUrl(raw: string | null | undefined): string | 
   return parsed.href;
 }
 
-export function openSafePlatformPostUrl(raw: string | null | undefined): void {
-  const safeUrl = getSafePlatformPostUrl(raw);
+export function encodeSafeProfileUsername(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim().replace(/^@+/, "");
+  if (!trimmed) return null;
+  try {
+    return encodeURIComponent(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+export function openSafePlatformPostUrl(
+  raw: string | null | undefined,
+  expectedPlatform?: string | null,
+): void {
+  const safeUrl = getSafePlatformPostUrl(raw, expectedPlatform);
   if (!safeUrl) return;
   window.open(safeUrl, "_blank", "noopener,noreferrer");
 }

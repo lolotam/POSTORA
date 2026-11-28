@@ -1,5 +1,5 @@
 import { formatBrandMetric } from "@/lib/brandMetrics";
-import { getSafeHttpsUrl } from "@/lib/safeExternalUrl";
+import { encodeSafeProfileUsername, getSafeHttpsUrl } from "@/lib/safeExternalUrl";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -132,6 +132,7 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
   const isInstagram = profile.platform === "instagram";
   const safeAvatarUrl = getSafeHttpsUrl(profile.avatarUrl);
   const safeWebsiteUrl = getSafeHttpsUrl(profile.website);
+  const encodedUsername = encodeSafeProfileUsername(profile.username);
 
   return (
     <Card className="overflow-hidden animate-[fadeSlideDown_0.5s_ease-out] relative border-0 bg-muted">
@@ -189,16 +190,16 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
               </a>
             </Button>
           )}
-          {profile.platform === "threads" ? (
+          {encodedUsername && (profile.platform === "threads" ? (
             <TooltipProvider delayDuration={150}>
               <div className="flex items-center gap-2">
                 <PlatformLogoButton
-                  href={`https://www.threads.net/@${encodeURIComponent(profile.username)}`}
+                  href={`https://www.threads.net/@${encodedUsername}`}
                   label={t("profile.openThreads", "Open on Threads")}
                   kind="threads"
                 />
                 <PlatformLogoButton
-                  href={`https://www.instagram.com/${encodeURIComponent(profile.username)}/`}
+                  href={`https://www.instagram.com/${encodedUsername}/`}
                   label={t("profile.openInstagram", "Open on Instagram")}
                   kind="instagram"
                 />
@@ -207,7 +208,7 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
           ) : (
             <Button variant="outline" size="sm" asChild>
               <a
-                href={config.profileUrl(encodeURIComponent(profile.username))}
+                href={config.profileUrl(encodedUsername)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="gap-1"
@@ -215,7 +216,7 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
                 {t("profile.viewProfile", "View Profile")} <ExternalLink className="w-3 h-3" />
               </a>
             </Button>
-          )}
+          ))}
           {isInstagram ? actions : null}
         </div>
       </CardContent>

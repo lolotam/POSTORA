@@ -1,8 +1,9 @@
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import {
+  encodeSafeProfileUsername,
   getSafeHttpsUrl,
   getSafePlatformPostUrl,
   getSafeTikTokEmbedUrl,
@@ -14,7 +15,7 @@ import BrandIntelligencePost from "@/pages/BrandIntelligencePost";
 import type { BrandPost, BrandProfile } from "@/types/brand-intelligence";
 
 vi.mock("@/components/layout/DashboardLayout", () => ({
-  DashboardLayout: ({ children }: { children: unknown }) => createElement("div", null, children),
+  DashboardLayout: ({ children }: { children: ReactNode }) => createElement("div", null, children),
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -170,14 +171,21 @@ describe("safeExternalUrl validation", () => {
 
     openSafePlatformPostUrl("https://evil.example/threads.net/post/1");
     openSafePlatformPostUrl("javascript:alert(1)");
+    openSafePlatformPostUrl("https://www.instagram.com/p/abc/", "threads");
     expect(openSpy).not.toHaveBeenCalled();
 
-    openSafePlatformPostUrl("https://www.threads.net/@user/post/123");
+    openSafePlatformPostUrl("https://www.threads.net/@user/post/123", "threads");
     expect(openSpy).toHaveBeenCalledWith(
       "https://www.threads.net/@user/post/123",
       "_blank",
       "noopener,noreferrer",
     );
+  });
+
+  it("encodeSafeProfileUsername encodes valid usernames and returns null for malformed UTF-16 surrogates", () => {
+    expect(encodeSafeProfileUsername("@brand.handle")).toBe("brand.handle");
+    expect(encodeSafeProfileUsername("bad\uD800surrogate")).toBeNull();
+    expect(encodeSafeProfileUsername("   ")).toBeNull();
   });
 });
 

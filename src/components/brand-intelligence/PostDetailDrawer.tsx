@@ -132,10 +132,10 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
         toast.error(mapped.message || t("errors.couldNotComment", "Could not post comment"));
         return;
       }
-      const safeCommentPermalink = getSafePlatformPostUrl(data?.permalink);
+      const safeCommentPermalink = getSafePlatformPostUrl(data?.permalink, "threads");
       if (safeCommentPermalink) {
         toast.success(t("toast.commentPosted", "Comment posted on Threads"), {
-          action: { label: t("common:view", "View"), onClick: () => openSafePlatformPostUrl(safeCommentPermalink) },
+          action: { label: t("common:view", "View"), onClick: () => openSafePlatformPostUrl(safeCommentPermalink, "threads") },
         });
       } else {
         toast.success(t("toast.commentPosted", "Comment posted on Threads"));
