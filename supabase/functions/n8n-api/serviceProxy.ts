@@ -157,14 +157,15 @@ const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?toke
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
-function isUrlOrQueryToken(token: string): boolean {
-  const cleaned = token.replace(/^[("'[<]+/, "");
-  return /^(?:(?:https?:)?\/\/|\/|[?#&]|%3f|%23|%26)/i.test(cleaned);
+function extractUrlSpan(token: string): string | null {
+  const match = /(?:^|[("'[<,;=])((?:https?:)?\/\/\S+|\/\S+|(?:[?#&]|%3f|%23|%26)\S+)/i.exec(token);
+  return match ? match[1] : null;
 }
 
 function hasCredentialQuery(value: string): boolean {
   for (const token of value.split(/\s+/)) {
-    if (token && isUrlOrQueryToken(token) && CREDENTIAL_PARAM_RE.test(token)) return true;
+    const span = token ? extractUrlSpan(token) : null;
+    if (span && CREDENTIAL_PARAM_RE.test(span)) return true;
   }
   return false;
 }
