@@ -157,89 +157,119 @@ const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?toke
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
-function computeTokenLevelPrefixes(token: string): string[] {
-  const prefixes = new Array<string>(token.length);
-  const stack: string[] = [""];
-  const closers: string[] = [""];
+interface ScopeState {
+  closer: string;
+  empty: boolean;
+  afterDelimiter: boolean;
+  hasSlashStart: boolean;
+  hasRelativeStart: boolean;
+  hasQuestionOrHash: boolean;
+  hasLeadingAmp: boolean;
+  hasSchemeSlash: boolean;
+}
+
+function newScopeState(closer: string): ScopeState {
+  return {
+    closer,
+    empty: true,
+    afterDelimiter: true,
+    hasSlashStart: false,
+    hasRelativeStart: false,
+    hasQuestionOrHash: false,
+    hasLeadingAmp: false,
+    hasSchemeSlash: false,
+  };
+}
+
+function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint8Array; allowAmpersand: Uint8Array } {
+  const n = token.length;
+  const allowQuestionOrHash = new Uint8Array(n);
+  const allowAmpersand = new Uint8Array(n);
+  const stack: ScopeState[] = [newScopeState("")];
   let inSingleQuote = false;
   let inDoubleQuote = false;
-  for (let i = 0; i < token.length; i++) {
-    prefixes[i] = stack[stack.length - 1];
+
+  for (let i = 0; i < n; i++) {
+    const top = stack[stack.length - 1];
+    const urlForQ = top.empty || top.hasSlashStart || top.hasRelativeStart || top.hasSchemeSlash || top.hasQuestionOrHash;
+    const urlForAmp =
+      top.empty ||
+      top.hasSchemeSlash ||
+      top.hasSlashStart ||
+      top.hasLeadingAmp ||
+      (top.hasQuestionOrHash && (top.hasRelativeStart || top.hasSlashStart || top.hasSchemeSlash));
+    allowQuestionOrHash[i] = urlForQ ? 1 : 0;
+    allowAmpersand[i] = urlForAmp ? 1 : 0;
+
     const ch = token[i];
     if (ch === '"' && !inSingleQuote) {
       if (inDoubleQuote) {
         inDoubleQuote = false;
-        if (stack.length > 1 && closers[closers.length - 1] === '"') {
-          stack.pop();
-          closers.pop();
-        }
-      } else {
+        if (stack.length > 1 && top.closer === '"') stack.pop();
+      } else if (top.empty || top.afterDelimiter) {
         inDoubleQuote = true;
-        stack.push("");
-        closers.push('"');
+        stack.push(newScopeState('"'));
       }
       continue;
     }
     if (ch === "'" && !inDoubleQuote) {
-      if (i > 0 && i + 1 < token.length && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
-        stack[stack.length - 1] += ch;
+      if (inSingleQuote) {
+        if (i > 0 && i + 1 < n && /[a-z0-9]/i.test(token[i - 1]) && /[a-z0-9]/i.test(token[i + 1])) {
+          continue;
+        }
+        inSingleQuote = false;
+        if (stack.length > 1 && top.closer === "'") stack.pop();
+      } else if ((top.empty || top.afterDelimiter) && !top.hasQuestionOrHash) {
+        inSingleQuote = true;
+        stack.push(newScopeState("'"));
+      }
+      continue;
+    }
+    if (!inSingleQuote && !inDoubleQuote) {
+      if (ch === "(" || ch === "[" || ch === "<") {
+        stack.push(newScopeState(ch === "(" ? ")" : ch === "[" ? "]" : ">"));
         continue;
       }
-      if (inSingleQuote) {
-        inSingleQuote = false;
-        if (stack.length > 1 && closers[closers.length - 1] === "'") {
-          stack.pop();
-          closers.pop();
-        }
-      } else {
-        inSingleQuote = true;
-        stack.push("");
-        closers.push("'");
+      if ((ch === ")" || ch === "]" || ch === ">") && stack.length > 1 && top.closer === ch) {
+        stack.pop();
+        continue;
       }
-      continue;
     }
-    if (inSingleQuote || inDoubleQuote) {
-      stack[stack.length - 1] += ch;
-      continue;
-    }
-    if (ch === "(" || ch === "[" || ch === "<") {
-      stack.push("");
-      closers.push(ch === "(" ? ")" : ch === "[" ? "]" : ">");
-    } else if ((ch === ")" || ch === "]" || ch === ">") && stack.length > 1 && closers[closers.length - 1] === ch) {
-      stack.pop();
-      closers.pop();
-    } else {
-      stack[stack.length - 1] += ch;
-    }
-  }
-  return prefixes;
-}
 
-function isUrlPrefixBeforeParameter(prefix: string): boolean {
-  if (!prefix) return true;
-  if (/(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(prefix)) return true;
-  if (/(?:^|[,;=])(?:\/|[?#]|%3f|%23)/i.test(prefix)) return true;
-  if (/^(?:&|%26)/i.test(prefix)) return true;
-  if (/[?#]|%3f|%23/i.test(prefix)) {
-    return /(?:^|[,;=])(?:\.\.?\/|[A-Za-z0-9._~@-])/i.test(prefix);
+    if (ch === "/" && i + 1 < n && token[i + 1] === "/") {
+      top.hasSchemeSlash = true;
+    }
+    const isQ = ch === "?" || ch === "#" || (ch === "%" && /^(?:3f|23)/i.test(token.slice(i + 1, i + 3)));
+    const isAmp = ch === "&" || (ch === "%" && /^26/i.test(token.slice(i + 1, i + 3)));
+    if (isQ) {
+      if (top.empty || top.afterDelimiter) top.hasSlashStart = true;
+      top.hasQuestionOrHash = true;
+    } else if (isAmp && top.empty) {
+      top.hasLeadingAmp = true;
+    } else if (top.afterDelimiter) {
+      if (ch === "/") {
+        top.hasSlashStart = true;
+      } else if (/[A-Za-z0-9._~@-]/.test(ch)) {
+        top.hasRelativeStart = true;
+      }
+    }
+
+    top.empty = false;
+    top.afterDelimiter = ch === "," || ch === ";" || ch === "=";
   }
-  return false;
+
+  return { allowQuestionOrHash, allowAmpersand };
 }
 
 function tokenHasCredentialQuery(token: string): boolean {
   const paramGlobalRe = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)(?=\S)/gi;
-  let prefixes: string[] | null = null;
+  let flags: { allowQuestionOrHash: Uint8Array; allowAmpersand: Uint8Array } | null = null;
   let match: RegExpExecArray | null;
   while ((match = paramGlobalRe.exec(token)) !== null) {
-    if (!prefixes) prefixes = computeTokenLevelPrefixes(token);
+    if (!flags) flags = computeTokenUrlContextFlags(token);
     const delimiter = match[0].startsWith("%") ? match[0].slice(0, 3).toLowerCase() : match[0][0];
     const isQuestionOrHash = delimiter === "?" || delimiter === "#" || delimiter === "%3f" || delimiter === "%23";
-    const prefix = prefixes[match.index] ?? "";
-    if (isQuestionOrHash) {
-      if (!prefix || /(?:^|[,;=])(?:\.\.?\/|[A-Za-z0-9._~@/-])/i.test(prefix) || /(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(prefix)) {
-        return true;
-      }
-    } else if (isUrlPrefixBeforeParameter(prefix)) {
+    if (isQuestionOrHash ? flags.allowQuestionOrHash[match.index] === 1 : flags.allowAmpersand[match.index] === 1) {
       return true;
     }
   }
