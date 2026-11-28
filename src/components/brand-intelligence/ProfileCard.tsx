@@ -1,4 +1,5 @@
 import { formatBrandMetric } from "@/lib/brandMetrics";
+import { getSafeHttpsUrl } from "@/lib/safeExternalUrl";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -129,6 +130,8 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
    * TikTok card by accident (spec §2).
    */
   const isInstagram = profile.platform === "instagram";
+  const safeAvatarUrl = getSafeHttpsUrl(profile.avatarUrl);
+  const safeWebsiteUrl = getSafeHttpsUrl(profile.website);
 
   return (
     <Card className="overflow-hidden animate-[fadeSlideDown_0.5s_ease-out] relative border-0 bg-muted">
@@ -146,7 +149,7 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
           <div className="relative">
             <Avatar className="w-20 h-20 border-2 border-border">
               <AvatarImage
-                src={profile.avatarUrl}
+                src={safeAvatarUrl ?? undefined}
                 alt={profile.username}
                 referrerPolicy="no-referrer"
               />
@@ -179,9 +182,9 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
 
         <div className="flex items-center gap-2 flex-wrap">
           {isInstagram && source !== undefined ? <CompetitorSourceBadge source={source} /> : null}
-          {profile.website && (
+          {safeWebsiteUrl && (
             <Button variant="outline" size="sm" asChild>
-              <a href={profile.website} target="_blank" rel="noopener noreferrer">
+              <a href={safeWebsiteUrl} target="_blank" rel="noopener noreferrer">
                 {t("profile.website", "🔗 Website")}
               </a>
             </Button>
@@ -190,12 +193,12 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
             <TooltipProvider delayDuration={150}>
               <div className="flex items-center gap-2">
                 <PlatformLogoButton
-                  href={`https://www.threads.net/@${profile.username}`}
+                  href={`https://www.threads.net/@${encodeURIComponent(profile.username)}`}
                   label={t("profile.openThreads", "Open on Threads")}
                   kind="threads"
                 />
                 <PlatformLogoButton
-                  href={`https://www.instagram.com/${profile.username}/`}
+                  href={`https://www.instagram.com/${encodeURIComponent(profile.username)}/`}
                   label={t("profile.openInstagram", "Open on Instagram")}
                   kind="instagram"
                 />
@@ -204,7 +207,7 @@ export function ProfileCard({ profile, isLoading, source, actions }: ProfileCard
           ) : (
             <Button variant="outline" size="sm" asChild>
               <a
-                href={config.profileUrl(profile.username)}
+                href={config.profileUrl(encodeURIComponent(profile.username))}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="gap-1"

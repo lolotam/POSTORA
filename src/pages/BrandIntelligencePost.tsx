@@ -1,4 +1,9 @@
 import { formatBrandMetric } from "@/lib/brandMetrics";
+import {
+  getSafeHttpsUrl,
+  getSafePlatformPostUrl,
+  getSafeTikTokEmbedUrl,
+} from "@/lib/safeExternalUrl";
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
@@ -12,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { ArrowLeft, Mic, Loader2, Sparkles, Copy, Check, Heart, MessageCircle, Eye, Share2, Bookmark, TrendingUp, Image, Video, FileText, ExternalLink, Calendar, Play } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import type { Database, Json } from "@/integrations/supabase/types";
 import { useTranscription } from "@/hooks/useTranscription";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -83,6 +89,26 @@ export default function BrandIntelligencePost() {
     loadCached();
   }, [session?.user?.id, postId, platform, post]);
 
+  const upsertContent = useCallback(async (updates: Database["public"]["Tables"]["bi_post_content"]["Update"]) => {
+    if (!session?.user?.id || !postId || !post) return;
+
+    if (dbRecordId) {
+      await supabase.from("bi_post_content").update(updates).eq("id", dbRecordId);
+    } else {
+      const payload: Database["public"]["Tables"]["bi_post_content"]["Insert"] = {
+        user_id: session.user.id,
+        post_id: postId,
+        platform,
+        username: (location.state as { username?: string })?.username || "",
+        post_data: post as unknown as Json,
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
+      const { data } = await supabase.from("bi_post_content").upsert(payload, { onConflict: "user_id,post_id,platform" }).select("id").single();
+      if (data) setDbRecordId(data.id);
+    }
+  }, [session?.user?.id, postId, platform, post, dbRecordId, location.state]);
+
   // Sync transcript from hook to state
   useEffect(() => {
     if (transcript && !isTranscribing) {
@@ -92,34 +118,15 @@ export default function BrandIntelligencePost() {
       setCachedDuration(duration);
       upsertContent({ transcript, transcript_language: language, transcript_duration: duration });
     }
-  }, [transcript, isTranscribing]);
-
-  const upsertContent = useCallback(async (updates: Record<string, unknown>) => {
-    if (!session?.user?.id || !postId || !post) return;
-
-    if (dbRecordId) {
-      await supabase.from("bi_post_content").update(updates as any).eq("id", dbRecordId);
-    } else {
-      const payload = {
-        user_id: session.user.id,
-        post_id: postId,
-        platform,
-        username: (location.state as { username?: string })?.username || "",
-        post_data: post as unknown as Record<string, unknown>,
-        ...updates,
-        updated_at: new Date().toISOString(),
-      };
-      const { data } = await supabase.from("bi_post_content").upsert(payload as any, { onConflict: "user_id,post_id,platform" }).select("id").single();
-      if (data) setDbRecordId(data.id);
-    }
-  }, [session?.user?.id, postId, platform, post, dbRecordId, location.state]);
+  }, [transcript, isTranscribing, language, duration, upsertContent]);
 
   const handleTranscribe = () => {
-    if (!post?.mediaUrl) {
+    const safeUrl = getSafeHttpsUrl(post?.mediaUrl);
+    if (!safeUrl) {
       toast.error(t("errors.noMediaUrl", "No media URL available for transcription"));
       return;
     }
-    transcribe(post.mediaUrl);
+    transcribe(safeUrl);
   };
 
   const handleGenerate = async () => {
@@ -185,6 +192,10 @@ export default function BrandIntelligencePost() {
   const displayTranscript = editableTranscript || cachedTranscript || transcript || "";
   const displayLanguage = cachedLanguage || language || "unknown";
   const displayDuration = cachedDuration ?? duration ?? 0;
+  const safeTikTokEmbedUrl = getSafeTikTokEmbedUrl(post.mediaUrl);
+  const safeMediaUrl = getSafeHttpsUrl(post.mediaUrl);
+  const safeThumbnailUrl = getSafeHttpsUrl(post.thumbnailUrl);
+  const safePermalink = getSafePlatformPostUrl(post.permalink);
 
   const stats = [
     { id: "likes", icon: Heart, label: t("stats.likes", "Likes"), value: post.likesCount, color: "text-red-500" },
@@ -223,7 +234,6 @@ export default function BrandIntelligencePost() {
             <Card>
               <CardContent className="p-0 overflow-hidden rounded-lg">
                 {(() => {
-                  const isTikTokEmbed = !!post.mediaUrl && /tiktok\.com\/(embed|player)/i.test(post.mediaUrl);
                   const formatDur = (s?: number) => {
                     if (!s || s <= 0) return null;
                     const m = Math.floor(s / 60);
@@ -233,11 +243,11 @@ export default function BrandIntelligencePost() {
                   const durationLabel = formatDur(post.duration);
 
                   let player;
-                  if (isTikTokEmbed) {
+                  if (safeTikTokEmbedUrl) {
                     player = (
                       <div className="relative w-full bg-black mx-auto" style={{ aspectRatio: "9 / 16", maxHeight: 600 }}>
                         <iframe
-                          src={post.mediaUrl}
+                          src={safeTikTokEmbedUrl}
                           title={t("video.tiktokTitle", "TikTok video")}
                           allow="encrypted-media;"
                           allowFullScreen
@@ -245,19 +255,19 @@ export default function BrandIntelligencePost() {
                         />
                       </div>
                     );
-                  } else if (post.mediaUrl) {
+                  } else if (safeMediaUrl) {
                     player = (
                       <video
-                        src={post.mediaUrl}
-                        poster={post.thumbnailUrl}
+                        src={safeMediaUrl}
+                        poster={safeThumbnailUrl ?? undefined}
                         controls
                         className="w-full aspect-video object-contain bg-black"
                       />
                     );
-                  } else if (post.thumbnailUrl) {
+                  } else if (safeThumbnailUrl) {
                     player = (
                       <img
-                        src={post.thumbnailUrl}
+                        src={safeThumbnailUrl}
                         alt=""
                         className="w-full aspect-video object-cover"
                         referrerPolicy="no-referrer"
@@ -297,7 +307,7 @@ export default function BrandIntelligencePost() {
             </Card>
 
             {/* Posted on + View on TikTok */}
-            {(post.timestamp || post.permalink) && (
+            {(post.timestamp || safePermalink) && (
               <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                 {post.timestamp ? (
                   <span className="flex items-center gap-1.5">
@@ -305,9 +315,9 @@ export default function BrandIntelligencePost() {
                     {format(new Date(post.timestamp), "MMMM d, yyyy • h:mm a")}
                   </span>
                 ) : <span />}
-                {post.permalink && (
+                {safePermalink && (
                   <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" asChild>
-                    <a href={post.permalink} target="_blank" rel="noopener noreferrer">
+                    <a href={safePermalink} target="_blank" rel="noopener noreferrer">
                       {platform === "tiktok" ? t("video.viewOnTikTok", "View on TikTok") : t("video.viewOnOriginal", "View on Original")}
                       <ExternalLink className="w-3 h-3" />
                     </a>
