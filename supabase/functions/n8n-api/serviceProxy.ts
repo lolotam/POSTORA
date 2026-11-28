@@ -159,24 +159,25 @@ const DIAGNOSTIC_KEY_RE = /(?:error|message|reason|detail|cause|diagnostic|stack
 // Graph pagination URLs (paging.next / paging.previous) embed the connected
 // account's access_token, so they never leave the proxy; the opaque cursors
 // stay. Any URL/query string carrying a credential parameter is dropped, and
-// diagnostic fields also strip bare credential assignments while ordinary
-// content fields (`text`, `caption`, `message`, etc.) preserve benign prose.
-export function stripCredentialUrls(value: unknown, parentKey?: string): unknown {
+// diagnostic envelopes (including nested children) also strip bare credential
+// assignments while ordinary content fields preserve benign prose.
+export function stripCredentialUrls(value: unknown, inDiagnosticContext = false): unknown {
   if (typeof value === "string") {
     if (CREDENTIAL_QUERY_RE.test(value)) return null;
-    if (parentKey && DIAGNOSTIC_KEY_RE.test(parentKey) && CREDENTIAL_DIAGNOSTIC_RE.test(value)) return null;
+    if (inDiagnosticContext && CREDENTIAL_DIAGNOSTIC_RE.test(value)) return null;
     return value;
   }
-  if (Array.isArray(value)) return value.map((item) => stripCredentialUrls(item, parentKey));
+  if (Array.isArray(value)) return value.map((item) => stripCredentialUrls(item, inDiagnosticContext));
   if (!value || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (/^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i.test(key)) continue;
+    const childDiagnostic = inDiagnosticContext || DIAGNOSTIC_KEY_RE.test(key);
     if (key === "paging" && child && typeof child === "object" && !Array.isArray(child)) {
       const { next: _next, previous: _previous, ...rest } = child as Record<string, unknown>;
-      out[key] = stripCredentialUrls(rest, key);
+      out[key] = stripCredentialUrls(rest, childDiagnostic);
     } else {
-      out[key] = stripCredentialUrls(child, key);
+      out[key] = stripCredentialUrls(child, childDiagnostic);
     }
   }
   return out;

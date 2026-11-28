@@ -1013,6 +1013,7 @@ Deno.test("stripCredentialUrls preserves ordinary text fields mentioning credent
     relativeUrl: "/v22.0/me?access_token=SECRET_TOKEN",
     embeddedInError: "GRAPH_ERROR: request to https://graph.facebook.com/v22.0/me?access_token=SECRET_TOKEN failed",
     diagnosticError: "Upstream failed with access_token=SECRET_TOKEN",
+    error: { title: "Upstream failed with access_token=SECRET_TOKEN", items: ["refresh_token=SECRET_TOKEN"] },
     protocolRelative: "//graph.facebook.com/v22.0/me?refresh_token%3DSECRET_TOKEN",
   });
   assertEquals(stripped, {
@@ -1026,6 +1027,7 @@ Deno.test("stripCredentialUrls preserves ordinary text fields mentioning credent
     relativeUrl: null,
     embeddedInError: null,
     diagnosticError: null,
+    error: { title: null, items: [null] },
     protocolRelative: null,
   });
 });
