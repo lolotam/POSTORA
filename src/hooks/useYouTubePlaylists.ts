@@ -88,6 +88,9 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   // changed belongs to an older generation and may not write into the list
   // the newer generation owns.
   const generationRef = useRef(0);
+  const reconcilingRef = useRef(false);
+  const reconciliationFailedRef = useRef(false);
+  const mustIncludePlaylistRef = useRef<YouTubePlaylistListItem | null>(null);
 
   useEffect(() => {
     if (activeCreateAccountRef.current !== (accountId ?? null)) {
@@ -96,6 +99,9 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
       creatingRef.current = false;
       setCreating(false);
     }
+    reconcilingRef.current = false;
+    reconciliationFailedRef.current = false;
+    mustIncludePlaylistRef.current = null;
   }, [accountId]);
 
   const capabilitiesGenerationRef = useRef(0);
@@ -195,7 +201,7 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
   const loadMore = useCallback(() => {
     const pageToken = cursorRef.current;
     const generation = generationRef.current;
-    if (!accountId || !pageToken || loadingMoreRef.current) return;
+    if (!accountId || !pageToken || loadingMoreRef.current || reconcilingRef.current) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
     gateway.listPlaylists({ accountId, pageToken })
@@ -222,34 +228,31 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
       });
   }, [accountId]);
 
-  const retry = useCallback(() => {
-    // A failed page is retried where it failed; a list that never arrived is
-    // read again from the first page.
-    if (unavailable && playlists.length > 0 && cursorRef.current !== null) {
-      loadMore();
-      return;
-    }
-    setAttempt((value) => value + 1);
-  }, [loadMore, playlists.length, unavailable]);
-
-  const retryCapabilities = useCallback(() => {
-    setCapabilitiesAttempt((value) => value + 1);
-  }, []);
-
   const refreshPlaylistsInPlace = useCallback(
     async (targetAccountId: string, mustInclude?: YouTubePlaylistListItem) => {
+      if (mustInclude !== undefined) {
+        mustIncludePlaylistRef.current = mustInclude;
+      }
+      const pinnedPlaylist = mustInclude ?? mustIncludePlaylistRef.current ?? undefined;
       const refreshGen = generationRef.current + 1;
       generationRef.current = refreshGen;
+      reconcilingRef.current = true;
+      reconciliationFailedRef.current = false;
+      cursorRef.current = null;
+      setNextPageToken(null);
       loadingMoreRef.current = false;
       setLoadingMore(false);
       setLoading(false);
       try {
         const result = await gateway.listPlaylists({ accountId: targetAccountId });
         if (generationRef.current !== refreshGen) return;
+        reconcilingRef.current = false;
+        reconciliationFailedRef.current = false;
+        mustIncludePlaylistRef.current = null;
         const items = result.data.items;
         const merged =
-          mustInclude && !items.some((item) => item.id === mustInclude.id)
-            ? [mustInclude, ...items]
+          pinnedPlaylist && !items.some((item) => item.id === pinnedPlaylist.id)
+            ? [pinnedPlaylist, ...items]
             : items;
         setPlaylists(merged);
         cursorRef.current = result.data.next_page_token;
@@ -257,12 +260,32 @@ export function useYouTubePlaylists(accountId?: string | null): YouTubePlaylists
         setUnavailable(false);
       } catch {
         if (generationRef.current !== refreshGen) return;
+        reconcilingRef.current = false;
+        reconciliationFailedRef.current = true;
         // Keep existing playlists (including mustInclude if prepended) and surface retry UI.
         setUnavailable(true);
       }
     },
     [],
   );
+
+  const retry = useCallback(() => {
+    if (reconciliationFailedRef.current && accountId) {
+      void refreshPlaylistsInPlace(accountId);
+      return;
+    }
+    // A failed page is retried where it failed; a list that never arrived is
+    // read again from the first page.
+    if (unavailable && playlists.length > 0 && cursorRef.current !== null) {
+      loadMore();
+      return;
+    }
+    setAttempt((value) => value + 1);
+  }, [accountId, loadMore, playlists.length, refreshPlaylistsInPlace, unavailable]);
+
+  const retryCapabilities = useCallback(() => {
+    setCapabilitiesAttempt((value) => value + 1);
+  }, []);
 
   const createPlaylist = useCallback(
     async (input: {

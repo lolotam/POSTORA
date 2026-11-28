@@ -314,6 +314,14 @@ export function YouTubeSettings({
   const [newPlaylistPrivacy, setNewPlaylistPrivacy] = useState<"" | "public" | "unlisted" | "private">("");
   const [newPlaylistDialogError, setNewPlaylistDialogError] = useState<string | null>(null);
   const [playlistOutcomeUnknownNotice, setPlaylistOutcomeUnknownNotice] = useState(false);
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      createDialogSessionRef.current += 1;
+    };
+  }, []);
   const latestPlaylistAccountIdRef = useRef<string | null>(playlistAccountId);
   latestPlaylistAccountIdRef.current = playlistAccountId;
   const createDialogSessionRef = useRef(0);
@@ -406,10 +414,23 @@ export function YouTubeSettings({
       privacyStatus: newPlaylistPrivacy,
     });
     if (
+      !isMountedRef.current ||
       latestPlaylistAccountIdRef.current !== submitAccountId ||
-      createDialogSessionRef.current !== submitSession ||
       result.outcome === "aborted"
     ) {
+      return;
+    }
+
+    if (result.outcome === "outcome_unknown") {
+      if (createDialogSessionRef.current === submitSession) {
+        setNewPlaylistDialogOpen(false);
+        resetNewPlaylistForm();
+      }
+      setPlaylistOutcomeUnknownNotice(true);
+      return;
+    }
+
+    if (createDialogSessionRef.current !== submitSession) {
       return;
     }
 
@@ -418,13 +439,6 @@ export function YouTubeSettings({
       setNewPlaylistDialogOpen(false);
       resetNewPlaylistForm();
       onSettingsChange({ playlist: result.playlist.id });
-      return;
-    }
-
-    if (result.outcome === "outcome_unknown") {
-      setNewPlaylistDialogOpen(false);
-      resetNewPlaylistForm();
-      setPlaylistOutcomeUnknownNotice(true);
       return;
     }
 
@@ -449,7 +463,7 @@ export function YouTubeSettings({
       setNewPlaylistDialogError(
         t(
           "youtube.playlistCreateQuotaExceeded",
-          "Postora's YouTube write quota for today is used up. Try again tomorrow.",
+          "Postora's YouTube write quota is currently unavailable or used up for today. Please try again later.",
         ),
       );
       return;

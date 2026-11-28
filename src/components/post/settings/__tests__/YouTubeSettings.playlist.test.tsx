@@ -607,4 +607,39 @@ describe("YouTubeSettings playlist selector", () => {
     await waitFor(() => expect(playlistCatalog.createPlaylist).toHaveBeenCalledTimes(1));
     expect(onSettingsChange).not.toHaveBeenCalledWith({ playlist: "PL_FROM_CHANNEL_1" });
   });
+
+  it("does not call onSettingsChange when the component unmounts while createPlaylist is pending", async () => {
+    let resolveCreate!: (value: unknown) => void;
+    playlistCatalog.createPlaylist.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveCreate = res;
+        }),
+    );
+
+    const { onSettingsChange } = renderSettings({}, [nativeAccount("account-1", "UC_1")]);
+    fireEvent.click(screen.getByTestId("youtube-new-playlist-button"));
+    const dialog = screen.getByTestId("youtube-new-playlist-dialog");
+    fireEvent.change(within(dialog).getByLabelText("Playlist title"), {
+      target: { value: "Unmount Playlist" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Playlist privacy"), {
+      target: { value: "private" },
+    });
+    fireEvent.click(within(dialog).getByTestId("youtube-new-playlist-submit"));
+
+    cleanup();
+
+    resolveCreate({
+      outcome: "created",
+      playlist: {
+        id: "PL_AFTER_UNMOUNT",
+        title: "Unmount Playlist",
+        privacy_status: "private",
+        thumbnail_url: null,
+      },
+    });
+    await Promise.resolve();
+    expect(onSettingsChange).not.toHaveBeenCalled();
+  });
 });

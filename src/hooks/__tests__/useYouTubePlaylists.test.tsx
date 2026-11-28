@@ -384,6 +384,37 @@ describe("useYouTubePlaylists", () => {
 
     expect(outcome).toEqual({ outcome: "outcome_unknown" });
     expect(result.current.unavailable).toBe(true);
+    expect(result.current.hasMore).toBe(false);
     expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL1"]);
+  });
+
+  it("retries first-page reconciliation instead of loadMore when post-create refresh fails after a paginated list", async () => {
+    listPlaylistsMock
+      .mockResolvedValueOnce(page([playlist("PL1")], "PAGE2"))
+      .mockRejectedValueOnce(new Error("refresh failed"))
+      .mockResolvedValueOnce(page([playlist("PL_NEW"), playlist("PL1")], "PAGE2_FRESH"));
+    createPlaylistMock.mockRejectedValueOnce(new YouTubeResourceError("outcome_unknown"));
+
+    const { result } = renderHook(() => useYouTubePlaylists("acc-1"));
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+
+    await act(async () => {
+      await result.current.createPlaylist({
+        title: "Playlist PL_NEW",
+        privacyStatus: "unlisted",
+      });
+    });
+
+    expect(result.current.unavailable).toBe(true);
+    expect(result.current.hasMore).toBe(false);
+
+    await act(async () => {
+      result.current.retry();
+    });
+
+    await waitFor(() => expect(result.current.unavailable).toBe(false));
+    expect(listPlaylistsMock).toHaveBeenLastCalledWith({ accountId: "acc-1" });
+    expect(result.current.playlists.map((entry) => entry.id)).toEqual(["PL_NEW", "PL1"]);
+    expect(result.current.hasMore).toBe(true);
   });
 });
