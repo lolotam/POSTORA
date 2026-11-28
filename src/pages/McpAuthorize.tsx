@@ -22,11 +22,10 @@ interface AuthorizationDetails {
 
 export const SCOPE_LABEL: Record<string, string> = {
   "accounts:read": "View your connected social media accounts",
-  "posts:read": "Read your posts, analytics, competitor reports, and brand analysis",
-  "posts:write": "Create, schedule, and publish posts, sync analytics, track competitors, and run paid AI generation (captions, hashtags, and images)",
+  "posts:read": "Read your posts, media library, analytics, competitor reports, brand analysis, and run paid AI best-time suggestions",
+  "posts:write": "Create, schedule, publish, and delete posts (including platform copies and media), sync analytics, track competitors, and run paid AI generation (captions, hashtags, and images; image generation also requires media:write)",
   "media:write": "Upload and store media in your Postora library",
   "webhooks:manage": "Register and manage webhook subscriptions",
-  "ai:generate": "Generate captions, hashtags, and images using your paid AI quota",
 };
 
 function functionUrl(path: string): string {

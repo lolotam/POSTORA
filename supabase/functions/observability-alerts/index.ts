@@ -53,22 +53,30 @@ function escapeHtml(raw: string): string {
     .replace(/'/g, "&#39;");
 }
 
+const MAX_EMAIL_SILENT_CONNECTIONS = 10;
+
 function formatSilentConnectionRow(conn: SilentStoreConnection): string {
   const connectorId = escapeHtml(String(conn.connector_id ?? "unknown"));
   const accountId = escapeHtml(String(conn.social_account_id ?? "unknown"));
   const bindingId = escapeHtml(conn.binding_id ? String(conn.binding_id) : "deleted");
   const lastDelivery = conn.last_delivery_at ? escapeHtml(String(conn.last_delivery_at)) : "unknown";
-  return `<li style="margin-bottom: 6px; font-family: monospace; font-size: 12px;">Connector: ${connectorId} &bull; Account: ${accountId} &bull; Binding: ${bindingId} &bull; Last delivery: ${lastDelivery}</li>`;
+  return `<li style="margin-bottom: 6px; font-family: monospace; font-size: 12px;">Connector: ${connectorId} &bull; Last delivery account: ${accountId} &bull; Current binding: ${bindingId} &bull; Last delivery: ${lastDelivery}</li>`;
 }
 
 export function renderSilentConnectionsEmailHtml(silentConnections: unknown): string {
   if (!Array.isArray(silentConnections) || silentConnections.length === 0) {
     return "";
   }
-  const items = (silentConnections as SilentStoreConnection[])
+  const typed = silentConnections as SilentStoreConnection[];
+  const items = typed
+    .slice(0, MAX_EMAIL_SILENT_CONNECTIONS)
     .map(formatSilentConnectionRow)
     .join("");
-  return `<div style="margin-top: 16px;"><div style="font-weight: 600; margin-bottom: 8px;">Silent Store Connections</div><ul style="margin: 0; padding-left: 20px;">${items}</ul></div>`;
+  const omitted = typed.length - MAX_EMAIL_SILENT_CONNECTIONS;
+  const omittedNote = omitted > 0
+    ? `<p style="margin-top: 8px; font-size: 12px; color: #6b7280;">+${omitted} more silent connection(s) omitted; view the full list on the dashboard.</p>`
+    : "";
+  return `<div style="margin-top: 16px;"><div style="font-weight: 600; margin-bottom: 8px;">Silent Store Connections</div><ul style="margin: 0; padding-left: 20px;">${items}</ul>${omittedNote}</div>`;
 }
 
 // A store counts as silent only if it delivered something this recently; see the
@@ -485,13 +493,13 @@ serve(async (req) => {
                       </tr>
                     </table>
                     ${config.description ? `<p style="margin-top: 16px; color: #6b7280;">${config.description}</p>` : ""}
-                    ${renderSilentConnectionsEmailHtml(ruleDetails.silent_connections)}
                     <div style="margin-top: 20px;">
                       <a href="https://postora.cloud/admin/observability" 
                          style="display: inline-block; background: #6366f1; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: 500;">
                         View Dashboard
                       </a>
                     </div>
+                    ${renderSilentConnectionsEmailHtml(ruleDetails.silent_connections)}
                   </div>
                 </div>
               `,

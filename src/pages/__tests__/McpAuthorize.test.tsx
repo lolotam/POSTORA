@@ -15,7 +15,7 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
     auth: {
       getSession: vi.fn().mockResolvedValue({
-        data: { session: { access_token: "test-token" } },
+        data: { session: null },
       }),
     },
     from: vi.fn(() => ({
@@ -72,19 +72,17 @@ describe("McpAuthorize consent screen disclosures", () => {
 
     expect(
       screen.getByText(
-        "Read your posts, analytics, competitor reports, and brand analysis",
+        "Read your posts, media library, analytics, competitor reports, brand analysis, and run paid AI best-time suggestions",
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Create, schedule, and publish posts, sync analytics, track competitors, and run paid AI generation (captions, hashtags, and images)",
+        "Create, schedule, publish, and delete posts (including platform copies and media), sync analytics, track competitors, and run paid AI generation (captions, hashtags, and images; image generation also requires media:write)",
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByText("Upload and store media in your Postora library"),
     ).toBeInTheDocument();
-    expect(SCOPE_LABEL["ai:generate"]).toBe(
-      "Generate captions, hashtags, and images using your paid AI quota",
-    );
+    expect(SCOPE_LABEL["ai:generate"]).toBeUndefined();
   });
 });

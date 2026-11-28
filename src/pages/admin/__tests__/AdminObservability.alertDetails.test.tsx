@@ -87,13 +87,13 @@ describe("AdminObservability store_webhook_silence details (#213)", () => {
 
     expect(await screen.findByText("Store Webhook Silent")).toBeInTheDocument();
     expect(screen.getByText("Connector: conn-111")).toBeInTheDocument();
-    expect(screen.getByText("Account: acc-222")).toBeInTheDocument();
-    expect(screen.getByText("Binding: bind-333")).toBeInTheDocument();
+    expect(screen.getByText("Last delivery account: acc-222")).toBeInTheDocument();
+    expect(screen.getByText("Current binding: bind-333")).toBeInTheDocument();
     expect(screen.getByText("Last delivery: 2026-10-01T10:00:00Z")).toBeInTheDocument();
 
     expect(screen.getByText("Connector: conn-444")).toBeInTheDocument();
-    expect(screen.getByText("Account: acc-555")).toBeInTheDocument();
-    expect(screen.getByText("Binding: deleted")).toBeInTheDocument();
+    expect(screen.getByText("Last delivery account: acc-555")).toBeInTheDocument();
+    expect(screen.getByText("Current binding: deleted")).toBeInTheDocument();
     expect(screen.getByText("Last delivery: 2026-10-01T08:30:00Z")).toBeInTheDocument();
   });
 });
