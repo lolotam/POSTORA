@@ -374,21 +374,23 @@ Deno.serve(async (req) => {
     };
 
     if (existingAccount) {
-      await admin
+      const { error: saveError } = await admin
         .from("social_accounts")
         .update({
           platform_username: displayPhone || verifiedName || phone_number_id,
           workspace_id: targetWorkspaceId,
           access_token: accessToken,
           token_expires_at: tokenExpiresAt,
+          connection_mode: mode,
           account_metadata: accountMetadata,
           is_active: true,
           needs_reauth: false,
           updated_at: new Date().toISOString(),
         })
         .eq("id", existingAccount.id);
+      if (saveError) throw saveError;
     } else {
-      await admin.from("social_accounts").insert({
+      const { error: saveError } = await admin.from("social_accounts").insert({
         user_id: userId,
         workspace_id: targetWorkspaceId,
         platform: "whatsapp",
@@ -396,9 +398,11 @@ Deno.serve(async (req) => {
         platform_username: displayPhone || verifiedName || phone_number_id,
         access_token: accessToken,
         token_expires_at: tokenExpiresAt,
+        connection_mode: mode,
         account_metadata: accountMetadata,
         is_active: true,
       });
+      if (saveError) throw saveError;
     }
 
     return restrictedJsonResponse(req, {

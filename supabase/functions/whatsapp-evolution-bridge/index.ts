@@ -327,9 +327,11 @@ async function resubscribeWebhook(context: Awaited<ReturnType<typeof authenticat
   return { success: true, social_account_id: body.social_account_id, events: EVOLUTION_EVENTS };
 }
 
-// The webhook is the primary activation path; this keeps a dropped delivery from
-// leaving an already-linked session permanently inactive in Postora. The decision
-// tree itself lives in qrStatus.ts so the mismatch contract stays in one place.
+// get_qr_status is the primary activation path for pending and disconnected
+// (is_active = false) QR accounts: whatsapp-evolution-webhook filters is_active = true
+// to ignore events from deactivated sessions, so initial and reconnect activation
+// happens here. The decision tree itself lives in qrStatus.ts so the mismatch contract
+// stays in one place.
 async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
   const account = await findOwnedAccount(admin, userId, body.social_account_id);
