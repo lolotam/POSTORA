@@ -157,12 +157,12 @@ const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?toke
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
-function boundedUrlSpan(token: string, start: number): { span: string; end: number } {
+function boundedUrlSpan(token: string, start: number, limit = token.length): { span: string; end: number } {
   const opener = start > 0 ? token[start - 1] : "";
   const closer = opener === "(" ? ")" : opener === "[" ? "]" : opener === "<" ? ">" : opener === '"' ? '"' : opener === "'" ? "'" : "";
   let depth = 0;
   let i = start;
-  for (; i < token.length; i++) {
+  for (; i < limit; i++) {
     const ch = token[i];
     if ((closer === ")" && ch === "(") || (closer === "]" && ch === "[")) {
       depth++;
@@ -179,12 +179,17 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
 function tokenHasCredentialQuery(token: string): boolean {
   if (!CREDENTIAL_PARAM_RE.test(token)) return false;
   const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<])(&|%26)/gi;
+  const enclosingEnds: number[] = [];
   let match: RegExpExecArray | null;
   while ((match = startRe.exec(token)) !== null) {
     const spanStart = match[1] ? match.index : match.index + match[0].length - (match[2] ?? match[3]).length;
-    const { span, end } = boundedUrlSpan(token, spanStart);
+    while (enclosingEnds.length > 0 && enclosingEnds[enclosingEnds.length - 1] <= spanStart) {
+      enclosingEnds.pop();
+    }
+    const limit = enclosingEnds.length > 0 ? enclosingEnds[enclosingEnds.length - 1] : token.length;
+    const { span, end } = boundedUrlSpan(token, spanStart, limit);
     if (CREDENTIAL_PARAM_RE.test(span)) return true;
-    if (end === token.length) break;
+    enclosingEnds.push(end);
   }
   return false;
 }
