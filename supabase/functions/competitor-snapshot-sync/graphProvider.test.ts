@@ -70,9 +70,11 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 
 Deno.test("the request uses the documented business_discovery.username expansion", async () => {
   const captured: string[] = [];
+  const inits: RequestInit[] = [];
 
-  const mockFetch = async (input: RequestInfo | URL) => {
+  const mockFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     captured.push(String(input));
+    inits.push(init ?? {});
     return jsonResponse(targetPayload({}, []));
   };
 
@@ -96,6 +98,7 @@ Deno.test("the request uses the documented business_discovery.username expansion
   assertEquals(fields.includes("media_product_type"), true);
   assertEquals(fields.includes("video_view_count"), false);
   assertEquals(url.searchParams.get("access_token"), TOKEN);
+  assertEquals(inits.every((init) => init.redirect === "error"), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -834,6 +837,27 @@ Deno.test("a throttle is read from the headers of an error response too", async 
 
   assertEquals(error.kind, "rate_limited");
   assertEquals(error.usagePercent, 91);
+});
+
+Deno.test("the rate limit codes including business-use-case 80001 and 80002 classify as rate_limited", async () => {
+  for (const code of [4, 17, 32, 613, 80001, 80002]) {
+    const provider = new GraphCompetitorProvider({
+      fetchFn: (async () =>
+        jsonResponse({ error: { code, message: "throttled" } }, { status: 400 })) as typeof fetch,
+    });
+    const error = await assertRejects(
+      () =>
+        provider.fetch({
+          username: "competitor_brand",
+          viewerIgUserId: VIEWER,
+          token: TOKEN,
+          signal: new AbortController().signal,
+        }),
+      CompetitorProviderError,
+    );
+    assertEquals(error.kind, "rate_limited", `code ${code}`);
+    assertEquals(error.retryable, false, `code ${code}`);
+  }
 });
 
 Deno.test("a 5xx is retried at most twice and a 4xx is not retried", async () => {

@@ -11,6 +11,7 @@ const OWNER = "d1000000-0000-4000-8000-000000000001";
 const ACCOUNT = "d2000000-0000-4000-8000-000000000001";
 const NOW = "2026-11-01T12:00:00.000Z";
 const COLLECTED = "2026-11-01T10:00:00.000Z";
+const CURSOR_SIGNING_MATERIAL = "cursor-signing-test-material";
 const scope: StoredReportScope = { platform: "facebook", ownerId: OWNER, accountId: ACCOUNT, days: 7 };
 const windows = closedAnalyticsPeriods({ now: NOW, days: 7, timezone: "America/Los_Angeles" });
 
@@ -355,4 +356,181 @@ Deno.test("data evidence covers all period posts and account readiness survives 
   } }, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
   assertEquals(empty.collection?.reason_code, "ready");
   assertEquals(empty.data?.state, "empty");
+});
+
+Deno.test("handler maps every PersistedReportRefused reason to a distinct status and actionable message and logs unexpected errors safely", async (test) => {
+  const validCursor = await storedReportCursor({
+    scope,
+    period: windows.current.period,
+    revision: 4,
+    publishedAt: "2026-10-31T12:00:00.123456Z",
+    postId: "772001_9001",
+    secret: CURSOR_SIGNING_MATERIAL,
+  });
+  const cases = [
+    {
+      reason: "account_not_found" as const,
+      status: 404,
+      message: "Account not found.",
+      authenticate: () => Promise.reject(new PersistedReportRefused("account_not_found", 404)),
+      envelope: { data: fixture(), error: null },
+      cursor: undefined,
+    },
+    {
+      reason: "invalid_cursor" as const,
+      status: 400,
+      message: "Invalid saved analytics pagination cursor.",
+      authenticate: undefined,
+      envelope: { data: fixture(), error: null },
+      cursor: `${validCursor.slice(0, -3)}bad`,
+    },
+    {
+      reason: "history_revision_changed" as const,
+      status: 409,
+      message: "Saved analytics history was updated while paging. Request the first page without a cursor.",
+      authenticate: undefined,
+      envelope: { data: { ok: false, reason: "history_revision_changed" }, error: null },
+      cursor: undefined,
+    },
+    {
+      reason: "history_expired" as const,
+      status: 410,
+      message: "Saved analytics history for this cursor has expired. Request the first page without a cursor.",
+      authenticate: undefined,
+      envelope: { data: { ok: false, reason: "history_expired" }, error: null },
+      cursor: undefined,
+    },
+    {
+      reason: "invalid_contract" as const,
+      status: 503,
+      message: "Saved analytics storage returned an invalid contract.",
+      authenticate: undefined,
+      envelope: { data: [], error: null },
+      cursor: undefined,
+    },
+    {
+      reason: "storage_unavailable" as const,
+      status: 503,
+      message: "Saved analytics could not be read. Please retry.",
+      authenticate: undefined,
+      envelope: { data: null, error: { code: "57014", message: "synthetic-db-failure" } },
+      cursor: undefined,
+    },
+  ];
+  for (const { reason, status, message, authenticate, envelope, cursor } of cases) {
+    await test.step(reason, async () => {
+      const handler = createStoredReportHandler({
+        authenticate: authenticate ?? (async () => ({ userId: OWNER })),
+        secret: CURSOR_SIGNING_MATERIAL,
+        now: () => NOW,
+        rpc: () => Promise.resolve(envelope),
+        audit: async () => true,
+      });
+      const response = await handler(new Request("https://saved-analytics.invalid", {
+        method: "POST",
+        body: JSON.stringify({
+          platform: "facebook",
+          accountId: ACCOUNT,
+          analyticsContractVersion: 1,
+          ...(cursor ? { cursor } : {}),
+        }),
+      }));
+      assertEquals(response.status, status);
+      assertEquals(await response.json(), { ok: false, reason, message });
+    });
+  }
+  await test.step("unexpected error emits sanitized log event without leaking error message", async () => {
+    const logged: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+    try {
+      const handler = createStoredReportHandler({
+        authenticate: async () => ({ userId: OWNER }),
+        secret: CURSOR_SIGNING_MATERIAL,
+        now: () => {
+          throw new TypeError("unexpected-internal-failure");
+        },
+        rpc: () => Promise.resolve({ data: fixture(), error: null }),
+        audit: async () => true,
+      });
+      const response = await handler(new Request("https://saved-analytics.invalid", {
+        method: "POST",
+        body: JSON.stringify({ platform: "facebook", accountId: ACCOUNT, analyticsContractVersion: 1 }),
+      }));
+      assertEquals(response.status, 503);
+      assertEquals(await response.json(), {
+        ok: false,
+        reason: "storage_unavailable",
+        message: "Saved analytics could not be read. Please retry.",
+      });
+      assertEquals(logged.length, 1);
+      assertEquals(logged[0].includes("unexpected-internal-failure"), false);
+      assertEquals(JSON.parse(logged[0]), {
+        event: "persisted_report_unexpected_error",
+        ownerId: OWNER,
+        platform: "facebook",
+        accountId: ACCOUNT,
+        errorKind: "TypeError",
+      });
+    } finally {
+      console.error = origError;
+    }
+  });
+});
+
+Deno.test("handler accepts a valid signed pagination cursor and rejects a tampered cursor", async (test) => {
+  const validCursor = await storedReportCursor({
+    scope,
+    period: windows.current.period,
+    revision: 4,
+    publishedAt: "2026-10-31T12:00:00.123456Z",
+    postId: "772001_9001",
+    secret: CURSOR_SIGNING_MATERIAL,
+  });
+  await test.step("valid cursor passes decoded after position to read_meta_owned_analytics_history", async () => {
+    let capturedName = "";
+    const capturedRequests: Array<Record<string, unknown>> = [];
+    const handler = createStoredReportHandler({
+      authenticate: async () => ({ userId: OWNER }),
+      secret: CURSOR_SIGNING_MATERIAL,
+      now: () => NOW,
+      audit: async () => true,
+      rpc: (name, args) => {
+        capturedName = name;
+        capturedRequests.push(args.p_request as Record<string, unknown>);
+        return Promise.resolve({ data: fixture(), error: null });
+      },
+    });
+    const response = await handler(new Request("https://saved-analytics.invalid", {
+      method: "POST",
+      body: JSON.stringify({ platform: "facebook", accountId: ACCOUNT, analyticsContractVersion: 1, cursor: validCursor }),
+    }));
+    assertEquals(response.status, 200);
+    assertEquals(capturedName, "read_meta_owned_analytics_history");
+    assertEquals(capturedRequests.length, 1);
+    const reqJson = JSON.stringify(capturedRequests[0]);
+    assertEquals(reqJson.includes("2026-10-31T12:00:00.123456Z"), true, reqJson);
+    assertEquals(reqJson.includes("772001_9001"), true, reqJson);
+    assertEquals(capturedRequests[0].expected_revision ?? capturedRequests[0].revision ?? (capturedRequests[0].after as Record<string, unknown> | undefined)?.revision, 4, reqJson);
+  });
+  await test.step("tampered cursor returns 400 invalid_cursor with specific message", async () => {
+    const tampered = `${validCursor.slice(0, -3)}bad`;
+    const handler = createStoredReportHandler({
+      authenticate: async () => ({ userId: OWNER }),
+      secret: CURSOR_SIGNING_MATERIAL,
+      now: () => NOW,
+      audit: async () => true,
+      rpc: () => Promise.resolve({ data: fixture(), error: null }),
+    });
+    const response = await handler(new Request("https://saved-analytics.invalid", {
+      method: "POST",
+      body: JSON.stringify({ platform: "facebook", accountId: ACCOUNT, analyticsContractVersion: 1, cursor: tampered }),
+    }));
+    assertEquals(response.status, 400);
+    assertEquals(await response.json(), {
+      ok: false,
+      reason: "invalid_cursor",
+      message: "Invalid saved analytics pagination cursor.",
+    });
+  });
 });

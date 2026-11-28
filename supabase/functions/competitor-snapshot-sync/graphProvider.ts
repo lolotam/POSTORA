@@ -125,7 +125,7 @@ export const MAX_RESPONSE_BYTES = 1_048_576;
 export const USAGE_STOP_PERCENT = 80;
 
 /** The Graph error codes that mean "the provider is throttling". */
-const RATE_LIMIT_CODES = new Set([4, 17, 32, 613]);
+const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80001, 80002]);
 
 /** The Graph error codes that mean "the credential was rejected". */
 const TOKEN_ERROR_CODES = new Set([190]);
@@ -1099,7 +1099,12 @@ export class GraphCompetitorProvider implements CompetitorProvider {
     try {
       // Raced, not merely signalled: a transport that ignores the abort must
       // not keep the attempt waiting past its ceiling.
-      const pending = this.#fetchFn(url, { signal: controller.signal });
+      // The token travels in the query string, so a redirect to any other
+      // host must fail rather than be followed.
+      const pending = this.#fetchFn(url, {
+        signal: controller.signal,
+        redirect: "error",
+      });
       pending.catch(() => undefined);
       const response = await Promise.race([pending, abortRejection(controller.signal)]);
 

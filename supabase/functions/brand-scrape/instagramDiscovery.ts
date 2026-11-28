@@ -26,12 +26,17 @@ export type DiscoveryAuthority = {
 export async function resolveDiscoveryAuthority(input: {
   rpc: ServiceRpcCaller; accounts: ViewerCandidate[]; userId: string; username: string;
 }): Promise<{ authority: DiscoveryAuthority | null; cacheIdentity: string; refusalCode: string | null }> {
+  if (!input.accounts.every((account) => account.user_id === input.userId)) {
+    throw new InstagramDiscoveryError("DISCOVERY_UNAVAILABLE", "Instagram discovery is unavailable.", 503);
+  }
   const capabilities = createInstagramAccountCapabilityStore(input.rpc);
   const accounts: ViewerCandidate[] = [];
-  for (const account of input.accounts) {
-    if (account.user_id !== input.userId) throw new InstagramDiscoveryError("DISCOVERY_UNAVAILABLE", "Instagram discovery is unavailable.", 503);
-    const capability = await capabilities.readCapability({ userId: input.userId, socialAccountId: account.id });
-    accounts.push({ ...account, capability });
+  for (let offset = 0; offset < input.accounts.length; offset += 4) {
+    const batch = await Promise.all(input.accounts.slice(offset, offset + 4).map(async (account) => ({
+      ...account,
+      capability: await capabilities.readCapability({ userId: input.userId, socialAccountId: account.id }),
+    })));
+    accounts.push(...batch);
   }
   const cacheIdentity = JSON.stringify(accounts.map((account) => [account.id, account.is_active,
     account.needs_reauth, account.capability]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
@@ -39,7 +44,7 @@ export async function resolveDiscoveryAuthority(input: {
     account.capability?.loginKind === "direct" && account.access_token &&
     (!account.ig_auth_type || account.ig_auth_type === "business_login") &&
     normalizeCompetitorHandle(String(account.platform_username ?? "")) === input.username);
-  if (own) return { authority: { account: own, token: own.access_token, source: "graph_own" }, cacheIdentity, refusalCode: null };
+  if (own) return { authority: { account: own, token: own.access_token, source: "graph_own" }, cacheIdentity: `${cacheIdentity}:graph_own:${own.id}`, refusalCode: null };
   let remaining = accounts.filter((account) => account.capability?.loginKind === "page_linked" && isBusinessDiscoveryViewerCandidate(account));
   while (remaining.length) {
     const viewer = pickBusinessDiscoveryViewer(remaining);
@@ -144,16 +149,17 @@ async function discoveryJson(url: string, fetchFn: typeof fetch): Promise<unknow
   try {
     const response = await fetchFn(url, { signal, redirect: "error" });
     const responseBody = response.body;
-    if (response.status === 429 && responseBody) {
+    const throttledHeader = response.status === 429 || parseUsagePercent(response.headers) >= 80;
+    if (throttledHeader && responseBody) {
       // Cleanup stays inside the attempt ceiling and cannot mask known throttling.
       await awaitWithAbort(() => responseBody.cancel(), signal).catch(() => undefined);
     }
-    const payload: unknown = response.status === 429 ? null : JSON.parse(await readBoundedBody(response, 1_048_576, signal));
+    const payload: unknown = throttledHeader ? null : JSON.parse(await readBoundedBody(response, 1_048_576, signal));
     const providerError = readGraphErrorEnvelope(payload);
-    if (providerError?.code === 190) throw new InstagramDiscoveryError("IG_RECONNECT_REQUIRED", "Reconnect Instagram to enable official competitor data.");
-    if (response.status === 429 || [4, 17, 32, 613].includes(providerError?.code ?? -1) || parseUsagePercent(response.headers) >= 80) {
+    if (throttledHeader || [4, 17, 32, 613, 80001, 80002].includes(providerError?.code ?? -1)) {
       throw new InstagramDiscoveryError("DISCOVERY_RATE_LIMITED", "Instagram discovery is temporarily unavailable.", 429);
     }
+    if (providerError?.code === 190) throw new InstagramDiscoveryError("IG_RECONNECT_REQUIRED", "Reconnect Instagram to enable official competitor data.");
     if (!response.ok || providerError) {
       // A provider permission-shaped code also covers target/data restrictions.
       // Only the trusted permission read above establishes a missing scope.

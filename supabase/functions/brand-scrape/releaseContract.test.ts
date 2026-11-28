@@ -70,7 +70,7 @@ Deno.test("own-account source and FEED video survive the direct transport with m
 });
 
 Deno.test("discovery classifies throttling independently of HTTP success and provider text", async (test) => {
-  for (const scenario of ["http429", "http429cancelerror", "code4", "code17", "code32", "code613", "usage80"] as const) {
+  for (const scenario of ["http429", "http429cancelerror", "code4", "code17", "code32", "code613", "code80001", "code80002", "usage80"] as const) {
     await test.step(scenario, async () => {
       let bodyCancelled = false;
       const response = scenario.startsWith("http429") ? new Response(new ReadableStream({
@@ -212,6 +212,56 @@ Deno.test("an explicitly credentialless capability cannot hide a usable protecte
     } });
   assertEquals(resolved.authority?.account.id, ACCOUNT);
   assertEquals(resolved.refusalCode, null);
+});
+
+Deno.test("resolveDiscoveryAuthority reads capabilities with bounded parallelism, validates ownership upfront, and includes graph_own account identity in cacheIdentity", async () => {
+  let inflight = 0;
+  let maxInflight = 0;
+  const rows = Array.from({ length: 6 }, (_, index) => ({
+    ...ACCOUNT_ROW,
+    id: `8a000000-0000-4000-8000-00000000001${index}`,
+    platform_username: `owner_${index}`,
+    ig_auth_type: "business_login",
+  }));
+  const resolved = await resolveDiscoveryAuthority({
+    userId: OWNER,
+    username: "owner_3",
+    accounts: rows,
+    rpc: async (_name, args) => {
+      inflight++;
+      maxInflight = Math.max(maxInflight, inflight);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inflight--;
+      return {
+        data: capability({
+          social_account_id: String(args.p_social_account_id),
+          login_kind: "direct",
+          granted_scopes: ["instagram_business_basic"],
+        }),
+        error: null,
+      };
+    },
+  });
+  assertEquals(maxInflight, 4);
+  assertEquals(resolved.authority?.source, "graph_own");
+  assertEquals(resolved.authority?.account.id, rows[3].id);
+  assertEquals(resolved.cacheIdentity.endsWith(`:graph_own:${rows[3].id}`), true);
+
+  let rpcCalls = 0;
+  await assertRejects(
+    () =>
+      resolveDiscoveryAuthority({
+        userId: OWNER,
+        username: "owner_0",
+        accounts: [rows[0], { ...rows[1], user_id: "8a000000-0000-4000-8000-000000000999" }],
+        rpc: () => {
+          rpcCalls++;
+          return Promise.resolve({ data: capability(), error: null });
+        },
+      }),
+    InstagramDiscoveryError,
+  );
+  assertEquals(rpcCalls, 0);
 });
 
 Deno.test("registered discovery handler retains source and null cells through cache and history, then refuses denied scopes", async () => {
