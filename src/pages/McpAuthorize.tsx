@@ -20,7 +20,7 @@ interface AuthorizationDetails {
   expires_at: string;
 }
 
-export const SCOPE_LABEL: Record<string, string> = {
+const SCOPE_LABEL: Record<string, string> = {
   "accounts:read": "View your connected social media accounts",
   "posts:read": "Read your posts, media library, analytics, competitor reports, brand analysis, and run paid AI best-time suggestions",
   "posts:write": "Create, schedule, publish, and delete posts (including platform copies and media), sync analytics, track competitors, and run paid AI generation (captions, hashtags, and images; post creation and image generation also require media:write)",

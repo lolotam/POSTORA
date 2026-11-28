@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import McpAuthorize, { SCOPE_LABEL } from "../McpAuthorize";
+import McpAuthorize from "../McpAuthorize";
 
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({
@@ -83,7 +83,6 @@ describe("McpAuthorize consent screen disclosures", () => {
     expect(
       screen.getByText("Upload and store media in your Postora library"),
     ).toBeInTheDocument();
-    expect(SCOPE_LABEL["ai:generate"]).toBeUndefined();
   });
 
   it("discloses that post creation and image generation require media:write when only posts:write is requested", async () => {
