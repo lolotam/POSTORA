@@ -5,11 +5,12 @@ import { handleRequest } from "../index.ts";
 import { decodeCursor } from "./pagination.ts";
 import { endSessionRoute } from "./whatsappNumbers.ts";
 import { withPartnerAuth } from "./authenticated.ts";
+import { KEY_ID, OWNER_ID, WORKSPACE_ID } from "../../_shared/humanAgentTestSupport.ts";
 
 const ID = "22222222-2222-4222-8222-222222222222";
 const OTHER = "11111111-1111-4111-8111-111111111111";
 const ROW = {
-  id: ID, workspace_id: "ws-1", platform: "whatsapp", platform_user_id: "15550001111",
+  id: ID, workspace_id: WORKSPACE_ID, platform: "whatsapp", platform_user_id: "15550001111",
   platform_username: "Support", connection_mode: "evolution_qr", account_metadata: {},
   access_token: "test-token",
   is_active: true, connected_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-10T00:00:00Z",
@@ -60,6 +61,11 @@ function database(opts: {
         writes.push({ table, row: JSON.parse(String(init?.body)) });
         return Promise.resolve(Response.json(!opts.leaseHeld));
       }
+      if (table === "deactivate_whatsapp_deliberately") {
+        writes.push({ table, row: JSON.parse(String(init?.body)) });
+        if (opts.deactivationFails) return Promise.resolve(Response.json({ message: "private failure" }, { status: 500 }));
+        return Promise.resolve(Response.json(true));
+      }
       if (table === "partner_api_idempotency" && init?.method === "PATCH") {
         const row = JSON.parse(String(init.body));
         settlements.push({ url, row });
@@ -73,7 +79,7 @@ function database(opts: {
         return Promise.resolve(new Response(null, { status: 204 }));
       }
       if (init?.method === "POST") {
-        assert(["system_logs", "partner_api_usage"].includes(table), `unexpected write to ${table}`);
+        assert(["system_logs", "partner_api_usage", "partner_webhook_deliveries"].includes(table), `unexpected write to ${table}`);
         writes.push({ table, row: JSON.parse(String(init.body)) });
         return Promise.resolve(new Response(null, { status: 201 }));
       }
@@ -83,22 +89,23 @@ function database(opts: {
       }
       const rows: Record<string, unknown[]> = {
         partner_api_keys: [{
-          id: "key-1", workspace_id: "ws-1", social_account_id: OTHER,
+          id: KEY_ID, workspace_id: WORKSPACE_ID, social_account_id: OTHER,
           key_prefix: "pk_live_test", scopes: opts.scopes ?? ["whatsapp:numbers.read"],
           rate_limit_per_min: 60, monthly_quota: null, expires_at: null, revoked_at: null,
         }],
-        partner_provisioned_workspaces: [{ owner_user_id: "owner-1" }],
+        partner_provisioned_workspaces: [{ owner_user_id: OWNER_ID }],
         app_settings: [{ key: "feature_msg_whatsapp", value: opts.entitled ?? true },
           { key: "feature_wa_evolution_qr_enabled", value: opts.qrEntitled ?? true },
           { key: "feature_wa_cloud_api_enabled", value: true }],
         user_feature_overrides: [],
         partner_api_key_accounts: opts.unbound || (url.searchParams.has("social_account_id") && url.searchParams.get("social_account_id") !== `eq.${ID}`) ? [] : [{ social_account_id: ID }],
         social_accounts: url.searchParams.get("id")?.startsWith("eq.") ? [{ ...ROW, connection_mode: opts.mode ?? ROW.connection_mode,
-          user_id: "owner-1", workspace_id: opts.noWorkspace ? null : ROW.workspace_id,
+          user_id: OWNER_ID, workspace_id: opts.noWorkspace ? null : ROW.workspace_id,
           platform_user_id: opts.unresolved ? `pending_${ID}` : ROW.platform_user_id, ...opts.accountPatch }] :
           [ROW, { ...ROW, id: OTHER }],
         whatsapp_evolution_instances: [{ instance_name: `postora_${ID}`, jwt_key: "private-key", last_qr: null,
           sync_started_at: null, last_sync_at: null, last_sync_outcome: opts.syncOutcome ?? null }],
+        partner_webhooks: [],
       };
       assert(Object.hasOwn(rows, table), `unexpected read of ${table}`);
       return Promise.resolve(Response.json(rows[table]));
@@ -127,11 +134,11 @@ Deno.test("number route returns a page, cursor and request id through authentica
     "user_feature_overrides", "partner_api_key_accounts", "social_accounts",
   ]);
   const binding = client.reads.find((url) => url.pathname.endsWith("/partner_api_key_accounts"))!;
-  assertEquals(binding.searchParams.get("key_id"), "eq.key-1");
-  assertEquals(binding.searchParams.get("workspace_id"), "eq.ws-1");
+  assertEquals(binding.searchParams.get("key_id"), `eq.${KEY_ID}`);
+  assertEquals(binding.searchParams.get("workspace_id"), `eq.${WORKSPACE_ID}`);
   const accounts = client.reads.at(-1)!;
   assertEquals(accounts.searchParams.get("id"), `in.(${ID})`);
-  assertEquals(accounts.searchParams.get("workspace_id"), "eq.ws-1");
+  assertEquals(accounts.searchParams.get("workspace_id"), `eq.${WORKSPACE_ID}`);
   assertEquals(accounts.searchParams.get("limit"), "2");
   assertEquals(client.writes.find((write) => write.table === "partner_api_usage")?.row.billable, false);
 });
@@ -240,10 +247,10 @@ async function claimWithoutDispatch(db: ReturnType<typeof database>, req: Reques
     assertEquals(accounts.length, numberSpecific ? 1 : 0);
     assertEquals(bindings.length, numberSpecific ? 1 : 0);
     if (numberSpecific) {
-      assertEquals(accounts[0].searchParams.get("workspace_id"), "eq.ws-1");
+      assertEquals(accounts[0].searchParams.get("workspace_id"), `eq.${WORKSPACE_ID}`);
       assertEquals(accounts[0].searchParams.get("id"), `eq.${ID}`);
-      assertEquals(bindings[0].searchParams.get("workspace_id"), "eq.ws-1");
-      assertEquals(bindings[0].searchParams.get("key_id"), "eq.key-1");
+      assertEquals(bindings[0].searchParams.get("workspace_id"), `eq.${WORKSPACE_ID}`);
+      assertEquals(bindings[0].searchParams.get("key_id"), `eq.${KEY_ID}`);
     }
     const flags = db.claimReads[0].filter((url) => url.pathname.endsWith("/app_settings"));
     assertEquals(flags.length, 1);
@@ -293,7 +300,7 @@ Deno.test("registration settles success with its attempt token and replays witho
   assertEquals(settlement.row.response_body, created);
   assertEquals(settlement.url.searchParams.get("attempt_token"), "eq.attempt-1");
   assertEquals(settlement.url.searchParams.get("state"), "eq.processing");
-  assertEquals(settlement.url.searchParams.get("key_id"), "eq.key-1");
+  assertEquals(settlement.url.searchParams.get("key_id"), `eq.${KEY_ID}`);
   assertEquals(settlement.url.searchParams.get("idempotency_key"), "eq.registration-key");
 });
 
@@ -512,7 +519,7 @@ for (const scenario of ["remote-failed", "remote-ok", "deactivation-failed", "se
       const req = () => mutation(`/${ID}/session`, {}, "key", "DELETE");
       const res = await handleRequest(req(), () => db.admin);
       const body = await res.json();
-      assertEquals(calls.length, 2);
+      assertEquals(calls.length, scenario === "deactivation-failed" ? 0 : 2);
       if (scenario === "remote-failed" || scenario === "remote-ok") {
         assertEquals(res.status, 200);
         assertEquals(body.local_deactivated, true);
@@ -789,8 +796,8 @@ for (const scenario of ["get", "update", "rejected", "5xx", "unparseable", "sett
       const accountRead = db.reads.find((url) => url.pathname.endsWith("/social_accounts"))!;
       assertEquals(accountRead.searchParams.get("id"), `eq.${ID}`); // primary account is OTHER
       const binding = db.reads.find((url) => url.pathname.endsWith("/partner_api_key_accounts"))!;
-      assertEquals(binding.searchParams.get("workspace_id"), "eq.ws-1");
-      assertEquals(binding.searchParams.get("key_id"), "eq.key-1");
+      assertEquals(binding.searchParams.get("workspace_id"), `eq.${WORKSPACE_ID}`);
+      assertEquals(binding.searchParams.get("key_id"), `eq.${KEY_ID}`);
       assertEquals(binding.searchParams.get("social_account_id"), `eq.${ID}`);
       if (scenario === "get") {
         assertEquals(res.status, 200);

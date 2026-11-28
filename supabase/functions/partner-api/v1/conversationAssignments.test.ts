@@ -1,15 +1,15 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { handleRequest } from "../index.ts";
-import { AGENT_ID, ATTEMPT_ID, humanAgentFixture } from "../../_shared/humanAgentTestSupport.ts";
+import { ACCOUNT_ID, AGENT_ID, ATTEMPT_ID, humanAgentFixture, KEY_ID, OWNER_ID, WORKSPACE_ID } from "../../_shared/humanAgentTestSupport.ts";
 const CONV = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const PRIVATE_KEY = "wa_123_96555555555";
 const OLD = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 function fixture(opts: Parameters<typeof humanAgentFixture>[0] = {}) {
   const f = humanAgentFixture(opts);
-  f.rows.partner_api_key_accounts.push({ key_id: "key", workspace_id: "ws", social_account_id: "account" });
-  f.rows.messaging_cache.push({ id: CONV, workspace_id: "ws", social_account_id: "account", platform: "whatsapp", conversation_id: PRIVATE_KEY, user_id: "private-owner", last_message_at: "2026-09-10T00:00:00Z" });
-  f.rows.whatsapp_conversation_assignments.push({ id: OLD, workspace_id: "ws", conversation_cache_id: CONV, conversation_id: PRIVATE_KEY, user_id: "private-owner", agent_id: AGENT_ID, assigned_at: "2026-09-10T00:00:00Z", unassigned_at: null, notes: "Old" });
+  f.rows.partner_api_key_accounts.push({ key_id: KEY_ID, workspace_id: WORKSPACE_ID, social_account_id: ACCOUNT_ID });
+  f.rows.messaging_cache.push({ id: CONV, workspace_id: WORKSPACE_ID, social_account_id: ACCOUNT_ID, platform: "whatsapp", conversation_id: PRIVATE_KEY, user_id: OWNER_ID, last_message_at: "2026-09-10T00:00:00Z" });
+  f.rows.whatsapp_conversation_assignments.push({ id: OLD, workspace_id: WORKSPACE_ID, conversation_cache_id: CONV, conversation_id: PRIVATE_KEY, user_id: OWNER_ID, agent_id: AGENT_ID, assigned_at: "2026-09-10T00:00:00Z", unassigned_at: null, notes: "Old" });
   return f;
 }
 function request(method = "GET", suffix = "assignment", body?: unknown, key = "assignment-1") {
@@ -21,7 +21,7 @@ const input = { agent_id: `agent_${AGENT_ID}`, notes: "Follow up" };
 const routes = [["GET", "assignment", "get_assignment"], ["PUT", "assignment", "assign_conversation"], ["DELETE", "assignment", "unassign_conversation"], ["GET", "assignment-history", "list_assignment_history"]] as const;
 function privateFree(body: unknown) {
   const text = JSON.stringify(body);
-  for (const forbidden of ["wa_", '"conversation_id"', '"user_id"', "private-owner"]) assert(!text.includes(forbidden), text);
+  for (const forbidden of ["wa_", '"conversation_id"', '"user_id"', OWNER_ID]) assert(!text.includes(forbidden), text);
 }
 for (const [method, suffix, action] of routes) {
   Deno.test(`${action}: entitlement refuses first under its own action and logs`, async () => {
@@ -50,10 +50,10 @@ Deno.test("assignment PUT closes the existing row, sets both tenancy columns, re
   assertEquals(response.status, 200); const saved = await response.json(); privateFree(saved);
   const rows = f.rows.whatsapp_conversation_assignments;
   assertEquals(rows.length, 2); assert(rows[0].unassigned_at); assertEquals(rows.filter((r) => r.unassigned_at === null).length, 1);
-  assertEquals(rows[1].workspace_id, "ws"); assertEquals(rows[1].conversation_cache_id, CONV); assertEquals(rows[1].notes, input.notes);
+  assertEquals(rows[1].workspace_id, WORKSPACE_ID); assertEquals(rows[1].conversation_cache_id, CONV); assertEquals(rows[1].notes, input.notes);
   const rpc = f.writes.find((w) => w.table === "partner_write_conversation_assignment")!;
-  assertEquals(rpc.row, { p_workspace_id: "ws", p_key_id: "key", p_conversation_cache_id: CONV, p_agent_id: AGENT_ID, p_notes: input.notes, p_unassign: false });
-  assertEquals(f.rows.whatsapp_assignment_history[0].workspace_id, "ws"); assertEquals(f.rows.whatsapp_assignment_history[0].action, "transferred");
+  assertEquals(rpc.row, { p_workspace_id: WORKSPACE_ID, p_key_id: KEY_ID, p_conversation_cache_id: CONV, p_agent_id: AGENT_ID, p_notes: input.notes, p_unassign: false });
+  assertEquals(f.rows.whatsapp_assignment_history[0].workspace_id, WORKSPACE_ID); assertEquals(f.rows.whatsapp_assignment_history[0].action, "transferred");
   const replay = await drive(f, request("PUT", "assignment", input)); assertEquals(await replay.json(), saved); assertEquals(replay.headers.get("Idempotency-Replayed"), "true");
   assertEquals(f.writes.filter((w) => w.table === "partner_write_conversation_assignment").length, 1);
   const read = await (await drive(f, request())).json(); privateFree(read); assertEquals(read.assignment.id, saved.assignment.id);
@@ -87,7 +87,7 @@ Deno.test("assignment DELETE preserves the closed row, and a fresh DELETE withou
   assert(!f.writes.some((w) => w.method === "DELETE"));
 });
 Deno.test("assignment history scopes workspace and key, excludes null dates and resumes equal timestamps", async () => {
-  const f = fixture(); const base = { workspace_id: "ws", conversation_id: PRIVATE_KEY, user_id: "private-owner", action: "assigned", from_agent_id: null, to_agent_id: AGENT_ID, reason: "Note", created_at: "2026-09-10T00:00:00Z" };
+  const f = fixture(); const base = { workspace_id: WORKSPACE_ID, conversation_id: PRIVATE_KEY, user_id: OWNER_ID, action: "assigned", from_agent_id: null, to_agent_id: AGENT_ID, reason: "Note", created_at: "2026-09-10T00:00:00Z" };
   f.rows.whatsapp_assignment_history.push({ ...base, id: CONV }, { ...base, id: OLD }, { ...base, id: AGENT_ID, created_at: null }, { ...base, id: OLD, workspace_id: "foreign" }, { ...base, id: OLD, conversation_id: "other" });
   const first = await (await drive(f, request("GET", "assignment-history?limit=1"))).json(); privateFree(first);
   assertEquals(first.data.map((r: { id: string }) => r.id), [`assignment_history_${OLD}`]); assert(first.next_cursor);

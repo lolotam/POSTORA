@@ -7,6 +7,7 @@ import { createEvolutionApi, EvolutionApiError, type EvolutionApi } from "./evol
 import { WhatsAppOpError } from "./whatsappPartnerOps.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectDeps } from "./whatsappDisconnect.ts";
 import { importEvolutionHistory, type SyncAccount } from "./whatsappSyncEngine.ts";
+import { enqueuePartnerWebhookEvent } from "./partnerWebhookEvents.ts";
 
 export const DIRECT_QR_CONSENT_VERSION = "direct-qr-2026-09-10";
 
@@ -309,7 +310,7 @@ async function reconcileAccountConnection(
         update: (patch: Record<string, unknown>) => ctx.admin.from(table).update(patch).eq("workspace_id", ctx.workspaceId).eq("id", account.id),
       };
     },
-    rpc: (name: string, args: Record<string, unknown>) => ctx.admin.rpc(name, args),
+    rpc: (name: string, args: Record<string, unknown> = {}) => ctx.admin.rpc(name, args),
   };
   if (state === "open") {
     if (account.is_active && !account.platform_user_id.startsWith("pending_")) {
@@ -335,11 +336,39 @@ async function reconcileAccountConnection(
   return { ownerNumber: account.platform_user_id, mismatch: false };
 }
 
+async function emitDisconnectedOnTeardown(ctx: PairingContext, accountId: string): Promise<void> {
+  try {
+    const { data: written, error: readbackError } = await ctx.admin
+      .from("social_accounts")
+      .select("updated_at")
+      .eq("workspace_id", ctx.workspaceId)
+      .eq("id", accountId)
+      .eq("is_active", false)
+      .maybeSingle();
+    if (!readbackError && written?.updated_at) {
+      const occurredAt = String(written.updated_at);
+      await enqueuePartnerWebhookEvent(ctx.admin, {
+        workspaceId: ctx.workspaceId,
+        eventType: "whatsapp_number.disconnected",
+        occurrenceId: `whatsapp_number.disconnected:${accountId}:${occurredAt}`,
+        payload: { account_id: accountId, is_active: false },
+        platform: "whatsapp",
+        accountId,
+        occurredAt,
+      });
+    } else {
+      console.error(`[evolution-qr] account ${accountId}: whatsapp_number.disconnected skipped, transition timestamp unavailable`);
+    }
+  } catch {
+    console.error(`[evolution-qr] account ${accountId}: whatsapp_number.disconnected enqueue failed after session end`);
+  }
+}
+
 export async function endSession(
   ctx: PairingContext, accountId: string,
   deps: { evolution?: WhatsAppDisconnectDeps["evolution"]; disconnect?: typeof disconnectWhatsAppAccount } = {},
 ) {
-  await pairingAccount(ctx, accountId);
+  const account = await pairingAccount(ctx, accountId);
   let evolution = deps.evolution;
   if (!evolution) {
     try { evolution = createEvolutionApi(); } catch {
@@ -351,6 +380,7 @@ export async function endSession(
     accountId, workspaceId: ctx.workspaceId, connectionMode: "evolution_qr",
   }, { admin: ctx.admin, evolution });
   if (!result.deactivated) throw new WhatsAppOpError("Number was not deactivated", "internal_error", 500);
+  if (account.is_active) await emitDisconnectedOnTeardown(ctx, accountId);
   return {
     local_deactivated: result.deactivated, remote_logout: result.evolution,
     // The shared teardown includes raw provider/DB exception text. Preserve each

@@ -223,6 +223,9 @@ Deno.serve(async (req) => {
     if (!code || !waba_id || !phone_number_id || !mode) {
       return restrictedErrorResponse(req, "Missing required fields: code, waba_id, phone_number_id, mode", 400);
     }
+    if (mode !== "cloud_api" && mode !== "coexistence") {
+      return restrictedErrorResponse(req, "Invalid mode: must be cloud_api or coexistence", 400);
+    }
 
     // Server-side feature flag guard: block Cloud API connections when disabled
     if (mode === "cloud_api") {
@@ -249,7 +252,7 @@ Deno.serve(async (req) => {
 
     const { data: existingAccount, error: existingAccountError } = await admin
       .from("social_accounts")
-      .select("id, account_metadata")
+      .select("id, workspace_id, account_metadata")
       .eq("platform", "whatsapp")
       .eq("platform_user_id", phone_number_id)
       .maybeSingle();
@@ -277,8 +280,15 @@ Deno.serve(async (req) => {
       `&client_secret=${encodeURIComponent(appSecret)}` +
       `&code=${encodeURIComponent(code)}`;
 
-    const tokenRes = await fetch(tokenUrl);
-    const tokenData = await tokenRes.json();
+    let tokenRes: Response;
+    let tokenData: { access_token?: string; expires_in?: number; error?: { message?: string } };
+    try {
+      tokenRes = await fetch(tokenUrl);
+      tokenData = await tokenRes.json();
+    } catch {
+      console.error("[whatsapp-oauth] Token exchange request failed");
+      return restrictedErrorResponse(req, "Token exchange failed", 502);
+    }
     if (!tokenRes.ok || !tokenData.access_token) {
       console.error("[whatsapp-oauth] Token exchange failed:", tokenData);
       return restrictedErrorResponse(req, 
@@ -374,21 +384,30 @@ Deno.serve(async (req) => {
     };
 
     if (existingAccount) {
-      await admin
+      const updateBuilder = admin
         .from("social_accounts")
         .update({
           platform_username: displayPhone || verifiedName || phone_number_id,
           workspace_id: targetWorkspaceId,
           access_token: accessToken,
           token_expires_at: tokenExpiresAt,
+          connection_mode: mode,
           account_metadata: accountMetadata,
           is_active: true,
           needs_reauth: false,
           updated_at: new Date().toISOString(),
         })
         .eq("id", existingAccount.id);
+      const scopedUpdate = existingAccount.workspace_id
+        ? updateBuilder.eq("workspace_id", existingAccount.workspace_id)
+        : updateBuilder.is("workspace_id", null);
+      const { error: saveError } = await scopedUpdate.select("id").single();
+      if (saveError) {
+        console.error("[whatsapp-oauth] Account update failed:", { code: saveError.code ?? "unknown" });
+        return restrictedErrorResponse(req, "Failed to save WhatsApp account", 500);
+      }
     } else {
-      await admin.from("social_accounts").insert({
+      const { error: saveError } = await admin.from("social_accounts").insert({
         user_id: userId,
         workspace_id: targetWorkspaceId,
         platform: "whatsapp",
@@ -396,9 +415,14 @@ Deno.serve(async (req) => {
         platform_username: displayPhone || verifiedName || phone_number_id,
         access_token: accessToken,
         token_expires_at: tokenExpiresAt,
+        connection_mode: mode,
         account_metadata: accountMetadata,
         is_active: true,
       });
+      if (saveError) {
+        console.error("[whatsapp-oauth] Account insert failed:", { code: saveError.code ?? "unknown" });
+        return restrictedErrorResponse(req, "Failed to save WhatsApp account", 500);
+      }
     }
 
     return restrictedJsonResponse(req, {
@@ -410,8 +434,11 @@ Deno.serve(async (req) => {
       sync_requests: syncRequests,
     });
   } catch (err) {
-    console.error("[whatsapp-oauth] Error:", err);
     if (err instanceof WhatsAppAccessError) return restrictedErrorResponse(req, err.message, err.status);
-    return restrictedErrorResponse(req, (err as Error).message, 500);
+    console.error("[whatsapp-oauth] Unexpected error:", {
+      name: err instanceof Error ? err.name : "unknown",
+      code: typeof err === "object" && err !== null && "code" in err ? (err as { code?: unknown }).code : undefined,
+    });
+    return restrictedErrorResponse(req, "An unexpected error occurred", 500);
   }
 });

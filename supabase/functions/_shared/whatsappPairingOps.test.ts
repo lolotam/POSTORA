@@ -75,10 +75,8 @@ Deno.test("session teardown preserves local success when Evolution is unreachabl
   assertEquals(result.remote_logout, "failed");
   assertEquals(result.warnings.length, 2);
   assert(!JSON.stringify(result).includes("secret"));
-  const update = db.calls.at(-1)!;
-  assertEquals(update.body, { is_active: false });
-  assertEquals(update.url.searchParams.get("workspace_id"), "eq.ws-1");
-  assertEquals(update.url.searchParams.get("id"), `eq.${ID}`);
+  const deactivateRpc = db.calls.find((call) => call.url.pathname.endsWith("/rpc/deactivate_whatsapp_deliberately"))!;
+  assertEquals(deactivateRpc.body, { p_account_id: ID, p_workspace_id: "ws-1" });
 });
 
 Deno.test("session with no remote instance reports skipped and a warning", async () => {
@@ -87,6 +85,34 @@ Deno.test("session with no remote instance reports skipped and a warning", async
   assertEquals(result.remote_logout, "skipped");
   assertEquals(result.local_deactivated, true);
   assert(result.warnings.length > 0);
+  assertEquals(db.calls.filter((call) => call.url.pathname.endsWith("/partner_webhook_deliveries")).length, 0);
+});
+
+Deno.test("session teardown on an active account emits whatsapp_number.disconnected and skips when already inactive", async () => {
+  const activeDb = fixture({ existing: true, active: true, resolved: true });
+  const result = await endSession({ ...CTX, admin: activeDb.admin }, ID, { evolution: {
+    logout: () => Promise.resolve({}),
+    deleteInstance: () => Promise.resolve({}),
+  } });
+  assertEquals(result.local_deactivated, true);
+  assertEquals(result.remote_logout, "ok");
+  const deliveryCall = activeDb.calls.find((call) => call.url.pathname.endsWith("/partner_webhook_deliveries"));
+  assert(deliveryCall, "Expected partner_webhook_deliveries outbox write for active account teardown");
+  const deliveries = deliveryCall.body as unknown as Record<string, unknown>[];
+  assertEquals(deliveries.length, 1);
+  assertEquals(deliveries[0].event_type, "whatsapp_number.disconnected");
+  assertEquals(deliveries[0].webhook_id, "matching");
+  assertEquals(deliveries[0].workspace_id, CTX.workspaceId);
+  assertEquals(deliveries[0].payload, { account_id: ID, is_active: false });
+  assertEquals(deliveries[0].event_occurrence_id, `whatsapp_number.disconnected:${ID}:2026-09-10T00:00:01.000Z`);
+
+  const inactiveDb = fixture({ existing: true, active: false, resolved: true });
+  const inactiveResult = await endSession({ ...CTX, admin: inactiveDb.admin }, ID, { evolution: {
+    logout: () => Promise.resolve({}),
+    deleteInstance: () => Promise.resolve({}),
+  } });
+  assertEquals(inactiveResult.local_deactivated, true);
+  assertEquals(inactiveDb.calls.filter((call) => call.url.pathname.endsWith("/partner_webhook_deliveries")).length, 0);
 });
 
 const FINISHED = "2026-09-10T10:00:00Z";
@@ -165,6 +191,9 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
         return Promise.resolve(Response.json(true));
       }
       if (table === "flag_whatsapp_number_mismatch") {
+        return Promise.resolve(Response.json(true));
+      }
+      if (table === "deactivate_whatsapp_deliberately") {
         return Promise.resolve(Response.json(true));
       }
       if (table === "partner_webhooks") {

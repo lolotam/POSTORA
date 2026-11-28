@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { handleRequest } from "../index.ts";
-import { AGENT_ID, AGENT_ROW, ATTEMPT_ID, humanAgentFixture, IDENTITY_ID } from "../../_shared/humanAgentTestSupport.ts";
+import { AGENT_ID, AGENT_ROW, ATTEMPT_ID, humanAgentFixture, IDENTITY_ID, WORKSPACE_ID } from "../../_shared/humanAgentTestSupport.ts";
 const id = `agent_${AGENT_ID}`;
 function request(method = "POST", suffix = "", body?: unknown, key = "idem-1") {
   return new Request(`https://partner.example/functions/v1/partner-api/v1/agents${suffix}`, { method,
@@ -21,7 +21,7 @@ for (const method of ["GET", "PATCH", "DELETE"]) Deno.test(`${method} foreign ag
   const response = await drive(f, request(method, `/${id}`, method === "PATCH" ? { display_name: "Changed" } : undefined));
   assertEquals((await response.json()).error.code, "resource_not_found");
   assert(!f.writes.some((write) => write.table === "whatsapp_agents")); assertEquals(f.creates.length, 0);
-  assert(f.reads.filter((url) => url.pathname.endsWith("whatsapp_agents")).every((url) => url.searchParams.get("workspace_id") === "eq.ws" && !url.searchParams.has("user_id")));
+  assert(f.reads.filter((url) => url.pathname.endsWith("whatsapp_agents")).every((url) => url.searchParams.get("workspace_id") === `eq.${WORKSPACE_ID}` && !url.searchParams.has("user_id")));
 });
 Deno.test("create replays stored body without a second Auth identity and hashes changed fields", async () => {
   const f = humanAgentFixture(); f.rows.whatsapp_agents = [];
@@ -94,7 +94,7 @@ Deno.test("list and get whitelist fields, and a failed read never becomes empty 
 // The null case is the one the workspace predicate used to miss: rows written
 // before the tenancy backfill still carry no workspace, and they are live
 // conversations, so a delete that cannot see them orphans a real customer.
-for (const workspace of ["ws", null]) Deno.test(`delete refuses a live assignment carrying workspace ${String(workspace)}`, async () => {
+for (const workspace of [WORKSPACE_ID, null]) Deno.test(`delete refuses a live assignment carrying workspace ${String(workspace)}`, async () => {
   const f = humanAgentFixture();
   f.rows.whatsapp_conversation_assignments.push({ id: "assignment", workspace_id: workspace, agent_id: AGENT_ID, unassigned_at: null });
   const response = await drive(f, request("DELETE", `/${id}`)); assertEquals(response.status, 409);
@@ -103,7 +103,7 @@ for (const workspace of ["ws", null]) Deno.test(`delete refuses a live assignmen
 });
 Deno.test("delete refuses when every retained assignment is already closed", async () => {
   const f = humanAgentFixture();
-  f.rows.whatsapp_conversation_assignments.push({ id: "closed", workspace_id: "ws", agent_id: AGENT_ID, unassigned_at: "2026-09-01T00:00:00Z" });
+  f.rows.whatsapp_conversation_assignments.push({ id: "closed", workspace_id: WORKSPACE_ID, agent_id: AGENT_ID, unassigned_at: "2026-09-01T00:00:00Z" });
   const response = await drive(f, request("DELETE", `/${id}`));
   assertEquals(response.status, 409);
   assertEquals((await response.json()).error.code, "invalid_request");
