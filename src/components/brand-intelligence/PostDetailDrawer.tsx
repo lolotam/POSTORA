@@ -1,4 +1,10 @@
 import { formatBrandMetric } from "@/lib/brandMetrics";
+import {
+  getSafeHttpsUrl,
+  getSafePlatformPostUrl,
+  getSafeTikTokEmbedUrl,
+  openSafePlatformPostUrl,
+} from "@/lib/safeExternalUrl";
 import { useTranslation } from "react-i18next";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Card, CardContent } from "@/components/ui/card";
@@ -61,7 +67,10 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
   const ownedAccountId = ownsUsername(platformUsername);
 
   const isVideo = post.mediaType === "VIDEO" || post.mediaType === "REEL";
-  const isTikTokEmbed = !!post.mediaUrl && /tiktok\.com\/(embed|player)/i.test(post.mediaUrl);
+  const safeTikTokEmbedUrl = getSafeTikTokEmbedUrl(post.mediaUrl);
+  const safeMediaUrl = getSafeHttpsUrl(post.mediaUrl);
+  const safeThumbnailUrl = getSafeHttpsUrl(post.thumbnailUrl);
+  const safePermalink = getSafePlatformPostUrl(post.permalink);
   const formatDuration = (s?: number) => {
     if (!s || s <= 0) return null;
     const m = Math.floor(s / 60);
@@ -123,10 +132,10 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
         toast.error(mapped.message || t("errors.couldNotComment", "Could not post comment"));
         return;
       }
-      const permalink: string | undefined = data?.permalink;
-      if (permalink) {
+      const safeCommentPermalink = getSafePlatformPostUrl(data?.permalink, "threads");
+      if (safeCommentPermalink) {
         toast.success(t("toast.commentPosted", "Comment posted on Threads"), {
-          action: { label: t("common:view", "View"), onClick: () => window.open(permalink, "_blank") },
+          action: { label: t("common:view", "View"), onClick: () => openSafePlatformPostUrl(safeCommentPermalink, "threads") },
         });
       } else {
         toast.success(t("toast.commentPosted", "Comment posted on Threads"));
@@ -154,26 +163,26 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
         <div className="p-4 space-y-4">
           {/* Media Preview */}
           <div className="rounded-lg overflow-hidden bg-muted relative">
-            {isVideo && isTikTokEmbed ? (
+            {isVideo && safeTikTokEmbedUrl ? (
               <div className="relative w-full" style={{ aspectRatio: "9 / 16", maxHeight: 500 }}>
                 <iframe
-                  src={post.mediaUrl}
+                  src={safeTikTokEmbedUrl}
                   title={t("video.tiktokTitle", "TikTok video")}
                   allow="encrypted-media;"
                   allowFullScreen
                   className="absolute inset-0 w-full h-full border-0"
                 />
               </div>
-            ) : isVideo && post.mediaUrl ? (
+            ) : isVideo && safeMediaUrl ? (
               <video
-                src={post.mediaUrl}
+                src={safeMediaUrl}
                 controls
-                poster={post.thumbnailUrl}
+                poster={safeThumbnailUrl ?? undefined}
                 className="w-full max-h-[400px] object-contain"
               />
-            ) : post.thumbnailUrl || post.mediaUrl ? (
+            ) : safeThumbnailUrl || safeMediaUrl ? (
               <img
-                src={post.thumbnailUrl || post.mediaUrl}
+                src={safeThumbnailUrl || safeMediaUrl || undefined}
                 alt=""
                 className="w-full max-h-[400px] object-contain"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -215,9 +224,9 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
             {post.timestamp && (
               <span>{format(new Date(post.timestamp), "MMMM d, yyyy • h:mm a")}</span>
             )}
-            {post.permalink && (
+            {safePermalink && (
               <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" asChild>
-                <a href={post.permalink} target="_blank" rel="noopener noreferrer">
+                <a href={safePermalink} target="_blank" rel="noopener noreferrer">
                   {t("posts.viewOriginal", "View Original")} <ExternalLink className="w-3 h-3" />
                 </a>
               </Button>
@@ -291,8 +300,8 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
                 <Button
                   variant="outline"
                   className="w-full gap-2"
-                  onClick={() => post.mediaUrl && transcribe(post.mediaUrl)}
-                  disabled={isTranscribing}
+                  onClick={() => safeMediaUrl && transcribe(safeMediaUrl)}
+                  disabled={isTranscribing || !safeMediaUrl}
                 >
                   {isTranscribing ? (
                     <>

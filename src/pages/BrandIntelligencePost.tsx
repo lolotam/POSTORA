@@ -1,4 +1,9 @@
 import { formatBrandMetric } from "@/lib/brandMetrics";
+import {
+  getSafeHttpsUrl,
+  getSafePlatformPostUrl,
+  getSafeTikTokEmbedUrl,
+} from "@/lib/safeExternalUrl";
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
@@ -185,6 +190,10 @@ export default function BrandIntelligencePost() {
   const displayTranscript = editableTranscript || cachedTranscript || transcript || "";
   const displayLanguage = cachedLanguage || language || "unknown";
   const displayDuration = cachedDuration ?? duration ?? 0;
+  const safeTikTokEmbedUrl = getSafeTikTokEmbedUrl(post.mediaUrl);
+  const safeMediaUrl = getSafeHttpsUrl(post.mediaUrl);
+  const safeThumbnailUrl = getSafeHttpsUrl(post.thumbnailUrl);
+  const safePermalink = getSafePlatformPostUrl(post.permalink, platform);
 
   const stats = [
     { id: "likes", icon: Heart, label: t("stats.likes", "Likes"), value: post.likesCount, color: "text-red-500" },
@@ -223,7 +232,6 @@ export default function BrandIntelligencePost() {
             <Card>
               <CardContent className="p-0 overflow-hidden rounded-lg">
                 {(() => {
-                  const isTikTokEmbed = !!post.mediaUrl && /tiktok\.com\/(embed|player)/i.test(post.mediaUrl);
                   const formatDur = (s?: number) => {
                     if (!s || s <= 0) return null;
                     const m = Math.floor(s / 60);
@@ -233,11 +241,11 @@ export default function BrandIntelligencePost() {
                   const durationLabel = formatDur(post.duration);
 
                   let player;
-                  if (isTikTokEmbed) {
+                  if (safeTikTokEmbedUrl) {
                     player = (
                       <div className="relative w-full bg-black mx-auto" style={{ aspectRatio: "9 / 16", maxHeight: 600 }}>
                         <iframe
-                          src={post.mediaUrl}
+                          src={safeTikTokEmbedUrl}
                           title={t("video.tiktokTitle", "TikTok video")}
                           allow="encrypted-media;"
                           allowFullScreen
@@ -245,19 +253,19 @@ export default function BrandIntelligencePost() {
                         />
                       </div>
                     );
-                  } else if (post.mediaUrl) {
+                  } else if (safeMediaUrl) {
                     player = (
                       <video
-                        src={post.mediaUrl}
-                        poster={post.thumbnailUrl}
+                        src={safeMediaUrl}
+                        poster={safeThumbnailUrl ?? undefined}
                         controls
                         className="w-full aspect-video object-contain bg-black"
                       />
                     );
-                  } else if (post.thumbnailUrl) {
+                  } else if (safeThumbnailUrl) {
                     player = (
                       <img
-                        src={post.thumbnailUrl}
+                        src={safeThumbnailUrl}
                         alt=""
                         className="w-full aspect-video object-cover"
                         referrerPolicy="no-referrer"
@@ -297,7 +305,7 @@ export default function BrandIntelligencePost() {
             </Card>
 
             {/* Posted on + View on TikTok */}
-            {(post.timestamp || post.permalink) && (
+            {(post.timestamp || safePermalink) && (
               <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                 {post.timestamp ? (
                   <span className="flex items-center gap-1.5">
@@ -305,9 +313,9 @@ export default function BrandIntelligencePost() {
                     {format(new Date(post.timestamp), "MMMM d, yyyy • h:mm a")}
                   </span>
                 ) : <span />}
-                {post.permalink && (
+                {safePermalink && (
                   <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" asChild>
-                    <a href={post.permalink} target="_blank" rel="noopener noreferrer">
+                    <a href={safePermalink} target="_blank" rel="noopener noreferrer">
                       {platform === "tiktok" ? t("video.viewOnTikTok", "View on TikTok") : t("video.viewOnOriginal", "View on Original")}
                       <ExternalLink className="w-3 h-3" />
                     </a>

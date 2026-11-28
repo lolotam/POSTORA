@@ -304,6 +304,38 @@ Deno.test("incompatible available cells cannot manufacture numerical report evid
   }
 });
 
+Deno.test("archived account with healthy saved data does not report reauth_required", () => {
+  const stored = fixture();
+  stored.health = { active: false, needs_reauth: false, token_expired: false };
+  const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+  assertEquals(report.sync.status, "fresh");
+  assertEquals(report.sync.reason, null);
+  for (const health of [
+    { active: false, needs_reauth: true, token_expired: false },
+    { active: false, needs_reauth: false, token_expired: true },
+  ]) {
+    const expiredReport = assembleStoredAnalytics({ stored: { ...stored, health }, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+    assertEquals(expiredReport.sync.status, "failed");
+    assertEquals(expiredReport.sync.reason, "reauth_required");
+  }
+});
+
+Deno.test("incompatible unavailable cells report provenance or window mismatch instead of a stale unavailable reason", () => {
+  for (const [change, expectedReason] of [
+    [{ api_version: "v0.0" }, "capability_unverified"],
+    [{ provider_metric: "stale_metric" }, "capability_unverified"],
+    [{ source_ref: "unverified" }, "capability_unverified"],
+    [{ window_kind: "lifetime" as const }, "window_mismatch"],
+  ] as const) {
+    const stored = fixture();
+    const cell = stored.daily[7].metrics.find((metric) => metric.metric_key === "views")!;
+    Object.assign(cell, { status: "unavailable" as const, value: null, reason: "permission_missing" as const, ...change });
+    const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+    const views = report.metrics.find((metric) => metric.definition.key === "views")!;
+    assertEquals(views.trend[0].metric, { status: "unavailable", reason: expectedReason });
+  }
+});
+
 Deno.test("data evidence covers all period posts and account readiness survives an empty period", () => {
   const stored = fixture();
   stored.daily = [];

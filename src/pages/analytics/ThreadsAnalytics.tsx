@@ -58,9 +58,13 @@ export default function ThreadsAnalytics() {
     ? (tabParam as ThreadsMode)
     : "analyze";
   const [threadsMode, setThreadsMode] = useState<ThreadsMode>(initialTab);
+  const [insightsVisited, setInsightsVisited] = useState(initialTab === "insights");
 
   // Keep URL in sync with active tab (deep-linkable: ?tab=discovery, etc.)
   useEffect(() => {
+    if (threadsMode === "insights") {
+      setInsightsVisited(true);
+    }
     if (searchParams.get("tab") !== threadsMode) {
       const next = new URLSearchParams(searchParams);
       next.set("tab", threadsMode);
@@ -250,9 +254,11 @@ export default function ThreadsAnalytics() {
         <div className={threadsMode === "keyword_search" ? "space-y-4" : "hidden"}>
           <ThreadsKeywordSearchPanel />
         </div>
-        <div className={threadsMode === "insights" ? "space-y-4" : "hidden"}>
-          <OwnedAnalyticsScreen platform="threads" />
-        </div>
+        {(insightsVisited || threadsMode === "insights") && (
+          <div className={threadsMode === "insights" ? "space-y-4" : "hidden"}>
+            <OwnedAnalyticsScreen platform="threads" />
+          </div>
+        )}
 
         <PostDetailDrawer
           post={selectedPost}

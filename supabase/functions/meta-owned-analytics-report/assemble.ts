@@ -22,14 +22,15 @@ function cellMetric(cell: StoredAnalyticsCell | null, definition: MetricDefiniti
   if (!cell) return unavailableMetric("not_collected");
   if (cell.status === "unavailable") {
     if (cell.value !== null || cell.reason === null) throw new PersistedReportRefused("invalid_contract", 503);
-    return unavailableMetric(cell.reason);
+  } else if (cell.value === null || cell.reason !== null) {
+    throw new PersistedReportRefused("invalid_contract", 503);
   }
-  if (cell.value === null || cell.reason !== null) throw new PersistedReportRefused("invalid_contract", 503);
   if (cell.api_version !== definition.apiVersion || cell.provider_metric !== definition.providerMetric
     || cell.source_ref !== (definition.platform === "facebook" ? "meta_graph_v25" : "threads_graph_v1")) return unavailableMetric("capability_unverified");
   if (cell.window_kind !== definition.windowKind) return unavailableMetric("window_mismatch");
+  if (cell.status === "unavailable") return unavailableMetric(cell.reason!);
   evidence?.(cell);
-  return { status: "available", value: cell.value };
+  return { status: "available", value: cell.value! };
 }
 
 function dailyMeasurement(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, window: AnalyticsCalendarWindow, evidence?: Evidence): Measurement {
@@ -92,7 +93,7 @@ function postMetric(definition: MetricDefinition, cells: readonly StoredAnalytic
     previousObservedAt: null, boundaryObservations: { current: null, previous: null }, trend: [] };
 }
 function connectionFailure(stored: StoredAnalyticsSnapshot): UnavailableReason | null {
-  if (!stored.health.active || stored.health.needs_reauth || stored.health.token_expired) return "reauth_required";
+  if (stored.health.needs_reauth || stored.health.token_expired) return "reauth_required";
   const job = stored.collection.latest;
   // sync describes the dated collection attempt; live collection readiness is separate.
   if (["reauth_required", "permission_missing"].includes(job?.reason_code ?? "")) return job!.reason_code as UnavailableReason;
