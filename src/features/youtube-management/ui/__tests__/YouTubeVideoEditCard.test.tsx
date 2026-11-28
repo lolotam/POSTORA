@@ -109,20 +109,25 @@ describe("YouTubeVideoEditCard", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
-  it("offers no visibility confirmation, because privacy is not part of this activation", async () => {
+  it("shows no privacy confirmation checkbox while privacy is unchanged", async () => {
     await renderUi(
       <YouTubeVideoEditCard
         video={video}
         fetchedAt="2026-11-20T10:00:00.000Z"
         canEdit
         disabledReason=""
+        onSnapshot={vi.fn().mockResolvedValue({
+          revision: "rev-1",
+          values: { privacyStatus: "private" },
+          restrictions: { scheduleProtected: false },
+        })}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    await waitFor(() => expect(screen.getByLabelText("Privacy")).not.toBeDisabled());
 
+    expect(screen.getByLabelText("Privacy")).toHaveValue("private");
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
-    expect(screen.queryByText(/changes who can see the video/i)).not.toBeInTheDocument();
-    expect(screen.queryByText("Visibility")).not.toBeInTheDocument();
   });
 
   it("starts the description and the tag field from the video the server confirmed", async () => {
@@ -540,5 +545,179 @@ describe("YouTubeVideoEditCard — the edit toggle", () => {
       "Why Every YouTube Creator Needs This Workflow",
     );
     expect(onSave).not.toHaveBeenCalled();
+  });
+});
+
+describe("YouTubeVideoEditCard — privacy editing (Phase 7E)", () => {
+  it("seeds the Privacy select from the snapshot's privacyStatus", async () => {
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={{ ...video, privacy_status: "private" }}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={vi.fn().mockResolvedValue({
+          revision: "rev-1",
+          values: { privacyStatus: "unlisted" },
+          restrictions: { scheduleProtected: false },
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    const privacySelect = screen.getByLabelText("Privacy");
+    await waitFor(() => expect(privacySelect).toHaveValue("unlisted"));
+    expect(privacySelect).not.toBeDisabled();
+    expect(
+      screen.queryByText("This video is scheduled on YouTube. Its privacy changes at the scheduled time."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("disables Privacy with the schedule-protected reason when scheduleProtected is true or restrictions is absent (fail-closed D-P7-8)", async () => {
+    const view = await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={vi.fn().mockResolvedValue({
+          revision: "rev-sched",
+          values: { privacyStatus: "private" },
+          restrictions: { scheduleProtected: true },
+        })}
+        onSave={vi.fn().mockResolvedValue("saved")}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled());
+
+    expect(screen.getByLabelText("Privacy")).toBeDisabled();
+    expect(
+      screen.getByText("This video is scheduled on YouTube. Its privacy changes at the scheduled time."),
+    ).toBeInTheDocument();
+
+    // Also fail-closed when restrictions is omitted from the snapshot.
+    view.unmount();
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={video}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={vi.fn().mockResolvedValue({
+          revision: "rev-no-restrictions",
+          values: { privacyStatus: "private" },
+        })}
+        onSave={vi.fn().mockResolvedValue("saved")}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled());
+    expect(screen.getByLabelText("Privacy")).toBeDisabled();
+    expect(
+      screen.getByText("This video is scheduled on YouTube. Its privacy changes at the scheduled time."),
+    ).toBeInTheDocument();
+  });
+
+  it("disables Privacy without a value when the current privacy is not public, unlisted or private", async () => {
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={{ ...video, privacy_status: null }}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={vi.fn().mockResolvedValue({
+          revision: "rev-unknown-privacy",
+          values: { privacyStatus: "unknown_status" },
+          restrictions: { scheduleProtected: false },
+        })}
+        onSave={vi.fn().mockResolvedValue("saved")}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled());
+
+    const privacySelect = screen.getByLabelText("Privacy");
+    expect(privacySelect).toBeDisabled();
+    expect(privacySelect).toHaveValue("");
+    expect(
+      screen.queryByText("This video is scheduled on YouTube. Its privacy changes at the scheduled time."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation when privacy changes, clears the tick on another change, adds Public wording, and sends matching privacyStatus + privacyConfirmation", async () => {
+    const onSave = vi.fn().mockResolvedValue("saved");
+    await renderUi(
+      <YouTubeVideoEditCard
+        video={{ ...video, privacy_status: "private" }}
+        fetchedAt="2026-11-20T10:00:00.000Z"
+        canEdit
+        disabledReason=""
+        accountId="acc-1"
+        onSnapshot={vi.fn().mockResolvedValue({
+          revision: "rev-priv-1",
+          values: {
+            title: "First video",
+            description: "Body text",
+            tags: ["one"],
+            categoryId: "998",
+            privacyStatus: "private",
+          },
+          restrictions: { scheduleProtected: false },
+        })}
+        onSave={onSave}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit video details" }));
+    const privacySelect = screen.getByLabelText("Privacy");
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(privacySelect).not.toBeDisabled());
+    expect(save).not.toBeDisabled();
+
+    // Change private -> unlisted: checkbox appears, Save becomes disabled.
+    fireEvent.change(privacySelect, { target: { value: "unlisted" } });
+    const checkbox = screen.getByRole("checkbox", {
+      name: "I understand this changes who can see this video on YouTube.",
+    });
+    expect(checkbox).not.toBeChecked();
+    expect(save).toBeDisabled();
+
+    // Tick the box -> Save enabled.
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+    expect(save).not.toBeDisabled();
+
+    // Change unlisted -> public: tick clears, Save disabled again, Public wording shown.
+    fireEvent.change(privacySelect, { target: { value: "public" } });
+    const publicCheckbox = screen.getByRole("checkbox", {
+      name: "I understand this changes who can see this video on YouTube. It becomes visible to everyone.",
+    });
+    expect(publicCheckbox).not.toBeChecked();
+    expect(save).toBeDisabled();
+
+    // Tick and save -> both privacyStatus and privacyConfirmation are sent.
+    fireEvent.click(publicCheckbox);
+    expect(save).not.toBeDisabled();
+    fireEvent.click(save);
+
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith({
+        title: "First video",
+        description: "Body text",
+        tags: ["one"],
+        categoryId: "998",
+        baseRevision: "rev-priv-1",
+        privacyStatus: "public",
+        privacyConfirmation: { to: "public" },
+      }),
+    );
   });
 });

@@ -37,7 +37,8 @@ const GoogleApiDisclosure = () => {
               <p className="text-muted-foreground">
                 Postora ("we", "us", or "our") uses Google API Services, including the YouTube Data API v3 and
                 YouTube Analytics API v2, to enable owners to publish and browse their YouTube content, edit
-                published video details (title, description, tags and category), create a new playlist on their
+                published video details (title, description, tags, category and privacy, with privacy changed only on
+                the owner&apos;s explicit confirmation), create a new playlist on their
                 channel when they explicitly ask or add a newly uploaded video to a playlist they choose, add a
                 caption track to a video they uploaded, manage comments, and view on-demand analytics. This
                 disclosure describes how we access, use, store, and share information obtained through Google APIs.
@@ -238,8 +239,9 @@ const GoogleApiDisclosure = () => {
                         <li>
                           <strong>Edit published video metadata</strong> on the YouTube Channel page (
                           <code className="bg-muted px-1 rounded">/youtube</code>) through{" "}
-                          <code className="bg-muted px-1 rounded">videos.update</code>: title, description, tags
-                          and category. Every edit is a conditional write: Postora reads the video, sends the
+                          <code className="bg-muted px-1 rounded">videos.update</code>: title, description, tags,
+                          category and privacy (with privacy changed only on the owner&apos;s explicit confirmation).
+                          Every edit is a conditional write: Postora reads the video, sends the
                           change with an <code className="bg-muted px-1 rounded">If-Match</code> header, and
                           reads the same video again to confirm the saved values, so a video you changed in
                           YouTube Studio in the meantime is refused instead of overwritten. Edits are limited
@@ -326,9 +328,10 @@ const GoogleApiDisclosure = () => {
                   on the YouTube Channel page, limited to your own channel
                 </li>
                 <li>
-                  <strong>Published Video Editing:</strong> To update the title, description, tags and category
-                  of a video you already uploaded, only when you ask, with a conditional write that verifies the
-                  saved result, without replacing its media bytes or deleting it
+                  <strong>Published Video Editing:</strong> To update the title, description, tags, category and
+                  privacy (with privacy changed only on your explicit confirmation) of a video you already uploaded,
+                  only when you ask, with a conditional write that verifies the saved result, without replacing its
+                  media bytes or deleting it
                 </li>
                 <li>
                   <strong>Thumbnail Replacement:</strong> To replace the thumbnail of a video you already uploaded,

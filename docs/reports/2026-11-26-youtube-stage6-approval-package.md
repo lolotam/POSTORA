@@ -63,7 +63,7 @@ The upload path creates a new video. It does not replace media bytes of an exist
 | Stage | User-facing capability | Provider operation | Exact implementation path |
 | --- | --- | --- | --- |
 | 3 | Read the current writable projection before a published edit | `videos.list` | `supabase/functions/youtube-resources/editProvider.ts`; snapshot composition in `editComposition.ts` and `editLifecycle.ts` |
-| 3 | Edit the published title, description, tags and category of an owned video on the owner's instruction (live in Phase 4A; privacy and the other declarations are not part of this activation) | `videos.update` | `supabase/functions/youtube-resources/editProvider.ts`; conditional planning/verification in `editLifecycle.ts` and `editComposition.ts`; editor `src/features/youtube-management/ui/YouTubeVideoEditCard.tsx`; activation evidence `docs/reports/2026-11-27-youtube-if-match-rehearsal.md` |
+| 3 | Edit the published title, description, tags, category and privacy of an owned video on the owner's instruction (live in Phase 4A for title, description, tags and category; Phase 7E adds privacy editing with explicit owner confirmation and schedule protection) | `videos.update` | `supabase/functions/youtube-resources/editProvider.ts`; conditional planning/verification in `editLifecycle.ts` and `editComposition.ts`; editor `src/features/youtube-management/ui/YouTubeVideoEditCard.tsx`; activation evidence `docs/reports/2026-11-27-youtube-if-match-rehearsal.md` |
 | 3 | Read the assignable category catalog for editing/publishing | `videoCategories.list` | `supabase/functions/youtube-resources/categoryClient.ts`; shared UI `src/components/post/settings/YouTubeCategorySelect.tsx` |
 | 3/4 | Optionally create a first top-level comment after upload | `commentThreads.insert` | `supabase/functions/process-post/youtubeUploadFollowUps.ts` |
 | 4 | Page owned uploads for the comment workspace | `playlistItems.list` | `supabase/functions/comment-manager/stage4/provider.ts`; UI `src/features/youtube-comments/ui/StudioVideoPicker.tsx` |
@@ -276,9 +276,9 @@ All automated provider calls in these suites use fakes/fixtures. No test should 
 
 **Prerequisite:** the write path is live (Phase 4A). Its `If-Match` rehearsal and activation evidence are `docs/reports/2026-11-27-youtube-if-match-rehearsal.md` and `docs/decisions/2026-11-27-youtube-phase4a-if-match-and-edit-activation.md`.
 
-**Actions:** On `/youtube`, open an existing owned video → Edit video details. Change the title, the description, the tags or the category as appropriate for the fixture. Review and save; wait for YouTube verification; open the original watch URL. Then change the same video in YouTube Studio while the editor is open, save again, and show the conflict refusal.
+**Actions:** On `/youtube`, open an existing owned video → Edit video details. Change the title, the description, the tags, the category or the privacy (ticking the confirmation checkbox when changing privacy) as appropriate for the fixture. Review and save; wait for YouTube verification; open the original watch URL. Then change the same video in YouTube Studio while the editor is open, save again, and show the conflict refusal.
 
-**Expected:** The same video has the new title, description, tags and category, with preserved media bytes. There is no video deletion or replacement. Conflict and unknown-outcome states never trigger an automatic second write, and a refused write limit reports its wait time with nothing written.
+**Expected:** The same video has the new title, description, tags, category and privacy, with preserved media bytes. There is no video deletion or replacement. Conflict and unknown-outcome states never trigger an automatic second write, and a refused write limit reports its wait time with nothing written.
 
 **Capture:** Before/after editor, verified result, and unchanged watch URL. Narrate the 53-unit save cost (1 snapshot + 1 category catalog + 50 update + 1 verification), the 10-per-10-minute and 50-per-24-hour per-user limits, and the 4,000-unit daily write budget.
 

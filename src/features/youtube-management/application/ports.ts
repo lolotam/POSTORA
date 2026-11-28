@@ -28,6 +28,9 @@ export interface YouTubeResourcesGateway {
       privacyStatus: string;
       categoryId: string | null;
     };
+    restrictions?: {
+      scheduleProtected: boolean;
+    };
   }>>;
   updateVideo?(params: {
     accountId: string;

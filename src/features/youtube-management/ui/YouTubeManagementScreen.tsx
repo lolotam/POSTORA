@@ -308,13 +308,17 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
           if (!activeAccountId || !gateway.getEditSnapshot) return null;
           try {
             const result = await gateway.getEditSnapshot({ accountId: activeAccountId, videoId });
-            return { revision: result.data.revision, values: result.data.values };
+            return {
+              revision: result.data.revision,
+              values: result.data.values,
+              ...(result.data.restrictions ? { restrictions: result.data.restrictions } : {}),
+            };
           } catch {
             return null;
           }
         }}
         onRequestPackagingScore={(params) => packagingScoreGateway.scorePackaging(params)}
-        onSave={async ({ title, description, tags, categoryId, baseRevision }) => {
+        onSave={async ({ title, description, tags, categoryId, baseRevision, privacyStatus, privacyConfirmation }) => {
           if (!activeAccountId || !selectedVideoId || !gateway.updateVideo) return "outcome_unknown";
           try {
             const updated = await gateway.updateVideo({
@@ -326,7 +330,9 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                 description,
                 tags,
                 ...(categoryId ? { category_id: categoryId } : {}),
+                ...(privacyStatus ? { privacy_status: privacyStatus } : {}),
               },
+              ...(privacyConfirmation ? { privacyConfirmation } : {}),
             });
             // The saved answer is only a claim: the verified values live in the
             // video itself, so the drawer and the library read it again.

@@ -38,6 +38,7 @@ export const youtubeFixtureState = {
     videoId: unknown;
     baseRevision: unknown;
     changes: Record<string, unknown>;
+    privacyConfirmation?: unknown;
   }>,
 };
 
@@ -142,7 +143,13 @@ export async function startStage3Journey(page: Page, scenario: Stage3Scenario = 
     }]));
 
   await page.route(/\/functions\/v1\/youtube-resources/, async (route) => {
-    const body = (route.request().postDataJSON() ?? {}) as { operation?: string };
+    const body = (route.request().postDataJSON() ?? {}) as {
+      operation?: string;
+      video_id?: unknown;
+      base_revision?: unknown;
+      changes?: Record<string, unknown>;
+      privacy_confirmation?: unknown;
+    };
     const operation = body.operation;
     if (operation === "capabilities") {
       const state = scenario.edit === "reconnect"
@@ -217,6 +224,9 @@ export async function startStage3Journey(page: Page, scenario: Stage3Scenario = 
         videoId: body.video_id,
         baseRevision: body.base_revision,
         changes: (body.changes ?? {}) as Record<string, unknown>,
+        ...(body.privacy_confirmation !== undefined
+          ? { privacyConfirmation: body.privacy_confirmation }
+          : {}),
       });
       if (scenario.edit === "conflict") return json(route, 409, { error: "edit_conflict", request_id: "fixture" });
       if (scenario.edit === "unknown") return json(route, 502, { error: "outcome_unknown", request_id: "fixture" });

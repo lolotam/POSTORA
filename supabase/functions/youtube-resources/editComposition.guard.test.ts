@@ -8,11 +8,20 @@ const OWNER = "owner-1";
 const CHANNEL = "UCfixturechannel000000001";
 const VIDEO = "AbcD1234eFg";
 
-const baseVideo = (title = "Original"): ProviderVideo => ({
+const baseVideo = (
+  title = "Original",
+  statusOverrides: Partial<ProviderVideo["status"]> = {},
+): ProviderVideo => ({
   id: VIDEO,
   etag: "etag-1",
   snippet: { channelId: CHANNEL, title, description: "Description", tags: [], categoryId: "22" },
-  status: { privacyStatus: "private", embeddable: false, license: "youtube", publicStatsViewable: false },
+  status: {
+    privacyStatus: "private",
+    embeddable: false,
+    license: "youtube",
+    publicStatsViewable: false,
+    ...statusOverrides,
+  },
 });
 
 function composition(
@@ -23,15 +32,25 @@ function composition(
   counts: { reads: number; catalog: number; writes: number },
   options?: {
     updateResult?: EditWriteResult;
+    initialStatus?: Partial<ProviderVideo["status"]>;
+    ignoreStatusWriteOnReread?: boolean;
   },
 ) {
   let currentTitle = "Original";
+  let currentPrivacy: ProviderVideo["status"]["privacyStatus"] =
+    options?.initialStatus?.privacyStatus ?? "private";
   return createConnectedEditPort({
     enabled: true,
     provider: {
       getVideo: () => {
         counts.reads += 1;
-        return Promise.resolve({ ok: true as const, value: baseVideo(currentTitle) });
+        return Promise.resolve({
+          ok: true as const,
+          value: baseVideo(currentTitle, {
+            ...options?.initialStatus,
+            privacyStatus: currentPrivacy,
+          }),
+        });
       },
       updateVideo: (_token, input) => {
         counts.writes += 1;
@@ -40,6 +59,10 @@ function composition(
         }
         const snippet = input.plan.body.snippet as { title?: string } | undefined;
         if (snippet?.title) currentTitle = snippet.title;
+        const status = input.plan.body.status as { privacyStatus?: ProviderVideo["status"]["privacyStatus"] } | undefined;
+        if (status?.privacyStatus && !options?.ignoreStatusWriteOnReread) {
+          currentPrivacy = status.privacyStatus;
+        }
         return Promise.resolve(options?.updateResult ?? { ok: true as const, id: VIDEO });
       },
     },
@@ -54,11 +77,11 @@ function composition(
         });
       },
     },
-    tokens: { get: () => Promise.resolve({ ok: true as const, accessToken: "bound-fixture-123", minted: false }) },
+    tokens: { get: () => Promise.resolve({ ok: true as const, accessToken: "yt-access", minted: false }) },
     accounts: {
       load: ({ accountId, userId }) => Promise.resolve({
         id: accountId, userId, channelId: CHANNEL, authProvider: null, needsReauth: false,
-        accessToken: "bound-fixture-123", refreshToken: null, tokenExpiresAt: null, accountMetadata: { country: "DE" },
+        accessToken: "yt-access", refreshToken: null, tokenExpiresAt: null, accountMetadata: { country: "DE" },
       }),
     },
     clock: { now: () => new Date("2026-11-22T10:00:00.000Z") },
@@ -201,4 +224,145 @@ Deno.test("successful update returns the post-write snapshot revision built from
   assertEquals(result.verified, true);
   assertEquals(result.snapshot.values.title, "Renamed");
   assertEquals(result.snapshot.revision !== snapshot.revision, true);
+});
+
+Deno.test("privacy edit order-pinning: schedule-protected, missing, and mismatched confirmation fail before authorizeWrite; confirmed writes once; differing re-read fails with outcome_unknown", async () => {
+  // 1. Schedule-protected video (`status.publishAt` set): refused with zero authorizeWrite, catalog, or provider writes
+  {
+    let authorizeCalls = 0;
+    const counts = { reads: 0, catalog: 0, writes: 0 };
+    const scheduledPort = composition(
+      {
+        authorizeWrite: () => {
+          authorizeCalls += 1;
+          return Promise.resolve({ ok: true });
+        },
+        stillBound: () => Promise.resolve(true),
+      },
+      counts,
+      { initialStatus: { publishAt: "2026-12-01T10:00:00Z" } },
+    );
+    const scheduledSnap = await scheduledPort!.snapshot({
+      accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+    });
+    assertEquals(scheduledSnap.restrictions.scheduleProtected, true);
+    let caught: unknown;
+    try {
+      await scheduledPort!.update({
+        accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+        baseRevision: scheduledSnap.revision,
+        changes: { privacyStatus: "public" },
+        privacyConfirmation: { to: "public" },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    assertEquals(caught instanceof EditFailure, true);
+    assertEquals((caught as EditFailure).code, "invalid_request");
+    assertEquals(authorizeCalls, 0);
+    assertEquals(counts.catalog, 0);
+    assertEquals(counts.writes, 0);
+  }
+
+  // 2. Missing confirmation and mismatched confirmation: refused with zero authorizeWrite, catalog, or provider writes
+  {
+    let authorizeCalls = 0;
+    const counts = { reads: 0, catalog: 0, writes: 0 };
+    const port = composition(
+      {
+        authorizeWrite: () => {
+          authorizeCalls += 1;
+          return Promise.resolve({ ok: true });
+        },
+        stillBound: () => Promise.resolve(true),
+      },
+      counts,
+    );
+    const snapshot = await port!.snapshot({
+      accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+    });
+
+    for (const badConfirmation of [null, { to: "unlisted" as const }]) {
+      let caught: unknown;
+      try {
+        await port!.update({
+          accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+          baseRevision: snapshot.revision,
+          changes: { privacyStatus: "public" },
+          privacyConfirmation: badConfirmation,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      assertEquals(caught instanceof EditFailure, true);
+      assertEquals((caught as EditFailure).code, "invalid_request");
+    }
+    assertEquals(authorizeCalls, 0);
+    assertEquals(counts.catalog, 0);
+    assertEquals(counts.writes, 0);
+  }
+
+  // 3. Confirmed privacy change: calls authorizeWrite once, writes once, returns verified re-read with privacyStatus === "unlisted"
+  {
+    let authorizeCalls = 0;
+    const counts = { reads: 0, catalog: 0, writes: 0 };
+    const port = composition(
+      {
+        authorizeWrite: () => {
+          authorizeCalls += 1;
+          return Promise.resolve({ ok: true });
+        },
+        stillBound: () => Promise.resolve(true),
+      },
+      counts,
+    );
+    const snapshot = await port!.snapshot({
+      accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+    });
+    const result = await port!.update({
+      accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+      baseRevision: snapshot.revision,
+      changes: { privacyStatus: "unlisted" },
+      privacyConfirmation: { to: "unlisted" },
+    });
+    assertEquals(authorizeCalls, 1);
+    assertEquals(counts.writes, 1);
+    assertEquals(result.verified, true);
+    assertEquals(result.snapshot.values.privacyStatus, "unlisted");
+  }
+
+  // 4. Differing provider re-read after a confirmed privacy change: rejects with EditFailure("outcome_unknown")
+  {
+    let authorizeCalls = 0;
+    const counts = { reads: 0, catalog: 0, writes: 0 };
+    const port = composition(
+      {
+        authorizeWrite: () => {
+          authorizeCalls += 1;
+          return Promise.resolve({ ok: true });
+        },
+        stillBound: () => Promise.resolve(true),
+      },
+      counts,
+      { ignoreStatusWriteOnReread: true },
+    );
+    const snapshot = await port!.snapshot({
+      accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+    });
+    let caught: unknown;
+    try {
+      await port!.update({
+        accountId: ACCOUNT, videoId: VIDEO, ownerId: OWNER, channelId: CHANNEL,
+        baseRevision: snapshot.revision,
+        changes: { privacyStatus: "unlisted" },
+        privacyConfirmation: { to: "unlisted" },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    assertEquals(authorizeCalls, 1);
+    assertEquals(counts.writes, 1);
+    assertEquals(caught instanceof EditFailure, true);
+    assertEquals((caught as EditFailure).code, "outcome_unknown");
+  }
 });
