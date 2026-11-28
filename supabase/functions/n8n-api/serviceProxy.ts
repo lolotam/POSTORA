@@ -157,12 +157,34 @@ const CREDENTIAL_PARAM_RE = /(?:[?#&]|%3f|%23|%26)(?:access_?token|refresh_?toke
 const CREDENTIAL_DIAGNOSTIC_RE = /(?:(?:^|[^a-z0-9_])(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)(?:=|%3d)\S+|(?:^|[^a-z0-9_])["']?(?:access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)["']?\s*:\s*["']?[^\s"',}]+)/i;
 const DIAGNOSTIC_KEY_RE = /^(?:(?:[a-z]+_)?(?:error|errors|reason|detail|details|cause|diagnostic|diagnostics|stack|trace)|[a-z]+(?:Error|Errors|Reason|Cause|Diagnostic|Diagnostics|Stack|Trace)|(?:error|failure|exception|diagnostic|upstream|platform|provider|api|graph|auth|sql|db|internal|validation)(?:Detail|Details|Message|Description|Summary|Code|Type)|error_?(?:message|description|summary|code|type)|stack_?trace)$/i;
 
-function tokenHasCredentialQuery(token: string): boolean {
-  for (const match of token.matchAll(/(?:^|[("'[<,;=])((?:https?:)?\/\/\S+|\/\S+|(?:[?#]|%3f|%23)\S+)/gi)) {
-    if (CREDENTIAL_PARAM_RE.test(match[1])) return true;
+function boundedUrlSpan(token: string, start: number): { span: string; end: number } {
+  const opener = start > 0 ? token[start - 1] : "";
+  const closer = opener === "(" ? ")" : opener === "[" ? "]" : opener === "<" ? ">" : opener === '"' ? '"' : opener === "'" ? "'" : "";
+  let depth = 0;
+  let i = start;
+  for (; i < token.length; i++) {
+    const ch = token[i];
+    if (closer === ")" && ch === "(") {
+      depth++;
+    } else if (closer && ch === closer) {
+      if (closer === ")" && depth > 0) depth--;
+      else break;
+    } else if (!closer && (ch === '"' || ch === "'" || ch === "<" || ch === ">")) {
+      break;
+    }
   }
-  const bareAmp = /(?:^|[("'[<])((?:&|%26)\S+)/i.exec(token);
-  return bareAmp !== null && CREDENTIAL_PARAM_RE.test(bareAmp[1]);
+  return { span: token.slice(start, i), end: i };
+}
+
+function tokenHasCredentialQuery(token: string): boolean {
+  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<])(&|%26)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = startRe.exec(token)) !== null) {
+    const spanStart = match[1] ? match.index : match.index + match[0].length - (match[2] ?? match[3]).length;
+    const { span } = boundedUrlSpan(token, spanStart);
+    if (CREDENTIAL_PARAM_RE.test(span)) return true;
+  }
+  return false;
 }
 
 function hasCredentialQuery(value: string): boolean {
