@@ -179,13 +179,36 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
   return { span: token.slice(start, i), end: i };
 }
 
+function hasBalancedRelativePathQuery(token: string, start: number): boolean {
+  let depth = 0;
+  for (let i = start; i < token.length; i++) {
+    const ch = token[i];
+    if (ch === "(") {
+      depth++;
+    } else if (ch === ")") {
+      if (depth === 0) return false;
+      depth--;
+    } else if (depth === 0 && (ch === "?" || ch === "#")) {
+      return true;
+    } else if (ch === "%") {
+      const code = token.slice(i + 1, i + 3).toLowerCase();
+      if (code === "3f" || code === "23") return depth === 0;
+      if (code === "26") return false;
+    } else if (ch === "&" || ch === '"' || ch === "'" || ch === "[" || ch === "]" || ch === "<" || ch === ">") {
+      return false;
+    }
+  }
+  return false;
+}
+
 function tokenHasCredentialQuery(token: string): boolean {
   if (!CREDENTIAL_PARAM_RE.test(token)) return false;
-  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<,;=])((?:\.\.?\/|[A-Za-z0-9._~@-])(?=(?:[^%?#&\s()"'[\]<>]|\([^%?#&\s()"'[\]<>]*\)|%(?!3f|23|26))*(?:[?#]|%3f|%23)))|(?:^|[("'[<])(&|%26)/gi;
+  const startRe = /((?:[a-z][a-z0-9+.-]*:)?\/\/)|(?:^|[("'[<,;=])(\/|(?:[?#]|%3f|%23))|(?:^|[("'[<,;=])(\.\.?\/|[A-Za-z0-9._~@-])|(?:^|[("'[<])(&|%26)/gi;
   let match: RegExpExecArray | null;
   while ((match = startRe.exec(token)) !== null) {
     const marker = match[1] ?? match[2] ?? match[3] ?? match[4];
     const spanStart = match[1] ? match.index : match.index + match[0].length - marker.length;
+    if (match[3] && !hasBalancedRelativePathQuery(token, spanStart)) continue;
     const { span, end } = boundedUrlSpan(token, spanStart);
     if (CREDENTIAL_PARAM_RE.test(span)) return true;
     startRe.lastIndex = Math.max(spanStart + 1, end);
