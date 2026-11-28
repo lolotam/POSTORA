@@ -179,8 +179,9 @@ function boundedUrlSpan(token: string, start: number): { span: string; end: numb
   return { span: token.slice(start, i), end: i };
 }
 
-function scanBalancedRelativePathQuery(token: string, start: number): { matched: boolean; matchStart: number; resumeAt: number; isScheme: boolean } {
+function scanBalancedRelativePathQuery(token: string, start: number): { matchedStarts: number[]; resumeAt: number } {
   const depthStarts: number[] = [start];
+  const matchedStarts: number[] = [];
   let depth = 0;
   for (let i = start; i < token.length; i++) {
     const ch = token[i];
@@ -188,27 +189,32 @@ function scanBalancedRelativePathQuery(token: string, start: number): { matched:
       depth++;
       depthStarts[depth] = i + 1;
     } else if (ch === ")") {
-      if (depth === 0) return { matched: false, matchStart: start, resumeAt: i, isScheme: false };
+      if (depth === 0) return { matchedStarts, resumeAt: i };
       depth--;
     } else if (ch === "?" || ch === "#") {
-      return { matched: true, matchStart: depthStarts[depth], resumeAt: i, isScheme: false };
+      const candidate = depthStarts[depth];
+      if (!matchedStarts.includes(candidate)) matchedStarts.push(candidate);
+      if (depth === 0) return { matchedStarts, resumeAt: i };
     } else if (ch === ":" && token.slice(i, i + 3) === "://") {
-      const candidateStart = depthStarts[depth];
-      return {
-        matched: false,
-        matchStart: candidateStart,
-        resumeAt: i,
-        isScheme: /^[a-z][a-z0-9+.-]*$/i.test(token.slice(candidateStart, i)),
-      };
+      const candidate = depthStarts[depth];
+      if (/^[a-z][a-z0-9+.-]*$/i.test(token.slice(candidate, i)) && !matchedStarts.includes(candidate)) {
+        matchedStarts.push(candidate);
+      }
+      if (depth === 0) return { matchedStarts, resumeAt: i };
     } else if (ch === "%") {
       const code = token.slice(i + 1, i + 3).toLowerCase();
-      if (code === "3f" || code === "23") return { matched: true, matchStart: depthStarts[depth], resumeAt: i, isScheme: false };
-      if (code === "26") return { matched: false, matchStart: start, resumeAt: i, isScheme: false };
-    } else if (ch === "&" || ch === '"' || ch === "'" || ch === "[" || ch === "]" || ch === "<" || ch === ">") {
-      return { matched: false, matchStart: start, resumeAt: i, isScheme: false };
+      if (code === "3f" || code === "23") {
+        const candidate = depthStarts[depth];
+        if (!matchedStarts.includes(candidate)) matchedStarts.push(candidate);
+        if (depth === 0) return { matchedStarts, resumeAt: i };
+      } else if (code === "26" && depth === 0) {
+        return { matchedStarts, resumeAt: i };
+      }
+    } else if (depth === 0 && (ch === "&" || ch === '"' || ch === "'" || ch === "[" || ch === "]" || ch === "<" || ch === ">")) {
+      return { matchedStarts, resumeAt: i };
     }
   }
-  return { matched: false, matchStart: start, resumeAt: token.length, isScheme: false };
+  return { matchedStarts, resumeAt: token.length };
 }
 
 function tokenHasCredentialQuery(token: string): boolean {
@@ -217,14 +223,17 @@ function tokenHasCredentialQuery(token: string): boolean {
   let match: RegExpExecArray | null;
   while ((match = startRe.exec(token)) !== null) {
     const marker = match[1] ?? match[2] ?? match[3] ?? match[4];
-    let spanStart = match[1] ? match.index : match.index + match[0].length - marker.length;
+    const spanStart = match[1] ? match.index : match.index + match[0].length - marker.length;
     if (match[3]) {
       const probe = scanBalancedRelativePathQuery(token, spanStart);
-      if (!probe.matched && !probe.isScheme) {
-        startRe.lastIndex = Math.max(spanStart + 1, probe.resumeAt);
-        continue;
+      let maxEnd = probe.resumeAt;
+      for (const candidateStart of probe.matchedStarts) {
+        const { span, end } = boundedUrlSpan(token, candidateStart);
+        if (CREDENTIAL_PARAM_RE.test(span)) return true;
+        maxEnd = Math.max(maxEnd, end);
       }
-      spanStart = probe.matchStart;
+      startRe.lastIndex = Math.max(spanStart + 1, maxEnd);
+      continue;
     }
     const { span, end } = boundedUrlSpan(token, spanStart);
     if (CREDENTIAL_PARAM_RE.test(span)) return true;
