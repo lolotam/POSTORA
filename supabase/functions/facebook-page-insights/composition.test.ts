@@ -80,6 +80,8 @@ Deno.test("owned Facebook Page analytics composes auth, provider, exact metrics 
     if (url.pathname.endsWith("/me")) {
       if (mode === "expired") return json({ error: { type: "OAuthException", code: 190, error_subcode: 463, message: TOKEN } }, 400);
       if (mode === "throttled_190") return Response.json({ error: { type: "OAuthException", code: 190, message: TOKEN } }, { status: 429, headers: { "Retry-After": "180" } });
+      if (mode === "throttled_80001") return Response.json({ error: { type: "OAuthException", code: 80001, message: TOKEN } }, { status: 400, headers: { "Retry-After": "180" } });
+      if (mode === "throttled_80002") return Response.json({ error: { type: "OAuthException", code: 80002, message: TOKEN } }, { status: 400, headers: { "Retry-After": "180" } });
       return json({ id: mode === "wrong_identity" ? "700200" : PAGE }, 200, mode === "version_drift" ? "v26.0" : "v25.0");
     }
     if (url.pathname.endsWith("/posts")) {
@@ -213,13 +215,14 @@ Deno.test("owned Facebook Page analytics composes auth, provider, exact metrics 
       assertEquals(options.status, 204);
       assertEquals(options.headers.has("Access-Control-Allow-Origin"), false);
     });
-    for (const scenario of ["expired", "throttled_190", "wrong_identity", "version_drift"]) await test.step("identity refusal " + scenario, async () => {
+    for (const scenario of ["expired", "throttled_190", "throttled_80001", "throttled_80002", "wrong_identity", "version_drift"]) await test.step("identity refusal " + scenario, async () => {
       mode = scenario;
       const before = calls.length;
       const body = await (await handler(request())).json();
       assertEquals(body.ok, false);
-      assertEquals(body.reason, scenario === "expired" ? "reauth_required" : scenario === "throttled_190" ? "rate_limited" : scenario === "wrong_identity" ? "wrong_account" : "capability_unverified");
-      if (scenario === "throttled_190") {
+      const isThrottleScenario = scenario.startsWith("throttled_");
+      assertEquals(body.reason, scenario === "expired" ? "reauth_required" : isThrottleScenario ? "rate_limited" : scenario === "wrong_identity" ? "wrong_account" : "capability_unverified");
+      if (isThrottleScenario) {
         assertEquals(body.needsReauth, false);
         assertEquals(typeof body.retryAt, "string");
         assertEquals(Date.parse(body.retryAt) > originalNow(), true);
