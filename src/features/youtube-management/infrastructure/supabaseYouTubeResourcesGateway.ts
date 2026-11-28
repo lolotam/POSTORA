@@ -75,7 +75,7 @@ function isVideoListItem(value: unknown): boolean {
   if ("url" in value && value.url !== undefined && typeof value.url !== "string") return false;
   if ("description" in value && value.description !== undefined && value.description !== null && typeof value.description !== "string") return false;
   if ("duration_iso8601" in value && value.duration_iso8601 !== undefined && value.duration_iso8601 !== null && typeof value.duration_iso8601 !== "string") return false;
-  if ("statistics" in value && value.statistics !== undefined && value.statistics !== null) {
+  if ("statistics" in value && value.statistics !== undefined) {
     if (
       !isRecord(value.statistics) ||
       !isNumberOrNull(value.statistics.view_count) ||

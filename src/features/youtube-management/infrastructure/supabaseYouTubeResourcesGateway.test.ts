@@ -178,6 +178,7 @@ describe("YouTube resources gateway", () => {
     ["a non-string title", { id: "vid-1", title: 456 }],
     ["a non-string description", { id: "vid-1", title: "Valid title", description: 123 }],
     ["a non-string duration_iso8601", { id: "vid-1", title: "Valid title", duration_iso8601: 123 }],
+    ["null statistics", { id: "vid-1", title: "Valid title", statistics: null }],
     ["a malformed statistics view_count", { id: "vid-1", title: "Valid title", statistics: { view_count: "NaN", like_count: 1, comment_count: 0 } }],
   ])("rejects a videos page containing an item with %s as upstream_unavailable", async (_scenario, badItem) => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({

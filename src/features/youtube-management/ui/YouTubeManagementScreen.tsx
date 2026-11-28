@@ -233,18 +233,27 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
             </Button>
           </div>
 
-          {capabilities.isError && (!capabilities.data || browseUnavailable) ? (
+          {capabilities.isError && !capabilities.data ? (
             <YouTubeResourceNotice
               code={errorCode(capabilities.error)}
               retryAfterSeconds={retryHint(capabilities.error)}
               onRetry={() => void capabilities.refetch()}
             />
           ) : browseUnavailable && browse ? (
-            <YouTubeResourceNotice
-              code={browse.reason}
-              retryAfterSeconds={null}
-              onRetry={() => void capabilities.refetch()}
-            />
+            <div className="space-y-2">
+              <YouTubeResourceNotice
+                code={browse.reason}
+                retryAfterSeconds={null}
+                onRetry={() => void capabilities.refetch()}
+              />
+              {capabilities.isError ? (
+                <YouTubeResourceNotice
+                  code={errorCode(capabilities.error)}
+                  retryAfterSeconds={retryHint(capabilities.error)}
+                  onRetry={() => void capabilities.refetch()}
+                />
+              ) : null}
+            </div>
           ) : (
             <div className="space-y-4">
               {capabilities.isError ? (
@@ -261,10 +270,9 @@ export function YouTubeManagementScreen(props: YouTubeManagementScreenProps): JS
                   retryAfterSeconds={retryHint(channel.error)}
                   onRetry={() => void channel.refetch()}
                 />
-              ) : null}
-              {channel.data ? (
+              ) : channel.data ? (
                 <YouTubeChannelSummary channel={channel.data.data} fetchedAt={channel.data.freshness.fetched_at} />
-              ) : !channel.isError && channel.isPending ? loadingLine : null}
+              ) : channel.isPending ? loadingLine : null}
 
               {videos.data ? (
                 <div className="space-y-3">
