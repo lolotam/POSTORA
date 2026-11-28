@@ -191,7 +191,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
 
   for (let i = 0; i < n; i++) {
     const top = stack[stack.length - 1];
-    const urlForQ = top.empty || top.hasSlashStart || top.hasRelativeStart || top.hasSchemeSlash || top.hasQuestionOrHash;
+    const urlForQ = top.empty || top.afterDelimiter || top.hasSlashStart || top.hasRelativeStart || top.hasSchemeSlash;
     const urlForAmp =
       top.empty ||
       top.hasSchemeSlash ||
@@ -202,11 +202,12 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
     allowAmpersand[i] = urlForAmp ? 1 : 0;
 
     const ch = token[i];
+    const afterColonQuote = i > 0 && token[i - 1] === ":";
     if (ch === '"' && !inSingleQuote) {
       if (inDoubleQuote) {
         inDoubleQuote = false;
         if (stack.length > 1 && top.closer === '"') stack.pop();
-      } else if (top.empty || top.afterDelimiter) {
+      } else if (top.empty || top.afterDelimiter || afterColonQuote) {
         inDoubleQuote = true;
         stack.push(newScopeState('"'));
       }
@@ -219,7 +220,7 @@ function computeTokenUrlContextFlags(token: string): { allowQuestionOrHash: Uint
         }
         inSingleQuote = false;
         if (stack.length > 1 && top.closer === "'") stack.pop();
-      } else if ((top.empty || top.afterDelimiter) && !top.hasQuestionOrHash) {
+      } else if ((top.empty || top.afterDelimiter || afterColonQuote) && !top.hasQuestionOrHash) {
         inSingleQuote = true;
         stack.push(newScopeState("'"));
       }
